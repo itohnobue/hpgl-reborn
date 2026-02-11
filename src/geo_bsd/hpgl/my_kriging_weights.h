@@ -359,8 +359,8 @@ namespace hpgl
 				{
 					variance -= weights[i] * b2[i];
 				}
-				// OK kriging variance: add the Lagrange multiplier (mu)
-				variance += mu;
+				// OK kriging variance: subtract the Lagrange multiplier (mu)
+				variance -= mu;
 			}
 			else
 			{

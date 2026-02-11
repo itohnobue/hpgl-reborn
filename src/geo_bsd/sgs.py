@@ -40,7 +40,7 @@ def _create_hpgl_nonparam_cdf(cdf_data):
 		size = cd2.values.size)
 
 def normed_cov_model(cov_model):
-	coef = cov_model.sill - cov_model.nugget
+	coef = cov_model.sill
 	return CovarianceModel(
 		cov_model.type, 
 		cov_model.ranges, 

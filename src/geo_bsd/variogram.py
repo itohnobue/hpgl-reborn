@@ -327,7 +327,7 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
         Covariances = float32((Values1 - SoftValues1)*(Values2 - SoftValues2))
         Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Covariances
         Result[NumValues + NumValues] += 1
-        Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues] / 2
+        Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues]
     return Result
 
 def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
@@ -349,5 +349,5 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
         Covariances = float32((Values1 - SoftValues1)*(Values2 - SoftValues2) / (SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1-SoftValues2)) ** 0.5)
         Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Covariances
         Result[NumValues + NumValues] += 1
-        Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues] / 2
+        Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues]
     return Result

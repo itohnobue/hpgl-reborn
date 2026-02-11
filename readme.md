@@ -341,6 +341,7 @@ Original documentation from earlier HPGL versions, including PDF manuals (Englis
 - **Input validation**: Comprehensive parameter validation framework
 - **Security**: Path validation, array reference management, safe library loading
 - **Modern build**: MSBuild-based build.bat, pyproject.toml, CMakeLists.txt
+- **Algorithm bug fixes**: Fixed 7 mathematical bugs — covariance C(0) missing nugget contribution, OK kriging variance sign error, correlogram weight adjustment inverted, Cokriging Mark II cross-covariance ratio inverted, SGS normalization coefficient, and spurious /2 in covariance and indicator correlation functions
 - **Test suite**: 361 automated tests with pytest
 - **Legacy cleanup**: Removed unused libraries, old Boost.Python bindings, obsolete build systems (SCons, old Makefiles), Debian packaging, old VS 2008 project files, and a bundled Win32 installer, etc
 

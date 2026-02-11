@@ -173,7 +173,7 @@ public:
 	{
 		double primary_variance = (*primary_cov_model)(coord_t(0,0,0), coord_t(0,0,0));
 		double secondary_variance = (*secondary_cov_model)(coord_t(0,0,0), coord_t(0,0,0));
-		m_coef = p12 * sqrt( secondary_variance / primary_variance );
+		m_coef = p12 * sqrt( primary_variance / secondary_variance );
 	}
 
 	template<typename coord1_t, typename coord2_t>

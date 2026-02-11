@@ -147,7 +147,7 @@ namespace hpgl
 		{
 			if(h < 0.0001)
 			{
-				return m_params.m_sill - m_params.m_nugget;
+				return m_params.m_sill;
 			}
 			else
 			{
@@ -160,11 +160,11 @@ namespace hpgl
 
 			if(h < 0.0001)
 			{
-				return m_params.m_sill - m_params.m_nugget;
+				return m_params.m_sill;
 			}
 			else
 			{
-				return (m_params.m_sill - m_params.m_nugget) * exp(-3 * h / m_params.m_ranges[0]);			
+				return (m_params.m_sill - m_params.m_nugget) * exp(-3 * h / m_params.m_ranges[0]);
 			}
 		}
 
@@ -172,7 +172,7 @@ namespace hpgl
 		{
 			if(h < 0.0001)
 			{
-				return m_params.m_sill - m_params.m_nugget;
+				return m_params.m_sill;
 			}
 			else
 			{

@@ -189,7 +189,7 @@ namespace hpgl
 				}
 
 				double sigma = sqrt(meani * (1 - meani));
-				weights[i] /= sigmac / sigma;
+				weights[i] *= sigmac / sigma;
 			}
 			return true;
 		}
