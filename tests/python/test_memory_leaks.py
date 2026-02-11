@@ -79,9 +79,7 @@ class TestMemoryLeaks:
         try:
             import tracemalloc
             tracemalloc.start()
-            
-            from sgs import sgs_simulation
-            
+
             grid = SugarboxGrid(x=10, y=10, z=5)
             data = np.random.rand(500).astype('float32') * 100
             mask = np.ones(500, dtype='uint8')

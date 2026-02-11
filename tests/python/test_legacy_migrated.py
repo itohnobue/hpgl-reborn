@@ -6,7 +6,8 @@ src/geo_testing/test_scripts/ that provide valuable test coverage not
 already present in the modern test suite.
 
 Legacy tests are marked with @pytest.mark.legacy
-Tests requiring external data are marked with skip and documented.
+Tests use data files restored from git history where available,
+and synthetic data where original files were never committed.
 """
 import numpy as np
 import pytest
@@ -15,211 +16,604 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
+TEST_DATA_DIR = Path(__file__).parent / "test_data"
+
 try:
     from geo_bsd.geo import (
-        ordinary_kriging, simple_kriging, indicator_kriging,
+        ordinary_kriging, simple_kriging, lvm_kriging, indicator_kriging,
+        simple_cokriging_markI, simple_cokriging_markII,
         ContProperty, IndProperty, CovarianceModel, covariance,
-        SugarboxGrid, calc_mean
+        SugarboxGrid, calc_mean, load_cont_property, load_ind_property,
+        write_property
     )
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
-    from geo_bsd.cdf import CdfData
+    from geo_bsd.cdf import CdfData, calc_cdf
     HPGL_AVAILABLE = True
 except ImportError as e:
     HPGL_AVAILABLE = False
 
+# Grid dimensions used by the "big" test dataset (166x141x20)
+BIG_GRID = (166, 141, 20)
+BIG_SIZE = 166 * 141 * 20  # 468,120 cells
+
+
+def _has_data_file(name):
+    return (TEST_DATA_DIR / name).exists()
+
+
+def _load_cont(name):
+    """Load a continuous property from test_data directory."""
+    return load_cont_property(str(TEST_DATA_DIR / name), -99, BIG_GRID)
+
+
+def _load_ind(name, indicators):
+    """Load an indicator property from test_data directory."""
+    return load_ind_property(str(TEST_DATA_DIR / name), -99, indicators, BIG_GRID)
+
 
 # ============================================================================
-# Tests Requiring External Data (Documented and Skipped)
+# Tests Using Restored Data Files (from git history)
 # ============================================================================
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_SOFT_DATA_CON_160_141_20.INC")
+@pytest.mark.skipif(
+    not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+)
 def test_big_ok_kriging_legacy():
     """
-    Test Ordinary Kriging on large dataset - migrated from test_big.py
+    Ordinary Kriging on large dataset - migrated from test_big.py
 
-    Original test loaded BIG_SOFT_DATA_CON_160_141_20.INC (166x141x20 grid)
-    and ran OK with exponential covariance, ranges=(10,10,10), sill=1.
-
-    Requirements:
-      - Test data: src/geo_testing/test_scripts/test_data/BIG_SOFT_DATA_CON_160_141_20.INC
-      - Grid size: 166x141x20
+    Original: OK with exponential covariance, ranges=(10,10,10), sill=1,
+    radiuses=(20,20,20), max_neighbours=12 on 166x141x20 grid.
     """
-    pass
+    prop_cont = _load_cont("BIG_SOFT_DATA_CON_160_141_20.INC")
+    grid = SugarboxGrid(*BIG_GRID)
+
+    cov_model = CovarianceModel(
+        type=covariance.exponential,
+        ranges=(10.0, 10.0, 10.0),
+        sill=1.0,
+        nugget=0.0
+    )
+
+    result = ordinary_kriging(
+        prop=prop_cont,
+        grid=grid,
+        radiuses=(20, 20, 20),
+        max_neighbours=12,
+        cov_model=cov_model
+    )
+
+    assert isinstance(result, ContProperty)
+    assert result.data.size == BIG_SIZE
+    assert not np.any(np.isnan(result.data.astype('float64')))
+    # Some uninformed cells should now be informed
+    assert np.sum(result.mask) > np.sum(prop_cont.mask)
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_SOFT_DATA_CON_160_141_20.INC")
+@pytest.mark.skipif(
+    not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+)
 def test_big_sk_kriging_legacy():
     """
-    Test Simple Kriging on large dataset - migrated from test_big.py
+    Simple Kriging on large dataset - migrated from test_big.py
 
-    Original test used mean=1.6 with exponential covariance.
-
-    Requirements:
-      - Test data: src/geo_testing/test_scripts/test_data/BIG_SOFT_DATA_CON_160_141_20.INC
+    Original: SK with mean=1.6, exponential covariance.
     """
-    pass
+    prop_cont = _load_cont("BIG_SOFT_DATA_CON_160_141_20.INC")
+    grid = SugarboxGrid(*BIG_GRID)
+
+    cov_model = CovarianceModel(
+        type=covariance.exponential,
+        ranges=(10.0, 10.0, 10.0),
+        sill=1.0,
+        nugget=0.0
+    )
+
+    result = simple_kriging(
+        prop=prop_cont,
+        grid=grid,
+        radiuses=(20, 20, 20),
+        max_neighbours=12,
+        cov_model=cov_model,
+        mean=1.6
+    )
+
+    assert isinstance(result, ContProperty)
+    assert result.data.size == BIG_SIZE
+    assert not np.any(np.isnan(result.data.astype('float64')))
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: mean_0.487_166_141_20.inc")
+@pytest.mark.skipif(
+    not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+)
 def test_big_lvm_kriging_legacy():
     """
-    Test LVM Kriging on large dataset - migrated from test_big.py
+    LVM Kriging on large dataset - migrated from test_big.py
 
-    Original test used locally varying mean data from mean_0.487_166_141_20.inc.
-
-    Requirements:
-      - Primary data: BIG_SOFT_DATA_CON_160_141_20.INC
-      - Mean data: mean_0.487_166_141_20.inc
+    Original: LVM kriging using locally varying mean data.
+    The mean data file (mean_0.487_166_141_20.inc) was never in git,
+    so we generate synthetic mean data from the property itself.
     """
-    pass
+    prop_cont = _load_cont("BIG_SOFT_DATA_CON_160_141_20.INC")
+    grid = SugarboxGrid(*BIG_GRID)
+
+    # Generate mean data as spatially smooth version of the property
+    # (original used a separate file with mean ~0.487)
+    mean_value = calc_mean(prop_cont)
+    mean_data = np.full(BIG_SIZE, mean_value, dtype='float32')
+
+    cov_model = CovarianceModel(
+        type=covariance.exponential,
+        ranges=(10.0, 10.0, 10.0),
+        sill=1.0,
+        nugget=0.0
+    )
+
+    result = lvm_kriging(
+        prop=prop_cont,
+        grid=grid,
+        mean_data=mean_data,
+        radiuses=(20, 20, 20),
+        max_neighbours=12,
+        cov_model=cov_model
+    )
+
+    assert isinstance(result, ContProperty)
+    assert result.data.size == BIG_SIZE
+    assert not np.any(np.isnan(result.data.astype('float64')))
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_SOFT_DATA_160_141_20.INC")
+@pytest.mark.skipif(
+    not _has_data_file("BIG_SOFT_DATA_160_141_20.INC"),
+    reason="Test data file not found: BIG_SOFT_DATA_160_141_20.INC"
+)
 def test_big_ik_legacy():
     """
-    Test Indicator Kriging on large dataset - migrated from test_big.py
+    Indicator Kriging (2-category) on large dataset - migrated from test_big.py
 
-    Original test used 2-category IK with marginal_probs=(0.8, 0.2).
-
-    Requirements:
-      - Test data: BIG_SOFT_DATA_160_141_20.INC with indicators [0,1]
+    Original: IK with 2 categories, marginal_probs=(0.8, 0.2),
+    exponential covariance, ranges=(10,10,10), sill=1.
     """
-    pass
+    ik_prop = _load_ind("BIG_SOFT_DATA_160_141_20.INC", [0, 1])
+    grid = SugarboxGrid(*BIG_GRID)
+
+    cov_model = CovarianceModel(
+        type=covariance.exponential,
+        ranges=(10.0, 10.0, 10.0),
+        sill=1.0,
+        nugget=0.0
+    )
+
+    ik_data = [
+        {
+            'cov_model': cov_model,
+            'radiuses': (20, 20, 20),
+            'max_neighbours': 12,
+        },
+        {
+            'cov_model': cov_model,
+            'radiuses': (20, 20, 20),
+            'max_neighbours': 12,
+        }
+    ]
+
+    result = indicator_kriging(
+        prop=ik_prop,
+        grid=grid,
+        data=ik_data,
+        marginal_probs=(0.8, 0.2)
+    )
+
+    assert isinstance(result, IndProperty)
+    assert result.data.size == BIG_SIZE
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_SOFT_DATA_160_141_20.INC")
 def test_big_multi_ik_legacy():
     """
-    Test multi-facies Indicator Kriging - migrated from test_big.py
+    Multi-facies Indicator Kriging (4 categories) - migrated from test_big.py
 
-    Original test used 4 categories with different ranges for each:
-      - Category 0: ranges=(4,4,4), sill=0.25, marginal_prob=0.24
-      - Category 1: ranges=(6,6,6), sill=0.25, marginal_prob=0.235
-      - Category 2: ranges=(2,2,2), sill=0.25, marginal_prob=0.34
-      - Category 3: ranges=(10,10,10), sill=0.25, marginal_prob=0.18
-
-    Requirements:
-      - Test data: MULTI_IND.INC with indicators [0,1,2,3]
+    Original test defined multi_ik_data with 4 categories and different
+    covariance ranges for each. Uses synthetic 4-category data since
+    the original data file was never committed to git.
     """
-    pass
+    grid = SugarboxGrid(x=20, y=20, z=10)
+    np.random.seed(42)
+    data = np.random.randint(0, 4, 4000, dtype='uint8')
+    mask = np.ones(4000, dtype='uint8')
+    mask[::20] = 0
+    prop = IndProperty(data, mask, 4)
+
+    ik_data = [
+        {
+            'cov_model': CovarianceModel(
+                type=covariance.spherical,
+                ranges=(4.0, 4.0, 4.0), sill=0.25, nugget=0.0
+            ),
+            'radiuses': (20, 20, 20),
+            'max_neighbours': 12,
+        },
+        {
+            'cov_model': CovarianceModel(
+                type=covariance.spherical,
+                ranges=(6.0, 6.0, 6.0), sill=0.25, nugget=0.0
+            ),
+            'radiuses': (20, 20, 20),
+            'max_neighbours': 12,
+        },
+        {
+            'cov_model': CovarianceModel(
+                type=covariance.spherical,
+                ranges=(2.0, 2.0, 2.0), sill=0.25, nugget=0.0
+            ),
+            'radiuses': (20, 20, 20),
+            'max_neighbours': 12,
+        },
+        {
+            'cov_model': CovarianceModel(
+                type=covariance.spherical,
+                ranges=(10.0, 10.0, 10.0), sill=0.25, nugget=0.0
+            ),
+            'radiuses': (20, 20, 20),
+            'max_neighbours': 12,
+        },
+    ]
+
+    result = indicator_kriging(
+        prop=prop,
+        grid=grid,
+        data=ik_data,
+        marginal_probs=[0.24, 0.235, 0.34, 0.18]
+    )
+
+    assert isinstance(result, IndProperty)
+    assert result.indicator_count == 4
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_SOFT_DATA_CON_160_141_20.INC")
+@pytest.mark.skipif(
+    not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+)
 def test_big_sgs_sk_legacy():
     """
-    Test SGS with Simple Kriging on large dataset - migrated from test_big.py
+    SGS with Simple Kriging on large dataset - migrated from test_big.py
 
-    Original test used sill=0.4 (different from kriging tests).
-
-    Requirements:
-      - Test data: BIG_SOFT_DATA_CON_160_141_20.INC
-      - Mean data: mean_0.487_166_141_20.inc for LVM variant
+    Original: SGS with sill=0.4, exponential covariance, kriging_type="sk".
     """
-    pass
+    prop_cont = _load_cont("BIG_SOFT_DATA_CON_160_141_20.INC")
+    grid = SugarboxGrid(*BIG_GRID)
+
+    cov_model = CovarianceModel(
+        type=covariance.exponential,
+        ranges=(10.0, 10.0, 10.0),
+        sill=0.4,
+        nugget=0.0
+    )
+
+    # calc_cdf needs 3D-shaped data
+    prop_cont.fix_shape(grid)
+    cdf = calc_cdf(prop_cont)
+
+    result = sgs_simulation(
+        prop=prop_cont,
+        grid=grid,
+        cdf_data=cdf,
+        radiuses=(20, 20, 20),
+        max_neighbours=12,
+        cov_model=cov_model,
+        seed=3439275
+    )
+
+    assert isinstance(result, ContProperty)
+    assert result.data.size == BIG_SIZE
+    assert not np.any(np.isnan(result.data.astype('float64')))
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_SOFT_DATA_160_141_20.INC")
+@pytest.mark.skipif(
+    not _has_data_file("BIG_SOFT_DATA_160_141_20.INC"),
+    reason="Test data file not found: BIG_SOFT_DATA_160_141_20.INC"
+)
 def test_big_sis_legacy():
     """
-    Test SIS on large dataset - migrated from test_big.py
+    SIS on large dataset - migrated from test_big.py
 
-    Requirements:
-      - Test data: BIG_SOFT_DATA_160_141_20.INC with indicators [0,1]
+    Original: SIS with 2 categories [0,1], seed=3241347,
+    exponential covariance, ranges=(10,10,10), sill=1.
     """
-    pass
+    ik_prop = _load_ind("BIG_SOFT_DATA_160_141_20.INC", [0, 1])
+    grid = SugarboxGrid(*BIG_GRID)
+
+    cov_model = CovarianceModel(
+        type=covariance.exponential,
+        ranges=(10.0, 10.0, 10.0),
+        sill=1.0,
+        nugget=0.0
+    )
+
+    sis_data = [
+        {
+            'cov_model': cov_model,
+            'radiuses': (20, 20, 20),
+            'max_neighbours': 12,
+        },
+        {
+            'cov_model': cov_model,
+            'radiuses': (20, 20, 20),
+            'max_neighbours': 12,
+        }
+    ]
+
+    result = sis_simulation(
+        prop=ik_prop,
+        grid=grid,
+        data=sis_data,
+        seed=3241347,
+        marginal_probs=(0.8, 0.2)
+    )
+
+    assert isinstance(result, IndProperty)
+    assert result.data.size == BIG_SIZE
+    assert result.indicator_count == 2
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_SOFT_DATA_CON_CoK.INC")
+@pytest.mark.skipif(
+    not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+)
 def test_simple_cokriging_mark1_legacy():
     """
-    Test Simple Cokriging Mark I - migrated from test_sck_mI.py
+    Simple Cokriging Mark I - migrated from test_sck_mI.py
 
-    Original test parameters:
-      - correlation_coef=0.97
-      - secondary_variance=5.9
-
-    Requirements:
-      - Primary data: BIG_SOFT_DATA_CON_160_141_20.INC
-      - Secondary data: BIG_SOFT_DATA_CON_CoK.INC
+    Original: cokriging with correlation_coef=0.97, secondary_variance=5.9.
+    Secondary data file was never in git; using synthetic correlated data.
     """
-    pass
+    prop_cont = _load_cont("BIG_SOFT_DATA_CON_160_141_20.INC")
+    grid = SugarboxGrid(*BIG_GRID)
+
+    # Generate synthetic secondary data correlated with primary
+    np.random.seed(42)
+    primary_mean = calc_mean(prop_cont)
+    sec_data_arr = np.where(
+        prop_cont.mask == 1,
+        prop_cont.data * 0.97 + np.random.randn(BIG_SIZE).astype('float32') * 0.5,
+        -99.0
+    ).astype('float32')
+    sec_mask = prop_cont.mask.copy()
+    sec_data = ContProperty(sec_data_arr, sec_mask)
+    secondary_mean = calc_mean(sec_data)
+
+    cov_model = CovarianceModel(
+        type=covariance.exponential,
+        ranges=(10.0, 10.0, 10.0),
+        sill=1.0,
+        nugget=0.0
+    )
+
+    result = simple_cokriging_markI(
+        prop=prop_cont,
+        grid=grid,
+        secondary_data=sec_data,
+        primary_mean=primary_mean,
+        secondary_mean=secondary_mean,
+        secondary_variance=5.9,
+        correlation_coef=0.97,
+        radiuses=(20, 20, 20),
+        max_neighbours=12,
+        cov_model=cov_model
+    )
+
+    assert isinstance(result, ContProperty)
+    assert result.data.size == BIG_SIZE
+    assert not np.any(np.isnan(result.data.astype('float64')))
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_SOFT_DATA_CON_CoK.INC")
+@pytest.mark.skipif(
+    not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+)
 def test_simple_cokriging_mark2_legacy():
     """
-    Test Simple Cokriging Mark II - migrated from test_sck_mII.py
+    Simple Cokriging Mark II - migrated from test_sck_mII.py
 
-    Requirements:
-      - Primary data: BIG_SOFT_DATA_CON_160_141_20.INC
-      - Secondary data: BIG_SOFT_DATA_CON_CoK.INC
+    Original: cokriging mark II with correlation_coef=0.97,
+    both primary and secondary using exponential covariance.
     """
-    pass
+    prop_cont = _load_cont("BIG_SOFT_DATA_CON_160_141_20.INC")
+    grid = SugarboxGrid(*BIG_GRID)
+
+    # Generate synthetic secondary data
+    np.random.seed(42)
+    primary_mean = calc_mean(prop_cont)
+    sec_data_arr = np.where(
+        prop_cont.mask == 1,
+        prop_cont.data * 0.97 + np.random.randn(BIG_SIZE).astype('float32') * 0.5,
+        -99.0
+    ).astype('float32')
+    sec_mask = prop_cont.mask.copy()
+    sec_data = ContProperty(sec_data_arr, sec_mask)
+    secondary_mean = calc_mean(sec_data)
+
+    cov_model = CovarianceModel(
+        type=covariance.exponential,
+        ranges=(10.0, 10.0, 10.0),
+        sill=1.0,
+        nugget=0.0
+    )
+
+    result = simple_cokriging_markII(
+        grid=grid,
+        primary_data={
+            'data': prop_cont,
+            'mean': primary_mean,
+            'cov_model': cov_model,
+        },
+        secondary_data={
+            'data': sec_data,
+            'mean': secondary_mean,
+            'cov_model': cov_model,
+        },
+        correlation_coef=0.97,
+        radiuses=(20, 20, 20),
+        max_neighbours=12
+    )
+
+    assert isinstance(result, ContProperty)
+    assert result.data.size == BIG_SIZE
+    assert not np.any(np.isnan(result.data.astype('float64')))
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: NEW_TEST_PROP_01.INC")
+@pytest.mark.skipif(
+    not _has_data_file("NEW_TEST_PROP_01.INC"),
+    reason="Test data file not found: NEW_TEST_PROP_01.INC"
+)
 def test_vpc_small_legacy():
     """
-    Test Variogram of Pixel Coordinates on small grid - migrated from test_vpc.py
+    Vertical Proportion Curves on small grid - migrated from test_vpc.py
 
-    Original test calculated VPC with marginal_probs=[0.8, 0.2].
-
-    Requirements:
-      - Test data: NEW_TEST_PROP_01.INC with indicators [0,1]
-      - Grid: 55x52x1
+    Original: VPC calculation with marginal_probs=[0.8, 0.2] on 55x52x1 grid.
+    Uses CalcVPCsIndicator from routines module (pure Python implementation).
     """
-    pass
+    from geo_bsd.routines import CalcVPCsIndicator
+
+    grid_dims = (55, 52, 1)
+    ik_prop = load_ind_property(
+        str(TEST_DATA_DIR / "NEW_TEST_PROP_01.INC"),
+        -99, [0, 1], grid_dims
+    )
+
+    # Reshape data to 3D for VPC calculation
+    cube = ik_prop.data.reshape(grid_dims, order='F')
+    mask = ik_prop.mask.reshape(grid_dims, order='F')
+
+    vpcs = CalcVPCsIndicator(cube, mask, [0, 1], [0.8, 0.2])
+
+    assert len(vpcs) == 2  # One VPC per indicator
+    assert len(vpcs[0]) == grid_dims[2]  # One value per Z layer
+    assert len(vpcs[1]) == grid_dims[2]
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_N_EMPTY.INC")
 def test_sis_on_empty_data_legacy():
     """
-    Test SIS with sparse/empty data - migrated from test_ik_on_empty.py
+    SIS with sparse/empty data - migrated from test_ik_on_empty.py
 
-    Original test used very sparse data with sill=0.4, smaller radiuses=(10,10,10).
-
-    Requirements:
-      - Test data: BIG_N_EMPTY.INC with indicators [0,1]
-      - Grid: 166x141x20
+    Original: SIS on BIG_N_EMPTY.INC (very sparse data), seed=3241347,
+    spherical covariance, sill=0.4, radiuses=(10,10,10).
+    Data file was never in git; using synthetic sparse data.
     """
-    pass
+    grid = SugarboxGrid(*BIG_GRID)
+    np.random.seed(42)
+
+    # Create very sparse indicator data (~1% informed)
+    data = np.random.randint(0, 2, BIG_SIZE, dtype='uint8')
+    mask = np.zeros(BIG_SIZE, dtype='uint8')
+    sparse_indices = np.random.choice(BIG_SIZE, BIG_SIZE // 100, replace=False)
+    mask[sparse_indices] = 1
+    prop = IndProperty(data, mask, 2)
+
+    cov_model = CovarianceModel(
+        type=covariance.spherical,
+        ranges=(10.0, 10.0, 10.0),
+        sill=0.4,
+        nugget=0.0
+    )
+
+    sis_data = [
+        {
+            'cov_model': cov_model,
+            'radiuses': (10, 10, 10),
+            'max_neighbours': 12,
+        },
+        {
+            'cov_model': cov_model,
+            'radiuses': (10, 10, 10),
+            'max_neighbours': 12,
+        }
+    ]
+
+    result = sis_simulation(
+        prop=prop,
+        grid=grid,
+        data=sis_data,
+        seed=3241347,
+        marginal_probs=(0.9, 0.1)
+    )
+
+    assert isinstance(result, IndProperty)
+    assert result.data.size == BIG_SIZE
+    assert result.indicator_count == 2
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
 @pytest.mark.legacy
-@pytest.mark.skip(reason="Requires external test data file: BIG_N_EMPTY.INC")
 def test_sgs_on_empty_data_legacy():
     """
-    Test SGS with sparse/empty data - migrated from test_sgs_on_empty.py
+    SGS with sparse/empty data - migrated from test_sgs_on_empty.py
 
-    Requirements:
-      - Test data: BIG_N_EMPTY.INC
-      - Grid: 166x141x20
+    Original: SGS on BIG_N_EMPTY.INC, seed=3439275, exponential covariance,
+    sill=0.4, radiuses=(20,20,20). Data file was never in git;
+    using synthetic sparse continuous data.
     """
-    pass
+    grid = SugarboxGrid(*BIG_GRID)
+    np.random.seed(42)
+
+    # Create very sparse continuous data (~1% informed)
+    data = np.random.rand(BIG_SIZE).astype('float32') * 100
+    mask = np.zeros(BIG_SIZE, dtype='uint8')
+    sparse_indices = np.random.choice(BIG_SIZE, BIG_SIZE // 100, replace=False)
+    mask[sparse_indices] = 1
+    prop = ContProperty(data, mask)
+
+    cov_model = CovarianceModel(
+        type=covariance.exponential,
+        ranges=(10.0, 10.0, 10.0),
+        sill=0.4,
+        nugget=0.0
+    )
+
+    # Build CDF from the sparse informed data
+    informed = data[mask == 1]
+    sorted_vals = np.sort(informed)
+    probs = np.linspace(0, 1, len(sorted_vals)).astype('float32')
+    cdf_data = CdfData(sorted_vals, probs)
+
+    result = sgs_simulation(
+        prop=prop,
+        grid=grid,
+        cdf_data=cdf_data,
+        radiuses=(20, 20, 20),
+        max_neighbours=12,
+        cov_model=cov_model,
+        seed=3439275
+    )
+
+    assert isinstance(result, ContProperty)
+    assert result.data.size == BIG_SIZE
+    assert not np.any(np.isnan(result.data.astype('float64')))
 
 
 # ============================================================================
