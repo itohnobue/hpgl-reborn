@@ -157,13 +157,12 @@ class TestGridEdgeCases:
 
     def test_large_grid_stress(self):
         """Test with large grid (50 x 50 x 50 = 125,000 cells)"""
-        pytest.skip("Stress test - skipped by default. Enable with: pytest -m stress")
-
         grid = SugarboxGrid(x=50, y=50, z=50)
         data = np.random.rand(125000).astype('float32') * 100
         mask = np.ones(125000, dtype='uint8')
         mask[::10] = 0  # 10% uninformed
         prop = ContProperty(data, mask)
+        prop.fix_shape(grid)
         cov_model = CovarianceModel(
             type=covariance.spherical,
             ranges=(10.0, 10.0, 10.0),
@@ -179,6 +178,7 @@ class TestGridEdgeCases:
             max_neighbours=12,
             cov_model=cov_model
         )
+        result.fix_shape(grid)
 
         assert result.data.shape == (50, 50, 50)
         assert not np.all(result.data == 0)
