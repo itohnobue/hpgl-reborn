@@ -87,10 +87,6 @@ endif()
 if(HPGL_BUILD_PYTHON)
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter Development.Module)
     message(STATUS "Python: ${Python3_EXECUTABLE} (version ${Python3_VERSION})")
-
-    # pybind11
-    find_package(pybind11 CONFIG REQUIRED)
-    message(STATUS "pybind11: ${pybind11_VERSION}")
 endif()
 
 # ============================================================================
@@ -195,45 +191,6 @@ if(HPGL_BUILD_PYTHON)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/hpgl/output.cpp
     )
 
-    # Check if we have boost::python bindings (hpgl.pyd)
-    set(HPGL_BOOST_PYTHON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/hpgl.pyd")
-    if(EXISTS "${HPGL_BOOST_PYTHON_DIR}/module.cpp")
-        file(GLOB_RECURSE HPGL_BOOST_PYTHON_SOURCES
-            ${HPGL_BOOST_PYTHON_DIR}/*.cpp
-        )
-    else()
-        set(HPGL_BOOST_PYTHON_SOURCES "")
-        message(STATUS "No boost::python bindings found (hpgl.pyd/module.cpp)")
-    endif()
-
-    # Create the Python extension module with pybind11
-    # Note: HPGL uses ctypes for the main interface, so we create a minimal pybind11 wrapper
-    pybind11_add_module(hpgl_py ${HPGL_BOOST_PYTHON_SOURCES})
-
-    target_link_libraries(hpgl_py PRIVATE hpgl_core)
-
-    # Include directories
-    target_include_directories(hpgl_py PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd
-    )
-
-    # NumPy support
-    target_compile_definitions(hpgl_py PRIVATE
-        PY_ARRAY_UNIQUE_SYMBOL=hpgl_py_ARRAY_API
-    )
-
-    # For Windows: ensure correct DLL extension
-    if(WIN32 AND NOT CYGWIN)
-        set_target_properties(hpgl_py PROPERTIES
-            PREFIX ""
-            SUFFIX ".pyd"
-        )
-    endif()
-
-    # Python module visibility
-    if(UNIX AND NOT APPLE)
-        target_link_libraries(hpgl_py PRIVATE "-Wl,--no-undefined")
-    endif()
 endif()
 
 # ============================================================================
@@ -290,13 +247,8 @@ install(DIRECTORY
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
 )
 
-# Install Python bindings
+# Install Python wrapper scripts
 if(HPGL_BUILD_PYTHON)
-    install(TARGETS hpgl_py
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
-    )
-
-    # Install Python wrapper scripts
     install(FILES
         src/geo_bsd/__init__.py
         src/geo_bsd/geo.py
@@ -362,7 +314,6 @@ message(STATUS "  Eigen:               ${eigen_SOURCE_DIR}")
 message(STATUS "  OpenMP:              ${OPENMP_FOUND}")
 if(HPGL_BUILD_PYTHON)
     message(STATUS "  Python:              ${Python3_EXECUTABLE}")
-    message(STATUS "  pybind11:            ${pybind11_VERSION}")
 endif()
 message(STATUS "====================================================================")
 message(STATUS "")
