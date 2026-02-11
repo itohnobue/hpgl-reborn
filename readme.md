@@ -1,9 +1,5 @@
 # HPGL - High Performance Geostatistics Library (v1.0.0)
 
-## Project Site
-
-[http://hpgl.github.io/hpgl/](http://hpgl.github.io/hpgl/)
-
 ## Description
 
 HPGL (High Performance Geostatistics Library) is a C++/Python library implementing geostatistical algorithms for spatial data analysis and reservoir modeling. The core computation engine is written in C++ for performance, with a Python interface for ease of use.
@@ -326,21 +322,3 @@ hpgl/
 ## License
 
 For non-commercial use (research, education, etc.) HPGL is distributed under the BSD license.
-For questions about commercial distribution, please contact the Authors.
-
-## Authors
-
-Management & Math:
-- Savichev Vladimir
-- Bezrukov Andrey
-
-Programming (C++, Python), testing, support:
-- Muharlyamov Arthur
-- Barskiy Konstantin
-- Nasibullina Dina
-- Safin Rustam
-
-## Acknowledgements
-
-- The Authors wish to thank Andre Journel for his valuable support and indefatigable enthusiasm.
-- The Authors also thank Iskander Shafikov for his assistance with the English translations and the User Guide cover.
