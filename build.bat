@@ -17,7 +17,7 @@ echo.
 echo MKL_ROOT: %MKL_ROOT%
 echo VCTargetsPath: %VCTargetsPath%
 echo Solution Dir: %SolutionDir%
-echo Project: hpgl-gpl.vcxproj
+echo Project: hpgl.vcxproj
 echo Configuration: Release x64
 echo.
 
@@ -38,7 +38,7 @@ echo Building...
 echo.
 
 REM Build with MSBuild (using x64 version for better performance)
-"%MSBUILD_PATH%" "%SolutionDir%hpgl-gpl.vcxproj" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%" /nologo
+"%MSBUILD_PATH%" "%SolutionDir%hpgl.vcxproj" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%" /nologo
 
 if %ERRORLEVEL% EQU 0 (
     echo.

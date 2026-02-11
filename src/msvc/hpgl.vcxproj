@@ -20,7 +20,7 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}</ProjectGuid>
-    <RootNamespace>hpgl_gpl</RootNamespace>
+    <RootNamespace>hpgl</RootNamespace>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
