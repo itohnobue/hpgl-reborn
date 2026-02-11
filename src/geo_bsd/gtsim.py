@@ -21,7 +21,7 @@ def tk_calculation(pk_prop):
     quad_diff = 1
     values = zeros(pk_prop.size(), dtype=float)
     for i in range(pk_prop.size()):
-        values[i] = 1./(quad_diff*sqrt(2*pi))*exp((1./2)*((pk_prop.get_at(i)-mean)/quad_diff)*((pk_prop.get_at(i)-mean)/quad_diff))
+        values[i] = 1./(quad_diff*sqrt(2*pi))*exp(-(1./2)*((pk_prop.get_at(i)-mean)/quad_diff)*((pk_prop.get_at(i)-mean)/quad_diff))
     for i in range(pk_prop.size()):
         pk_prop.set_at(i,values[i])
     return pk_prop
@@ -37,10 +37,7 @@ def gtsim_2ind(grid, prop, sk_params, do_sk = True, pk_prop = None, sgs_params =
         pk_prop = simple_kriging(prop, grid, **sk_params)
         print("Done.")
     else:
-        if type(pk_prop) is hpgl.cont_property_array:
-            hpgl.write_cont_property(pk_prop, filename, prop_name, undefined_value)
-        else:
-            print("error")
+        print("Using provided pk_prop.")
 
     # 2. calculate tk_prop
     # t0_prop = 0

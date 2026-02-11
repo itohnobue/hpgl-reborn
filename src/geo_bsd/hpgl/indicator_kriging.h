@@ -122,7 +122,7 @@ namespace hpgl
 		report.stop();
 		{
 			std::ostringstream oss;
-			oss << "Done. Average speec: " << report.iterations_per_second() << " point/sec.\n";
+			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";
 			write(oss.str());
 		}
 	}

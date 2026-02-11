@@ -10,12 +10,12 @@ option(HPGL_BUILD_CPP_TESTS "Build C++ unit tests" OFF)
 if(HPGL_BUILD_CPP_TESTS)
     enable_testing()
 
-    # Test executable
+    # Test executable (paths relative to this CMakeLists.txt directory)
     add_executable(hpgl_test
-        tests/test_main.cpp
-        tests/test_kriging.cpp
-        tests/test_grid.cpp
-        tests/test_covariance.cpp
+        cpp/test_main.cpp
+        cpp/test_kriging.cpp
+        cpp/test_grid.cpp
+        cpp/test_covariance.cpp
     )
 
     target_link_libraries(hpgl_test PRIVATE hpgl::core)
@@ -25,17 +25,9 @@ endif()
 
 # Python Tests
 if(HPGL_BUILD_PYTHON)
-    find_package(pytest QUIET)
-
-    if(pytest_FOUND)
-        add_test(NAME hpgl_python_tests
-            COMMAND ${Python3_EXECUTABLE} -m pytest
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/python
-        )
-    else()
-        message(STATUS "pytest not found - Python tests will not run")
-        add_test(NAME hpgl_python_tests
-            COMMAND ${Python3_EXECUTABLE} -c "import hpgl; print('HPGL import successful')"
-        )
-    endif()
+    # Always register Python test via pytest (pytest availability checked at runtime)
+    add_test(NAME hpgl_python_tests
+        COMMAND ${Python3_EXECUTABLE} -m pytest -v
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python
+    )
 endif()

@@ -94,7 +94,7 @@ def _CalcSearchTemplateWindow(VariogramSearchTemplate):
 
 def _CalcLagDistances(VariogramSearchTemplate):
     LagIndexes = range(0, VariogramSearchTemplate.NumLags)
-    LagDistance = np.dot(list(LagIndexes), VariogramSearchTemplate.LagSeparation + VariogramSearchTemplate.FirstLagDistance)
+    LagDistance = np.array(list(LagIndexes)) * VariogramSearchTemplate.LagSeparation + VariogramSearchTemplate.FirstLagDistance
     LagWidth = VariogramSearchTemplate.LagWidth
     LagStart = LagDistance - LagWidth / 2
     LagEnd = LagDistance + LagWidth / 2
@@ -166,8 +166,8 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         Filter = np.bitwise_and(Filter, DX <= MaxX)
         Filter = np.bitwise_and(Filter, MinY <= DY)
         Filter = np.bitwise_and(Filter, DY <= MaxY)
-        Filter = np.bitwise_and(Filter, MinY <= DY)
-        Filter = np.bitwise_and(Filter, DY <= MaxY)
+        Filter = np.bitwise_and(Filter, MinZ <= DZ)
+        Filter = np.bitwise_and(Filter, DZ <= MaxZ)
 
         FDX, FDY, FDZ = DX[Filter], DY[Filter], DZ[Filter]
         FIndex = Index[Filter]

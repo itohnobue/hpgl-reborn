@@ -438,7 +438,10 @@ void calc_variograms(
 
 	for (int i = 0; i < lag_count; ++i)
 	{
-		result_covariations[i] = lag_stats[i].m_cov_sum / lag_stats[i].m_cov_count / 2;
+		if (lag_stats[i].m_cov_count > 0)
+			result_covariations[i] = lag_stats[i].m_cov_sum / lag_stats[i].m_cov_count / 2;
+		else
+			result_covariations[i] = 0;
 	}
 
 	free(lag_stats);

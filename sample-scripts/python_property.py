@@ -11,7 +11,7 @@ def load_property_python(x, y, z, filename, intype=False):
     with open(filename) as f:
         for line in f:
             if "--" in line:
-                line = line[+1]
+                line = line[:line.index("--")]
             ss = line.split()
             for s in ss:
                 try:

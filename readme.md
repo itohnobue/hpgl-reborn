@@ -258,7 +258,7 @@ Run the full test suite:
 uv run pytest tests/python/ -v
 ```
 
-The test suite includes 344+ tests covering:
+The test suite includes 361 tests covering:
 - All kriging algorithms (OK, SK, LVM, IK, Median IK, Cokriging)
 - All simulation algorithms (SGS, SIS)
 - Edge cases and parameter validation
@@ -341,7 +341,7 @@ Original documentation from earlier HPGL versions, including PDF manuals (Englis
 - **Input validation**: Comprehensive parameter validation framework
 - **Security**: Path validation, array reference management, safe library loading
 - **Modern build**: MSBuild-based build.bat, pyproject.toml, CMakeLists.txt
-- **Test suite**: 344+ automated tests with pytest
+- **Test suite**: 361 automated tests with pytest
 - **Legacy cleanup**: Removed unused libraries, old Boost.Python bindings, obsolete build systems (SCons, old Makefiles), Debian packaging, old VS 2008 project files, and a bundled Win32 installer, etc
 
 ## License

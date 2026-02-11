@@ -94,7 +94,7 @@ def _CalcSearchTemplateWindow(VariogramSearchTemplate):
 
 def _CalcLagDistances(VariogramSearchTemplate):
     LagIndexes = range(0, VariogramSearchTemplate.NumLags)
-    LagDistance = dot(LagIndexes, VariogramSearchTemplate.LagSeparation + VariogramSearchTemplate.FirstLagDistance)
+    LagDistance = array(LagIndexes) * VariogramSearchTemplate.LagSeparation + VariogramSearchTemplate.FirstLagDistance
     LagWidth = VariogramSearchTemplate.LagWidth
     LagStart = LagDistance - float(LagWidth) / 2
     LagEnd = LagDistance + float(LagWidth) / 2
@@ -169,8 +169,8 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         Filter = bitwise_and(Filter, DX <= MaxX)
         Filter = bitwise_and(Filter, MinY <= DY)
         Filter = bitwise_and(Filter, DY <= MaxY)
-        Filter = bitwise_and(Filter, MinY <= DY)
-        Filter = bitwise_and(Filter, DY <= MaxY)
+        Filter = bitwise_and(Filter, MinZ <= DZ)
+        Filter = bitwise_and(Filter, DZ <= MaxZ)
         
         FDX, FDY, FDZ = DX[Filter], DY[Filter], DZ[Filter]
         FIndex = Index[Filter]
@@ -286,6 +286,8 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
             GK2Slice = GK2[:, :, k][Intersection[:, :, k]].flatten()
         
             Result[Lag, :] = Function((GI1Slice, GJ1Slice, GK1Slice), (GI2Slice, GJ2Slice, GK2Slice), Result[Lag, :], Params)
+
+    return Result, LagDistance
 
 def CalcVariogramFunction(Point1, Point2, Result, Params):
     Values = Params['HardData']

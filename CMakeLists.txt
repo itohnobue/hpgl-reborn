@@ -136,7 +136,7 @@ if(WIN32)
     )
     # Windows-specific runtime library
     if(NOT HPGL_BUILD_SHARED)
-        set_property(TARGET hpgl_core PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug:Debug>")
+        set_property(TARGET hpgl_core PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endif()
 else()
     target_compile_definitions(hpgl_core PUBLIC HPGL_SO)
@@ -187,8 +187,8 @@ if(HPGL_BUILD_VARIOGRAM)
     if(WIN32)
         target_compile_definitions(hpgl_variogram PRIVATE CVAR_DLL CVAR_EXPORTS)
         set_target_properties(hpgl_variogram PROPERTIES
-            PREFIX "_"
-            SUFFIX "_d"
+            PREFIX ""
+            SUFFIX ""
             OUTPUT_NAME "_cvariogram"
         )
     elseif(UNIX)

@@ -23,8 +23,14 @@ pytest tests/python/test_performance.py -v
 
 | File | Description | Tests |
 |------|-------------|-------|
-| `test_kriging.py` | Kriging algorithms | OK, SK, IK, numerical stability |
-| `test_simulation.py` | Simulation algorithms | SGS, SIS |
+| `test_classes.py` | Core classes | SugarboxGrid, CovarianceModel, ContProperty, IndProperty |
+| `test_kriging.py` | Kriging algorithms | OK, SK, IK |
+| `test_kriging_complete.py` | Kriging comprehensive | All kriging variants, LVM, cokriging, edge cases |
+| `test_simulation.py` | Simulation algorithms | SGS, SIS basic |
+| `test_simulation_complete.py` | Simulation comprehensive | All SGS/SIS variants, LVM, masks, multi-realization |
+| `test_edge_cases.py` | Edge cases | Boundary conditions, error handling |
+| `test_legacy_migrated.py` | Legacy tests | Migrated from original test suite |
+| `test_utilities.py` | Utility functions | I/O, CDF, mean calc, callbacks |
 | `test_numpy2_compat.py` | NumPy 2.0+ compatibility | Array handling, ctypes |
 | `test_memory_leaks.py` | Memory leak detection | Memory cleanup tests |
 | `test_performance.py` | Performance benchmarks | Timing and scaling |
@@ -63,7 +69,7 @@ pytest tests/python/test_performance.py -v
 
 Before running tests, ensure:
 - [ ] Build completed successfully
-- [ ] HPGL can be imported: `import geo`
+- [ ] HPGL can be imported: `import geo_bsd`
 - [ ] NumPy >= 1.24: `python -c "import numpy; print(numpy.__version__)"`
 - [ ] pytest installed: `uv sync --extra test`
 
@@ -72,7 +78,7 @@ Before running tests, ensure:
 Run tests with coverage:
 
 ```bash
-pytest tests/python/ --cov=geo --cov-report=html
+pytest tests/python/ --cov=geo_bsd --cov-report=html
 ```
 
 View coverage report:
@@ -96,10 +102,10 @@ These tests are designed to run in CI environments:
 
 ### Import Errors
 ```
-ImportError: No module named 'geo'
+ImportError: No module named 'geo_bsd'
 ```
 - Ensure HPGL is built
-- Check PYTHONPATH includes `src/geo_bsd`
+- Check PYTHONPATH includes `src/` (parent of `geo_bsd`)
 
 ### NumPy Version Warnings
 ```

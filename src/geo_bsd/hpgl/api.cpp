@@ -677,14 +677,14 @@ hpgl_simple_cokriging_mark2(
 		{
 			std::ostringstream oss;
 			oss << "Size of secondary data (" << size2 << ") is different from size of primary data (" << size << ")";
-			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
+			throw hpgl_exception("hpgl_simple_cokriging_mark2", oss.str());
 		}
 
 		if (size != size3)
 		{
 			std::ostringstream oss;
 			oss << "Size of output data (" << size3 << ") is different from size of primary data (" << size << ")";
-			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
+			throw hpgl_exception("hpgl_simple_cokriging_mark2", oss.str());
 		}
 
 		cont_property_array_t primary_prop(

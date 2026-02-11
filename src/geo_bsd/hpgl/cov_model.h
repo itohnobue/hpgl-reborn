@@ -97,8 +97,10 @@ namespace hpgl
 			case covariance_type_t::COV_GAUSSIAN:
 				fun = &cov_model_t::gaussian;
 				break;
+			default:
+				throw hpgl_exception("cov_model_t::init_fun", "Unknown covariance type");
 			}
-			
+
 		}
 	public:
 
