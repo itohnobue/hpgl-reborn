@@ -94,6 +94,10 @@ Repository = "https://github.com/hpgl/hpgl"
 Issues = "https://github.com/hpgl/hpgl/issues"
 Changelog = "https://github.com/hpgl/hpgl/blob/main/CHANGELOG.md"
 
+[tool.uv]
+# Don't build/install the project itself (C++ is built separately via build.bat/CMake)
+package = false
+
 [tool.scikit-build]
 # Minimum CMake version
 cmake.version = ">=3.20"

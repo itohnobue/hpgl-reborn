@@ -65,7 +65,7 @@ Before running tests, ensure:
 - [ ] Build completed successfully
 - [ ] HPGL can be imported: `import geo`
 - [ ] NumPy >= 1.24: `python -c "import numpy; print(numpy.__version__)"`
-- [ ] pytest installed: `pip install pytest pytest-cov pytest-benchmark`
+- [ ] pytest installed: `uv sync --extra test`
 
 ## Coverage
 
@@ -105,7 +105,7 @@ ImportError: No module named 'geo'
 ```
 RuntimeWarning: numpy.ndarray size changed
 ```
-- Update NumPy: `pip install --upgrade numpy`
+- Update NumPy: `uv sync --upgrade-package numpy`
 
 ### Skipped Tests
 Tests with "HPGL not available" are skipped when:

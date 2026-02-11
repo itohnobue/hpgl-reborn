@@ -25,15 +25,15 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 
 ### Common
 
-- **Python**: 3.9 or higher (tested up to 3.14)
-- **NumPy**: 1.24 or higher (compatible with NumPy 2.x)
-- **SciPy**: (optional, for `routines` module)
+- **[uv](https://docs.astral.sh/uv/)**: Package and environment manager (installs Python and dependencies automatically)
+- **Python**: 3.9 or higher (tested up to 3.14) — installed by uv
+- **NumPy**: 1.24 or higher (compatible with NumPy 2.x) — installed by uv
+- **SciPy**: (optional, for `routines` module) — installed by uv
 
 ### Windows Build
 
 - Visual Studio 2022 Build Tools with C++ desktop development workload (v143 toolset)
 - Intel oneAPI Math Kernel Library (MKL)
-- Python 3.9+ with NumPy installed
 
 ### Linux Build
 
@@ -41,7 +41,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 - GCC 10+ or Clang 12+ with C++17 support
 - OpenBLAS and LAPACK development libraries (or Intel MKL)
 - OpenMP (optional, for parallelization)
-- Python 3.9+ development headers
+- Python 3.9+ development headers (`python3-dev`)
 
 ## Build Instructions
 
@@ -51,15 +51,16 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 
    - Install [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) with "Desktop development with C++" workload
    - Install [Intel oneAPI MKL](https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl.html) (free)
-   - Install Python 3.9+ and set up a virtual environment:
+
+2. **Set up the Python environment:**
 
    ```cmd
-   python -m venv .venv
-   .venv\Scripts\activate
-   pip install numpy scipy pytest
+   uv sync --extra test
    ```
 
-2. **Build the native library:**
+   This automatically installs the required Python version, creates a virtual environment, and installs all dependencies (NumPy, SciPy, pytest) from `pyproject.toml`.
+
+3. **Build the native library:**
 
    ```cmd
    build.bat
@@ -69,32 +70,36 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
    - `src\geo_bsd\hpgl.dll` (main native library, ~9.5 MB)
    - `src\geo_bsd\_cvariogram.dll` (variogram extension, ~22 KB)
 
-3. **Verify the build:**
+4. **Verify the build:**
 
    ```cmd
-   .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); from geo_bsd import hpgl_wrap; print('Build OK')"
+   uv run python -c "import sys; sys.path.insert(0, 'src'); from geo_bsd import hpgl_wrap; print('Build OK')"
    ```
 
 ### Linux (CMake)
 
-1. **Install prerequisites:**
+1. **Install system packages:**
 
    Ubuntu/Debian:
    ```bash
    sudo apt-get update
    sudo apt-get install -y build-essential cmake libopenblas-dev liblapack-dev \
-       python3-dev python3-pip python3-venv libomp-dev
-   pip3 install numpy scipy pytest
+       python3-dev libomp-dev
    ```
 
    Fedora/RHEL:
    ```bash
    sudo dnf install -y gcc-c++ cmake openblas-devel lapack-devel \
-       python3-devel python3-pip libomp-devel
-   pip3 install numpy scipy pytest
+       python3-devel libomp-devel
    ```
 
-2. **Build with CMake:**
+2. **Set up the Python environment:**
+
+   ```bash
+   uv sync --extra test
+   ```
+
+3. **Build with CMake:**
 
    ```bash
    mkdir -p build && cd build
@@ -113,7 +118,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
    cmake --build . --parallel $(nproc)
    ```
 
-3. **Install (optional):**
+4. **Install (optional):**
 
    ```bash
    sudo cmake --install .
@@ -135,25 +140,18 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 
 ### From Source (Development Mode)
 
-After building, add the `src/` directory to your Python path:
+After building, use `uv run` to execute scripts — it automatically manages the virtual environment:
+
+```bash
+uv run python my_script.py
+```
+
+Scripts need to add the `src/` directory to the Python path to import `geo_bsd`:
 
 ```python
 import sys
 sys.path.insert(0, "/path/to/hpgl/src")
 import geo_bsd
-```
-
-Or set the `PYTHONPATH` environment variable:
-
-```bash
-# Linux/macOS
-export PYTHONPATH="/path/to/hpgl/src:$PYTHONPATH"
-
-# Windows (PowerShell)
-$env:PYTHONPATH = "C:\path\to\hpgl\src;$env:PYTHONPATH"
-
-# Windows (CMD)
-set PYTHONPATH=C:\path\to\hpgl\src;%PYTHONPATH%
 ```
 
 ## Quick Start
@@ -256,9 +254,8 @@ geo_bsd.write_property(sim, "simulation_result.inc", "SGS_REAL1", -99)
 
 Run the full test suite:
 
-```cmd
-cd hpgl
-.venv\Scripts\python.exe -m pytest tests/python/ -v
+```bash
+uv run pytest tests/python/ -v
 ```
 
 The test suite includes 344+ tests covering:

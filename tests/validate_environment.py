@@ -46,7 +46,7 @@ def check_numpy():
             return False
     except ImportError:
         print("  [FAIL] NumPy not installed")
-        print("  Install with: pip install numpy>=1.24")
+        print("  Install with: uv sync")
         return False
 
 def check_pytest():
@@ -59,54 +59,60 @@ def check_pytest():
         return True
     except ImportError:
         print("  [WARN] pytest not installed")
-        print("  Install with: pip install pytest")
+        print("  Install with: uv sync --extra test")
         return False
 
 def check_hpgl():
     """Check HPGL library availability"""
     print("\nChecking HPGL library...")
     
-    # Add src/geo_bsd to path
+    # Add src/ to path so geo_bsd package can be imported
     project_root = Path(__file__).parent.parent
-    src_dir = project_root / "src" / "geo_bsd"
+    src_dir = project_root / "src"
     sys.path.insert(0, str(src_dir))
-    
+
     try:
-        import geo
+        import geo_bsd
         print("  [PASS] HPGL library imported successfully")
         return True
     except ImportError as e:
         print(f"  [FAIL] Cannot import HPGL library: {e}")
         print("\nPossible reasons:")
-        print("  1. Build has not completed - no Python extension available")
-        print("  2. Python extension not in expected location")
-        print("  3. Missing dependencies (NumPy, etc.)")
-        print("\nTo fix:")
-        print("  1. Complete the build process")
-        print("  2. Verify .pyd or .so files exist in build/ directory")
-        print("  3. Install required dependencies")
+        print("  1. Build has not completed - run build.bat (Windows) or cmake (Linux)")
+        print("  2. DLL/SO not in expected location (src/geo_bsd/)")
+        print("  3. Missing dependencies (run: uv sync)")
         return False
 
 def check_build_files():
     """Check for built extension files"""
-    print("\nChecking for built extension files...")
-    
+    print("\nChecking for built native libraries...")
+
     project_root = Path(__file__).parent.parent
-    build_dir = project_root / "build"
-    
-    # Look for Python extensions
-    pyd_files = list(build_dir.glob("**/*.pyd"))
-    so_files = list(build_dir.glob("**/*.so"))
-    dll_files = list(build_dir.glob("**/*.dll"))
-    
-    if pyd_files or so_files:
-        print(f"  Found {len(pyd_files)} .pyd files")
-        print(f"  Found {len(so_files)} .so files")
-        print("  [PASS] Extension files exist")
+    geo_bsd_dir = project_root / "src" / "geo_bsd"
+
+    # Look for native libraries (DLL on Windows, SO on Linux)
+    dll_files = list(geo_bsd_dir.glob("hpgl.dll")) + list(geo_bsd_dir.glob("hpgl.so"))
+    cvar_files = list(geo_bsd_dir.glob("_cvariogram.dll")) + list(geo_bsd_dir.glob("_cvariogram.so"))
+
+    found = bool(dll_files)
+    if dll_files:
+        for f in dll_files:
+            print(f"  [OK] {f.name}")
+    else:
+        print("  [MISSING] hpgl.dll / hpgl.so")
+
+    if cvar_files:
+        for f in cvar_files:
+            print(f"  [OK] {f.name}")
+    else:
+        print("  [MISSING] _cvariogram.dll / _cvariogram.so")
+
+    if found:
+        print("  [PASS] Native libraries exist")
         return True
     else:
-        print("  [FAIL] No Python extension files (.pyd or .so) found")
-        print("\nThe build has not completed yet. Tests will be skipped.")
+        print("  [FAIL] Native libraries not found")
+        print("\n  Build with: build.bat (Windows) or cmake (Linux)")
         return False
 
 def check_test_files():
@@ -170,7 +176,7 @@ def main():
     
     if passed == total:
         print("\n[SUCCESS] Environment is ready for testing!")
-        print("\nRun tests with: python tests/run_tests.py all")
+        print("\nRun tests with: uv run pytest tests/python/ -v")
         return 0
     elif results["HPGL library"] or results["Build files"]:
         print("\n[PARTIAL] Some checks failed")
