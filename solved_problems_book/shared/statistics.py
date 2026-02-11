@@ -1,0 +1,133 @@
+#
+#   Solved Problems in Geostatistics
+#
+# ------------------------------------------------
+#   This file includes some general statistics
+#   functions, which are needed for the problems
+# ------------------------------------------------
+
+import numpy as np
+from numpy import mean, std, sum, sqrt, sort, corrcoef, tanh, arctanh
+from numpy.random import randint
+
+
+# Standardize the array
+def stand(z, mean_val, st_dev):
+    z = (z - mean_val) / st_dev
+    return z
+
+
+# Calculate weighted variance
+def w_var(weights, data, w_mean_val):
+    var = 0.0
+    weights = norm(weights)
+    for i in range(len(data)):
+        var = var + weights[i] * (data[i] - w_mean_val) ** 2
+    var = sqrt(var / weights.sum())
+    return var
+
+
+# Calculate weighted mean
+def w_mean(weights, data):
+    z_1 = 0.0
+    z = 0.0
+    for i in range(len(data)):
+        z = z + weights[i] * data[i]
+        z_1 = z_1 + weights[i]
+    z = z / z_1
+    return z
+
+
+# Calculate standard deviation (sqrt[var])
+def calc_quadr_var(array, mean_val):
+    var = 0.0
+    for i in range(len(array)):
+        var = var + ((array[i] - mean_val) ** 2) / len(array)
+    var = sqrt(var)
+    return var
+
+
+# Calculate mean
+def calc_mean_array(array):
+    size = len(array)
+    total = array.sum() / size
+    return total
+
+
+# Normalize array
+def norm(array):
+    total = array.sum()
+    for i in range(len(array)):
+        array[i] = array[i] / total
+    return array
+
+
+# Calculate correlation coefficient
+def corr_coef(x, y):
+    coef = 0.0
+    mean_x = x.mean()
+    var_x = calc_quadr_var(x, mean_x)
+    mean_y = y.mean()
+    var_y = calc_quadr_var(y, mean_y)
+    var = var_x * var_y
+    for i in range(len(x)):
+        coef = coef + x[i] * y[i]
+    coef = (coef - len(x) * mean_x * mean_y) / ((len(x) - 1) * var)
+    return coef
+
+
+# Make random array from existing with same values
+def rand_arrays(array1, array2, n):
+    array1_rand = np.zeros(n, dtype=float)
+    array2_rand = np.zeros(n, dtype=float)
+    for i in range(n):
+        value = np.random.randint(len(array1))
+        array1_rand[i] = array1[value]
+        array2_rand[i] = array2[value]
+    return [array1_rand, array2_rand]
+
+
+# Calculate weighted covariance
+def calc_cov(x, y, w):
+    cov = 0.0
+    weights = 0.0
+    for i in range(len(x)):
+        cov = cov + w[i] * (x[i] - w_mean(w, x)) * (y[i] - w_mean(w, y))
+        weights = weights + w[i]
+    cov = cov / weights
+    return cov
+
+
+# Calculate weighted correlation coefficient
+def w_corr_coef(x, y, w):
+    w_coef = calc_cov(x, y, w) / sqrt(calc_cov(x, x, w) * calc_cov(y, y, w))
+    return w_coef
+
+
+# Calculate distance between points
+def calc_distance(x1, y1, x2, y2):
+    h = sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+    return h
+
+
+def calc_distance_3d(x1, y1, z1, x2, y2, z2):
+    h = sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z1 - z2) ** 2)
+    return h
+
+
+def bootstrap_correlation(x, y):
+    idx = randint(len(x), size=(1000, len(x)))
+    bx = x[idx]
+    by = y[idx]
+    mx = mean(bx, 1)
+    my = mean(by, 1)
+    sx = std(bx, 1)
+    sy = std(by, 1)
+    r = sort(sum((bx - mx.repeat(len(x), 0).reshape(bx.shape)) *
+                 (by - my.repeat(len(y), 0).reshape(by.shape)), 1)
+             / ((len(x) - 1) * sx * sy))
+    # bootstrap confidence interval (NB! biased)
+    conf_interval = (r[25], r[975])
+    # bootstrap standard error using Fisher's z-transform (NB! biased)
+    std_err = tanh(std(arctanh(r)) * (len(r) / (len(r) - 1.0)))
+    return (std_err, conf_interval)

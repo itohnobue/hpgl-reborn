@@ -274,6 +274,9 @@ hpgl/
   build.bat              # Windows build script (MSBuild)
   CMakeLists.txt         # Cross-platform CMake build
   pyproject.toml         # Python project metadata
+  sample-scripts/        # Example scripts demonstrating HPGL usage
+  solved_problems_book/  # Practical implementations from geostatistics textbook
+  legacy_documentation/  # Original documentation and manuals
   src/
     geo_bsd/             # Python package
       __init__.py        # Package entry point
@@ -297,11 +300,35 @@ hpgl/
       _cvariogram/       # Variogram C++ extension
     msvc/                # Visual Studio project files
     tnt_126/             # TNT math library (headers)
-    doc/                 # Legacy documentation and manuals
-    sample-scripts/      # Example scripts (legacy API)
   tests/
     python/              # Python test suite (pytest)
 ```
+
+### Sample Scripts (`sample-scripts/`)
+
+Example Python scripts demonstrating how to use the HPGL library for various geostatistical tasks: kriging, simulation (SGS/SIS), indicator kriging, cokriging, property I/O, histogram analysis, and more. These scripts serve as practical usage examples and integration tests for the `geo_bsd` Python API.
+
+### Solved Problems (`solved_problems_book/`)
+
+Python implementations of problems from the textbook *"Solved Problems in Geostatistics"* by Oy Leuangthong, K. Daniel Khan, and Clayton V. Deutsch (Wiley, 2008, ISBN 978-0-470-17792-1). The scripts cover topics including:
+
+- **2.3** Standardization and probability intervals
+- **3.1** Basic declustering
+- **3.3** Comparison of declustering methods
+- **4.1** Central limit theorem
+- **4.2** Bootstrap and spatial bootstrap
+- **4.3** Transfer of uncertainty (NPV analysis)
+- **5.2** Variogram calculation (2D and 3D)
+- **5.3** Variogram modeling and volume variance
+- **7.2** Conditioning by kriging
+- **7.3** Gaussian simulation
+- **8.3** Indicator simulation for categorical data
+
+The `shared/` subdirectory contains utility modules (statistics, GSLIB file I/O, variogram routines, grid classes, CDF transforms) used across all scripts.
+
+### Legacy Documentation (`legacy_documentation/`)
+
+Original documentation from earlier HPGL versions, including PDF manuals (English and Russian), Word source documents, and the archived sample scripts documentation.
 
 ## Changes from v0.9.9
 

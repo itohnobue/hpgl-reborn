@@ -1,0 +1,140 @@
+import numpy as np
+
+
+class Grid:
+	def __init__(self, x0, y0, z0, i_max, j_max, k_max, nx, ny, nz):
+		self.x0 = x0
+		self.y0 = y0
+		self.z0 = z0
+		self.i_max = i_max
+		self.j_max = j_max
+		self.k_max = k_max
+		self.x_max = i_max * nx + x0
+		self.y_max = j_max * ny + y0
+		self.z_max = k_max * nz + z0
+		self.nx = nx
+		self.ny = ny
+		self.nz = nz
+
+	# Function to get ijk by (x,y,z)
+	def get_ijk(self, x, y, z):
+		if (x <= self.x_max) and (y <= self.y_max) and (z <= self.z_max):
+			i = int((x - self.x0) / self.nx)
+			j = int((y - self.y0) / self.ny)
+			k = int((z - self.z0) / self.nz)
+			return i, j, k
+		else:
+			return -1, -1, -1
+
+	# Function to get index of cell by ijk
+	def get_cell_num(self, i, j, k):
+		index = j * self.i_max + i + k * self.j_max * self.i_max
+		return index
+
+	# Function to get ijk by index of cell
+	def get_ijk_cell(self, index):
+		i = index % self.i_max
+		j = (index % (self.j_max * self.i_max)) // self.i_max
+		k = index // (self.j_max * self.i_max)
+		return i, j, k
+
+# Function to get number of points, lying in n-index cell
+def get_point_num(Grid, n, PointSet):
+	N = 0
+	for i in range(len(PointSet[0])):
+		i, j, k = Grid.get_ijk(PointSet[0][i], PointSet[1][i], PointSet[2][i])
+		index = Grid.get_cell_num(i, j, k)
+		if (index == n):
+			N = N + 1
+	return N
+
+# Function to get center points by using ijk, cells length (nnx, nny, nnz), x_min, y_min, z_min
+def get_center_points(i, j, k, nnx, nny, nnz, x_min, y_min, z_min):
+	x_center = i * nnx + nnx/2 + x_min
+	y_center = j * nny + nny/2 + y_min
+	z_center = k * nnz + nnz/2 + z_min
+	return x_center, y_center, z_center
+
+# Function to get weights by cell declustering
+def get_weights_cell(Grid, PointSet):
+	w = np.zeros((len(PointSet[0])), dtype=float)
+	n = 0
+	n_1 = 0
+	for q in range(len(PointSet[0])):
+		i, j, k = Grid.get_ijk(PointSet[0][q], PointSet[1][q], PointSet[2][q])
+		n_1 = Grid.get_cell_num(i, j, k)
+		n = get_point_num(Grid, n_1, PointSet)
+		w[q] = 1.0 / float(n)
+	return w
+
+# Function to get weights for IDW declustering
+def get_weights_idw(Grid, x_center, y_center, z_center, PointSet, c):
+	w1 = np.zeros((len(PointSet[0])), dtype=np.float32)
+	e_h = calc_e_h(x_center, y_center, z_center, c, PointSet)
+	for i in range(len(PointSet[0])):
+		h = calc_h(x_center, y_center, z_center, i, c, PointSet)
+		w1[i] = h/e_h
+	return w1
+
+#For IDW
+def calc_e_h(x_center, y_center, z_center, c, PointSet):
+	e_h = 0.0
+	for i in range(len(PointSet[0])):
+		e_h = e_h + (np.sqrt((x_center-PointSet[0][i])**2 + (y_center-PointSet[1][i])**2 + (z_center-PointSet[2][i])**2))**(-c)
+	return e_h
+
+#For IDW
+def calc_h(x_center, y_center, z_center, j, c, PointSet):
+	h = (np.sqrt((x_center-PointSet[0][j])**2 + (y_center-PointSet[1][j])**2 + (z_center-PointSet[2][j])**2))**(-c)
+	return h
+
+# Function to get standardized weights
+def stand_weight(w, n):
+	total = w.sum()
+	for i in range(len(w)):
+		w[i] = (w[i]*n)/total
+	return w
+# n- kol-vo izvestnih tochek
+
+def get_sum_cell_value(array_grid, array_x, array_y, array_z, i, j, k, value, type='a'):
+	if (type == 'a'):
+		# arithmetic average
+		array_value = 0
+		n = 0
+		for x in range(len(array_x)):
+			i_x, i_y, i_z = array_grid.get_ijk(array_x[x], array_y[x], array_z[x])
+			if (i_x == i) and (i_y == j) and (i_z == k):
+				array_value = array_value + value[x]
+				n = n + 1
+		if (n > 0):
+			return (array_value / n)
+		else:
+			return 0
+
+	if (type == 'g'):
+		# geometric average
+		array_value = 1.0
+		n = 0
+		for x in range(len(array_x)):
+			i_x, i_y, i_z = array_grid.get_ijk(array_x[x], array_y[x], array_z[x])
+			if (i_x == i) and (i_y == j) and (i_z == k):
+				array_value = array_value * value[x]
+				n = n + 1
+		if (n > 0):
+			return (array_value ** (1./n))
+		else:
+			return 0
+
+	if (type == 'h'):
+		# harmonic average
+		array_value = 0.0
+		n = 0.0
+		for x in range(len(array_x)):
+			i_x, i_y, i_z = array_grid.get_ijk(array_x[x], array_y[x], array_z[x])
+			if (i_x == i) and (i_y == j) and (i_z == k):
+				array_value = array_value + 1. / value[x]
+				n = n + 1
+		if (n > 0):
+			return (np.float32(n) / array_value)
+		else:
+			return 0

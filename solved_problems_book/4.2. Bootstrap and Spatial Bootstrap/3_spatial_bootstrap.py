@@ -1,0 +1,137 @@
+#
+#	Solved Problems in Geostatistics
+#
+# ------------------------------------------------
+#	Script for lesson 4.2
+#	"Bootstrap & Spatial Bootstrap"
+# ------------------------------------------------
+
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+
+import numpy as np
+import matplotlib.pyplot as plt
+from numpy import sqrt
+from statistics import *
+from gslib import *
+from gaussian_cdf import *
+from scipy.linalg import cholesky
+from scipy.interpolate import interp1d
+
+def cov(h):
+	if (h == 0):
+		return 1.0
+	elif (h > 1):
+		return 0.0
+	else:
+		return (0.9*(1.0 - 1.5*(h) + 0.5*(h**3)))
+
+def get_distance(x1, y1, x2, y2, a_x, a_y):
+	return sqrt(((x1 - x2)/a_x)**2 + ((y1 - y2)/a_y)**2)
+
+def spatial_bootstrap(x_num, y_num, poro_values, l):
+	A = np.zeros(shape=(x_num, x_num))
+
+	# Set covariance values
+	for i in range(x_num):
+		for j in range(x_num):
+			h = get_distance(x_coord[i], y_coord[i], x_coord[j], y_coord[j], a_x, a_y)
+			A[i, j] = cov(h)
+
+	#Calculate lower triangular matrix by a Cholesky LU decomposition
+	L = cholesky(A, lower=True, overwrite_a=False)
+
+	#Vector of independent Gaussian values
+	w = np.random.randn(x_num)
+
+	#Matrix multiplication
+	y = np.dot(L, w)
+
+	to_delete = []
+	for i in range(len(y)):
+		if (i > l):
+			to_delete.append(i)
+	y = np.delete(y, to_delete)
+
+	[x, y1] = np.histogram(poro_values, bins=15)
+
+	for i in range(len(x)-1):
+		x[i+1] = x[i+1] + x[i]
+	x_float = np.zeros(len(x), dtype=float)
+
+	for i in range(len(x)):
+		x_float[i] = float(x[i]) / x_num
+
+	y1 = np.delete(y1, [0])
+
+	x_min = x_float.min()
+
+	#Calculate p (n by 1 vector of probability values [0,1]) with standard normal distribution
+	to_delete = []
+	p = np.zeros(l, dtype=float)
+	for i in range(l):
+		p[i] = abs(normal_score(y[i]))
+		if(p[i] > 1.0):
+			to_delete.append(i)
+		if(p[i] < x_min):
+			to_delete.append(i)
+
+	p = np.delete(p, to_delete)
+
+	z = np.zeros(len(p), dtype=float)
+
+	#Interpolation
+	int_obj = interp1d(x_float, y1)
+	for i in range(len(p)):
+		z[i] = int_obj(p[i])
+	return z
+
+# -------------------------------------------------------------------
+# Main program
+# -------------------------------------------------------------------
+print("----------------------------------------------------")
+print("Loading data & initializing...")
+
+# Loading sample data from file
+
+x_num = 62
+y_num = 6
+
+#The range of correlation in the x and y directions
+a_x = 8500
+a_y = 6500
+
+# Number of realizations
+n = 1000
+# Number of data to bootstrap
+l = 62
+
+data_dict = load_gslib_file("welldata.txt")
+
+x_coord = data_dict['X']
+y_coord = data_dict['Y']
+poro_values = data_dict['Por']
+seismic_values = data_dict['Seis']
+
+print("Done.")
+print("----------------------------------------------------")
+
+print("Number of bootstrapped realizations: ", n)
+print("Number of points to bootstrap: ", l)
+print("----------------------------------------------------")
+print("Running bootstrap...")
+
+z_mean = []
+for i in range(n):
+	z_mas = spatial_bootstrap(x_num, y_num, poro_values, l)
+	z_mean.append(calc_mean_array(z_mas))
+
+print("Done!")
+print("Drawing histogram...")
+
+#Draw histogram "Distribution of mean porosity considering spatial correlation between the data"
+plt.figure()
+plt.hist(z_mean, 15, density=True)
+plt.ylabel("Frequency")
+plt.show()
