@@ -8,7 +8,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 
 ### Algorithms
 
-- **Kriging**: Ordinary Kriging (OK), Simple Kriging (SK), LVM Kriging (Locally Varying Mean)
+- **Kriging**: Simple Kriging (SK), Ordinary Kriging (OK), LVM Kriging (Locally Varying Mean)
 - **Indicator Kriging**: Indicator Kriging (IK), Median Indicator Kriging
 - **Cokriging**: Simple Cokriging Mark I (Markov Model 1) and Mark II
 - **Simulation**: Sequential Gaussian Simulation (SGS), Sequential Indicator Simulation (SIS)
@@ -42,7 +42,6 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 - OpenBLAS and LAPACK development libraries (or Intel MKL)
 - OpenMP (optional, for parallelization)
 - Python 3.9+ development headers
-- pybind11
 
 ## Build Instructions
 
@@ -85,14 +84,14 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
    sudo apt-get update
    sudo apt-get install -y build-essential cmake libopenblas-dev liblapack-dev \
        python3-dev python3-pip python3-venv libomp-dev
-   pip3 install numpy scipy pytest pybind11
+   pip3 install numpy scipy pytest
    ```
 
    Fedora/RHEL:
    ```bash
    sudo dnf install -y gcc-c++ cmake openblas-devel lapack-devel \
        python3-devel python3-pip libomp-devel
-   pip3 install numpy scipy pytest pybind11
+   pip3 install numpy scipy pytest
    ```
 
 2. **Build with CMake:**
@@ -298,26 +297,29 @@ hpgl/
         my_kriging_weights.h     # Weight calculation
         sequential_simulation.h  # Simulation framework
         ...
-    hpgl.pyd/            # Boost.Python bindings (legacy)
+      _cvariogram/       # Variogram C++ extension
+    bs_gstl/             # GSTL support library (used by CMake build)
     msvc/                # Visual Studio project files
-    GsTL-1.3/            # GsTL library (included)
-    tnt_126/             # TNT library (included)
+    tnt_126/             # TNT math library (headers)
+    doc/                 # Legacy documentation and manuals
+    sample-scripts/      # Example scripts (legacy API)
   tests/
     python/              # Python test suite (pytest)
 ```
 
 ## Changes from v0.9.9
 
-- **Python 3 support**: Full Python 3.9-3.14 compatibility (previously Python 2 only)
-- **NumPy 2.0+ support**: Compatible with modern NumPy versions (removed `numpy.matrix`)
-- **Visual Studio 2022**: Build with modern MSVC toolchain (v143, C++17)
+- **Python 3 support**: Full Python 3.9+ compatibility (previously Python 2 only)
+- **NumPy 2.0+ support**: Compatible with modern NumPy versions
+- **Visual Studio 2022**: Windows build with newer MSVC toolchain (v143, C++17)
 - **Intel MKL**: Replaced CLAPACK with Intel MKL for LAPACK operations
-- **Boost removed**: Replaced boost::python with ctypes-based Python bindings
+- **Boost removed**: Replaced legacy boost::python with ctypes-based Python bindings
 - **CMake build**: Cross-platform CMake build system alongside MSBuild
 - **Input validation**: Comprehensive parameter validation framework
 - **Security**: Path validation, array reference management, safe library loading
 - **Modern build**: MSBuild-based build.bat, pyproject.toml, CMakeLists.txt
 - **Test suite**: 344+ automated tests with pytest
+- **Legacy cleanup**: Removed unused libraries, old Boost.Python bindings, obsolete build systems (SCons, old Makefiles), Debian packaging, old VS 2008 project files, and a bundled Win32 installer, etc
 
 ## License
 
