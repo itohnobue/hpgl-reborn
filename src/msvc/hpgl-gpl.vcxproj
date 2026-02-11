@@ -1,0 +1,310 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}</ProjectGuid>
+    <RootNamespace>hpgl_gpl</RootNamespace>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LinkIncremental>true</LinkIncremental>
+    <OutDir>$(SolutionDir)\geo\</OutDir>
+    <IntDir>$(SolutionDir)\temp\$(ProjectName)\$(Configuration)\</IntDir>
+    <TargetName>hpgl_d</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>true</LinkIncremental>
+    <OutDir>$(SolutionDir)\geo\</OutDir>
+    <IntDir>$(SolutionDir)\temp\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>hpgl_d</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+    <OutDir>$(SolutionDir)\geo_bsd\</OutDir>
+    <IntDir>$(SolutionDir)\temp\$(ProjectName)\$(Configuration)\</IntDir>
+    <TargetName>hpgl</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LinkIncremental>false</LinkIncremental>
+    <OutDir>$(SolutionDir)\geo_bsd\</OutDir>
+    <IntDir>$(SolutionDir)\temp\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>hpgl</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <MinimalRebuild>true</MinimalRebuild>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <OpenMPSupport>true</OpenMPSupport>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
+      <DisableSpecificWarnings>4003;4244;4267;4018;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Windows</SubSystem>
+      <TargetMachine>MachineX86</TargetMachine>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <OpenMPSupport>true</OpenMPSupport>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <DisableSpecificWarnings>4003;4244;4267;4018;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>mkl_core.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <OpenMPSupport>true</OpenMPSupport>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <DisableSpecificWarnings>4267;4244;4018;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMATFolding>true</EnableCOMATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <TargetMachine>MachineX86</TargetMachine>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <OpenMPSupport>true</OpenMPSupport>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <DisableSpecificWarnings>4267;4244;4018;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>mkl_intel_lp64.lib;mkl_core.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMATFolding>true</EnableCOMATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\geo_bsd\hpgl\api.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\api_helpers.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\bs_assert.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\bs_random_generator.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\calc_mean.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\cdf_utils.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\clusterizer.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\covariance_field.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\covariance_param.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\gauss_solver.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\hpgl_exception.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\ik_params.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\indicator_kriging.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\kriging_stats.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\load_property_from_file.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\logging.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\lvm_kriging.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\mean_provider.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\median_ik.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\neighbourhood_param.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\ok_params.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\ordinary_kriging.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\output.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\path_random_generator.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\pretty_printer.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\progress_reporter.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\property_writer.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\random_node_enumerator.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\read_inc_file.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\sample.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\sequential_gaussian_simulation.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\sequential_indicator_simulation.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\set_thread_num.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\sgs_params.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\simple_cokriging_markI.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\simple_kriging.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\sk_params_t.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\sugarbox_grid.cpp" />
+    <ClCompile Include="..\geo_bsd\hpgl\stdafx.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\geo_bsd\hpgl\api.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\api_helpers.hpp" />
+    <ClInclude Include="..\geo_bsd\hpgl\bs_assert.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\bs_random_generator.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\buffer_accessor_3d.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\calc_mean.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\cdf_utils.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\clusterizer.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\combiner.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\cont_kriging.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\cov_model.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\covariance_field.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\covariance_param.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\covariance_type.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\gauss_solver.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\gaussian_distribution.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\generate_reverse_path.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\geometry.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\hpgl_core.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\hpgl_exception.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\ik_params.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\index_3d.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\indicator_kriging.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\indicator_param.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\is_informed_predicate.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\kriging.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\kriging_constraints.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\kriging_interpolation.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\kriging_stats.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\load_property_from_file.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\locale_keeper.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\logging.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\looped_sugarbox_grid.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\lvm_utils.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\map_categories.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\mean_provider.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\median_ik.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\my_kriging_weights.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\neighbour_set.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\neighbourhood_lookup.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\neighbourhood_param.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\non_parametric_cdf.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\ok_params.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\output.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\path_random_generator.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\precalculated_covariance.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\pretty_printer.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\progress_reporter.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\property_array.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\property_writer.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\random_node_enumerator.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\sample.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\select.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\sequential_simulation.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\setup_common_api.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\setup_plugin_api.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\sgs_params.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\sk_params.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\stdafx.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\sugarbox_grid.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\sugarbox_indexed_neighbour_lookup.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\sugarbox_neighbour_lookup.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\sugarbox_neighbour_lookup_distance.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\top_only_container.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\trace_functions.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\typedefs.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\var_radix_utils.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\variable.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

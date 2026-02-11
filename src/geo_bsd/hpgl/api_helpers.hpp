@@ -9,7 +9,7 @@ namespace hpgl
 	class sugarbox_grid_t;
 	class sgs_params_t;
 	class ik_params_t;
-	class indicator_params_t;
+	struct indicator_params_t;
 
 	int get_shape_volume(hpgl_shape_t * shape);
 	void init_grid(hpgl::sugarbox_grid_t & grid, hpgl_shape_t * shape);

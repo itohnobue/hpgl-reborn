@@ -27,8 +27,32 @@ namespace hpgl
 		int max_neighbours;
 	};
 
-	void set_thread_num(int n_threads);
+	/// Sets the number of OpenMP threads to use for parallel regions.
+	/// Thread Safety: Affects global OpenMP state. Not thread-safe with
+	/// concurrent calls to set_thread_num(). External sync required if called
+	/// from multiple threads. Undefined behavior if called within parallel region.
+	///
+	/// @param n_threads Number of threads (must be >= 0)
+	/// @return true if successful, false if n_threads is invalid
+	bool set_thread_num(int n_threads);
+
+	/// Gets the maximum number of OpenMP threads that could be used.
+	/// Thread Safety: Thread-safe.
+	///
+	/// @return Maximum number of threads available for parallel regions
 	int get_thread_num();
+
+	/// Gets the number of threads currently in the team executing the parallel region.
+	/// Thread Safety: Thread-safe.
+	///
+	/// @return Number of threads in the current parallel team (1 if outside parallel region)
+	int get_current_thread_num();
+
+	/// Checks if currently executing within a parallel region.
+	/// Thread Safety: Thread-safe.
+	///
+	/// @return true if inside a parallel region, false otherwise
+	bool in_parallel_region();
 
 	void read_inc_file_float(
 		const char* file_name,

@@ -9,6 +9,7 @@
 
 #include "stdafx.h"
 #include <ik_params.h>
+#include <validation.h>
 
 namespace hpgl
 {
@@ -17,29 +18,51 @@ namespace hpgl
 	{}
 
 	void ik_params_t::add_indicator(
-			covariance_type_t covariance_type, 
-			double range1, double range2, double range3, 
-			double angle1, double angle2, double angle3, 
-			double sill, 
+			covariance_type_t covariance_type,
+			double range1, double range2, double range3,
+			double angle1, double angle2, double angle3,
+			double sill,
 			double nugget,
-			double radius1, double radius2, double radius3, 
+			double radius1, double radius2, double radius3,
 			size_t neighbour_limit, double marginal_prob)
 	{
-		std::vector<double> ranges;
-		ranges.push_back(range1);
-		ranges.push_back(range2);
-		ranges.push_back(range3);
+		// Validate covariance parameters before adding indicator
+		double ranges[3] = {range1, range2, range3};
+		validation_result_t cov_result = validation::validate_covariance_parameters(sill, nugget, ranges);
+		HPGL_VALIDATE_RESULT(cov_result);
 
-		std::vector<double> angles;
-		angles.push_back(angle1);
-		angles.push_back(angle2);
-		angles.push_back(angle3);
+		// Validate angles
+		double angles[3] = {angle1, angle2, angle3};
+		validation_result_t angles_result = validation::validate_angles(angles);
+		HPGL_VALIDATE_RESULT(angles_result);
+
+		// Validate radiuses
+		validation_result_t radius_result = validation::validate_radius(radius1, radius2, radius3, "ik_radius");
+		HPGL_VALIDATE_RESULT(radius_result);
+
+		// Validate neighbor limit
+		validation_result_t neighbors_result = validation::validate_max_neighbors(neighbour_limit);
+		HPGL_VALIDATE_RESULT(neighbors_result);
+
+		// Validate marginal probability
+		validation_result_t prob_result = validation::validate_probability(marginal_prob, "marginal_prob");
+		HPGL_VALIDATE_RESULT(prob_result);
+
+		std::vector<double> ranges_vec;
+		ranges_vec.push_back(range1);
+		ranges_vec.push_back(range2);
+		ranges_vec.push_back(range3);
+
+		std::vector<double> angles_vec;
+		angles_vec.push_back(angle1);
+		angles_vec.push_back(angle2);
+		angles_vec.push_back(angle3);
 
 		sugarbox_search_ellipsoid_t radiuses(radius1, radius2, radius3);
 
 		m_covariances.push_back(covariance_type);
-		m_ranges.push_back(ranges);
-		m_angles.push_back(angles);
+		m_ranges.push_back(ranges_vec);
+		m_angles.push_back(angles_vec);
 		m_sills.push_back(sill);
 		m_nuggets.push_back(nugget);
 		m_radiuses.push_back(radiuses);
@@ -55,11 +78,15 @@ namespace hpgl
 		m_cov_params.push_back(cov_param);
 
 		neighbourhood_param_t nb_param;
-		nb_param.set_radiuses(radius1, radius2, radius3);
+		nb_param.set_radiuses(static_cast<size_t>(radius1), static_cast<size_t>(radius2), static_cast<size_t>(radius3));
 		nb_param.m_max_neighbours = neighbour_limit;
 		m_nb_params.push_back(nb_param);
 
 		m_category_count++;
+
+		// Validate indicator count
+		validation_result_t count_result = validation::validate_indicator_count(m_category_count);
+		HPGL_VALIDATE_RESULT(count_result);
 	}
 
 	void ik_params_t::add_indicator(const indicator_param_t & indicator)
@@ -86,7 +113,7 @@ namespace hpgl
 	{
 		for (int i = 0; i < p.m_category_count; ++i)
 		{
-			s 
+			s
 				<< "\t\tCovariance type: " << p.m_covariances[i] << "\n"
 				<< "\t\tRanges:	[" << p.m_ranges[i][0] << ", " << p.m_ranges[i][1] << ", " << p.m_ranges[i][2] << "]\n"
 				<< "\t\tAngles: [" << p.m_angles[i][0] << ", " << p.m_angles[i][1] << ", " << p.m_angles[i][2] << "]\n"

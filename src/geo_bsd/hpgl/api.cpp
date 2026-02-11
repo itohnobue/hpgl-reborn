@@ -1,6 +1,5 @@
 #include "stdafx.h"
 #include <iostream>
-#include <boost/format.hpp>
 
 #include "api.h"
 #include "api_helpers.hpp"
@@ -25,10 +24,10 @@ static void init_cov_param(hpgl::covariance_param_t * cp, hpgl_cov_params_t * pa
 	}
 	cp->m_sill = params->m_sill;
 	cp->m_nugget = params->m_nugget;
-	cp->m_covariance_type = (hpgl::covariance_type_t) params->m_covariance_type;	
+	cp->m_covariance_type = (hpgl::covariance_type_t) params->m_covariance_type;
 }
 
-static void 
+static void
 handle_exception(const std::exception & ex)
 {
 	hpgl::set_last_exception_message(ex.what());
@@ -108,7 +107,7 @@ HPGL_API void hpgl_write_inc_file_float(
 	property_writer_t writer;
 	writer.init(filename, name);
 	cont_property_array_t prop(
-			arr->m_data, 
+			arr->m_data,
 			arr->m_mask,
 			get_shape_volume(&(arr->m_shape)));
 	writer.write_double(prop, undefined_value);
@@ -116,20 +115,25 @@ HPGL_API void hpgl_write_inc_file_float(
 
 void init_remap_table(unsigned char * values, int values_count, int indicator_count, std::vector<unsigned char> & remap_table)
 {
-	using namespace boost;
 	if (values_count == indicator_count)
 	{
 		remap_table.assign(values, values+values_count);
 	}
 	else if (values_count > indicator_count)
 	{
-		LOGWARNING(format("Given %1% values for %2% indicators. Ignoring extra values.\n") % values_count % indicator_count);
+		std::ostringstream oss;
+		oss << "Given " << values_count << " values for " << indicator_count << " indicators. Ignoring extra values.\n";
+		LOGWARNING(oss.str());
 		remap_table.assign(values, values + indicator_count);
 	}
 	else
 	{
 		if (values_count > 0)
-			LOGWARNING(format("Warning: Given %1% values for %2% indicators. Ignoring values. Using [0, 1, 2 ..]\n") % values_count % indicator_count);
+		{
+			std::ostringstream oss;
+			oss << "Warning: Given " << values_count << " values for " << indicator_count << " indicators. Ignoring values. Using [0, 1, 2 ..]\n";
+			LOGWARNING(oss.str());
+		}
 		for (int i = 0; i < indicator_count; ++i)
 			remap_table.push_back(i);
 	}
@@ -591,123 +595,133 @@ hpgl_simple_cokriging_mark1(
 		hpgl_cokriging_m1_params_t * params,
 		hpgl_cont_masked_array_t * output_data)
 {
-	using namespace boost;
-	using namespace hpgl;
-	int size = get_shape_volume(&input_data->m_shape);
-	int size2 = get_shape_volume(&secondary_data->m_shape);
-	int size3 = get_shape_volume(&output_data->m_shape);
-
-	if (size != size2)
+	try
 	{
-		throw hpgl_exception(
-				"hpgl_simple_cokriging_mark1", 
-				format("Size of secondary data (%1%) is different from size of primary data (%2%)") % size2 % size);
-	}
+		using namespace hpgl;
+		int size = get_shape_volume(&input_data->m_shape);
+		int size2 = get_shape_volume(&secondary_data->m_shape);
+		int size3 = get_shape_volume(&output_data->m_shape);
 
-	if (size != size3)
+		if (size != size2)
+		{
+			std::ostringstream oss;
+			oss << "Size of secondary data (" << size2 << ") is different from size of primary data (" << size << ")";
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
+		}
+
+		if (size != size3)
+		{
+			std::ostringstream oss;
+			oss << "Size of output data (" << size3 << ") is different from size of primary data (" << size << ")";
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
+		}
+
+		cont_property_array_t primary_prop(
+				input_data->m_data, input_data->m_mask, size);
+		cont_property_array_t secondary_prop(
+				secondary_data->m_data, secondary_data->m_mask, size2);
+		cont_property_array_t output_prop(
+				output_data->m_data, output_data->m_mask, size3);
+
+		neighbourhood_param_t np;
+		np.m_max_neighbours = params->m_max_neighbours;
+
+		covariance_param_t cp;
+		cp.m_nugget = params->m_nugget;
+		cp.m_sill = params->m_sill;
+		cp.m_covariance_type = (covariance_type_t) params->m_covariance_type;
+
+		for (int i = 0; i < 3; ++i)
+		{
+			np.m_radiuses[i] = params->m_radiuses[i];
+			cp.m_ranges[i] = params->m_ranges[i];
+			cp.m_angles[i] = params->m_angles[i];
+		}
+
+		sugarbox_grid_t grid;
+		init_grid(grid, &input_data->m_shape);
+
+		simple_cokriging_markI(
+				grid,
+				primary_prop,
+				secondary_prop,
+				params->m_primary_mean,
+				params->m_secondary_mean,
+				params->m_secondary_variance,
+				params->m_correlation_coef,
+				np,
+				cp,
+				output_prop);
+	}
+	catch (const std::exception& ex)
 	{
-		throw hpgl_exception(
-				"hpgl_simple_cokriging_mark1",
-				format("Size of output data (%1%) is different from size of primary data (%2%)") % size3 % size);
+		handle_exception(ex);
 	}
-
-	cont_property_array_t primary_prop(
-			input_data->m_data, input_data->m_mask, size);
-	cont_property_array_t secondary_prop(
-			secondary_data->m_data, secondary_data->m_mask, size2);
-	cont_property_array_t output_prop(
-			output_data->m_data, output_data->m_mask, size3);
-
-	neighbourhood_param_t np;
-	np.m_max_neighbours = params->m_max_neighbours;
-
-	covariance_param_t cp;
-	cp.m_nugget = params->m_nugget;
-	cp.m_sill = params->m_sill;
-	cp.m_covariance_type = (covariance_type_t) params->m_covariance_type;
-
-	for (int i = 0; i < 3; ++i)
-	{
-		np.m_radiuses[i] = params->m_radiuses[i];
-		cp.m_ranges[i] = params->m_ranges[i];
-		cp.m_angles[i] = params->m_angles[i];
-	}
-
-	sugarbox_grid_t grid;
-	init_grid(grid, &input_data->m_shape);
-
-	simple_cokriging_markI(
-			grid, 
-			primary_prop,
-			secondary_prop,
-			params->m_primary_mean,
-			params->m_secondary_mean,
-			params->m_secondary_variance,
-			params->m_correlation_coef,
-			np,
-			cp,
-			output_prop);
-						   
-	
 }
 
 HPGL_API void
 hpgl_simple_cokriging_mark2(
 		hpgl_cont_masked_array_t * primary_data,
 		hpgl_cont_masked_array_t * secondary_data,
-		hpgl_cokriging_m2_params_t * params,		
+		hpgl_cokriging_m2_params_t * params,
 		hpgl_cont_masked_array_t * output_data)
 {
-	using namespace boost;
-	using namespace hpgl;
-	int size = get_shape_volume(&primary_data->m_shape);
-	int size2 = get_shape_volume(&secondary_data->m_shape);
-	int size3 = get_shape_volume(&output_data->m_shape);
-
-	if (size != size2)
+	try
 	{
-		throw hpgl_exception(
-				"hpgl_simple_cokriging_mark1", 
-				format("Size of secondary data (%1%) is different from size of primary data (%2%)") % size2 % size);
+		using namespace hpgl;
+		int size = get_shape_volume(&primary_data->m_shape);
+		int size2 = get_shape_volume(&secondary_data->m_shape);
+		int size3 = get_shape_volume(&output_data->m_shape);
+
+		if (size != size2)
+		{
+			std::ostringstream oss;
+			oss << "Size of secondary data (" << size2 << ") is different from size of primary data (" << size << ")";
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
+		}
+
+		if (size != size3)
+		{
+			std::ostringstream oss;
+			oss << "Size of output data (" << size3 << ") is different from size of primary data (" << size << ")";
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
+		}
+
+		cont_property_array_t primary_prop(
+				primary_data->m_data, primary_data->m_mask, size);
+		cont_property_array_t secondary_prop(
+				secondary_data->m_data, secondary_data->m_mask, size2);
+		cont_property_array_t out_prop(
+				output_data->m_data, output_data->m_mask, size3);
+
+		sugarbox_grid_t grid;
+		init_grid(grid, &primary_data->m_shape);
+
+		covariance_param_t primary_cp, secondary_cp;
+
+		init_cov_param(&primary_cp, &params->m_primary_cov_params);
+		init_cov_param(&secondary_cp, &params->m_secondary_cov_params);
+
+		neighbourhood_param_t np;
+		np.m_max_neighbours = params->m_max_neighbours;
+		for (int i = 0; i < 3; ++i)
+		{
+			np.m_radiuses[i] = params->m_radiuses[i];
+		}
+
+		simple_cokriging_markII(
+				grid, primary_prop,
+				secondary_prop,
+				params->m_primary_mean,
+				params->m_secondary_mean,
+				params->m_correlation_coef,
+				np,
+				primary_cp,
+				secondary_cp,
+				out_prop);
 	}
-
-	if (size != size3)
+	catch (const std::exception& ex)
 	{
-		throw hpgl_exception(
-				"hpgl_simple_cokriging_mark1",
-				format("Size of output data (%1%) is different from size of primary data (%2%)") % size3 % size);
+		handle_exception(ex);
 	}
-
-	cont_property_array_t primary_prop(
-			primary_data->m_data, primary_data->m_mask, size);
-	cont_property_array_t secondary_prop(
-			secondary_data->m_data, secondary_data->m_mask, size2);
-	cont_property_array_t out_prop(
-			output_data->m_data, output_data->m_mask, size3);
-
-	sugarbox_grid_t grid;
-	init_grid(grid, &primary_data->m_shape);
-
-	covariance_param_t primary_cp, secondary_cp;
-
-	init_cov_param(&primary_cp, &params->m_primary_cov_params);
-	init_cov_param(&secondary_cp, &params->m_secondary_cov_params);
-
-	neighbourhood_param_t np;
-	np.m_max_neighbours = params->m_max_neighbours;
-	for (int i = 0; i < 3; ++i)
-	{
-		np.m_radiuses[i] = params->m_radiuses[i];
-	}	
-
-	simple_cokriging_markII(
-			grid, primary_prop, 
-			secondary_prop,
-			params->m_primary_mean,
-			params->m_secondary_mean,
-			params->m_correlation_coef,
-			np,
-			primary_cp,
-			secondary_cp,
-			out_prop);
 }

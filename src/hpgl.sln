@@ -1,38 +1,51 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.1.31903.286
+VisualStudioVersion = 17.8.34322.80
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{CB602A57-BEE3-415A-AEEF-E1584D8C4C45}"
-	ProjectSection(SolutionItems) = preProject
-		hpgl.vsmdi = hpgl.vsmdi
-		localtestrun.testrunconfig = localtestrun.testrunconfig
-	EndProjectSection
-EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "cvariogram", "msvc\cvariogram.vcxproj", "{FDF030EA-03F1-4EF2-9D6C-375B29E1EB24}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "hpgl-bsd", "msvc\hpgl-gpl.vcxproj", "{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "python_pkg", "msvc\python_pkg.vcxproj", "{37A2F67D-DE60-4C8C-A3AE-01FF142E0AE2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
+		Debug|x64 = Debug|x64
 		Release|Win32 = Release|Win32
+		Release|x64 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{FDF030EA-03F1-4EF2-9D6C-375B29E1EB24}.Debug|Win32.ActiveCfg = Debug|Win32
 		{FDF030EA-03F1-4EF2-9D6C-375B29E1EB24}.Debug|Win32.Build.0 = Debug|Win32
+		{FDF030EA-03F1-4EF2-9D6C-375B29E1EB24}.Debug|x64.ActiveCfg = Debug|x64
+		{FDF030EA-03F1-4EF2-9D6C-375B29E1EB24}.Debug|x64.Build.0 = Debug|x64
 		{FDF030EA-03F1-4EF2-9D6C-375B29E1EB24}.Release|Win32.ActiveCfg = Release|Win32
 		{FDF030EA-03F1-4EF2-9D6C-375B29E1EB24}.Release|Win32.Build.0 = Release|Win32
+		{FDF030EA-03F1-4EF2-9D6C-375B29E1EB24}.Release|x64.ActiveCfg = Release|x64
+		{FDF030EA-03F1-4EF2-9D6C-375B29E1EB24}.Release|x64.Build.0 = Release|x64
 		{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}.Debug|Win32.ActiveCfg = Debug|Win32
 		{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}.Debug|Win32.Build.0 = Debug|Win32
+		{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}.Debug|x64.ActiveCfg = Debug|x64
+		{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}.Debug|x64.Build.0 = Debug|x64
 		{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}.Release|Win32.ActiveCfg = Release|Win32
 		{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}.Release|Win32.Build.0 = Release|Win32
+		{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}.Release|x64.ActiveCfg = Release|x64
+		{6A8F0309-17A4-440D-8FC0-F6DC7E82BD23}.Release|x64.Build.0 = Release|x64
+		{37A2F67D-DE60-4C8C-A3AE-01FF142E0AE2}.Debug|Win32.ActiveCfg = Debug|Win32
+		{37A2F67D-DE60-4C8C-A3AE-01FF142E0AE2}.Debug|Win32.Build.0 = Debug|Win32
+		{37A2F67D-DE60-4C8C-A3AE-01FF142E0AE2}.Debug|x64.ActiveCfg = Debug|x64
+		{37A2F67D-DE60-4C8C-A3AE-01FF142E0AE2}.Debug|x64.Build.0 = Debug|x64
+		{37A2F67D-DE60-4C8C-A3AE-01FF142E0AE2}.Release|Win32.ActiveCfg = Release|Win32
+		{37A2F67D-DE60-4C8C-A3AE-01FF142E0AE2}.Release|Win32.Build.0 = Release|Win32
+		{37A2F67D-DE60-4C8C-A3AE-01FF142E0AE2}.Release|x64.ActiveCfg = Release|x64
+		{37A2F67D-DE60-4C8C-A3AE-01FF142E0AE2}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {31D8F463-D8B3-4B6D-BD41-E9A21DA5DEAC}
-		AMDCaProjectFile = C:\blue_sky\hpgl\CodeAnalyst\hpgl.caw
 	EndGlobalSection
 EndGlobal

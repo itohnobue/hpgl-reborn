@@ -27,8 +27,7 @@
 #include <exception>
 #include <algorithm>
 #include <numeric>
-#include <boost/smart_ptr.hpp>
-#include <boost/algorithm/string.hpp>
-#include <boost/format.hpp>
+#include <memory>        // C++11 smart pointers (replaces boost/smart_ptr.hpp)
+#include <string_view>  // C++17 string_view (replaces some boost string functions)
 
 #include "setup_plugin_api.h"

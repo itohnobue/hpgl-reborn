@@ -49,8 +49,8 @@ namespace hpgl
 					for (int x = 0; x < sx; ++x)
 					{
 						int index = vr_to_dec(sy, sx, z, y, x);
-						double c1[] = {0, 0, 0};
-						double c2[] = {x + dx, y + dy, z + dz};
+						double c1[] = {0.0, 0.0, 0.0};
+						double c2[] = {static_cast<double>(x + dx), static_cast<double>(y + dy), static_cast<double>(z + dz)};
 						m_covariances[index] = cov(c1, c2);
 					}
 			m_box = rect_3d_t<int>(-rx, -ry, -rz, rx, ry, rz);
@@ -60,7 +60,7 @@ namespace hpgl
 		template<typename coord_t>
 		covariance_t operator()(const coord_t & c1, const coord_t & c2)const
 		{
-			double vec[] = {c2[0] - c1[0], c2[1] - c1[1], c2[2] - c1[2]}; //c2 - c1;
+			double vec[] = {static_cast<double>(c2[0] - c1[0]), static_cast<double>(c2[1] - c1[1]), static_cast<double>(c2[2] - c1[2])}; //c2 - c1;
 
 			if (m_box.has(vec))
 			{

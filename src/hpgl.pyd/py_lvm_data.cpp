@@ -14,13 +14,13 @@
 
 namespace hpgl
 {
-	py_indicator_lvm_data_t py_load_indicator_mean_data(PyObject * filenames)
+	py_indicator_lvm_data_t py_load_indicator_mean_data(py::list filenames)
 	{
-		size_t file_count = PyList_Size(filenames);
-		std::vector<boost::shared_ptr<std::vector<mean_t> > > data(file_count);
+		size_t file_count = py::len(filenames);
+		std::vector<std::shared_ptr<std::vector<mean_t> > > data(file_count);
 		for (size_t i = 0; i < file_count; ++i)
 		{
-			std::string file_name =  PyString_AsString(PyList_GetItem(filenames, i));
+			std::string file_name = py::cast<std::string>(filenames[py::int_(i)]);
 			data[i].reset(new std::vector<mean_t>());
 			load_variable_mean_from_file(*data[i], file_name);
 		}

@@ -63,11 +63,11 @@ namespace hpgl
 		for (int i = size-1; i >=0 ; --i)
 		{
 			int row = order[i];
-			X[i] = B[i];
+			X[i] = B[row];
 			for (int j = size-1; j >i; --j)
 			{
 				X[i] -= A[row * size + j] * X[j];
-			}	
+			}
 		}
 
 		return true;

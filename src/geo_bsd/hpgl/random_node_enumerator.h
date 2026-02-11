@@ -1,9 +1,6 @@
 #ifndef __RANDOM_NODE_ENUMERATOR_H__89D32835_1CF0_4966_BA62_6F0C4B0FBE43__
 #define __RANDOM_NODE_ENUMERATOR_H__89D32835_1CF0_4966_BA62_6F0C4B0FBE43__
 
-#include <boost/smart_ptr.hpp>
-
-
 #include "property_array.h"
 #include "sugarbox_grid.h"
 

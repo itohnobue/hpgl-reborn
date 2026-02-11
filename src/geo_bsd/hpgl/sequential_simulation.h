@@ -14,6 +14,7 @@
 #include "neighbourhood_lookup.h"
 #include "is_informed_predicate.h"
 #include "cov_model.h"
+#include <sstream>
 
 namespace hpgl
 {
@@ -58,7 +59,11 @@ namespace hpgl
 	{
 
 		if (property.size() != grid.size())
-			throw hpgl_exception("do_sequential_gausian_simulation", boost::format("Property size '%s' is not equal to grid size '%s'") % property.size() % grid.size());
+		{
+			std::ostringstream oss;
+			oss << "Property size '" << property.size() << "' is not equal to grid size '" << grid.size() << "'";
+			throw hpgl_exception("do_sequential_gausian_simulation", oss.str());
+		}
 
 		mt_random_generator_t gen;
 		gen.seed(params.m_seed);
@@ -106,7 +111,11 @@ namespace hpgl
 			//neighbour_lookup.add_node(node);
 		}
 		report.stop();
-		write(boost::format("Done. Average speed: %1% point/sec.\n") % report.iterations_per_second());
+		{
+			std::ostringstream oss;
+			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";
+			write(oss.str());
+		}
 	}
 
 	template <typename grid_t, typename mean_provider_t, typename weight_calculator_t>
@@ -119,7 +128,11 @@ namespace hpgl
 		const std::vector<int> & points_indexes)
 	{
 		if (property.size() != grid.size())
-			throw hpgl_exception("do_sequential_gausian_simulation_in_points", boost::format("Property size '%s' is not equal to grid size '%s'") % property.size() % grid.size());
+		{
+			std::ostringstream oss;
+			oss << "Property size '" << property.size() << "' is not equal to grid size '" << grid.size() << "'";
+			throw hpgl_exception("do_sequential_gausian_simulation_in_points", oss.str());
+		}
 
 		mt_random_generator_t gen;
 		gen.seed(params.m_seed);
@@ -168,7 +181,11 @@ namespace hpgl
 			report.next_lap();
 		}
 		report.stop();
-		write(boost::format("Done. Average speed: %1% point/sec.") % report.iterations_per_second());
+		{
+			std::ostringstream oss;
+			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";
+			write(oss.str());
+		}
 	}
 }
 

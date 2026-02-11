@@ -3,6 +3,7 @@
 
 #include "clusterizer.h"
 #include "sugarbox_neighbour_lookup.h"
+#include <memory>
 
 namespace hpgl
 {
@@ -12,7 +13,7 @@ namespace hpgl
 
 		struct entry_t
 		{
-			node_index_t index;			
+			node_index_t index;
 			double cov_value;
 			bool operator<(const entry_t & e)const
 			{
@@ -42,7 +43,7 @@ namespace hpgl
 	class indexed_neighbour_lookup_t<sugarbox_grid_t, covariances_t>
 	{
 		neighbour_lookup_t<sugarbox_grid_t, covariances_t> m_nlookup;
-		boost::shared_ptr<clusterizer_t> m_clusterizer;
+		std::shared_ptr<clusterizer_t> m_clusterizer;
 		const covariances_t * m_cov;
 		int m_max_neighbours;
 		const sugarbox_grid_t * m_grid;

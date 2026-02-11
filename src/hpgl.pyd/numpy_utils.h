@@ -14,81 +14,87 @@
 
 namespace hpgl
 {
-	inline bool check_axis_order(boost::python::object obj)
+	inline bool check_axis_order(py::object obj)
 	{
-		using namespace boost::python;
-		bool is_f_contiguous = extract<bool>(obj.attr("flags")["F_CONTIGUOUS"]);
+		bool is_f_contiguous = py::cast<bool>(obj.attr("flags")["F_CONTIGUOUS"]);
 		return is_f_contiguous;
 	}
-  
+
 
 	template<typename T, char kind>
-	T * get_buffer_from_ndarray(boost::python::object obj, int size, const std::string & context)
+	T * get_buffer_from_ndarray(py::object obj, int size, const std::string & context)
 	{
 		using namespace std;
-		using namespace boost;
-		using namespace boost::python;
 
 		if (!check_axis_order(obj))
 			throw hpgl_exception(context, "Array is not F_CONTIGUOUS");
 
-		string strkind = extract<string>(obj.attr("dtype").attr("kind"));
-		
+		std::string strkind = py::cast<std::string>(obj.attr("dtype").attr("kind"));
+
 		if (strkind[0] != kind)
 		{
-			throw hpgl_exception(context, 
-				format("Invalid dtype.kind: %s. Expected %s.") % strkind % kind);
+			std::ostringstream oss;
+			oss << "Invalid dtype.kind: " << strkind << ". Expected " << kind << ".";
+			throw hpgl_exception(context, oss.str());
 		}
 
-		int item_size_2 = extract<int>(obj.attr("itemsize"));
+		int item_size_2 = py::cast<int>(obj.attr("itemsize"));
 
 		if (item_size_2 != sizeof(T))
 		{
-			throw hpgl_exception(context,
-					format("Invalid itemsize: %i. Expected %i.") % item_size_2 % sizeof(T));
+			std::ostringstream oss;
+			oss << "Invalid itemsize: " << item_size_2 << ". Expected " << sizeof(T) << ".";
+			throw hpgl_exception(context, oss.str());
 		}
-		
-		object bufo = obj.attr("data");
-		PyObject * buffer = bufo.ptr();
-		PyBufferProcs * pb = buffer->ob_type->tp_as_buffer;
-		
-		void * result;
-		int buf_size = (*pb->bf_getwritebuffer)(buffer, 0, &result);
-		if (buf_size != size*sizeof(T))
+
+		// Use Python 3 buffer protocol (Py_buffer) instead of removed bf_getwritebuffer
+		Py_buffer view;
+		PyObject * array_obj = obj.ptr();
+		if (PyObject_GetBuffer(array_obj, &view, PyBUF_WRITABLE | PyBUF_SIMPLE) != 0)
 		{
-			throw hpgl_exception(context,
-				format("Invalid buffer size: %i. Expected %i.") % buf_size % (size * sizeof(T)));
+			throw hpgl_exception(context, "Failed to get writable buffer from array.");
+		}
+
+		Py_ssize_t buf_size = view.len;
+		void * result = view.buf;
+		PyBuffer_Release(&view);
+
+		if (buf_size != static_cast<Py_ssize_t>(size) * static_cast<Py_ssize_t>(sizeof(T)))
+		{
+			std::ostringstream oss;
+			oss << "Invalid buffer size: " << buf_size << ". Expected " << (static_cast<Py_ssize_t>(size) * sizeof(T)) << ".";
+			throw hpgl_exception(context, oss.str());
 		}
 		return (T*)result;
-	}	
-
-	inline int get_ndarray_len(boost::python::object obj)
-	{
-		using namespace boost::python;
-		return (int) len(obj.attr("data")) / (int)extract<int>(obj.attr("itemsize"));
 	}
 
-	inline boost::shared_ptr<indicator_property_array_t> ind_prop_from_tuple(
-		boost::python::tuple arr)
+	inline int get_ndarray_len(py::object obj)
 	{
-		int size = get_ndarray_len(arr[0]);
-		boost::shared_ptr<indicator_property_array_t> result
+		// Use numpy array's size attribute (total number of elements)
+		return py::cast<int>(obj.attr("size"));
+	}
+
+	inline std::shared_ptr<indicator_property_array_t> ind_prop_from_tuple(
+		py::tuple arr)
+	{
+		int size = get_ndarray_len(arr[py::int_(0)]);
+		std::shared_ptr<indicator_property_array_t> result
 			(new indicator_property_array_t(
-			get_buffer_from_ndarray<indicator_value_t, 'u'>(arr[0], size, "prop_from_tuple"),
-			get_buffer_from_ndarray<unsigned char, 'u'>(arr[1], size, "prop_from_tuple"),
+			get_buffer_from_ndarray<indicator_value_t, 'u'>(arr[py::int_(0)], size, "prop_from_tuple"),
+			get_buffer_from_ndarray<unsigned char, 'u'>(arr[py::int_(1)], size, "prop_from_tuple"),
 			size,
-			boost::python::extract<int>(arr[2])));
+			py::cast<int>(arr[py::int_(2)])));
 		return result;
 	}
 
-	inline boost::shared_ptr<cont_property_array_t> cont_prop_from_tuple(
-		boost::python::tuple arr)
+	inline std::shared_ptr<cont_property_array_t> cont_prop_from_tuple(
+		py::tuple arr)
 	{
-		int size = get_ndarray_len(arr[0]);
-		boost::shared_ptr<cont_property_array_t> result
+		int size = get_ndarray_len(arr[py::int_(0)]);
+		std::shared_ptr<cont_property_array_t> result
 			(new cont_property_array_t(
-			get_buffer_from_ndarray<cont_value_t, 'f'>(arr[0], size, "prop_from_tuple"),
-			get_buffer_from_ndarray<unsigned char, 'u'>(arr[1], size, "prop_from_tuple"),
+			get_buffer_from_ndarray<cont_value_t, 'f'>(arr[py::int_(0)], size, "prop_from_tuple"),
+			get_buffer_from_ndarray<unsigned char, 'u'>(arr[py::int_(1)], size, "prop_from_tuple"),
 			size));
 		return result;
 	}

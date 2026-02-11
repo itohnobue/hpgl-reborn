@@ -3,6 +3,7 @@
 
 #include "typedefs.h"
 #include "output.h"
+#include <sstream>
 
 namespace hpgl
 {
@@ -17,7 +18,9 @@ namespace hpgl
 	template<typename T>
 	void print_param(const std::string & param, const T & value)
 	{
-		write(boost::format("%1%: %2%\n") % param % value);
+		std::ostringstream oss;
+		oss << param << ": " << value << "\n";
+		write(oss.str());
 	}
 
 	void print_algo_name(const std::string & name);

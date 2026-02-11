@@ -12,7 +12,7 @@
 
 namespace hpgl
 {
-	boost::shared_ptr<std::vector<mean_t> > generate_complement_array(boost::shared_ptr<std::vector<mean_t> > in);
+	std::shared_ptr<std::vector<mean_t> > generate_complement_array(std::shared_ptr<std::vector<mean_t> > in);
 }
 
 #endif //__GENERATE_COMPLEMENT_ARRAY_H__4682F4AC_AAED_4AD6_8C70_1DC6A794ACEA

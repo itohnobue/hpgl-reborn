@@ -8,14 +8,18 @@
 #define BS_ASSERT_H_
 
 #if defined (_WIN32)
-
-#define BREAK_HERE __asm { int 3 }
-  
+    #if defined(_M_X64) || defined(__x86_64__)
+        // x64: inline asm not supported, use intrinsic debugbreak
+        #define BREAK_HERE __debugbreak()
+    #else
+        // x86: inline asm is supported
+        #define BREAK_HERE __asm { int 3 }
+    #endif
 #else
 #define BREAK_HERE __asm__ __volatile__ ("int $0x3")
 #endif
 
-#include <boost/lexical_cast.hpp>
+#include <sstream>
 
 namespace blue_sky {
 
@@ -86,8 +90,9 @@ namespace blue_sky {
       template <class T> asserter *
       add_var (const T &t, const std::string &name)
       {
-        std::string str = name + " = " + boost::lexical_cast <std::string> (t) + "\n";
-        var_list = var_list + str;
+        std::ostringstream oss;
+        oss << name << " = " << t << "\n";
+        var_list = var_list + oss.str();
 
         return this;
       }

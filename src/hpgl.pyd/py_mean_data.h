@@ -17,7 +17,7 @@ namespace hpgl
 	class py_mean_data_t
 	{
 	public:
-		boost::shared_ptr<std::vector<mean_t> > m_data;
+		std::shared_ptr<std::vector<mean_t> > m_data;
 
 	};
 

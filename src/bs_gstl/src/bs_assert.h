@@ -20,19 +20,19 @@
 
 #include <windows.h>
 
-  #if _WIN32 >= 0x400
-    #define BREAK_HERE                  \
-      if (IsDebuggerPresent ())         \
-        DebugBreak ();
-  #else
+  #if defined(_M_IX86)  // x86 only - inline asm works
     #define BREAK_HERE __asm { int 3 }
+  #elif defined(_M_X64) || defined(_M_IA64)  // x64 or IA64 - use intrinsic
+    #define BREAK_HERE __debugbreak()
+  #else
+    #define BREAK_HERE DebugBreak()
   #endif
 
 #else
 	#define BREAK_HERE __asm__ __volatile__ ("int $0x3")
 #endif
 
-#include <boost/lexical_cast.hpp>
+#include <sstream>
 
 namespace blue_sky {
 
@@ -103,8 +103,9 @@ namespace blue_sky {
       template <class T> asserter *
       add_var (const T &t, const std::string &name)
       {
-        std::string str = name + " = " + boost::lexical_cast <std::string> (t) + "\n";
-        var_list = var_list + str;
+        std::ostringstream oss;
+        oss << name << " = " << t << "\n";
+        var_list = var_list + oss.str();
 
         return this;
       }

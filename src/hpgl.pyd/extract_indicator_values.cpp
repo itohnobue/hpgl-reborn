@@ -13,19 +13,19 @@
 namespace hpgl
 {
 	void extract_indicator_values(
-		boost::python::list values,
+		py::list values,
 		int expected_count,
 		std::vector<indicator_value_t> & result)
 	{
-		int iv_length = (int) boost::python::len(values);
+		int iv_length = (int) py::len(values);
 		int i_count = expected_count;
 		if (iv_length >= i_count)
-		{	
+		{
 			if (iv_length > i_count)
 				std::cout << "Warning: Property has " << i_count << " indicators, but " << iv_length << " values given. Extra values are ignored." << std::endl;
 			for (int i = 0; i < i_count; ++i)
 			{
-				result.push_back((int)boost::python::extract<int>(values[i]));
+				result.push_back(py::cast<int>(values[py::int_(i)]));
 			}
 		}
 		else

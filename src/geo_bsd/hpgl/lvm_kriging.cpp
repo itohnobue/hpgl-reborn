@@ -29,11 +29,13 @@ void lvm_kriging(
 	typedef precalculated_covariances_t covariances_t;
 	covariances_t pcov(cov_model_t(params), params.m_radiuses);
 
-	hpgl::cont_kriging(input, grid, params, mean_data, pcov, 
-		sk_weight_calculator_t(), 
+	hpgl::cont_kriging(input, grid, params, mean_data, pcov,
+		sk_weight_calculator_t(),
 		output, reporter, stats, kriging_failure_handling::mean_on_failure);
 
-	write(boost::format("%1%") % stats);	
+	std::ostringstream oss;
+	oss << stats;
+	write(oss.str());
 }
 
 }

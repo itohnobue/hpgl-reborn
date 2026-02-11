@@ -19,10 +19,10 @@
 #include <exception>
 #include <algorithm>
 #include <numeric>
-#include <boost/smart_ptr.hpp>
-//#include <boost/algorithm/string.hpp>
-//#include <boost/thread.hpp>
-//#include <boost/thread/condition.hpp>
-#include <boost/format.hpp>
+#include <memory>		// std::shared_ptr, std::unique_ptr, std::make_shared
+#include <random>		// std::mt19937, std::uniform_int_distribution, std::uniform_real_distribution
+#include <cstdint>		// std::nullptr_t
+#include <iomanip>		// std::quoted (for safer string handling)
 
 #include "setup_plugin_api.h"
+

@@ -2,6 +2,7 @@
 #define __NON_PARAMETRIC_CDF_H__6BBB60EA_BA86_4AE3_98FF_3B287C1D1522____
 
 #include "api.h"
+#include <cassert>
 
 namespace hpgl
 {
@@ -30,9 +31,11 @@ namespace hpgl
 			typedef typename occ_map_t::iterator occ_iterator_t;
 
 			occ_map_t occ;
-			int size = data.size();
-			int count = 0;
-			for (int i = 0; i < size; ++i)
+
+			// Type safety: Use size_t for size variable
+			const size_t size = data.size();
+			size_t count = 0;
+			for (size_t i = 0; i < size; ++i)
 			{
 				if (data.is_informed(i))
 				{
@@ -61,7 +64,7 @@ namespace hpgl
 
 			m_cdf.reserve(pdf.size());
 			m_cdf.push_back(pdf[0]);
-			for (size_t i = 1; i < pdf.size()-1; ++i)
+			for (size_t i = 1; i < pdf.size(); ++i)
 			{				
 				m_cdf.push_back(make_pair(pdf[i].first, pdf[i].second + m_cdf[i-1].second));
 			}			
@@ -75,9 +78,11 @@ namespace hpgl
 			typedef typename occ_map_t::iterator occ_iterator_t;
 
 			occ_map_t occ;
-			int size = data.size();
-			int count = 0;
-			for (int i = 0; i < size; ++i)
+
+			// Type safety: Use size_t for size variable
+			const size_t size = data.size();
+			size_t count = 0;
+			for (size_t i = 0; i < size; ++i)
 			{
 					pair<occ_iterator_t, bool> result = occ.insert(make_pair(data[i], 1));
 					if (!result.second)
@@ -104,7 +109,7 @@ namespace hpgl
 
 			m_cdf.reserve(pdf.size());
 			m_cdf.push_back(pdf[0]);
-			for (size_t i = 1; i < pdf.size()-1; ++i)
+			for (size_t i = 1; i < pdf.size(); ++i)
 			{				
 				m_cdf.push_back(make_pair(pdf[i].first, pdf[i].second + m_cdf[i-1].second));
 			}			
@@ -112,13 +117,15 @@ namespace hpgl
 
 		void dump()
 		{
-			using namespace boost;
-			write(format("Non-parametric CDF. Size: %1%\n") % m_cdf.size());
-			for (int i = 0; i < m_cdf.size(); ++i)
+			std::ostringstream oss;
+			oss << "Non-parametric CDF. Size: " << m_cdf.size() << "\n";
+			// Type safety: Use size_t for loop index when comparing with size()
+			for (size_t i = 0; i < m_cdf.size(); ++i)
 			{
-				write(format("(%1%, %2%);") % m_cdf[i].first % m_cdf[i].second);
+				oss << "(" << m_cdf[i].first << ", " << m_cdf[i].second << ");";
 			}
-			write("\n");
+			oss << "\n";
+			write(oss.str());
 		}
 
 		prob_t prob(value_t value)
@@ -263,13 +270,15 @@ namespace hpgl
 
 		void dump()
 		{
-			using namespace boost;
-			write(format("Non-param cdf. Size =  %1%.\n") % m_size);
+			std::ostringstream oss;
+			oss << "Non-param cdf. Size =  " << m_size << ".\n";
 
-			for (int i = 0; i < m_size; ++i)
+			// Type safety: Use long long for loop index to match m_size type
+			for (long long i = 0; i < m_size; ++i)
 			{
-				write(format("(%1%, %2%)\n") % m_values[i] % m_probs[i]);
+				oss << "(" << m_values[i] << ", " << m_probs[i] << ")\n";
 			}
+			write(oss.str());
 		}
 	};
 }

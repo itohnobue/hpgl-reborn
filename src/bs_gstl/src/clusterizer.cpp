@@ -13,6 +13,8 @@
 #include <clusterizer.h>
 #include "sugarbox_grid.h"
 #include "hpgl_exception.h"
+#include <memory>
+#include <vector>
 
 namespace hpgl
 {
@@ -52,16 +54,16 @@ namespace hpgl
 		const std::vector<node_index_t> & nodes() const{ return *m_nodes;}
 
 	private:
-		std::auto_ptr<std::vector<node_index_t> > m_nodes;
+		std::unique_ptr<std::vector<node_index_t> > m_nodes;
 		size_t m_limit;
 		bool m_limit_exceeded;
 	};
-	
+
 
 	struct clusterizer_t::state
 	{
 		//typedef std::vector<node_index_t> cluster_t;
-		std::vector<boost::shared_ptr<cluster_t> > m_clusters;
+		std::vector<std::shared_ptr<cluster_t> > m_clusters;
 		rect_3d_t<int> m_cluster_box;
 		int m_x;
 		int m_y;

@@ -1,12 +1,13 @@
 #include "stdafx.h"
 #include "api.h"
+#include <string>
 
-static int (*s_handler)(char * data, void * param) = 0;
-static void * s_param = 0;
+static int (*s_handler)(char * data, void * param) = nullptr;
+static void * s_param = nullptr;
 
 
-static int (*s_progress_handler)(char * stage, int percentage, void * param) = 0;
-static void * s_progress_handler_param = 0;
+static int (*s_progress_handler)(char * stage, int percentage, void * param) = nullptr;
+static void * s_progress_handler_param = nullptr;
 
 
 namespace hpgl
@@ -30,13 +31,8 @@ namespace hpgl
 		write(str.c_str());
 	}
 
-	void write(const boost::format & str)
-	{
-		write(str.str().c_str());
-	}
-
 	void update_progress(const char * stage, int percentage)
-	{		
+	{
 		if (s_progress_handler)
 		{
 			s_progress_handler((char*)stage, percentage, s_progress_handler_param);
@@ -45,7 +41,7 @@ namespace hpgl
 		{
 			if (percentage == 0)
 			{
-				write(boost::format("%1%: ") % stage);
+				write(std::string(stage) + ": ");
 			}
 			else if (percentage == -1)
 			{
@@ -53,7 +49,7 @@ namespace hpgl
 			}
 			else
 			{
-				write(boost::format("%1%%%... ") % percentage);
+				write(std::to_string(percentage) + "%... ");
 			}
 		}
 	}

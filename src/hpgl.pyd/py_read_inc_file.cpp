@@ -47,16 +47,13 @@ namespace hpgl
 			const std::string & filename,
 			double undefined_value,
 			int size,
-			boost::python::object odata,
-			boost::python::object omask)
+			py::object odata,
+			py::object omask)
 		{
 			using namespace std;
-			using namespace boost;
-			using namespace boost::python;
-			
-			
-			float * data_ptr = get_buffer_from_ndarray<float, 'f'>(odata, size, "py_read_inc_file_float");			
-			unsigned char * mask_ptr = get_buffer_from_ndarray<unsigned char, 'u'>(omask, size, "py_read_inc_file_float");			
+
+			float * data_ptr = get_buffer_from_ndarray<float, 'f'>(odata, size, "py_read_inc_file_float");
+			unsigned char * mask_ptr = get_buffer_from_ndarray<unsigned char, 'u'>(omask, size, "py_read_inc_file_float");
 
 			read_inc_file_float(filename.c_str(), (float)undefined_value, size, data_ptr, mask_ptr);
 		}
@@ -65,16 +62,16 @@ namespace hpgl
 			const std::string & filename,
 			int undefined_value,
 			int size,
-			boost::python::object data,
-			boost::python::object mask, 
-			boost::python::list ind_values)
+			py::object data,
+			py::object mask,
+			py::list ind_values)
 		{
 			unsigned char * data_ptr = get_buffer_from_ndarray<unsigned char, 'u'>(data, size, "py_read_inc_file_byte");
 			unsigned char * mask_ptr = get_buffer_from_ndarray<unsigned char, 'u'>(mask, size, "py_read_inc_file_byte");
 			read_inc_file_byte(filename.c_str(), undefined_value, size, data_ptr, mask_ptr);
 
 			std::vector<indicator_value_t> remap_table;
-			extract_indicator_values(ind_values, (int) boost::python::len(ind_values), remap_table);
+			extract_indicator_values(ind_values, (int) py::len(ind_values), remap_table);
 			transform_values_to_indices(data_ptr, mask_ptr, size, remap_table);
 		}
 	}

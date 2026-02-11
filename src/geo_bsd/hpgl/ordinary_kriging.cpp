@@ -37,11 +37,13 @@ namespace hpgl
 			typedef precalculated_covariances_t covariances_t;
 			covariances_t pcov(cov_model_t(params), params.m_radiuses);
 
-			hpgl::cont_kriging(input, grid, params, no_mean_t(), pcov, 
-				ok_weight_calculator_t(), 
+			hpgl::cont_kriging(input, grid, params, no_mean_t(), pcov,
+				ok_weight_calculator_t(),
 				output, report, stats, kriging_failure_handling::undefined_on_failure);
 		}
 
-		write(boost::format("%1%") % stats);
+		std::ostringstream oss;
+		oss << stats;
+		write(oss.str());
 	}
 }

@@ -10,6 +10,7 @@
 #include "stdafx.h"
 
 #include "lvm_data.h"
+#include <memory>
 
 namespace hpgl
 {
@@ -28,7 +29,7 @@ indicator_lvm_data_t::indicator_lvm_data_t()
 }
 
 void
-indicator_lvm_data_t::assign(const std::vector<boost::shared_ptr<std::vector<mean_t> > > &data)
+indicator_lvm_data_t::assign(const std::vector<std::shared_ptr<std::vector<mean_t> > > &data)
 {
 	m_data_holder.clear();
 	m_data.clear();

@@ -27,8 +27,9 @@ namespace hpgl
 	{
 		if (size <= 0)
 		{
-			throw hpgl_exception("random_path_generator_t", 
-				boost::format("Invalid size: %s") % size);
+			std::ostringstream oss;
+			oss << "Invalid size: " << size;
+			throw hpgl_exception("random_path_generator_t", oss.str());
 		}
 	}
 
@@ -46,8 +47,9 @@ namespace hpgl
 			node_index_t next_index = m_path_gen.next();
 			if (next_index != m_first_index)
 			{
-				throw hpgl_exception("random_path_generator",
-					boost::format("Invariant invalid: %s != %s") % m_first_index % next_index);
+				std::ostringstream oss;
+				oss << "Invariant invalid: " << m_first_index << " != " << next_index;
+				throw hpgl_exception("random_path_generator", oss.str());
 			}
 			return true;
 		} 

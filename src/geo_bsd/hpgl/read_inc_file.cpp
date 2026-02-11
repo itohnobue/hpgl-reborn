@@ -73,11 +73,12 @@ start:
 				}
 				else
 				{
-					float value;	
+					float value;
 					if (sscanf(buffer, "%f", &value) != 1)
 					{
-						throw hpgl_exception("load_floats_into_vector", 
-							boost::format("Error parsing '%s' string.") % buffer);
+						std::ostringstream oss;
+						oss << "Error parsing '" << buffer << "' string.";
+						throw hpgl_exception("load_floats_into_vector", oss.str());
 					}					
 					data[i] = value;											
 				}		
@@ -113,11 +114,12 @@ start:
 				}
 				else
 				{
-					int value;	
+					int value;
 					if (sscanf(buffer, "%d", &value) != 1)
 					{
-						throw hpgl_exception("load_floats_into_vector", 
-							boost::format("Error parsing '%s' string.") % buffer);
+						std::ostringstream oss;
+						oss << "Error parsing '" << buffer << "' string.";
+						throw hpgl_exception("load_floats_into_vector", oss.str());
 					}					
 					data[i] = value;											
 					mask[i] = value == undefined_value ? 0 : 1;

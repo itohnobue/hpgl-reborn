@@ -2,17 +2,18 @@
 #define SUGARBOX_GRID_H_INCLUDED_RANDOM_STUFF_ASKLJDALSDJLASKDJLASDJKEWOERO
 
 #include "typedefs.h"
+#include <memory>
 
 namespace hpgl
 {
 	/*!
-	 * Manages 
+	 * Manages
 	 *
-	 */	
+	 */
 	class sugarbox_grid_t
 	{
 		int m_x, m_y, m_z; //grid dimensions
-		bool m_initialized; 
+		bool m_initialized;
 	public:
 		typedef int size_type;
 		typedef sugarbox_location_t value_type;
@@ -25,16 +26,16 @@ namespace hpgl
 		void init(size_type x, size_type y, size_type z);
 		inline bool contains(const sugarbox_location_t &)const;
 		inline bool contains(node_index_t)const;
-		inline node_index_t get_index(const sugarbox_location_t &)const;		
-		inline node_index_t get_index(node_index_t index)const { return index; }	
+		inline node_index_t get_index(const sugarbox_location_t &)const;
+		inline node_index_t get_index(node_index_t index)const { return index; }
 		void get_dimensions(int &x, int &y, int &z)const
 		{
 			x = m_x; y = m_y; z = m_z;
 		}
-		~sugarbox_grid_t();	
+		~sugarbox_grid_t();
 	};
 
-	typedef boost::shared_ptr<sugarbox_grid_t> sp_sugarbox_grid_t;
+	typedef std::shared_ptr<sugarbox_grid_t> sp_sugarbox_grid_t;
 
 	bool sugarbox_grid_t::contains(const sugarbox_location_t & loc)const
 	{

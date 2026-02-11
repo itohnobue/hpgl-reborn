@@ -1,10 +1,85 @@
-src/temp
-src/msvc
-src/.vs
-*.pdb
+# Build directories
+build/
+build*/
+
+# Python
+__pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+dist/
+*.egg
+.pytest_cache/
+
+# UV package manager lock file (not needed for library)
+uv.lock
+
+# CMake/CPack (alternative build system - MSVC is primary)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+!src/**/CMakeLists.txt
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.sln.cache
+*.sln.docstates
+
+# Compiled binaries
+*.pdb
 *.exp
 *.lib
 *.dblite
+*.exe
+*.obj
+*.o
+*.ilk
+*.iobj
+*.ipdb
+
+# DLLs (built from source - not tracked)
 *.dll
+
+# Specific paths
+src/temp/
+src/.vs/
+src/msvc/temp/
+src/msvc/geo/
+src/msvc/geo_bsd/
 src/geo/_cvariogram_d.dll
+
+# Windows
+nul
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code (user-specific)
+.claude/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary files
+tmp/
+
+# Build logs
+*.log
+build_*.log
+test_*.log

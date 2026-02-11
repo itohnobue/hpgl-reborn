@@ -12,26 +12,26 @@ class TVEllipsoid:
         Dip = radians(Dip)
         Rotation = radians(Rotation);
         
-        A = matrix([
+        A = array([
              [cos(Azimut), -sin(Azimut), 0],
-             [sin(Azimut),  cos(Azimut), 0], 
+             [sin(Azimut),  cos(Azimut), 0],
              [0, 0, 1]
              ])
-        
-        B = matrix([
-             [cos(Dip), 0, -sin(Dip)], 
-             [0, 1, 0], 
+
+        B = array([
+             [cos(Dip), 0, -sin(Dip)],
+             [0, 1, 0],
              [sin(Dip), 0,  cos(Dip)]
              ])
-        
-        C = matrix([
-             [1, 0, 0], 
-             [0, cos(Rotation), -sin(Rotation)], 
+
+        C = array([
+             [1, 0, 0],
+             [0, cos(Rotation), -sin(Rotation)],
              [0, sin(Rotation),  cos(Rotation)]
              ])
-        
-        ABC = A * B * C
-        
+
+        ABC = A @ B @ C
+
         self.Direction1 = ABC[:, 0]
         self.Direction2 = ABC[:, 1]
         self.Direction3 = ABC[:, 2]
@@ -138,10 +138,10 @@ def _CalcLagsAreas(VariogramSearchTemplate):
         J = row_stack((J, GJ[Filter].reshape(NumPoints, 1)))
         K = row_stack((K, GK[Filter].reshape(NumPoints, 1)))
         LagIndexes = row_stack((LagIndexes, ones((NumPoints, 1)) * i))
-    I = reshape(I[1:], len(I[1:]))
-    J = reshape(J[1:], len(J[1:]))
-    K = reshape(K[1:], len(K[1:]))
-    LagIndexes = reshape(LagIndexes[1:], len(LagIndexes[1:]))
+    I = reshape(I[1:], len(I[1:])).astype(int)
+    J = reshape(J[1:], len(J[1:])).astype(int)
+    K = reshape(K[1:], len(K[1:])).astype(int)
+    LagIndexes = reshape(LagIndexes[1:], len(LagIndexes[1:])).astype(int)
     return I, J, K, LagIndexes, LagDistance
 
 def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
@@ -155,13 +155,13 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     MinDistance2 = max(0, min(LagStart)) ** 2
     MaxDistance2 = max(LagEnd) ** 2
     
-    if Function != None:
+    if Function is not None:
         Result = Function(0, 0, None, Params)  
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
     
     Index = array(range(0, len(PX)))
-    for i in xrange(len(PX)):
+    for i in range(len(PX)):
         X1, Y1, Z1 = PX[i], PY[i], PZ[i]
         DX, DY, DZ = PX - X1, PY - Y1, PZ - Z1
         
@@ -208,13 +208,13 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
     PJ = PointSetXYZ[1]
     PK = PointSetXYZ[2]
         
-    if Function != None:
+    if Function is not None:
         Result = Function(0, 0, None, Params)  
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
     
     Index = array(range(0, len(PI)))
-    for i in xrange(len(PI)):
+    for i in range(len(PI)):
         I1, J1, K1 = PI[i], PJ[i], PK[i]
         DI, DJ, DK = PI - I1, PJ - J1, PK - K1
         
@@ -229,14 +229,14 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
         FDI, FDJ, FDK = FPI - I1, FPJ - J1, FPK - K1
         FIndex = Index[Filter]
         
-        for j in xrange(len(FDI)):
+        for j in range(len(FDI)):
             LFilter = FDI[j] == LI
             LFilter = bitwise_and(LFilter, FDJ[j] == LJ)
             LFilter = bitwise_and(LFilter, FDK[j] == LK)
             
             ActiveLags = LagIndexes[LFilter]
             
-            if Function != None:
+            if Function is not None:
                 I2, J2, K2 = FPI[j], FPJ[j], FPK[j]
                 for Lag in ActiveLags:
                     Result[Lag, :] = Function(i, FIndex[j], Result[Lag, :], Params)
@@ -251,14 +251,14 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
     JMin, JMax = min(LJ), max(LJ)
     KMin, KMax = min(LK), max(LK)
     
-    if Function != None:
+    if Function is not None:
         Result = Function(0, 0, None, Params)  
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
     
     GI, GJ, GK = mgrid[0:NI, 0:NJ, 0:NK]
         
-    for i in xrange(len(LagIndexes)):
+    for i in range(len(LagIndexes)):
         DI = LI[i]
         DJ = LJ[i]
         DK = LK[i]
@@ -277,7 +277,7 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
         GJ2 = GJ[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
         GK2 = GK[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
         
-        for k in xrange(Intersection.shape[2]):
+        for k in range(Intersection.shape[2]):
             GI1Slice = GI1[:, :, k][Intersection[:, :, k]].flatten()
             GJ1Slice = GJ1[:, :, k][Intersection[:, :, k]].flatten()
             GK1Slice = GK1[:, :, k][Intersection[:, :, k]].flatten()
@@ -290,14 +290,14 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
 def CalcVariogramFunction(Point1, Point2, Result, Params):
     Values = Params['HardData']
     NumValues = len(Values)
-    if Result == None:
+    if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
     else:
         NumPoints = shape(Point1)[len(shape(Point1))-1]
         
         Values1 = zeros((NumValues, NumPoints))
         Values2 = zeros((NumValues, NumPoints))
-        for i in xrange(NumValues):
+        for i in range(NumValues):
             Values1[i] = Values[i][Point1[:]]
             Values2[i] = Values[i][Point2[:]]
         Variances = float32(Values1 - Values2)**2
@@ -310,14 +310,14 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
     Values = Params['HardData']
     SoftData = Params['SoftData']
     NumValues = len(Values)
-    if Result == None:
+    if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
     else:
         Values1 = zeros(NumValues)
         Values2 = zeros(NumValues)
         SoftValues1 = zeros(NumValues)
         SoftValues2 = zeros(NumValues)
-        for i in xrange(NumValues):
+        for i in range(NumValues):
             Values1[i] = Values[i][Point1]
             Values2[i] = Values[i][Point2]
             SoftValues1[i] = SoftData[i][Point1]
@@ -332,14 +332,14 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
     Values = Params['HardData']
     SoftData = Params['SoftData']
     NumValues = len(Values)
-    if Result == None:
+    if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
     else:
         Values1 = zeros(NumValues)
         Values2 = zeros(NumValues)
         SoftValues1 = zeros(NumValues)
         SoftValues2 = zeros(NumValues)
-        for i in xrange(NumValues):
+        for i in range(NumValues):
             Values1[i] = Values[i][Point1]
             Values2[i] = Values[i][Point2]
             SoftValues1[i] = SoftData[i][Point1]

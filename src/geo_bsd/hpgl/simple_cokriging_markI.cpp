@@ -90,7 +90,9 @@ bool combine(
 {
 	if (values.size() != weights.size() - 1)
 	{
-		throw hpgl_exception("combine", boost::format( "values.size() = %s, weights.size() = %s. weights.size() - values.size() != 1") % values.size() % weights.size());
+		std::ostringstream oss;
+		oss << "values.size() = " << values.size() << ", weights.size() = " << weights.size() << ". weights.size() - values.size() != 1";
+		throw hpgl_exception("combine", oss.str());
 	}
 
 	int size = values.size();
@@ -195,7 +197,11 @@ void simple_cokriging_markI(
 		cont_property_array_t & output_prop)
 {
 	if (input_prop.size() != output_prop.size())
-		throw hpgl_exception("simple_cokriging", boost::format("Input data size: %s. Output data size: %s. Must be equal.") % input_prop.size() % output_prop.size());
+	{
+		std::ostringstream oss;
+		oss << "Input data size: " << input_prop.size() << ". Output data size: " << output_prop.size() << ". Must be equal.";
+		throw hpgl_exception("simple_cokriging", oss.str());
+	}
 
 	print_algo_name("Simple Colocated Cokriging Markov Model I");
 	print_params(neighbourhood_params);
@@ -254,7 +260,11 @@ void simple_cokriging_markII(
 		cont_property_array_t & output_prop)
 {
 	if (input_prop.size() != output_prop.size())
-		throw hpgl_exception("simple_cokriging", boost::format("Input data size: %s. Output data size: %s. Must be equal.") % input_prop.size() % output_prop.size());
+	{
+		std::ostringstream oss;
+		oss << "Input data size: " << input_prop.size() << ". Output data size: " << output_prop.size() << ". Must be equal.";
+		throw hpgl_exception("simple_cokriging", oss.str());
+	}
 
 	print_algo_name("Simple Colocated Cokriging Markov Model II");
 	print_params(neighbourhood_params);

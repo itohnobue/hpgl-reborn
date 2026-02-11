@@ -64,12 +64,15 @@ namespace hpgl
 
 		py_byte_property_array_t(){};
 
-		py_byte_property_array_t(int size, boost::python::object values)
+		py_byte_property_array_t(int size, py::object values)
 		{
 			m_byte_property_array.reset(new indicator_property_array_t(size));
-			int icount = (int) boost::python::len(values);
-			if (icount < 0)
-				throw hpgl_exception("py_byte_property_array_t", boost::format("Too many values: %s. (Overflow?)") % icount);
+			int icount = (int) py::len(values);
+			if (icount < 0) {
+				std::ostringstream oss;
+				oss << "Too many values: " << icount << ". (Overflow?)";
+				throw hpgl_exception("py_byte_property_array_t", oss.str());
+			}
 			set_indicator_count(*m_byte_property_array, icount);
 		}
 

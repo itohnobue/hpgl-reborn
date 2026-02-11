@@ -15,11 +15,11 @@
 namespace hpgl
 {
 	py_cont_property_array_t load_cont_property(const std::string & filenames, double undefined_value);
-	py_byte_property_array_t load_ind_property(const std::string & filename, int undefined_value, boost::python::list indicator_values);
+	py_byte_property_array_t load_ind_property(const std::string & filename, int undefined_value, py::list indicator_values);
 
 
 	py_cont_property_array_t load_gslib_cont_property(const std::string & filename, double undefined_value, int i_size, int j_size, int k_size);
-	py_byte_property_array_t load_gslib_ind_property(const std::string & filename, int undefined_value, boost::python::list indicator_values, int i_size, int j_size, int k_size);
+	py_byte_property_array_t load_gslib_ind_property(const std::string & filename, int undefined_value, py::list indicator_values, int i_size, int j_size, int k_size);
 
 }
 

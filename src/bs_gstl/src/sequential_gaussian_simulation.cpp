@@ -54,8 +54,11 @@ void sequential_gaussian_simulation(
 	std::cout.flush();
 
 	if (output.size() != grid.size())
-		throw hpgl_exception("sequential_gaussian_simulation",
-		boost::format("Input property size: %s. Grid size: %s. Must be equal.") % output.size() % grid.size());
+	{
+		std::ostringstream oss;
+		oss << "Input property size: " << output.size() << ". Grid size: " << grid.size() << ". Must be equal.";
+		throw hpgl_exception("sequential_gaussian_simulation", oss.str());
+	}
 	
 	/*No_TI no_ti;
 	Tail_interpolator ti(&no_ti);
@@ -118,8 +121,11 @@ void sequential_gaussian_simulation_lvm(
 	std::cout.flush();
 
 	if (output.size() != grid.size())
-		throw hpgl_exception("sequential_gaussian_simulation_lvm",
-		boost::format("Input property size: %s. Grid size: %s. Must be equal.") % output.size() % grid.size());	
+	{
+		std::ostringstream oss;
+		oss << "Input property size: " << output.size() << ". Grid size: " << grid.size() << ". Must be equal.";
+		throw hpgl_exception("sequential_gaussian_simulation_lvm", oss.str());
+	}	
 
 	//subtract_means(output, mean_data);	
 
@@ -128,8 +134,11 @@ void sequential_gaussian_simulation_lvm(
 	//add_means(output, mean_data);
 
 	if (output.size() != grid.size())
-		throw hpgl_exception("sequential_gaussian_simulation",
-		boost::format("Input property size: %s. Grid size: %s. Must be equal.") % output.size() % grid.size());
+	{
+		std::ostringstream oss;
+		oss << "Input property size: " << output.size() << ". Grid size: " << grid.size() << ". Must be equal.";
+		throw hpgl_exception("sequential_gaussian_simulation", oss.str());
+	}
 	
 	/*No_TI no_ti;
 	Tail_interpolator ti(&no_ti);

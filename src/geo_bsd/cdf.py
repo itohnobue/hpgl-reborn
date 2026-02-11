@@ -15,12 +15,12 @@ def calc_cdf(prop):
                 if prop.mask[x,y,z] != 0:
                     value = prop.data[x,y,z]
                     full_count += 1
-                    if counts.has_key(value):
+                    if value in counts:
                         counts[value] += 1
                     else:
                         counts[value] = 1
     full_count = float(full_count)
-    values = numpy.sort(counts.keys())
+    values = numpy.sort(list(counts.keys()))
     if values.size == 0:
         size = 0
     elif values.size == 1:
@@ -29,7 +29,7 @@ def calc_cdf(prop):
         size = values.size - 1
     values = numpy.resize(values, size)
     probs = numpy.zeros(values.shape)
-    last_prob = 0.0    
+    last_prob = 0.0
     for i in range(size):
         probs[i] = last_prob + counts[values[i]] / full_count
         last_prob = probs[i]

@@ -1,10 +1,38 @@
+import os
 import ctypes as C
-import numpy.ctypeslib as NC
 import numpy
+
+# NumPy 2.0+ compatibility: try new location first, fall back to old
+try:
+    from numpy import ctypeslib as NC
+    import numpy as np
+    if tuple(map(int, np.__version__.split('.')[:2])) >= (2, 0):
+        _load_lib_func = lambda libpath: C.CDLL(str(libpath))
+    else:
+        _load_lib_func = lambda libpath: NC.load_library(libpath)
+except ImportError:
+    from numpy import _ctypeslib as NC
+    import numpy as np
+    if tuple(map(int, np.__version__.split('.')[:2])) >= (2, 0):
+        _load_lib_func = lambda libpath: C.CDLL(str(libpath))
+    else:
+        _load_lib_func = lambda libpath: NC.load_library(libpath)
+
+# In NumPy 2.0+, ndpointer might be in different location
+try:
+    ndpointer = NC.ndpointer
+except AttributeError:
+    from numpy.ctypeslib import ndpointer
 
 #from _cvariogram import CStackLayers
 
-cvar = NC.load_library('_cvariogram', __file__)
+try:
+    cvar = NC.load_library('_cvariogram', __file__)
+except (OSError, AttributeError):
+    # NumPy 2.0+ fallback: load directly using ctypes
+    import pathlib
+    _cvar_dir = pathlib.Path(__file__).resolve().parent
+    cvar = _load_lib_func(os.path.join(str(_cvar_dir), '_cvariogram'))
 
 class vector_t(C.Structure):
     _fields_ = [("data", C.c_double * 3)]
@@ -92,7 +120,7 @@ def checked_create(T, **kargs):
     return T(**kargs)
 
 def __strides(array):
-    return (array.strides[0] / array.itemsize, array.strides[1] / array.itemsize, array.strides[2] / array.itemsize)
+    return (array.strides[0] // array.itemsize, array.strides[1] // array.itemsize, array.strides[2] // array.itemsize)
 
 def _c_array(t, size, values):
     return (t * size)(*values)
@@ -123,9 +151,9 @@ class VariogramSearchTemplate:
             ellipsoid = ellipsoid.ell)
 
         self.num_lags = num_lags
-	self.lag_separation = lag_separation
-        
-       
+        self.lag_separation = lag_separation
+
+
 def CalcVariograms(templ, hard_data, percent=100):
     variogram = numpy.array([0] * templ.num_lags, dtype='float32')
     
@@ -147,7 +175,7 @@ def CalcVariograms(templ, hard_data, percent=100):
 
     lags_borders = numpy.zeros(templ.num_lags)
 
-    for k in xrange(templ.num_lags):
+    for k in range(templ.num_lags):
         lags_borders[k] = k * templ.lag_separation
 
     return (lags_borders, variogram)
@@ -160,8 +188,8 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
         xs = point_set["X"].ctypes.data_as(C.POINTER(C.c_float)),
         ys = point_set["Y"].ctypes.data_as(C.POINTER(C.c_float)),
         zs = point_set["Z"].ctypes.data_as(C.POINTER(C.c_float)),
-        values = point_set("Property").ctypes.data_as(C.POINTER(C.c_float)),
-        values_count = values.size)
+        values = point_set["Property"].ctypes.data_as(C.POINTER(C.c_float)),
+        values_count = point_set["Property"].size)
 
     cvar.calc_variograms_from_point_set(
         C.byref(templ.templ),
@@ -171,13 +199,13 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
 
     lags_borders = numpy.zeros(templ.num_lags)
 
-    for k in xrange(templ.num_lags):
+    for k in range(templ.num_lags):
         lags_borders[k] = k * templ.lag_separation
 
     return (lags_borders, variogram)
 
 def _create_float_data(array):
-    return __checked_create(
+    return checked_create(
         float_data_t,
         data = array.ctypes.data_as(C.POINTER(C.c_float)),
         data_shape = _c_array(C.c_int, 3, array.shape),

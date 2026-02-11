@@ -78,8 +78,11 @@ namespace hpgl
 			m_sgs_params.m_mean_kind = e_mean_stationary;
 		else if (mean_kind == "varying")
 			m_sgs_params.m_mean_kind = e_mean_varying;
-		else
-			throw hpgl_exception("py_sgs_params", boost::format("Unknown mean kind: %s.") % mean_kind);
+		else {
+			std::ostringstream oss;
+			oss << "Unknown mean kind: " << mean_kind << ".";
+			throw hpgl_exception("py_sgs_params", oss.str());
+		}
 	}
 
 }

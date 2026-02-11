@@ -27,12 +27,16 @@ namespace hpgl
 
 	namespace {
 
-		typedef boost::shared_ptr<FILE> file_t;
+		typedef std::shared_ptr<FILE> file_t;
 		file_t open_file_checked(const char * filename, const char * mode)
 		{
 			FILE * f = fopen(filename, mode);
 			if (f == 0)
-				throw hpgl_exception("open_file_checked", boost::format("Can't open file '%s'.") % filename);
+			{
+				std::ostringstream oss;
+				oss << "Can't open file '" << filename << "'.";
+				throw hpgl_exception("open_file_checked", oss.str());
+			}
 			return file_t(f, fclose);
 		}
 

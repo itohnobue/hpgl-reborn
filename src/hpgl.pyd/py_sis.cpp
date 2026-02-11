@@ -21,9 +21,9 @@
 namespace hpgl
 {
 	void py_sis(
-		boost::python::tuple array, 
+		py::tuple array,
 		const py_grid_t & grid,
-		boost::python::object params, int seed, bool use_vpc, bool use_corellogram, boost::python::object mask_data)
+		py::object params, int seed, bool use_vpc, bool use_corellogram, py::object mask_data)
 	{
 		if (use_vpc)
 			throw hpgl_exception("py_sis", "use_vpc no longer supported. Use lvm instead.");
@@ -31,13 +31,13 @@ namespace hpgl
 		ik_params_t ik_params;
 		parse_sis_params(params, ik_params);
 
-		boost::shared_ptr<indicator_property_array_t> property 
-				= ind_prop_from_tuple(array);		
-									
+		std::shared_ptr<indicator_property_array_t> property
+				= ind_prop_from_tuple(array);
+
 		progress_reporter_t report(grid.m_sugarbox_geometry->size());
 
-		unsigned char * mask_ptr = 
-			mask_data.ptr() == Py_None ? NULL 
+		unsigned char * mask_ptr =
+			mask_data.ptr() == Py_None ? nullptr
 			: get_buffer_from_ndarray<unsigned char,'u'>(mask_data, property->size(), "py_sis");
 
 		sequential_indicator_simulation(
@@ -53,37 +53,37 @@ namespace hpgl
 
 
 	void py_sis_lvm(
-			const boost::python::tuple & array,
+			const py::tuple & array,
 			const py_grid_t & grid,
-			boost::python::object params,
+			py::object params,
 			int seed,
-			boost::python::object mean_data,
+			py::object mean_data,
 			bool use_corellogram,
-			boost::python::object mask_data)
+			py::object mask_data)
 	{
-		boost::shared_ptr<indicator_property_array_t> property = ind_prop_from_tuple(array);		
+		std::shared_ptr<indicator_property_array_t> property = ind_prop_from_tuple(array);
 
 		ik_params_t ik_params;
-		parse_sis_params(params, ik_params);		
+		parse_sis_params(params, ik_params);
 		progress_reporter_t report(grid.m_sugarbox_geometry->size());
-		
+
 		unsigned char * mask_ptr =
-			mask_data.ptr() == Py_None ? NULL 
+			mask_data.ptr() == Py_None ? nullptr
 			: get_buffer_from_ndarray<unsigned char,'u'>(mask_data, property->size(), "py_sis_lvm");
 
 		std::vector<const mean_t*> means;
 		for (int i = 0; i < indicator_count(*property); ++i)
 		{
-			means.push_back(get_buffer_from_ndarray<mean_t, 'f'>(mean_data[i], property->size(), "py_sis_lvm"));
+			means.push_back(get_buffer_from_ndarray<mean_t, 'f'>(mean_data[py::int_(i)], property->size(), "py_sis_lvm"));
 		}
 
 		sequential_indicator_simulation_lvm(
-				*property, 
-				*grid.m_sugarbox_geometry, 
-				ik_params, seed, 
-				&means[0], 
-				report, 
-				use_corellogram, mask_ptr);	
+				*property,
+				*grid.m_sugarbox_geometry,
+				ik_params, seed,
+				&means[0],
+				report,
+				use_corellogram, mask_ptr);
 	}
 
 }

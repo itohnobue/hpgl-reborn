@@ -1,11 +1,19 @@
-from hpgl_wrap import _HPGL_KRIGING_KIND, _HPGL_SGS_PARAMS, hpgl_non_parametric_cdf_t,  _hpgl_so
+from .hpgl_wrap import _HPGL_KRIGING_KIND, _HPGL_SGS_PARAMS, hpgl_non_parametric_cdf_t,  _hpgl_so
 
-from geo import _empty_clone, _clone_prop, _create_hpgl_cont_masked_array, _create_hpgl_float_array, _create_hpgl_ubyte_array, _require_cont_data, _requite_ind_data, __checked_create
+from .geo import _empty_clone, _clone_prop, _create_hpgl_cont_masked_array, _create_hpgl_float_array, _create_hpgl_ubyte_array, _require_cont_data, _requite_ind_data, __checked_create
 
-from geo import CovarianceModel
-from geo import accepts_tuple
+from .geo import CovarianceModel
+from .geo import accepts_tuple
 
-from cdf import CdfData
+from .cdf import CdfData
+
+# Import validation framework
+from . import validation
+from .validation import (
+    GridValidator,
+    ParameterValidator,
+    validate_simulation_params
+)
 
 import ctypes as C
 
@@ -47,7 +55,7 @@ def sgs_simulation(prop, grid, cdf_data, radiuses, max_neighbours, cov_model, se
 Parameters:
 -----------
 cdf_data: None or array_like or CdfData:
-    Cumulative distribution data or data to use for calulating it. 
+    Cumulative distribution data or data to use for calulating it.
     If None - no cdf transformation is performed.
 radiuses : tuple of 3 integers
     Search radiuses by X, Y and Z axes.
@@ -60,23 +68,48 @@ seed: integer
 kriging_type:"sk" or "ok", optional
     Selects either simple or ordinary kriging type. Defaults to Simple Kriging.
 mean:None or integer or array_like, optional
-    Stationary mean value or varying mean array. None - stationary mean value 
+    Stationary mean value or varying mean array. None - stationary mean value
     will be calculated from source data. Default: None
 use_harddata: bool, optional
-    True - to use source data values for simulation. False - to ignore source data 
+    True - to use source data values for simulation. False - to ignore source data
     values. Default: True.
 mask: None or array_like, optional:
-    Array containing 1 in cell that need to be simulated and 0 in cell that aren't. 
-    If None simulate all cells. Defualt: None.  
+    Array containing 1 in cell that need to be simulated and 0 in cell that aren't.
+    If None simulate all cells. Defualt: None.
 """
+	# Validate grid dimensions
+	GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+
+	# Validate radiuses - convert to int for ctypes compatibility
+	valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+	# Ensure radiuses are integers for ctypes (c_int * 3)
+	valid_radiuses = tuple(int(r) for r in valid_radiuses)
+
+	# Validate max_neighbours
+	ParameterValidator.validate_max_neighbors(max_neighbours)
+
+	# Validate covariance model
+	ParameterValidator.validate_covariance_parameters(
+		cov_model.sill,
+		cov_model.nugget,
+		cov_model.ranges,
+		cov_model.angles
+	)
+
+	# Validate seed
+	ParameterValidator.validate_seed(seed)
+
+	# Validate min_neighbours
+	ParameterValidator.validate_min_neighbors(min_neighbours, max_neighbours)
+
 	prop.fix_shape(grid)
 	cov_model = normed_cov_model(cov_model)
-	
+
 	out_prop, mean, mask = __prepare_sgs(
-		prop=prop, 
-		mean=mean, 
-		use_harddata=use_harddata, 
-		mask=mask)	
+		prop=prop,
+		mean=mean,
+		use_harddata=use_harddata,
+		mask=mask)
 
 	sgsp = _HPGL_SGS_PARAMS(
 		covariance_type = cov_model.type,
@@ -84,30 +117,28 @@ mask: None or array_like, optional:
 		angles = cov_model.angles,
 		sill = cov_model.sill,
 		nugget = cov_model.nugget,
-		radiuses = radiuses,
+		radiuses = valid_radiuses,
 		max_neighbours = max_neighbours,
 		kriging_kind = {"sk" : _HPGL_KRIGING_KIND.simple, "ok" : _HPGL_KRIGING_KIND.ordinary}[kriging_type],
 		seed = seed,
 		min_neighbours = min_neighbours)
 
-	if (cdf_data is None):
+	if cdf_data is None:
 		hpgl_cdf = None
 	else:
-		C.byref(_create_hpgl_nonparam_cdf(cdf_data))
+		hpgl_cdf = C.byref(_create_hpgl_nonparam_cdf(cdf_data))
 
-	hpgl_mask = C.byref(_create_hpgl_ubyte_array(mask, grid)) if mask != None else None
+	hpgl_mask = C.byref(_create_hpgl_ubyte_array(mask, grid)) if mask is not None else None
 
-	hpgl_cdf = _create_hpgl_nonparam_cdf(cdf_data)
-	
 	if mean is None or numpy.isscalar(mean):
 		_hpgl_so.hpgl_sgs_simulation(
 			C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
 			C.byref(sgsp),
 			hpgl_cdf,
-			C.byref(C.c_double(mean)) if mean != None else None,
+			C.byref(C.c_double(mean)) if mean is not None else None,
 			hpgl_mask
 			)
-		
+
 
 	else:
 		_hpgl_so.hpgl_sgs_lvm_simulation(

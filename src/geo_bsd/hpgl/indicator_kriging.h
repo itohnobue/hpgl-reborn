@@ -119,8 +119,12 @@ namespace hpgl
 			}
 		}
 
-		report.stop();	
-		write(boost::format("Done. Average speec: %1% point/sec.\n") % report.iterations_per_second() );
+		report.stop();
+		{
+			std::ostringstream oss;
+			oss << "Done. Average speec: " << report.iterations_per_second() << " point/sec.\n";
+			write(oss.str());
+		}
 	}
 }
 

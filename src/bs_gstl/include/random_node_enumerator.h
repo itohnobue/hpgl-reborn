@@ -10,12 +10,8 @@
 #ifndef __RANDOM_NODE_ENUMERATOR_H__89D32835_1CF0_4966_BA62_6F0C4B0FBE43__
 #define __RANDOM_NODE_ENUMERATOR_H__89D32835_1CF0_4966_BA62_6F0C4B0FBE43__
 
-#include <boost/smart_ptr.hpp>
-
-
 #include <property_array.h>
 #include <sugarbox_grid.h>
-
 #include "path_random_generator.h"
 
 namespace hpgl
@@ -30,7 +26,7 @@ namespace hpgl
 		bool m_eop;
 		node_index_t m_first_index;
 	public:
-		random_path_generator_t(size_t size, int seed);		
+		random_path_generator_t(size_t size, int seed);
 		bool end_of_path();
 		node_index_t get_next();
 		size_t get_next(size_t count, std::vector<node_index_t> & indices);

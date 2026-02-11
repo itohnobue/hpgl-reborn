@@ -21,7 +21,7 @@ py_grid_t::py_grid_t(
 		sugarbox_grid_size_t y,
 		sugarbox_grid_size_t z)
 {
-	m_sugarbox_geometry = boost::shared_ptr<sugarbox_grid_t>(new sugarbox_grid_t());
+	m_sugarbox_geometry = std::make_shared<sugarbox_grid_t>();
 	m_sugarbox_geometry->init(x, y, z);
 }
 }

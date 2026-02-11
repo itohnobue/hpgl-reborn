@@ -1,6 +1,8 @@
 #ifndef __MAP_CATEGORIES_H__85188541_A46B_492D_9CA8_B64EE3307DF1
 #define __MAP_CATEGORIES_H__85188541_A46B_492D_9CA8_B64EE3307DF1
 
+#include <sstream>
+
 namespace hpgl
 {
 	template<typename T>
@@ -9,17 +11,21 @@ namespace hpgl
 		for (int i = 0; i < data.size(); ++i)
 		{
 			bool mapped = false;
-			for (int j = 0; j < indicator_values.size(); ++i)
+			for (int j = 0; j < indicator_values.size(); ++j)
 			{
 				if (data[i] == indicator_values[j])
 				{
 					data[i] = j;
 					mapped = true;
 					break;
-				}				
+				}
 			}
 			if (!mapped)
-				throw hpgl_exception("map_categories", boost::format("Unexpected value: %s.") % data[i]);
+			{
+				std::ostringstream oss;
+				oss << "Unexpected value: " << data[i] << ".";
+				throw hpgl_exception("map_categories", oss.str());
+			}
 		}
 	}
 
@@ -29,17 +35,21 @@ namespace hpgl
 		for (int i = 0; i < data.size(); ++i)
 		{
 			bool mapped = false;
-			for (int j = 0; j < indicator_values.size(); ++i)
+			for (int j = 0; j < indicator_values.size(); ++j)
 			{
 				if (data.get_at(i) == indicator_values[j])
 				{
 					data.set_at(i, j);
 					mapped = true;
 					break;
-				}				
+				}
 			}
 			if (!mapped)
-				throw hpgl_exception("map_categories", boost::format("Unexpected value: %s.") % data[i]);
+			{
+				std::ostringstream oss;
+				oss << "Unexpected value: " << data.get_at(i) << ".";
+				throw hpgl_exception("map_categories", oss.str());
+			}
 		}
 	}
 }

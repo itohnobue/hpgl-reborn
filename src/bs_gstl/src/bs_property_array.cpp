@@ -12,6 +12,7 @@
 
 #include "stdafx.h"
 #include <property_array.h>
+#include <memory>
 
 using namespace hpgl;
 
@@ -51,9 +52,9 @@ property_array_t<T>::property_array_t(
 }
 
 template<typename T>
-boost::shared_ptr<property_array_t<T> > property_array_t<T>::clone()const
+std::shared_ptr<property_array_t<T> > property_array_t<T>::clone()const
 {
-	boost::shared_ptr<property_array_t<T> > result(new property_array_t<T>());
+	std::shared_ptr<property_array_t<T> > result(new property_array_t<T>());
 	result->m_size = m_size;
 	result->data_ = data_;
 	result->m_flags = m_flags;
@@ -62,9 +63,9 @@ boost::shared_ptr<property_array_t<T> > property_array_t<T>::clone()const
 }
 
 template<typename T>
-boost::shared_ptr<property_array_t<T> > property_array_t<T>::clone_without_data()const
+std::shared_ptr<property_array_t<T> > property_array_t<T>::clone_without_data()const
 {
-	boost::shared_ptr<property_array_t<T> > result(new property_array_t<T>());
+	std::shared_ptr<property_array_t<T> > result(new property_array_t<T>());
 	result->m_size = m_size;
 	result->data_.resize(m_size);
 	result->m_flags.resize(m_size, 0);

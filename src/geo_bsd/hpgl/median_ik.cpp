@@ -34,13 +34,17 @@ void median_ik_for_two_indicators(
 	assert(input_property.size() == output_property.size());
 	if (input_property.size() != output_property.size())
 	{
-		throw hpgl_exception(
-				"median_ik_for_two_indicators", 
-				boost::format("Input property size %1% is not equal output property size %2%") % input_property.size() % output_property.size());
+		std::ostringstream oss;
+		oss << "Input property size " << input_property.size() << " is not equal output property size " << output_property.size();
+		throw hpgl_exception("median_ik_for_two_indicators", oss.str());
 	}
-	
+
 	if (input_property.size() != grid.size())
-		throw hpgl_exception("median_ik_for_two_indicators", boost::format("Properties size '%s' is not equal to grid size '%s'") % input_property.size() % grid.size());
+	{
+		std::ostringstream oss;
+		oss << "Properties size '" << input_property.size() << "' is not equal to grid size '" << grid.size() << "'";
+		throw hpgl_exception("median_ik_for_two_indicators", oss.str());
+	}
 
 
 	size_t prop_size = input_property.size();
@@ -87,9 +91,10 @@ void median_ik_for_two_indicators(
 			}
 		}
 	}
-	report.stop();	
-	write(boost::format("Done. Average speed: %1% point/sec.\n") 
-		  % report.iterations_per_second());
+	report.stop();
+	std::ostringstream oss;
+	oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";
+	write(oss.str());
 }
 }
 

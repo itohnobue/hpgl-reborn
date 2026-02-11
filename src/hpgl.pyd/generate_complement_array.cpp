@@ -14,9 +14,9 @@
 namespace hpgl
 {
 
-	boost::shared_ptr<std::vector<mean_t> > generate_complement_array(boost::shared_ptr<std::vector<mean_t> > in)
+	std::shared_ptr<std::vector<mean_t> > generate_complement_array(std::shared_ptr<std::vector<mean_t> > in)
 	{
-		boost::shared_ptr<std::vector<mean_t> > lvm0 (new std::vector<mean_t>());
+		std::shared_ptr<std::vector<mean_t> > lvm0 = std::make_shared<std::vector<mean_t>>();
 		lvm0->reserve(in->size());
 		for (size_t idx = 0, end_idx = in->size(); idx < end_idx; ++idx)
 		{

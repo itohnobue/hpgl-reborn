@@ -10,8 +10,7 @@
 #ifndef __BS_PROPERTY_ARRAY_H__069FA229_B0A2_470D_84DD_385DCDBAAFC3__
 #define __BS_PROPERTY_ARRAY_H__069FA229_B0A2_470D_84DD_385DCDBAAFC3__
 
-#include <boost/smart_ptr.hpp>
-
+#include <memory>
 #include <typedefs.h>
 
 namespace hpgl
@@ -106,11 +105,11 @@ namespace hpgl
 		{
 			return is_informed(neighbour_node);
 		}
-	};	
+	};
 
-	typedef boost::shared_ptr<cont_property_array_t> sp_double_property_array_t;
-	typedef boost::shared_ptr<indicator_property_array_t> sp_byte_property_array_t;
-	
+	typedef std::shared_ptr<cont_property_array_t> sp_double_property_array_t;
+	typedef std::shared_ptr<indicator_property_array_t> sp_byte_property_array_t;
+
 	inline const int indicator_count(const indicator_property_array_t & prop)
 	{
 		return prop.m_indicator_count;

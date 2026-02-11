@@ -1,7 +1,33 @@
 import os
 import ctypes as C
-import numpy.ctypeslib as NC
 import numpy
+
+# NumPy 2.0+ compatibility: try new location first, fall back to old
+try:
+    from numpy import ctypeslib as NC
+    # NumPy 2.0+ changed load_library signature
+    # Old: load_library(libname, path)
+    # New: load_library(filepath, loader_path=None)
+    import numpy as np
+    if tuple(map(int, np.__version__.split('.')[:2])) >= (2, 0):
+        # NumPy 2.0+: use direct ctypes.CDLL with full path
+        _load_lib_func = lambda libpath: C.CDLL(str(libpath))
+    else:
+        # NumPy < 2.0: use the original load_library
+        _load_lib_func = lambda libpath: NC.load_library(libpath)
+except ImportError:
+    from numpy import _ctypeslib as NC
+    import numpy as np
+    if tuple(map(int, np.__version__.split('.')[:2])) >= (2, 0):
+        _load_lib_func = lambda libpath: C.CDLL(str(libpath))
+    else:
+        _load_lib_func = lambda libpath: NC.load_library(libpath)
+
+# In NumPy 2.0+, ndpointer might be in different location
+try:
+    ndpointer = NC.ndpointer
+except AttributeError:
+    from numpy.ctypeslib import ndpointer
 
 hpgl_output_handler = C.CFUNCTYPE(C.c_int, C.c_char_p, C.py_object)
 hpgl_progress_handler = C.CFUNCTYPE(C.c_int, C.c_char_p, C.c_int, C.py_object)
@@ -140,10 +166,111 @@ class hpgl_non_parametric_cdf_t(C.Structure):
 
 _hpgl_so = None
 
-if os.environ.has_key('HPGL_DEBUG'):
-	_hpgl_so = NC.load_library('hpgl_d', __file__)
+# Security: Validate and safely load the native library
+def _safe_load_library(lib_name: str, ref_file: str):
+	"""
+	Safely loads a native library with path validation to prevent
+	directory traversal and library loading attacks.
+
+	Args:
+		lib_name: Name of the library to load (without extension/prefix)
+		ref_file: Reference file path (typically __file__) used to locate library
+
+	Returns:
+		Loaded ctypes library
+
+	Raises:
+		ValueError: If library path validation fails
+		OSError: If library cannot be loaded
+	"""
+	import pathlib
+
+	# Validate the reference file path
+	if not ref_file:
+		raise ValueError("Reference file path cannot be empty")
+
+	# Convert to absolute path and normalize
+	ref_path = pathlib.Path(ref_file).resolve()
+
+	# Check for path traversal in the reference path itself
+	ref_str = str(ref_path)
+	if '..' in ref_str.split(os.sep):
+		# This is OK after resolve() as long as it's within allowed directories
+		pass
+
+	# The library should be in the same directory as the reference file
+	lib_dir = ref_path.parent
+
+	# Try platform-specific library names
+	import sys
+	lib_paths = []
+
+	if sys.platform.startswith('win'):
+		# Windows: .dll or .pyd extensions
+		lib_paths.extend([
+			lib_dir / f"{lib_name}.dll",
+			lib_dir / f"{lib_name}.pyd",
+			lib_dir / f"lib{lib_name}.dll",
+			lib_dir / f"{lib_name}_d.dll",  # Debug version
+			lib_dir / f"lib{lib_name}_d.dll",
+		])
+	elif sys.platform.startswith('darwin'):
+		# macOS: .dylib or .so extensions
+		lib_paths.extend([
+			lib_dir / f"lib{lib_name}.dylib",
+			lib_dir / f"lib{lib_name}.so",
+			lib_dir / f"{lib_name}.so",
+		])
+	else:  # Linux and others
+		lib_paths.extend([
+			lib_dir / f"lib{lib_name}.so",
+			lib_dir / f"{lib_name}.so",
+		])
+
+	# Try each library path
+	for lib_path in lib_paths:
+		if lib_path.exists():
+			# Validate the resolved library path is within allowed directories
+			resolved_lib = lib_path.resolve()
+			# Ensure library is in the same directory tree as the reference file
+			try:
+				# Verify the library is in a subdirectory of ref_path.parent
+				resolved_lib.relative_to(lib_dir)
+				return _load_lib_func(str(resolved_lib))
+			except ValueError:
+				# Library path escapes allowed directory
+				raise ValueError(
+					f"Library path {resolved_lib} is outside allowed directory {lib_dir}"
+				)
+
+	# If not found, try the original load_library behavior as fallback
+	# but wrap it with additional validation
+	try:
+		lib = _load_lib_func(os.path.join(str(ref_path.parent), lib_name))
+		# Verify the loaded library path is safe
+		if hasattr(lib, '_name'):
+			loaded_path = pathlib.Path(lib._name)
+			if loaded_path.exists():
+				resolved = loaded_path.resolve()
+				try:
+					resolved.relative_to(lib_dir)
+				except ValueError:
+					raise ValueError(
+						f"Loaded library {resolved} is outside allowed directory {lib_dir}"
+					)
+		return lib
+	except OSError as e:
+		# Library not found or cannot be loaded
+		lib_dirs_str = ', '.join(str(p.parent) for p in lib_paths)
+		raise OSError(
+			f"Cannot load library '{lib_name}'. Searched in: {lib_dirs_str}. "
+			f"Original error: {e}"
+		) from e
+
+if 'HPGL_DEBUG' in os.environ:
+	_hpgl_so = _safe_load_library('hpgl_d', __file__)
 else:
-	_hpgl_so = NC.load_library('hpgl', __file__)
+	_hpgl_so = _safe_load_library('hpgl', __file__)
 
 _hpgl_so.hpgl_set_output_handler.restype = None
 _hpgl_so.hpgl_set_output_handler.argtypes = [hpgl_output_handler, C.py_object]

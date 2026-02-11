@@ -111,16 +111,14 @@ namespace hpgl
 		data_strides_t m_strides;
 		int get_flat_index(const index_3d_t & idx)const
 		{
-			using namespace boost;
 			int node = m_strides.get_flat_idx(idx);
 			if (node < 0)
-				throw hpgl_exception(
-						"buffer_accessor_3d_t::get_flat_index", 
-						format("Index is out of range: (%s, %s, %s). Shape: (%s, %s, %s)")
-						% idx[0] % idx[1] % idx[2]
-						% m_strides.get_shape()[0]
-						% m_strides.get_shape()[1]
-						% m_strides.get_shape()[2]);
+			{
+				std::ostringstream oss;
+				oss << "Index is out of range: (" << idx[0] << ", " << idx[1] << ", " << idx[2] << "). Shape: ("
+					<< m_strides.get_shape()[0] << ", " << m_strides.get_shape()[1] << ", " << m_strides.get_shape()[2] << ")";
+				throw hpgl_exception("buffer_accessor_3d_t::get_flat_index", oss.str());
+			}
 
 			return node;
 		}
@@ -172,14 +170,13 @@ namespace hpgl
 		data_strides_t m_strides;
 		int get_flat_index(const index_3d_t & idx)const
 		{
-			using namespace boost;
 			int node = m_strides.get_flat_idx(idx);
 			if (node < 0)
-				throw hpgl_exception(
-						"buffer_accessor_3d_t::get_flat_index", 
-						format("Index is out of range: (%s, %s, %s). Shape: %s")
-						% idx[0] % idx[1] % idx[2]
-						% m_strides.get_shape());
+			{
+				std::ostringstream oss;
+				oss << "Index is out of range: (" << idx[0] << ", " << idx[1] << ", " << idx[2] << "). Shape: " << m_strides.get_shape();
+				throw hpgl_exception("buffer_accessor_3d_t::get_flat_index", oss.str());
+			}
 
 			return node;
 		}

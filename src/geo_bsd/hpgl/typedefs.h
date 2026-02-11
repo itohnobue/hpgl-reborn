@@ -3,7 +3,7 @@
 
 #include <ostream>
 #include <vector>
-#include <boost/smart_ptr.hpp>
+#include <memory>
 
 namespace hpgl
 {

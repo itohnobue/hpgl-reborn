@@ -1,8 +1,11 @@
-from geo import *
+from .geo import *
 from numpy import *
 import numpy.ma as ma
 from numpy import savetxt
-from scipy import *
+try:
+    from scipy import *
+except ImportError:
+    pass
 
 
 def CalcMean(Cube, Mask):
@@ -11,7 +14,7 @@ def CalcMean(Cube, Mask):
 
 def CalcMarginalProbsIndicator(Cube, Mask, Indicators):
     Result = zeros(len(Indicators))
-    for i in xrange(len(Indicators)):
+    for i in range(len(Indicators)):
         Result.flat[i] = CalcMean(Cube == Indicators[i], Mask)
     return Result
 
@@ -30,7 +33,7 @@ def CalcVPC(Cube, Mask, MarginalMean):
     
 def CalcVPCsIndicator(Cube, Mask, Indicators, MarginalProbs):
     Result = []
-    for i in xrange(len(Indicators)):
+    for i in range(len(Indicators)):
         VPC = CalcVPC(Cube == Indicators[i], Mask, MarginalProbs[i])
         Result.append(VPC)
     
@@ -44,19 +47,19 @@ def CubeFromVPC(VPC, NX, NY):
     
 def CubesFromVPCs(VPCs, NX, NY):
     Cubes = []
-    for i in xrange(len(VPCs)):
+    for i in range(len(VPCs)):
         Cube = CubeFromVPC(VPCs[i], NX, NY)
         Cubes.append(Cube)
     return Cubes
 
 def Cubes2PointSet(CubesDictionary, Mask):
-    NX, NY, NZ = CubesDictionary.values()[0].shape
+    NX, NY, NZ = list(CubesDictionary.values())[0].shape
     I, J = mgrid[0:NX, 0:NY]
     PointSet = {'X':zeros(0, dtype=int32), 'Y':zeros(0, dtype=int32), 'Z':zeros(0, dtype=int32)}
     for Key in CubesDictionary.keys():
         PointSet[Key] = zeros(0, dtype=int32)
     
-    for k in xrange(NZ):
+    for k in range(NZ):
         Slice = Mask[:, :, k]
         PointSet['X'] = append(PointSet['X'], I[Slice])
         PointSet['Y'] = append(PointSet['Y'], J[Slice])
@@ -74,7 +77,7 @@ def Cube2PointSet(Cube, Mask):
     Y = zeros(0, dtype=int32)
     Z = zeros(0, dtype=int32)
     Property = zeros(0, dtype=int32)
-    for k in xrange(NZ):
+    for k in range(NZ):
         Slice = Mask[:, :, k]
         X = append(X, I[Slice])
         Y = append(Y, J[Slice])
@@ -86,7 +89,7 @@ def Cube2PointSet(Cube, Mask):
 def PointSet2Cube(X, Y, Z, Property, Cube):
     NX, NY, NZ = Cube.shape
     Mask = zeros(Cube.shape)
-    for Ind in xrange(len(X.flat)):
+    for Ind in range(len(X.flat)):
         if (0 <= X[Ind]) & (X[Ind] < NX) & (0 <= Y[Ind]) & (Y[Ind] < NY) & (0 <= Z[Ind]) & (Z[Ind] < NZ): 
             Cube[X[Ind], Y[Ind], Z[Ind]] = Property[Ind]
             Mask[X[Ind], Y[Ind], Z[Ind]] = 1
@@ -110,39 +113,39 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
     
     # Check that all properties have the same length
     if(sum(lens - lens[0]) == 0):
-        MegaPointSet = zeros((lens[0], 0))
+        MegaPointSet = zeros((int(lens[0]), 0))
         for Key in PointSet.keys():
             MegaPointSet = column_stack((MegaPointSet, PointSet[Key]))
         savetxt(f, MegaPointSet)
     else:
-        print "ERROR! All properties in GSLIB dictionary must have equal size"
-    
+        print("ERROR! All properties in GSLIB dictionary must have equal size")
+
     f.close()
 
 def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
     f = open(FileName, "w")
-    
+
     # 1. Caption
     f.write(Caption + '\n')
-    
+
     # 2. Number of properties in file
     f.write(str(len(CubesDictionary)) + '\n')
-    
+
     # 3. Properties names
     lens = numpy.array([])
-    
+
     for Key in CubesDictionary.keys():
         f.write(Key + '\n')
         lens = numpy.append(lens, len(CubesDictionary[Key].flat))
-    
+
     # Check that all properties have the same length
     if(sum(lens - lens[0]) == 0):
-        MegaCube = zeros((lens[0], 0))
+        MegaCube = zeros((int(lens[0]), 0))
         for Key in CubesDictionary.keys():
             MegaCube = column_stack((MegaCube, CubesDictionary[Key].copy().swapaxes(0, 2).swapaxes(1, 2).flat))
         savetxt(f, MegaCube, Format)
     else:
-        print "ERROR! All properties in GSLIB dictionary must have equal size"
+        print("ERROR! All properties in GSLIB dictionary must have equal size")
     
     f.close()
 
@@ -159,14 +162,15 @@ def GetEllipseMask(Radiuses):
 	y0 = Radiuses[1]
 	z0 = Radiuses[2]
 	
-	for a in xrange(Radiuses[0]*2):
-		for b in xrange(Radiuses[1]*2):
-			for c in xrange(Radiuses[2]*2):
+	for a in range(Radiuses[0]*2):
+		for b in range(Radiuses[1]*2):
+			for c in range(Radiuses[2]*2):
 				if ( ((a-x0)**2 / float32(Radiuses[0]**2)) + ((b-y0)**2 / float32(Radiuses[1]**2)) + ((c-z0)**2 / float32(Radiuses[2]**2)) <= 1):
 					MeanMask[a,b,c] = 1
 	return MeanMask
 
-def MeanCalc(Cube, Mask, Radiuses, MeanMask,(i,j,k), undefined_value):
+def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):
+	i, j, k = coords
 	imin = i-Radiuses[0]
 	imax = i+Radiuses[0]
 
@@ -196,13 +200,14 @@ def MeanCalc(Cube, Mask, Radiuses, MeanMask,(i,j,k), undefined_value):
 		return undefined_value
 
 
-def MovingAverage3D((Cube, Mask), Radiuses, undefined_value, MaskCalcFunction):
+def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
+	Cube, Mask = cube_mask
 	MACube = copy(Cube)
 	MeanMask = MaskCalcFunction(Radiuses)
 	
-	for i in xrange(Cube.shape[0]):
-		for j in xrange(Cube.shape[1]):
-			for k in xrange(Cube.shape[2]):
+	for i in range(Cube.shape[0]):
+		for j in range(Cube.shape[1]):
+			for k in range(Cube.shape[2]):
 				MACube[i,j,k] = MeanCalc(Cube, Mask, Radiuses, MeanMask, (i,j,k), undefined_value)
 
 	return MACube
@@ -217,18 +222,18 @@ def LoadGslibFile(filename, property_size):
 	num_p = int(f.readline())
 	#print num_p
 
-	for i in xrange(num_p):
+	for i in range(num_p):
 		list_prop.append(str(f.readline().strip()))
 	#print list_prop
 
-	for i in xrange(len(list_prop)):
+	for i in range(len(list_prop)):
 		dict[ list_prop[i] ] = zeros((property_size[0]*property_size[1]*property_size[2]))
 
-	index = zeros(len(list_prop))
+	index = zeros(len(list_prop), dtype=int)
 
 	for line in f:
 		points = line.split()
-		for j in xrange(len(points)):
+		for j in range(len(points)):
 			dict[ list_prop[j] ][index[j]] = float64(points[j])
 			index[j]+=1
 	

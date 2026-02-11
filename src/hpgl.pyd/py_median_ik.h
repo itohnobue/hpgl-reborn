@@ -25,9 +25,9 @@ namespace hpgl
 		void set_angles(double a1, double a2, double a3);
 		void set_sill(double sill);
 		void set_nugget(double nugget);
-		void set_radiuses(size_t , size_t , size_t );	
+		void set_radiuses(size_t , size_t , size_t );
 		void set_max_neighbours(size_t mn);
-		void set_marginal_probs(double p1, double p2);	
+		void set_marginal_probs(double p1, double p2);
 	};
 
 	void py_median_ik_params_t::set_covariance_type(int type)
@@ -59,7 +59,7 @@ namespace hpgl
 	{
 		m_params.set_radiuses(s1, s2, s3);
 	}
-	
+
 	void py_median_ik_params_t::set_max_neighbours(size_t mn)
 	{
 		m_params.m_max_neighbours = mn;
@@ -71,24 +71,23 @@ namespace hpgl
 		m_params.m_marginal_probs[1] = p2;
 	}
 
-	
+
 	py_median_ik_params_t py_create_median_ik_params()
 	{
 		return py_median_ik_params_t();
 	}
 
-	void py_median_ik(boost::python::tuple input_property,
-		boost::python::tuple output_property,
+	void py_median_ik(py::tuple input_property,
+		py::tuple output_property,
 		const py_grid_t & grid,
 		const py_median_ik_params_t & params)
 	{
-		using namespace boost::python;
 		sp_byte_property_array_t in_prop = ind_prop_from_tuple(input_property);
 		sp_byte_property_array_t out_prop = ind_prop_from_tuple(output_property);
-			
+
 		std::cout << "Performing Median IK.\n" << params.m_params;
 
-		median_ik_for_two_indicators(params.m_params, *grid.m_sugarbox_geometry, *in_prop, *out_prop);		
+		median_ik_for_two_indicators(params.m_params, *grid.m_sugarbox_geometry, *in_prop, *out_prop);
 	}
 }
 

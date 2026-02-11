@@ -7,7 +7,7 @@
 */
 
 
-/* 
+/*
  * File:   py_kriging_weights.h
  * Author: nobu
  *
@@ -21,44 +21,45 @@
 
 namespace hpgl
 {
-    boost::python::list py_calculate_kriging_weight(
-        const boost::python::list & center_coords,
-        const boost::python::list & neighbourhoods_coords_x,
-        const boost::python::list & neighbourhoods_coords_y,
-        const boost::python::list & neighbourhoods_coords_z,
+    inline py::list py_calculate_kriging_weight(
+        const py::list & center_coords,
+        const py::list & neighbourhoods_coords_x,
+        const py::list & neighbourhoods_coords_y,
+        const py::list & neighbourhoods_coords_z,
             const py_sk_params_t & param)
 
     {
-        assert(boost::python::len(center_coords) == 3);
+        assert(py::len(center_coords) == 3);
 
-        assert(boost::python::len(neighbourhoods_coords_x) ==
-                boost::python::len(neighbourhoods_coords_y) ==
-                boost::python::len(neighbourhoods_coords_z) );
+        assert(py::len(neighbourhoods_coords_x) ==
+                py::len(neighbourhoods_coords_y) &&
+               py::len(neighbourhoods_coords_y) ==
+                py::len(neighbourhoods_coords_z));
 
         // center point
-        real_location_t center((double)boost::python::extract<double>(center_coords[0]),
-                (double)boost::python::extract<double>(center_coords[1]),
-                (double)boost::python::extract<double>(center_coords[2]));
+        real_location_t center(py::cast<double>(center_coords[py::int_(0)]),
+                py::cast<double>(center_coords[py::int_(1)]),
+                py::cast<double>(center_coords[py::int_(2)]));
 
         std::vector<real_location_t> neighbourhoods_coords;
 
         // neighbourhoods
-        for (int i = 0; i < boost::python::len(neighbourhoods_coords_x); i++)
+        for (int i = 0; i < py::len(neighbourhoods_coords_x); i++)
         {
             neighbourhoods_coords.push_back(
                     real_location_t(
-                        (double)boost::python::extract<double>(neighbourhoods_coords_x[i]),
-                        (double)boost::python::extract<double>(neighbourhoods_coords_y[i]),
-                        (double)boost::python::extract<double>(neighbourhoods_coords_z[i])
+                        py::cast<double>(neighbourhoods_coords_x[py::int_(i)]),
+                        py::cast<double>(neighbourhoods_coords_y[py::int_(i)]),
+                        py::cast<double>(neighbourhoods_coords_z[py::int_(i)])
                         )
                     );
-        }     
+        }
 
         // covariance
-        
+
         std::vector<kriging_weight_t> weights;
         double variance;
-        
+
         simple_kriging_weights(
 			&param.m_sk_params,
                 center,
@@ -67,8 +68,8 @@ namespace hpgl
                 variance);
 
 
-        boost::python::list result_weights;
-        
+        py::list result_weights;
+
         for (int i=0; i < (int) weights.size(); i++)
         {
             result_weights.append(double(weights[i]));
@@ -78,7 +79,6 @@ namespace hpgl
 
     }
 }
-
 
 
 

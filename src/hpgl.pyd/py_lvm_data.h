@@ -17,10 +17,10 @@ namespace hpgl
 	class py_indicator_lvm_data_t
 	{
 	public:
-		boost::shared_ptr<indicator_lvm_data_t> m_lvm_data;
+		std::shared_ptr<indicator_lvm_data_t> m_lvm_data;
 	};
 
-	py_indicator_lvm_data_t py_load_indicator_mean_data(PyObject * filenames);
+	py_indicator_lvm_data_t py_load_indicator_mean_data(py::list filenames);
 }
 
 #endif //__PY_LVM_DATA_H__9F38BC53_A2BF_4442_BC6A_27ED517DA7DB

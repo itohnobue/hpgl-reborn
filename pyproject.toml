@@ -1,0 +1,262 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.9.0",
+    "pybind11>=2.13.0",
+    "numpy>=1.24",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "hpgl"
+version = "1.0.0"
+description = "High Performance Geostatistics Library - Modern C++ with Python bindings"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "BSD-3-Clause"}
+authors = [
+    {name = "Artur Muharlyamov", email = "muharlyamovar@ufanipi.ru"},
+    {name = "Andrew Bezrukov", email = "bezrukovav@ufanipi.ru"},
+    {name = "Konstantin Barsky", email = "barskykd@ufanipi.ru"},
+]
+maintainers = [
+    {name = "HPGL Team", email = "hpgl@ufanipi.ru"},
+]
+keywords = [
+    "geostatistics",
+    "kriging",
+    "spatial",
+    "variogram",
+    "simulation",
+    "SGS",
+    "SIS",
+    "indicator-kriging",
+    "cokriging",
+    "scientific-computing",
+    "geoscience",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# Development dependencies
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-benchmark>=4.0",
+    "scipy>=1.10",
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=1.3",
+    "mypy>=1.5",
+    "ruff>=0.1.0",
+]
+
+# Testing dependencies
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-benchmark>=4.0",
+    "scipy>=1.10",
+]
+
+# Documentation dependencies
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=1.3",
+    "myst-parser>=2.0",
+]
+
+# All development dependencies
+all = [
+    "hpgl[dev,test,docs]",
+]
+
+[project.urls]
+Homepage = "http://hpgl.github.io/hpgl/"
+Documentation = "http://hpgl.github.io/hpgl/"
+Repository = "https://github.com/hpgl/hpgl"
+Issues = "https://github.com/hpgl/hpgl/issues"
+Changelog = "https://github.com/hpgl/hpgl/blob/main/CHANGELOG.md"
+
+[tool.scikit-build]
+# Minimum CMake version
+cmake.version = ">=3.20"
+
+# CMake configuration
+cmake.args = [
+    "-DHPGL_BUILD_PYTHON=ON",
+    "-DHPGL_USE_OPENMP=ON",
+    "-DHPGL_USE_MKL=ON",
+    "-DMKL_ROOT=C:/Program Files (x86)/Intel/oneAPI/mkl/latest",
+]
+
+# Wheel configuration
+wheel.py-api = "py3"
+wheel.install-dir = "hpgl"
+
+# Build directory settings
+build-dir = "build/{wheel_tag}"
+
+# Ninja build backend (faster than default)
+ninja.make-fallback = true
+
+# Strict mode for better compatibility
+strict-config = true
+
+# Logging
+logging.level = "INFO"
+
+[tool.scikit-build.sdist]
+# Include these files in source distribution
+include = [
+    "LICENSE",
+    "README.md",
+    "src/",
+    "cmake/",
+]
+
+# Exclude these files from source distribution
+exclude = [
+    "**/*.pyc",
+    "**/__pycache__",
+    "**/.git",
+    "**/.github",
+    "**/build/",
+    "**/dist/",
+    "**/*.egg-info",
+]
+
+[tool.cibuildwheel]
+# Build wheels for all supported Python versions
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+
+# Skip 32-bit builds and PyPy
+skip = "*-win32 *-manylinux_i686 pp*"
+
+# Testing commands
+test-command = "python -c 'import hpgl; print(hpgl.__version__)'"
+
+# Environment variables
+environment = { CMAKE_BUILD_PARALLEL_LEVEL = "4" }
+
+[tool.cibuildwheel.linux]
+# Use manylinux2014 for broader compatibility
+archs = ["x86_64", "aarch64"]
+before-all = "yum install -y openblas-devel || apt-get update && apt-get install -y libopenblas-dev"
+
+[tool.cibuildwheel.macos]
+# Build for both x86_64 and arm64 (Apple Silicon)
+archs = ["x86_64", "arm64"]
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
+
+[tool.cibuildwheel.windows]
+# Build for x64 only
+archs = ["AMD64"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests", "src/tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_functions = ["test_*"]
+python_classes = ["Test*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--showlocals",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "legacy: marks tests migrated from legacy test suite",
+    "stress: marks stress tests (deselect with '-m \"not stress\"')",
+]
+
+[tool.coverage.run]
+source = ["src/hpgl", "src/geo_bsd"]
+branch = true
+parallel = true
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/site-packages/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["numpy.*", "scipy.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C4",  # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # unused imports
+"tests/**/*.py" = ["S101"]  # assert allowed in tests
+
+[tool.ruff.lint.isort]
+known-first-party = ["hpgl", "geo"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312", "py313"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["hpgl", "geo"]

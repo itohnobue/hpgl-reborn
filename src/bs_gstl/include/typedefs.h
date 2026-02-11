@@ -10,7 +10,7 @@
 #ifndef __TYPEDEFS_H__A2E48559_1FA0_4196_BC88_F018A3AE1162__
 #define __TYPEDEFS_H__A2E48559_1FA0_4196_BC88_F018A3AE1162__
 
-#include <boost/smart_ptr.hpp>
+#include <memory>
 
 namespace hpgl
 {

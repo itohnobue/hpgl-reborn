@@ -68,7 +68,7 @@ namespace hpgl
 
 			m_cdf.reserve(pdf.size());
 			m_cdf.push_back(pdf[0]);
-			for (size_t i = 1; i < pdf.size()-1; ++i)
+			for (size_t i = 1; i < pdf.size(); ++i)
 			{				
 				m_cdf.push_back(make_pair(pdf[i].first, pdf[i].second + m_cdf[i-1].second));
 			}			
@@ -111,7 +111,7 @@ namespace hpgl
 
 			m_cdf.reserve(pdf.size());
 			m_cdf.push_back(pdf[0]);
-			for (size_t i = 1; i < pdf.size()-1; ++i)
+			for (size_t i = 1; i < pdf.size(); ++i)
 			{				
 				m_cdf.push_back(make_pair(pdf[i].first, pdf[i].second + m_cdf[i-1].second));
 			}			

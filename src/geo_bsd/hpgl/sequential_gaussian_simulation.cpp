@@ -26,10 +26,13 @@ namespace hpgl
 		print_params(params);
 
 		if (output.size() != grid.size())
-			throw hpgl_exception("sequential_gaussian_simulation",
-				boost::format("Input property size: %s. Grid size: %s. Must be equal.") % output.size() % grid.size());
+		{
+			std::ostringstream oss;
+			oss << "Input property size: " << output.size() << ". Grid size: " << grid.size() << ". Must be equal.";
+			throw hpgl_exception("sequential_gaussian_simulation", oss.str());
+		}
 
-		if (cdf != 0)
+		if (cdf != nullptr)
 		{
 			transform_cdf_p(output, non_parametric_cdf_2_t(cdf), gaussian_cdf_t());
 		}
@@ -38,7 +41,7 @@ namespace hpgl
 		{
 			double mean = 0;
 
-			if (mask != NULL)
+			if (mask != nullptr)
 			{
 				do_sequential_gausian_simulation(output, grid, params,
 					single_mean_t(mean),
@@ -55,7 +58,7 @@ namespace hpgl
 			}
 		}
 		else {
-			if (mask != NULL)
+			if (mask != nullptr)
 			{
 				do_sequential_gausian_simulation(output, grid, params,
 					no_mean_t(),
@@ -70,13 +73,13 @@ namespace hpgl
 			}
 		}
 
-		if (cdf != 0)
+		if (cdf != nullptr)
 			transform_cdf_p(output, gaussian_cdf_t(), non_parametric_cdf_2_t(cdf));
 	}
 
 	void sequential_gaussian_simulation_lvm(
 		const sugarbox_grid_t& grid,
-		const sgs_params_t & params,
+		const sgs_params_t& params,
 		const mean_t* mean_data,
 		cont_property_array_t& output,
 		const hpgl_non_parametric_cdf_t* cdf,
@@ -87,43 +90,42 @@ namespace hpgl
 		print_params(params);
 
 		if (output.size() != grid.size())
-			throw hpgl_exception("sequential_gaussian_simulation_lvm",
-			boost::format("Input property size: %s. Grid size: %s. Must be equal.") % output.size() % grid.size());
-
-		if (output.size() != grid.size())
-			throw hpgl_exception("sequential_gaussian_simulation",
-			boost::format("Input property size: %s. Grid size: %s. Must be equal.") % output.size() % grid.size());
+		{
+			std::ostringstream oss;
+			oss << "Input property size: " << output.size() << ". Grid size: " << grid.size() << ". Must be equal.";
+			throw hpgl_exception("sequential_gaussian_simulation_lvm", oss.str());
+		}
 
 		std::vector<mean_t> mean_data_vec;
-		mean_data_vec.assign(mean_data, mean_data + output.size() );
+		mean_data_vec.assign(mean_data, mean_data + output.size());
 
-		if (cdf != 0)
+		if (cdf != nullptr)
 		{
 			non_parametric_cdf_2_t new_cdf(cdf);
 			transform_cdf_p(output, new_cdf, gaussian_cdf_t());
 			transform_cdf_ptr(mean_data, mean_data_vec, new_cdf, gaussian_cdf_t());
 		}
 
-			if (mask != NULL)
-			{
-				do_sequential_gausian_simulation( output, grid, params,
+		if (mask != nullptr)
+		{
+			do_sequential_gausian_simulation( output, grid, params,
 						mean_data_vec,
 						sk_weight_calculator_t(),
 						mask);
-			}
-			else
-			{
-				do_sequential_gausian_simulation( output, grid, params,
+		}
+		else
+		{
+			do_sequential_gausian_simulation( output, grid, params,
 						mean_data_vec,
 						sk_weight_calculator_t(),
 						no_mask_t());
 
-			}
+		}
 
-			if (cdf != 0)
-			{
-				non_parametric_cdf_2_t new_cdf(cdf);
-				transform_cdf_p(output, gaussian_cdf_t(), new_cdf);
-			}
+		if (cdf != nullptr)
+		{
+			non_parametric_cdf_2_t new_cdf(cdf);
+			transform_cdf_p(output, gaussian_cdf_t(), new_cdf);
+		}
 	}
 }

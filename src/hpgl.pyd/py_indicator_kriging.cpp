@@ -26,7 +26,7 @@ namespace hpgl
 
 	bool is_valid_parameter(const std::string param_name)
 	{
-		return 
+		return
 			param_name == c_param_cov_model ||
 			param_name == c_param_radiuses ||
 			param_name == c_param_max_neighbours ||
@@ -43,70 +43,69 @@ namespace hpgl
 			char * key = PyString_AsString(PyList_GetItem(keys, idx));
 			if (!is_valid_parameter(key))
 				throw hpgl_exception("py_indicator_kriging", std::string("Invalid ik parameter '") + key + "'.");
-		}		
+		}
 	}
 
 
 	void py_indicator_kriging(
-		boost::python::tuple input_array,
-		boost::python::tuple output_array,
+		py::tuple input_array,
+		py::tuple output_array,
 		const py_grid_t & grid,
-		boost::python::object params)
+		py::object params)
 {
 	using namespace hpgl;
-	using namespace boost::python;
-	
+
 	ik_params_t ik_params;
 	Py_ssize_t idx, end_idx;
-	end_idx = len(params);
+	end_idx = py::len(params);
 	for (idx = 0; idx < end_idx; ++idx)
 	{
 		indicator_param_t indicator_param;
-		object ik_dict              = params[idx];
+		py::object ik_dict              = params[idx];
 		check_parameters(ik_dict.ptr());
-		object cov_model            = ik_dict[c_param_cov_model];
-		object radiuses             = ik_dict[c_param_radiuses];
-		object max_neighbours       = ik_dict[c_param_max_neighbours];
-		object marginal_probability = ik_dict[c_param_marg_prob];		
+		py::object cov_model            = ik_dict[c_param_cov_model];
+		py::object radiuses             = ik_dict[c_param_radiuses];
+		py::object max_neighbours       = ik_dict[c_param_max_neighbours];
+		py::object marginal_probability = ik_dict[c_param_marg_prob];
 
 		indicator_param.m_covariance_type = (covariance_type_t)
-			(int)extract<int>(cov_model.attr("type"));		
+			(int)py::cast<int>(cov_model.attr("type"));
 
 
 		{
-			object ranges = cov_model.attr("ranges");
-			double r1 = extract<double>(ranges[0]);
-			double r2 = extract<double>(ranges[1]);
-			double r3 = extract<double>(ranges[2]);
+			py::object ranges = cov_model.attr("ranges");
+			double r1 = py::cast<double>(ranges[py::int_(0)]);
+			double r2 = py::cast<double>(ranges[py::int_(1)]);
+			double r3 = py::cast<double>(ranges[py::int_(2)]);
 			indicator_param.set_ranges(r1, r2, r3);
-		} 
-	
+		}
+
 		{
-			object angles = cov_model.attr("angles");
-			double a1 = extract<double>(angles[0]);
-			double a2 = extract<double>(angles[1]);
-			double a3 = extract<double>(angles[2]);
+			py::object angles = cov_model.attr("angles");
+			double a1 = py::cast<double>(angles[py::int_(0)]);
+			double a2 = py::cast<double>(angles[py::int_(1)]);
+			double a3 = py::cast<double>(angles[py::int_(2)]);
 			indicator_param.set_angles(a1, a2, a3);
 		}
-		indicator_param.m_sill = extract<double>(cov_model.attr("sill"));
-		indicator_param.m_nugget = extract<double>(cov_model.attr("nugget"));
+		indicator_param.m_sill = py::cast<double>(cov_model.attr("sill"));
+		indicator_param.m_nugget = py::cast<double>(cov_model.attr("nugget"));
 
 		{
-			int r1 = extract<int>(radiuses[0]);
-			int r2 = extract<int>(radiuses[1]);
-			int r3 = extract<int>(radiuses[2]);
+			int r1 = py::cast<int>(radiuses[py::int_(0)]);
+			int r2 = py::cast<int>(radiuses[py::int_(1)]);
+			int r3 = py::cast<int>(radiuses[py::int_(2)]);
 			indicator_param.set_radiuses(r1, r2, r3);
 		}
 
-		indicator_param.m_max_neighbours = extract<int>(max_neighbours);
-		indicator_param.m_marginal_prob = extract<double>(marginal_probability);
+		indicator_param.m_max_neighbours = py::cast<int>(max_neighbours);
+		indicator_param.m_marginal_prob = py::cast<double>(marginal_probability);
 		ik_params.add_indicator(indicator_param);
 	}
 
 	sp_byte_property_array_t in_prop = ind_prop_from_tuple(input_array);
 	sp_byte_property_array_t out_prop = ind_prop_from_tuple(output_array);
-	
-	indicator_kriging(*in_prop, *grid.m_sugarbox_geometry, ik_params, *out_prop);	
+
+	indicator_kriging(*in_prop, *grid.m_sugarbox_geometry, ik_params, *out_prop);
 }
 
 } //namespace hpgl

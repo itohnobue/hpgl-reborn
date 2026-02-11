@@ -23,6 +23,7 @@
 #include "neighbourhood_lookup.h"
 #include "is_informed_predicate.h"
 #include "cov_model.h"
+#include <sstream>
 
 namespace hpgl
 {
@@ -67,7 +68,11 @@ namespace hpgl
 	{
 
 		if (property.size() != grid.size())
-			throw hpgl_exception("do_sequential_gausian_simulation", boost::format("Property size '%s' is not equal to grid size '%s'") % property.size() % grid.size());
+		{
+			std::ostringstream oss;
+			oss << "Property size '" << property.size() << "' is not equal to grid size '" << grid.size() << "'";
+			throw hpgl_exception("do_sequential_gausian_simulation", oss.str());
+		}
 
 		mt_random_generator_t gen;
 		gen.seed(params.m_seed);
@@ -128,7 +133,11 @@ namespace hpgl
 		const std::vector<int> & points_indexes)
 	{
 		if (property.size() != grid.size())
-			throw hpgl_exception("do_sequential_gausian_simulation_in_points", boost::format("Property size '%s' is not equal to grid size '%s'") % property.size() % grid.size());
+		{
+			std::ostringstream oss;
+			oss << "Property size '" << property.size() << "' is not equal to grid size '" << grid.size() << "'";
+			throw hpgl_exception("do_sequential_gausian_simulation_in_points", oss.str());
+		}
 
 		mt_random_generator_t gen;
 		gen.seed(params.m_seed);

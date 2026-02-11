@@ -12,7 +12,7 @@
 
 namespace hpgl
 {
-	boost::shared_ptr<indicator_lvm_data_t> extract_lvm_data(boost::python::object & mean_data, int indicator_count);
+	std::shared_ptr<indicator_lvm_data_t> extract_lvm_data(py::object & mean_data, int indicator_count);
 }
 
 #endif //__EXTRACT_LVM_DATA_H__9ABD102B_8963_4102_B40B_7BD38DCA6D2A

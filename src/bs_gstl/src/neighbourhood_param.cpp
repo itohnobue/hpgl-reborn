@@ -9,11 +9,12 @@
 
 #include "stdafx.h"
 #include <neighbourhood_param.h>
+#include <validation.h>
 
 namespace hpgl
 {
 	neighbourhood_param_t::neighbourhood_param_t()
-		: 
+		:
 	m_max_neighbours(0)
 	{
 		set_radiuses(0, 0, 0);
@@ -27,6 +28,10 @@ namespace hpgl
 
 	void neighbourhood_param_t::set_radiuses(size_t radius1, size_t radius2, size_t radius3)
 	{
+		// Validate radius values before setting
+		validation_result_t result = validation::validate_radius(radius1, radius2, radius3, "search_radius");
+		HPGL_VALIDATE_RESULT(result);
+
 		m_radiuses[0] = radius1;
 		m_radiuses[1] = radius2;
 		m_radiuses[2] = radius3;

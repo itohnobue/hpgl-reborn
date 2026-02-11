@@ -13,7 +13,7 @@
 namespace hpgl
 {
 	void extract_indicator_values(
-		boost::python::list values,
+		py::list values,
 		int expected_count,
 		std::vector<indicator_value_t> & result);
 }

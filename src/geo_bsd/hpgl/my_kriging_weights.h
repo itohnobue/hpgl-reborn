@@ -4,14 +4,13 @@
 //#define HPGL_SOLVER
 #define LAPACK_SOLVER
 
-extern "C" {
-	#include "f2c.h"
-	#include "blaswrap.h"
-	#include "clapack.h"
-	#undef abs
-	#undef max
-	#undef min
-};
+#include <cassert>
+#include <cstdio>
+#include <limits>
+
+// Use LAPACK compatibility header
+// Supports Intel MKL, OpenBLAS, and CLAPACK
+#include "lapack_compat.h"
 
 
 #include "sugarbox_grid.h"
@@ -23,36 +22,103 @@ extern "C" {
 
 namespace hpgl
 {
+	// SECURITY FIX: Safe allocation helper to prevent integer overflow
+	namespace detail {
+		// LAPACK error handler with proper error codes
+		inline void handle_lapack_error(int info, const char* operation, int matrix_size = -1) {
+			if (info == 0) return; // No error
+
+			char error_msg[256];
+			if (info < 0) {
+				// Invalid argument at position -info
+				snprintf(error_msg, sizeof(error_msg),
+					"LAPACK Error in %s: Invalid argument at position %d. Matrix size: %d",
+					operation, -info, matrix_size);
+			} else {
+				// Matrix is not positive definite or singular
+				snprintf(error_msg, sizeof(error_msg),
+					"LAPACK Error in %s: Matrix not positive definite or singular. Failed at diagonal %d. Matrix size: %d",
+					operation, info, matrix_size);
+			}
+			HPGL_LOG_STRING(error_msg);
+
+			// For now, log the error but don't throw exception (to maintain API compatibility)
+			// Consider throwing std::runtime_error(error_msg) in future versions
+		}
+		inline bool safe_multiply_size_t(size_t a, size_t b, size_t& result) {
+			if (a == 0 || b == 0) {
+				result = 0;
+				return true;
+			}
+			if (a > SIZE_MAX / b) {
+				return false; // Overflow would occur
+			}
+			result = a * b;
+			return true;
+		}
+	}
+
 	template<typename covariances_t, bool calc_variance, typename coord_t>
-	bool sk_kriging_weights_3(						
-			coord_t center_coord,			
+	bool sk_kriging_weights_3(
+			coord_t center_coord,
 			const std::vector<coord_t> & coords,
-			const covariances_t & covariances, 
+			const covariances_t & covariances,
 			std::vector<kriging_weight_t> & weights,
 			double & variance)
 	{
 		HPGL_LOG_STRING("Sk weights");
 		HPGL_LOG_NEIGHBOURS(center_coord, coords);
-			
-		int size = (int)coords.size();
-		std::vector<double> A(coords.size() * coords.size());
-		std::vector<double> b(coords.size());
-		std::vector<double> b2(coords.size());
-		weights.resize(coords.size());
+
+		// SECURITY FIX: Validate input size before processing
 		if (coords.size() <= 0)
 		{
 			HPGL_LOG_STRING("No neighbours.");
 			return false;
 		}
-		
+
+		// SECURITY FIX: Check for integer overflow in size calculation
+		const size_t coord_size = coords.size();
+		size_t matrix_size = 0;
+		if (!detail::safe_multiply_size_t(coord_size, coord_size, matrix_size))
+		{
+			HPGL_LOG_STRING("Security: Matrix size overflow detected.");
+			return false;
+		}
+
+		// SECURITY FIX: Validate size fits in int for LAPACK compatibility
+		if (coord_size > static_cast<size_t>(std::numeric_limits<int>::max()))
+		{
+			HPGL_LOG_STRING("Security: Coordinate count exceeds int max.");
+			return false;
+		}
+
+		const int size = static_cast<int>(coord_size);
+
+		// SECURITY FIX: Use pre-validated size for allocation
+		std::vector<double> A(matrix_size);
+		std::vector<double> b(coord_size);
+		std::vector<double> b2(coord_size);
+		weights.resize(coord_size);
+
+		// SECURITY FIX: Assert vector sizes match expected allocation in debug builds
+		assert(A.size() == coord_size * coord_size && "Matrix A size mismatch");
+		assert(b.size() == coord_size && "Vector b size mismatch");
+		assert(b2.size() == coord_size && "Vector b2 size mismatch");
+
 		//build invariant
-		for (int i = 0, end_i = (int)coords.size(); i < end_i; ++i)
+		for (int i = 0, end_i = size; i < end_i; ++i)
 		{
 			for (int j = i, end_j = end_i; j < end_j; ++j)
 			{
+				// SECURITY FIX: Validate indices are within bounds
+				assert(i >= 0 && i < size && j >= 0 && j < size && "Index out of bounds");
+				assert(i * size + j >= 0 && static_cast<size_t>(i * size + j) < matrix_size && "Matrix A index out of bounds");
+
 				A[i*size + j] = covariances(coords[i], coords[j]);
 				A[j*size + i] = A[i*size + j];
 			}
+			// SECURITY FIX: Validate vector index
+			assert(i >= 0 && i < size && "Vector b index out of bounds");
 			b[i] = covariances(coords[i], center_coord);
 			b2[i] = b[i];
 		}
@@ -92,14 +158,25 @@ namespace hpgl
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
-		// Solve
+		// Handle decomposition errors
+		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
 
+		if (info_dec != 0) {
+			system_solved = false;
+			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+			return system_solved;
+		}
+
+		// Solve
 		for (size_t i = 0; i < size; i ++)
 			weights[i] = b[i];
 
 		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
 
-		if (info_dec == 0 && info_solve == 0 ) system_solved = true;
+		// Handle solve errors
+		detail::handle_lapack_error(info_solve, "dpotrs_ (Cholesky solver)", size);
+
+		if (info_solve == 0) system_solved = true;
 
 		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 
@@ -132,34 +209,62 @@ namespace hpgl
 	bool ok_kriging_weights_3(
 			coord_t center,
 			const std::vector<coord_t> & coords,
-			const covariances_t & covariances, 
+			const covariances_t & covariances,
 			std::vector<kriging_weight_t> & weights,
 			double & variance)
 	{
 		HPGL_LOG_STRING("Ok weights.");
+
+		// SECURITY FIX: Validate input size before processing
 		if (coords.size() <= 0)
 		{
 			HPGL_LOG_STRING("No neighbours.");
 			return false;
 		}
 
-		int size = (int)coords.size();
-		std::vector<double> A(coords.size() * coords.size());
-		std::vector<double> b(coords.size());
-		std::vector<double> b2(coords.size());
-		weights.resize(coords.size());
-
-		if (coords.size() <= 0)
+		// SECURITY FIX: Check for integer overflow in size calculation
+		const size_t coord_size = coords.size();
+		size_t matrix_size = 0;
+		if (!detail::safe_multiply_size_t(coord_size, coord_size, matrix_size))
+		{
+			HPGL_LOG_STRING("Security: Matrix size overflow detected.");
 			return false;
-		
+		}
+
+		// SECURITY FIX: Validate size fits in int for LAPACK compatibility
+		if (coord_size > static_cast<size_t>(std::numeric_limits<int>::max()))
+		{
+			HPGL_LOG_STRING("Security: Coordinate count exceeds int max.");
+			return false;
+		}
+
+		const int size = static_cast<int>(coord_size);
+
+		// SECURITY FIX: Use pre-validated size for allocation
+		std::vector<double> A(matrix_size);
+		std::vector<double> b(coord_size);
+		std::vector<double> b2(coord_size);
+		weights.resize(coord_size);
+
+		// SECURITY FIX: Assert vector sizes match expected allocation in debug builds
+		assert(A.size() == coord_size * coord_size && "Matrix A size mismatch");
+		assert(b.size() == coord_size && "Vector b size mismatch");
+		assert(b2.size() == coord_size && "Vector b2 size mismatch");
+
 		//build invariant
-		for (int i = 0, end_i = (int)coords.size(); i < end_i; ++i)
+		for (int i = 0, end_i = size; i < end_i; ++i)
 		{
 			for (int j = i, end_j = end_i; j < end_j; ++j)
 			{
+				// SECURITY FIX: Validate indices are within bounds
+				assert(i >= 0 && i < size && j >= 0 && j < size && "Index out of bounds");
+				assert(i * size + j >= 0 && static_cast<size_t>(i * size + j) < matrix_size && "Matrix A index out of bounds");
+
 				A[i*size + j] = covariances(coords[i], coords[j]);
 				A[j*size + i] = A[i*size + j];
 			}
+			// SECURITY FIX: Validate vector index
+			assert(i >= 0 && i < size && "Vector b index out of bounds");
 			b[i] = covariances(coords[i], center);
 			b2[i] = b[i];
 		}
@@ -199,8 +304,16 @@ namespace hpgl
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
-		// Solve
+		// Handle decomposition errors
+		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
 
+		if (info_dec != 0) {
+			system_solved = false;
+			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+			return system_solved;
+		}
+
+		// Solve
 		for (size_t i = 0; i < size; i ++)
 		{
 			sk_weights[i] = b[i];
@@ -210,7 +323,10 @@ namespace hpgl
 		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &sk_weights[0], &size_lap, &info_solve );
 		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &ones_result[0], &size_lap, &info_solve );
 
-		if (info_dec == 0 && info_solve == 0 ) system_solved = true;
+		// Handle solve errors
+		detail::handle_lapack_error(info_solve, "dpotrs_ (OK Cholesky solver)", size);
+
+		if (info_solve == 0) system_solved = true;
 
 #endif
 
@@ -243,7 +359,8 @@ namespace hpgl
 				{
 					variance -= weights[i] * b2[i];
 				}
-				variance -= weights[size - 1];
+				// OK kriging variance: add the Lagrange multiplier (mu)
+				variance += mu;
 			}
 			else
 			{
@@ -256,7 +373,7 @@ namespace hpgl
 	
 	template<typename covariances_t, typename coord_t>
 	bool corellogramed_weights_3(
-			coord_t center,			
+			coord_t center,
 			mean_t center_mean,
 			const std::vector<coord_t> & coords,
 			const covariances_t & cov,
@@ -264,17 +381,47 @@ namespace hpgl
 			std::vector<kriging_weight_t> & weights
 			)
 	{
-		int size = (int) coords.size();
-		if (size <= 0)
+		// SECURITY FIX: Validate input size before processing
+		if (coords.size() <= 0)
 			return false;
 
-		std::vector<double> A(size * size);
-		std::vector<double> b(size);
-		weights.resize(size);		
+		const size_t coord_size = coords.size();
+
+		// SECURITY FIX: Check for integer overflow in size calculation
+		size_t matrix_size = 0;
+		if (!detail::safe_multiply_size_t(coord_size, coord_size, matrix_size))
+		{
+			HPGL_LOG_STRING("Security: Matrix size overflow detected.");
+			return false;
+		}
+
+		// SECURITY FIX: Validate size fits in int for LAPACK compatibility
+		if (coord_size > static_cast<size_t>(std::numeric_limits<int>::max()))
+		{
+			HPGL_LOG_STRING("Security: Coordinate count exceeds int max.");
+			return false;
+		}
+
+		const int size = static_cast<int>(coord_size);
+
+		std::vector<double> A(matrix_size);
+		std::vector<double> b(coord_size);
+		weights.resize(coord_size);
+
+		// SECURITY FIX: Validate means vector size matches coords size
+		if (means.size() != coord_size)
+		{
+			HPGL_LOG_STRING("Security: Means vector size mismatch.");
+			return false;
+		}
+
+		// SECURITY FIX: Assert vector sizes in debug builds
+		assert(A.size() == coord_size * coord_size && "Matrix A size mismatch");
+		assert(b.size() == coord_size && "Vector b size mismatch");
 
 		double meanc = center_mean;
 		double delta = 0.00001;
-		
+
 		if(meanc == 0)
 		{
 			meanc += delta;
@@ -285,13 +432,16 @@ namespace hpgl
 		}
 
 		double sigmac = sqrt(meanc * (1 - meanc));
-		
-		std::vector<double> sigmas(size);		
+
+		std::vector<double> sigmas(coord_size);
 
 		for (int i = 0; i < size; ++i)
-		{			
+		{
+			// SECURITY FIX: Validate array access with bounds check
+			assert(i >= 0 && i < size && "sigmas index out of bounds");
+
 			double meani = means[i];
-			
+
 			if(meani == 0)
 			{
 				meani += delta;
@@ -304,13 +454,17 @@ namespace hpgl
 			sigmas[i] = sqrt(meani * (1-meani));
 		}
 
-	
+
 		//build invariant
 		for (int i = 0; i < size; ++i)
-		{			
+		{
 			for (int j = 0; j < size; ++j)
-			{				
-				A[i * size + j] = 
+			{
+				// SECURITY FIX: Validate matrix indices are within bounds
+				assert(i >= 0 && i < size && j >= 0 && j < size && "Matrix index out of bounds");
+				assert(i * size + j >= 0 && static_cast<size_t>(i * size + j) < matrix_size && "Matrix A index out of bounds");
+
+				A[i * size + j] =
 					cov(coords[i], coords[j]) * (sigmas[i] * sigmas[j]);
 			}
 			b[i] = cov(coords[i], center) * (sigmas[i] * sigmac);
@@ -342,14 +496,24 @@ namespace hpgl
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
-		// Solve
+		// Handle decomposition errors
+		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
 
+		if (info_dec != 0) {
+			system_solved = false;
+			return system_solved;
+		}
+
+		// Solve
 		for (size_t i = 0; i < size; i ++)
 			weights[i] = b[i];
 
 		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
 
-		if (info_dec == 0 && info_solve == 0 ) system_solved = true;
+		// Handle solve errors
+		detail::handle_lapack_error(info_solve, "dpotrs_ (Corellogram Cholesky solver)", size);
+
+		if (info_solve == 0) system_solved = true;
 
 #endif
 

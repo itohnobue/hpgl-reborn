@@ -156,11 +156,12 @@ namespace hpgl
 						  const mean_t center_mean,
 						  const means_t & means)const
 		{
-			int size = (int) weights.size();
+			// Type safety: Use size_t for size variable, validate it fits in int
+			const size_t size = weights.size();
 
 			double delta = 0.00001;
 			double meanc = center_mean;
-			
+
 			if(meanc == 0)
 			{
 				meanc += delta;
@@ -171,12 +172,13 @@ namespace hpgl
 			}
 
 			double sigmac = sqrt(meanc * (1 - meanc));
-			
+
 			double meani = 0;
-			for (int i = 0; i < size; ++i)
+			// Type safety: Use size_t for loop index
+			for (size_t i = 0; i < size; ++i)
 			{
 				meani = means[i];
-			
+
 				if(meani == 0)
 				{
 					meani += delta;

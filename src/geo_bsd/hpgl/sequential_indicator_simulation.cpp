@@ -137,7 +137,11 @@ void sequential_indicator_simulation(
 	print_algo_name("Sequential Indicator Simulation");
 	print_params(params);
 	if (property.size() != grid.size())
-		throw hpgl_exception("sequential_indicator_simulation", boost::format("Property size '%s' is not equal to grid size '%s'") % property.size() % grid.size());
+	{
+		std::ostringstream oss;
+		oss << "Property size '" << property.size() << "' is not equal to grid size '" << grid.size() << "'";
+		throw hpgl_exception("sequential_indicator_simulation", oss.str());
+	}
 	
 	std::vector<single_mean_t> single_means;
 	create_means(params.m_marginal_probs, single_means);	

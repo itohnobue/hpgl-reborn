@@ -15,14 +15,15 @@
 #include "neighbourhood_param.h"
 #include "sugarbox_grid.h"
 #include "neighbourhood_lookup.h"
+#include <memory>
 
 namespace hpgl
 {
 	template<typename covariances_t>
 	class neighbour_lookup_t<sugarbox_grid_t, covariances_t>
-	{		
+	{
 		template <typename grid_t, typename cov_t> friend class indexed_neighbour_lookup_t;
-		boost::shared_ptr<std::vector<sugarbox_vector_t> > m_vectors;
+		std::shared_ptr<std::vector<sugarbox_vector_t> > m_vectors;
 		const sugarbox_grid_t * m_grid;
 		int m_max_neighbours;
 	public:		

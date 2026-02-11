@@ -30,24 +30,24 @@
 #ifndef __GSTL_RANDOM_NUMBER_GENERATORS_H__
 #define __GSTL_RANDOM_NUMBER_GENERATORS_H__
 
-#include <boost/random/mersenne_twister.hpp>
+#include <random>
 
 #include <cmath>
 #include <stdlib.h>
 
 
 struct Rand48_generator {
-  typedef boost::mt11213b::result_type IntType;
+  typedef std::mt19937::result_type IntType;
   typedef double return_type;
 
   Rand48_generator() {}
   Rand48_generator( long int seed ) : gen( static_cast<IntType>(seed) ) {}
   inline void seed( long int seed ) { gen.seed( static_cast<IntType>(seed) ); }
-  inline double operator() () { return double( gen() ) / double( gen.max BOOST_PREVENT_MACRO_SUBSTITUTION () ); }
+  inline double operator() () { return double( gen() ) / double( gen.max() ); }
 
 private:
-	boost::mt11213b gen;
-	
+	std::mt19937 gen;
+
 };
 
 

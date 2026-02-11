@@ -97,15 +97,19 @@ namespace hpgl
 					sum += value;
 					break;
 				case KI_NO_NEIGHBOURS:
-					points_without_neighbours++;				
+					points_without_neighbours++;
 					if (fh == mean_on_failure)
+					{
 						output_property.set_at(idx, means[idx]);
 						sum += means[idx];
+					}
 					break;
 				case KI_SINGULARITY:
 					if (fh == mean_on_failure)
+					{
 						output_property.set_at(idx, means[idx]);
 						sum += means[idx];
+					}
 					break;
 				}				
 			}

@@ -88,15 +88,19 @@ namespace hpgl
 					sum += value;
 					break;
 				case ki_result_t::KI_NO_NEIGHBOURS:
-					points_without_neighbours++;				
+					points_without_neighbours++;
 					if (fh == kriging_failure_handling::mean_on_failure)
+					{
 						output_property.set_at(idx, means[idx]);
 						sum += means[idx];
+					}
 					break;
 				case ki_result_t::KI_SINGULARITY:
 					if (fh == kriging_failure_handling::mean_on_failure)
+					{
 						output_property.set_at(idx, means[idx]);
 						sum += means[idx];
+					}
 					break;
 				}				
 			}
@@ -117,7 +121,11 @@ namespace hpgl
 		stats.m_points_without_neighbours = points_without_neighbours;
 		stats.m_mean = sum / output_property.size();
 		stats.m_speed_nps = report.iterations_per_second();
-		write(boost::format("Done. Average speed: %1% point/sec.\n") % report.iterations_per_second());
+		{
+			std::ostringstream oss;
+			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";
+			write(oss.str());
+		}
 	}
  	
 }

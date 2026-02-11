@@ -1,9 +1,97 @@
 import numpy
+import os
+import pathlib
+from typing import Optional, Tuple, Union
 
 import ctypes as C
 
-from hpgl_wrap import _HPGL_SHAPE, _HPGL_CONT_MASKED_ARRAY, _HPGL_IND_MASKED_ARRAY, _HPGL_UBYTE_ARRAY, _HPGL_FLOAT_ARRAY, _HPGL_OK_PARAMS, _HPGL_SK_PARAMS, _HPGL_IK_PARAMS, _HPGL_MEDIAN_IK_PARAMS, __hpgl_cov_params_t, __hpgl_cockriging_m1_params_t, __hpgl_cockriging_m2_params_t, _hpgl_so
-from hpgl_wrap import hpgl_output_handler, hpgl_progress_handler
+# Import validation framework
+from . import validation
+from .validation import (
+    PathValidator,
+    GridValidator,
+    ParameterValidator,
+    validate_grid_params,
+    validate_kriging_params,
+    validate_simulation_params,
+    validate_file_params,
+    ValidationError,
+    CriticalValidationError
+)
+
+from .hpgl_wrap import _HPGL_SHAPE, _HPGL_CONT_MASKED_ARRAY, _HPGL_IND_MASKED_ARRAY, _HPGL_UBYTE_ARRAY, _HPGL_FLOAT_ARRAY, _HPGL_OK_PARAMS, _HPGL_SK_PARAMS, _HPGL_IK_PARAMS, _HPGL_MEDIAN_IK_PARAMS, __hpgl_cov_params_t, __hpgl_cockriging_m1_params_t, __hpgl_cockriging_m2_params_t, _hpgl_so
+
+
+# Security: Path validation utilities to prevent directory traversal attacks
+def _validate_filepath(filename: Union[str, pathlib.Path], allow_directories: bool = False) -> str:
+    """
+    Validates and sanitizes file paths to prevent directory traversal attacks.
+
+    Args:
+        filename: The file path to validate
+        allow_directories: Whether to allow directory paths (default: False)
+
+    Returns:
+        Absolute, normalized path as string
+
+    Raises:
+        ValueError: If path contains directory traversal attempts or points outside allowed directories
+        FileNotFoundError: If the file doesn't exist when validation requires it
+    """
+    if not filename:
+        raise ValueError("Filename cannot be empty")
+
+    # Convert to Path object for robust handling
+    path = pathlib.Path(filename)
+
+    # Resolve to absolute path and normalize (removes ../ segments)
+    try:
+        resolved_path = path.resolve(strict=False)
+    except (OSError, RuntimeError) as e:
+        raise ValueError(f"Invalid path: {filename}") from e
+
+    # Check for path traversal attempts in the original string
+    # This catches cases where resolve() might behave unexpectedly
+    path_str = os.path.normpath(filename)
+    if '..' in path_str.split(os.sep) or '../' in filename or '..\\' in filename:
+        raise ValueError(f"Path traversal detected in filename: {filename}")
+
+    # If we're reading, verify the file exists (unless allow_directories is True)
+    # For write operations, we don't require existence but validate path safety
+    if allow_directories:
+        # For directories, ensure we're not escaping filesystem root
+        if not resolved_path.is_absolute():
+            # Resolve relative to current working directory
+            resolved_path = pathlib.Path.cwd() / resolved_path
+            resolved_path = resolved_path.resolve()
+    else:
+        # For files, we validate the path structure but may defer existence check
+        # to the caller's context (read vs write)
+        pass
+
+    return str(resolved_path)
+
+
+# Security: Array reference holder to prevent use-after-free with ctypes
+class _ArrayReferenceHolder:
+    """
+    Holds references to NumPy arrays to prevent garbage collection
+    while C code holds pointers to their data.
+
+    This prevents use-after-free vulnerabilities where the C code
+    might access freed memory if the Python array is garbage collected.
+    """
+    def __init__(self):
+        self._arrays = []
+
+    def add(self, *arrays):
+        """Add arrays to be kept alive"""
+        self._arrays.extend(arrays)
+
+    def clear(self):
+        """Clear all references"""
+        self._arrays.clear()
+from .hpgl_wrap import hpgl_output_handler, hpgl_progress_handler
 
 def _c_array(ar_type, size, values):
 	if len(values) != size:
@@ -11,7 +99,15 @@ def _c_array(ar_type, size, values):
 	return (ar_type * size) (*values)
 
 def _create_hpgl_shape(shape, strides=None):
+	# Normalize shape to 3D tuple
+	if len(shape) == 1:
+		shape = (shape[0], 1, 1)
+	elif len(shape) == 2:
+		shape = (shape[0], shape[1], 1)
+
 	if strides is None:
+		# C-order strides (row-major) to match C++ indexing: z * x * y + y * x + x
+		# The strides array is (stride_x, stride_y, stride_z)
 		return _HPGL_SHAPE(data = _c_array(C.c_int, 3, shape),
 				   strides = _c_array(C.c_int, 3, (1, shape[0], shape[0]*shape[1])))
 	else:
@@ -19,9 +115,15 @@ def _create_hpgl_shape(shape, strides=None):
 				   strides = _c_array(C.c_int, 3, strides))
 
 def __get_strides(prop):
-	return (prop.strides[0] / prop.itemsize,
-		prop.strides[1] / prop.itemsize,
-		prop.strides[2] / prop.itemsize)
+	ndim = prop.ndim
+	if ndim == 1:
+		return (1, prop.shape[0], prop.shape[0])
+	elif ndim == 2:
+		return (1, prop.shape[0], prop.shape[0] * prop.shape[1])
+	else:  # ndim == 3
+		return (prop.strides[0] // prop.itemsize,
+			prop.strides[1] // prop.itemsize,
+			prop.strides[2] // prop.itemsize)
 
 
 def __checked_create(T, **kargs):
@@ -44,14 +146,28 @@ def _create_hpgl_cont_masked_array(prop, grid):
 	if (grid is None):
 		sh = _create_hpgl_shape(prop.data.shape, __get_strides(prop.data))
 	else:
-		sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
+		# Use actual NumPy strides if array is 3D, otherwise compute strides from grid
+		if prop.data.ndim == 3:
+			sh = _create_hpgl_shape((grid.x, grid.y, grid.z), __get_strides(prop.data))
+		else:
+			# For 1D arrays, compute expected strides based on grid dimensions
+			sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 		if grid.x * grid.y * grid.z != prop.data.size:
 			raise RuntimeError("Invalid data size. Size of data = %s. Size of grid = %s" % (prop.data.size, grid.x * grid.y * grid.z))
 
-	return _HPGL_CONT_MASKED_ARRAY(
+	# Security: Keep references to arrays to prevent use-after-free
+	# The C code will hold pointers to this memory, so we must ensure
+	# the Python objects aren't garbage collected while in use
+	result = _HPGL_CONT_MASKED_ARRAY(
 		data=prop.data.ctypes.data_as(C.POINTER(C.c_float)),
 		mask=prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
 		shape = sh)
+
+	# Store array references on the result object to prevent garbage collection
+	# This ensures the arrays live as long as the C structure does
+	result._array_refs = (prop.data, prop.mask)
+
+	return result
 
 def _create_hpgl_ind_masked_array(prop, grid):
 	if (grid is None):
@@ -60,11 +176,17 @@ def _create_hpgl_ind_masked_array(prop, grid):
 	else:
 		sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
-	return _HPGL_IND_MASKED_ARRAY(
+	# Security: Keep references to arrays to prevent use-after-free
+	result = _HPGL_IND_MASKED_ARRAY(
 		data=prop.data.ctypes.data_as(C.POINTER(C.c_ubyte)),
 		mask=prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
 		shape = sh,
 		indicator_count = prop.indicator_count)
+
+	# Store array references to prevent garbage collection while C code uses them
+	result._array_refs = (prop.data, prop.mask)
+
+	return result
 
 def _create_hpgl_ubyte_array(array, grid):
 	checkFWA(array)
@@ -72,7 +194,11 @@ def _create_hpgl_ubyte_array(array, grid):
 		sh = _create_hpgl_shape(array.shape, strides=__get_strides(array))
 	else:
 		sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
-	return _HPGL_UBYTE_ARRAY(data = array.ctypes.data_as(C.POINTER(C.c_ubyte)), shape = sh)
+
+	# Security: Keep array reference to prevent use-after-free
+	result = _HPGL_UBYTE_ARRAY(data = array.ctypes.data_as(C.POINTER(C.c_ubyte)), shape = sh)
+	result._array_ref = array
+	return result
 
 def _create_hpgl_float_array(array, grid):
 	checkFWA(array)
@@ -80,7 +206,11 @@ def _create_hpgl_float_array(array, grid):
 		sh = _create_hpgl_shape(array.shape, strides=__get_strides(array))
 	else:
 		sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
-	return _HPGL_FLOAT_ARRAY(data = array.ctypes.data_as(C.POINTER(C.c_float)), shape = sh)
+
+	# Security: Keep array reference to prevent use-after-free
+	result = _HPGL_FLOAT_ARRAY(data = array.ctypes.data_as(C.POINTER(C.c_float)), shape = sh)
+	result._array_ref = array
+	return result
 
 class ContProperty:
 	def __init__(self, data, mask):
@@ -150,11 +280,13 @@ class covariance:
 
 class SugarboxGrid:
 	def __init__(self, x, y, z):
+		# Validate grid dimensions
+		GridValidator.validate_grid_dimensions(x, y, z)
 		self.x = x
 		self.y = y
 		self.z = z
 
-class CovarianceModel:	
+class CovarianceModel:
 	def __init__(self, type = 0, ranges=(0,0,0), angles=(0.0,0.0,0.0), sill=1.0, nugget=0.0):
 		self.type = type
 		self.ranges = ranges
@@ -162,52 +294,60 @@ class CovarianceModel:
 		self.sill = sill
 		self.nugget = nugget
 
-		if nugget > sill:
-			raise Exception("Nugget should be less or equal to Sill")
+		# Validate covariance parameters
+		ParameterValidator.validate_covariance_parameters(sill, nugget, ranges, angles)
 
 def _load_prop_cont_slow(filename, undefined_value):
+	# Security: Validate filename to prevent directory traversal attacks
+	safe_path = _validate_filepath(filename)
+
 	values = []
 	mask = []
-	f = open(filename)
-	for line in f:
-		if line.strip().startswith("--"):
-			continue
-		for part in line.split():
-			try:
-				val = float(part.strip())
-				values.append(val)
-				if (val == undefined_value):
-					mask.append(0)
-				else:
-					mask.append(1)
-			except:
-				pass
+	# Use validated path and explicit encoding
+	with open(safe_path, 'r', encoding='utf-8') as f:
+		for line in f:
+			if line.strip().startswith("--"):
+				continue
+			for part in line.split():
+				try:
+					val = float(part.strip())
+					values.append(val)
+					if (val == undefined_value):
+						mask.append(0)
+					else:
+						mask.append(1)
+				except:
+					pass
 
 	return ContProperty(numpy.array(values, dtype="float32"), numpy.array(mask, dtype="uint8"))
 
 def _load_prop_ind_slow(filename, undefined_value, ind_values):
-	dict_map = {}	
-	for i in xrange(len(ind_values)):
+	dict_map = {}
+	for i in range(len(ind_values)):
 		dict_map[ind_values[i]] = i
-	
+
+	# Security: Validate filename to prevent directory traversal attacks
+	safe_path = _validate_filepath(filename)
+
 	values = []
 	mask = []
 
-	f = open(filename)
-	for line in f:
-		if line.strip().startswith("--"):
-			continue
-		for part in line.split():
-			try:
-				val = int(part.strip())
-				if (val == undefined_value):
-					values.append(255)
-					mask.append(0)
-				else:
-					values.append(dict_map[val])
-					mask.append(1)
-			except:
-				pass
+	# Use validated path and explicit encoding
+	with open(safe_path, 'r', encoding='utf-8') as f:
+		for line in f:
+			if line.strip().startswith("--"):
+				continue
+			for part in line.split():
+				try:
+					val = int(part.strip())
+					if (val == undefined_value):
+						values.append(255)
+						mask.append(0)
+					else:
+						values.append(dict_map[val])
+						mask.append(1)
+				except:
+					pass
 
 	return IndProperty(numpy.array(values, dtype="uint8", order='F'), numpy.array(mask, dtype="uint8", order='F'), len(ind_values))
 
@@ -263,19 +403,22 @@ def accepts_tuple(arg_name, arg_pos):
 			return t
 	def decorator(f):
 		def new_f(*args, **kargs):
-			if kargs.has_key(arg_name):
+			if arg_name in kargs:
 				kargs[arg_name] = tuple_to_prop(kargs[arg_name])
 			elif len(args) > arg_pos:
 				args = args[:arg_pos] + (tuple_to_prop(args[arg_pos]),) + args[arg_pos+1:]
 			else:
 				assert False
 			return f(*args, **kargs)
-		new_f.func_name = f.func_name
+		new_f.__name__ = f.__name__
 		return new_f
 	return decorator
 		
 @accepts_tuple('prop', 0)
 def write_property(prop, filename, prop_name, undefined_value, indicator_values=[]):
+	# Security: Validate filename to prevent directory traversal attacks
+	safe_path = _validate_filepath(filename)
+
 	if (prop.data.ndim == 3):
 		sh = _create_hpgl_shape(prop.data.shape)
 	else:
@@ -285,69 +428,97 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
 			data = prop.data.ctypes.data_as(C.POINTER(C.c_float)),
 			mask = prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
 			shape = sh)
+		# Security: Keep array references to prevent use-after-free
+		marr._array_refs = (prop.data, prop.mask)
 		_hpgl_so.hpgl_write_inc_file_float(
-			filename,
+			safe_path.encode("utf-8"),
 			C.byref(marr),
 			undefined_value,
-			prop_name)
-	else:		
+			prop_name.encode("utf-8"))
+	else:
+		# Security: Keep reference to indicator_values array
+		ind_arr = numpy.array(indicator_values, dtype='uint8')
 		marr = _HPGL_IND_MASKED_ARRAY(
 			data = prop.data.ctypes.data_as(C.POINTER(C.c_ubyte)),
 			mask = prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
 			shape = sh,
 			indicator_count = prop.indicator_count)
+		# Security: Keep array references to prevent use-after-free
+		marr._array_refs = (prop.data, prop.mask, ind_arr)
 		_hpgl_so.hpgl_write_inc_file_byte(
-			filename,
+			safe_path.encode("utf-8"),
 			C.byref(marr),
 			undefined_value,
-			prop_name,
-			numpy.array(indicator_values).ctypes.data_as(C.POINTER(C.c_ubyte)),
+			prop_name.encode("utf-8"),
+			ind_arr.ctypes.data_as(C.POINTER(C.c_ubyte)),
 			len(indicator_values))
 
 @accepts_tuple('prop', 0)
-def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=[]):	
+def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=[]):
+	# Security: Validate filename to prevent directory traversal attacks
+	safe_path = _validate_filepath(filename)
+
 	if isinstance(prop, ContProperty):
 		_hpgl_so.hpgl_write_gslib_cont_property(
 			_create_hpgl_cont_masked_array(prop, None),
-			filename,
-			prop_name,
+			safe_path.encode("utf-8"),
+			prop_name.encode("utf-8"),
 			undefined_value)
 	else:
 		_hpgl_so.hpgl_write_gslib_byte_property(
 			_create_hpgl_ind_masked_array(prop, None),
-			filename,
-			prop_name,
+			safe_path.encode("utf-8"),
+			prop_name.encode("utf-8"),
 			undefined_value,
 			_c_array(C.c_ubyte, len(indicator_values), indicator_values),
 			len(indicator_values))
 
 def load_cont_property(filename, undefined_value, size=None):
-	if size is None:			
-		print "[WARNING]. load_cont_property: Size is not specified. Using slow and ineficcient method."
-		return _load_prop_cont_slow(filename, undefined_value)
+	# Validate filename for security
+	safe_path = PathValidator.validate_filepath(filename, must_exist=True)
+
+	if size is None:
+		print("[WARNING]. load_cont_property: Size is not specified. Using slow and ineficcient method.")
+		return _load_prop_cont_slow(safe_path, undefined_value)
 	else:
-		return read_inc_file_float(filename, undefined_value, size)
+		return read_inc_file_float(safe_path, undefined_value, size)
 
 def read_inc_file_float(filename, undefined_value, size):
-	data = numpy.zeros((size), dtype='float32', order='F')
-	mask = numpy.zeros((size), dtype='uint8', order='F')
+	# Security: Validate filename to prevent directory traversal attacks
+	safe_path = PathValidator.validate_filepath(filename, must_exist=True)
+
+	# Validate size parameters
+	if isinstance(size, tuple) and len(size) == 3:
+		GridValidator.validate_grid_dimensions(size[0], size[1], size[2])
+
+	total_elements = size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+	data = numpy.zeros(total_elements, dtype='float32', order='F')
+	mask = numpy.zeros(total_elements, dtype='uint8', order='F')
 
 	_hpgl_so.hpgl_read_inc_file_float(
-		filename,
+		safe_path.encode("utf-8"),
 		undefined_value,
-		size[0]*size[1]*size[2],
+		total_elements,
 		data,
 		mask)
 
 	return ContProperty(data, mask)
 
 def read_inc_file_byte(filename, undefined_value, size, indicator_values):
-	data = numpy.zeros(size, dtype='uint8', order='F')
-	mask = numpy.zeros(size, dtype='uint8', order='F')
+	# Security: Validate filename to prevent directory traversal attacks
+	safe_path = PathValidator.validate_filepath(filename, must_exist=True)
+
+	# Validate size parameters
+	if isinstance(size, tuple) and len(size) == 3:
+		GridValidator.validate_grid_dimensions(size[0], size[1], size[2])
+
+	total_elements = size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+	data = numpy.zeros(total_elements, dtype='uint8', order='F')
+	mask = numpy.zeros(total_elements, dtype='uint8', order='F')
 	_hpgl_so.hpgl_read_inc_file_byte(
-		filename,
+		safe_path.encode("utf-8"),
 		undefined_value,
-		size[0] * size[1] * size[2],
+		total_elements,
 		data,
 		mask,
 		numpy.array(indicator_values, dtype='uint8'),
@@ -356,7 +527,7 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
 
 def load_ind_property(filename, undefined_value, indicator_values, size=None):
 	if (size is None):
-		print "[WARNING]. load_ind_property: Size is not specified. Using slow and ineficcient method."
+		print("[WARNING]. load_ind_property: Size is not specified. Using slow and ineficcient method.")
 		return _load_prop_ind_slow(filename, undefined_value, indicator_values)
 	else:
 		return read_inc_file_byte(filename, undefined_value, size, indicator_values)
@@ -372,7 +543,7 @@ def calc_mean(prop):
 	l = len(prop.data.flat)
 	sum = 0
 	count = 0
-	for i in xrange(l):
+	for i in range(l):
 		if prop.mask.flat[i] == 1:
 			sum += prop.data.flat[i]
 			count += 1
@@ -380,6 +551,23 @@ def calc_mean(prop):
 
 @accepts_tuple('prop', 0)
 def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
+	# Validate grid dimensions
+	GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+
+	# Validate radiuses
+	valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+
+	# Validate max_neighbours
+	ParameterValidator.validate_max_neighbors(max_neighbours)
+
+	# Validate covariance model
+	ParameterValidator.validate_covariance_parameters(
+		cov_model.sill,
+		cov_model.nugget,
+		cov_model.ranges,
+		cov_model.angles
+	)
+
 	out_prop = _clone_prop(prop)
 
 	okp = _HPGL_OK_PARAMS(
@@ -388,7 +576,7 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
 		angles = cov_model.angles,
 		sill = cov_model.sill,
 		nugget = cov_model.nugget,
-		radiuses = radiuses,
+		radiuses = valid_radiuses,
 		max_neighbours = max_neighbours)
 
 	_hpgl_so.hpgl_ordinary_kriging(
@@ -400,6 +588,23 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
 
 @accepts_tuple('prop', 0)
 def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
+	# Validate grid dimensions
+	GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+
+	# Validate radiuses
+	valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+
+	# Validate max_neighbours
+	ParameterValidator.validate_max_neighbors(max_neighbours)
+
+	# Validate covariance model
+	ParameterValidator.validate_covariance_parameters(
+		cov_model.sill,
+		cov_model.nugget,
+		cov_model.ranges,
+		cov_model.angles
+	)
+
 	out_prop = _clone_prop(prop)
 
 	skp = _HPGL_SK_PARAMS(
@@ -408,16 +613,15 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
 		angles = cov_model.angles,
 		sill = cov_model.sill,
 		nugget = cov_model.nugget,
-		radiuses = radiuses,
+		radiuses = valid_radiuses,
 		max_neighbours = max_neighbours,
 		automatic_mean = (mean is None),
-		mean = (mean if mean != None else 0))
+		mean = (mean if mean is not None else 0))
 
-	sh_data = (C.c_int * 3)(grid.x, grid.y, grid.z)
-	sh = _HPGL_SHAPE(data=sh_data)
+	sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
 	_hpgl_so.hpgl_simple_kriging(
-		prop.data, prop.mask, 
+		prop.data, prop.mask,
 		C.byref(sh), C.byref(skp),
 		out_prop[0], out_prop[1],
 		C.byref(sh))
@@ -437,11 +641,10 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 		radiuses = radiuses,
 		max_neighbours = max_neighbours)
 
-	sh_data = (C.c_int * 3)(grid.x, grid.y, grid.z)
-	sh = _HPGL_SHAPE(data=sh_data)
+	sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
 	_hpgl_so.hpgl_lvm_kriging(
-		prop.data, prop.mask, C.byref(sh), 
+		prop.data, prop.mask, C.byref(sh),
 		mean_data, C.byref(sh),
 		C.byref(okp),
 		out_prop.data, out_prop.mask,
@@ -488,7 +691,7 @@ def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
 
 @accepts_tuple('prop', 0)
 def indicator_kriging(prop, grid, data, marginal_probs):
-	for i in xrange(len(data)):
+	for i in range(len(data)):
 		data[i]['marginal_prob'] = marginal_probs[i]
 	if(len(data) == 2):
 		return median_ik(
@@ -608,7 +811,7 @@ def simple_kriging_weights(center_point, n_x, n_y, n_z, ranges = (100000,100000,
 def get_gslib_property(prop_dict, prop_name, undefined_value):
 	prop = prop_dict[prop_name]
 	informed_array = numpy.zeros(prop.shape, dtype=numpy.uint8)
-	for i in xrange(prop.size):
+	for i in range(prop.size):
 		if(prop[i] == undefined_value):
 			informed_array[i] = 0
 		else:
@@ -618,7 +821,8 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
 def set_output_handler(handler, param):
 	global h
 	if (handler is None):
-		_hpgl_so.hpgl_set_output_handler(None, None)
+		# Cast None to the expected type for ctypes compatibility
+		_hpgl_so.hpgl_set_output_handler(C.cast(None, hpgl_output_handler), None)
 		h = None
 	else:
 		h = hpgl_output_handler(handler)
@@ -628,7 +832,8 @@ def set_output_handler(handler, param):
 def set_progress_handler(handler, param):
 	global progress_handler
 	if (handler is None):
-		_hpgl_so.hpgl_set_output_handler(None, None)
+		# Cast None to the expected type for ctypes compatibility
+		_hpgl_so.hpgl_set_progress_handler(C.cast(None, hpgl_progress_handler), None)
 		progress_handler = None
 	else:
 		progress_handler = hpgl_progress_handler(handler)

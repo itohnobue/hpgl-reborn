@@ -23,17 +23,17 @@ namespace hpgl
 		int seed,
 		bool use_vpc,
 		bool use_corellogram,
-		boost::python::object mask);	
+		py::object mask);
 
 	py_byte_property_array_t py_sis_lvm(
 		const py_byte_property_array_t & input_array,
 		const py_grid_t & grid,
 		PyObject * params,
 		int seed,
-		boost::python::object mean_data,
+		py::object mean_data,
 		//const py_indicator_lvm_data_t & mean_data,
 		bool use_corellogram,
-		boost::python::object mask);
+		py::object mask);
 
 }
 
