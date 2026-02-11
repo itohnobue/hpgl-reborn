@@ -295,7 +295,6 @@ hpgl/
         sequential_simulation.h  # Simulation framework
         ...
       _cvariogram/       # Variogram C++ extension
-    bs_gstl/             # GSTL support library (used by CMake build)
     msvc/                # Visual Studio project files
     tnt_126/             # TNT math library (headers)
     doc/                 # Legacy documentation and manuals

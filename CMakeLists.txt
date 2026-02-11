@@ -103,30 +103,6 @@ if(NOT MSVC)
     list(FILTER HPGL_CORE_SOURCES EXCLUDE REGEX ".*stdafx.cpp$")
 endif()
 
-# BsGTL library sources
-file(GLOB_RECURSE HPGL_GSTL_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bs_gstl/src/*.cpp
-)
-
-# Exclude precompiled header
-if(NOT MSVC)
-    list(FILTER HPGL_GSTL_SOURCES EXCLUDE REGEX ".*stdafx.cpp$")
-endif()
-
-# ============================================================================
-# Library: hpgl_gstl
-# ============================================================================
-
-add_library(hpgl_gstl ${HPGL_GSTL_SOURCES})
-target_include_directories(hpgl_gstl
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/bs_gstl/include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/tnt_126>
-        $<INSTALL_INTERFACE:include>
-)
-
-add_library(hpgl::gstl ALIAS hpgl_gstl)
-
 # ============================================================================
 # Library: hpgl_core
 # ============================================================================
@@ -137,7 +113,7 @@ add_library(hpgl::core ALIAS hpgl_core)
 target_include_directories(hpgl_core
     PRIVATE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/bs_gstl/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/hpgl>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/tnt_126>
     PUBLIC
         $<INSTALL_INTERFACE:include>
@@ -145,7 +121,6 @@ target_include_directories(hpgl_core
 
 target_link_libraries(hpgl_core
     PUBLIC
-        hpgl_gstl
         eigen
         ${BLAS_LIBRARIES}
         ${LAPACK_LIBRARIES}
@@ -232,7 +207,7 @@ endif()
 include(GNUInstallDirs)
 
 # Install core library
-install(TARGETS hpgl_core hpgl_gstl
+install(TARGETS hpgl_core
     EXPORT hpglTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -242,7 +217,6 @@ install(TARGETS hpgl_core hpgl_gstl
 # Install headers
 install(DIRECTORY
     src/geo_bsd/hpgl/
-    src/bs_gstl/include/
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/hpgl
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
 )
