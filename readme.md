@@ -1,8 +1,10 @@
-# HPGL - High Performance Geostatistics Library (v1.0.0)
+# HPGL Reborn - High Performance Geostatistics Library (v1.0.0)
 
 ## Description
 
-HPGL (High Performance Geostatistics Library) is a C++/Python library implementing geostatistical algorithms for spatial data analysis and reservoir modeling. The core computation engine is written in C++ for performance, with a Python interface for ease of use.
+HPGL Reborn (High Performance Geostatistics Library) is a C++/Python library implementing geostatistical algorithms for spatial data analysis and reservoir modeling. The core computation engine is written in C++ for performance, with a Python interface for ease of use.
+
+It is "Reborn" because it was updated, fixed and refactored to work with modern tech along with fixing dozens of bugs.
 
 Originally developed at the Ufa Petroleum Institute, HPGL provides production-grade implementations of standard geostatistical methods as described in Deutsch & Journel's GSLIB.
 
