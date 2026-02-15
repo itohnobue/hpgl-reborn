@@ -33,10 +33,16 @@ public:
 	template<typename point_t>
 	int get_index_from_grid_point(const point_t & loc)
 	{
+		// Validate ellipsoid ranges are non-zero to prevent division by zero
+		if (m_ellipsoid[0] == 0 || m_ellipsoid[1] == 0 || m_ellipsoid[2] == 0)
+		{
+			return -1; // Return error code for invalid ellipsoid
+		}
+
 		int cx = loc[0] / m_ellipsoid[0];
 		int cy = loc[1] / m_ellipsoid[1];
 		int cz = loc[2] / m_ellipsoid[2];
-		return get_index(cx, cy, cz);		
+		return get_index(cx, cy, cz);
 	}
 
 	int get_index(int cx, int cy, int cz)const;

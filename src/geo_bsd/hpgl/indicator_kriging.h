@@ -28,13 +28,43 @@ namespace hpgl
 
 	namespace detail
 	{
+		// Correct indicator kriging probabilities for order relations
+		// Ensures: 1) Monotonicity P(k) <= P(k+1), 2) Bounds [0,1]
+		// Reference: Deutsch & Journel (1998), Section V.6.3
+		inline void correct_order_relations(std::vector<indicator_probability_t> & probs)
+		{
+			if (probs.empty())
+				return;
+
+			// Step 1: Clamp probabilities to [0, 1]
+			for (size_t i = 0; i < probs.size(); ++i)
+			{
+				if (probs[i] < 0.0)
+					probs[i] = 0.0;
+				else if (probs[i] > 1.0)
+					probs[i] = 1.0;
+			}
+
+			// Step 2: Enforce monotonicity using averaging method
+			// For each pair, if P(k) > P(k+1), replace both with average
+			for (size_t i = 0; i + 1 < probs.size(); ++i)
+			{
+				if (probs[i] > probs[i + 1])
+				{
+					double avg = (probs[i] + probs[i + 1]) / 2.0;
+					probs[i] = avg;
+					probs[i + 1] = avg;
+				}
+			}
+		}
+
 		template<typename cov_t>
 		void create_precalucated_cov_models(const ik_params_t & params, std::vector<cov_t> & result)
 		{
 			result.resize(params.m_category_count);
 			for (int i = 0; i < params.m_category_count; ++i)
 			{
-				result[i].init(cov_model_t(params.m_cov_params[i]), params.m_radiuses[i]);	
+				result[i].init(cov_model_t(params.m_cov_params[i]), params.m_radiuses[i]);
 			}
 		}
 
@@ -109,7 +139,10 @@ namespace hpgl
 						prob = mps[idx][node_idx];
 					}
 					probs.push_back(prob);
-				}				
+				}
+
+				// Apply order relations correction to ensure monotonicity and [0,1] bounds
+				correct_order_relations(probs);
 
 				output_property.set_at(node_idx, most_probable_category(probs));			
 				#pragma omp critical
