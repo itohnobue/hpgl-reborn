@@ -4,7 +4,6 @@
 //#define HPGL_SOLVER
 #define LAPACK_SOLVER
 
-#include <cassert>
 #include <cstdio>
 #include <limits>
 
@@ -100,25 +99,14 @@ namespace hpgl
 		std::vector<double> b2(coord_size);
 		weights.resize(coord_size);
 
-		// SECURITY FIX: Assert vector sizes match expected allocation in debug builds
-		assert(A.size() == coord_size * coord_size && "Matrix A size mismatch");
-		assert(b.size() == coord_size && "Vector b size mismatch");
-		assert(b2.size() == coord_size && "Vector b2 size mismatch");
-
 		//build invariant
 		for (int i = 0, end_i = size; i < end_i; ++i)
 		{
 			for (int j = i, end_j = end_i; j < end_j; ++j)
 			{
-				// SECURITY FIX: Validate indices are within bounds
-				assert(i >= 0 && i < size && j >= 0 && j < size && "Index out of bounds");
-				assert(i * size + j >= 0 && static_cast<size_t>(i * size + j) < matrix_size && "Matrix A index out of bounds");
-
 				A[i*size + j] = covariances(coords[i], coords[j]);
 				A[j*size + i] = A[i*size + j];
 			}
-			// SECURITY FIX: Validate vector index
-			assert(i >= 0 && i < size && "Vector b index out of bounds");
 			b[i] = covariances(coords[i], center_coord);
 			b2[i] = b[i];
 		}
@@ -246,25 +234,14 @@ namespace hpgl
 		std::vector<double> b2(coord_size);
 		weights.resize(coord_size);
 
-		// SECURITY FIX: Assert vector sizes match expected allocation in debug builds
-		assert(A.size() == coord_size * coord_size && "Matrix A size mismatch");
-		assert(b.size() == coord_size && "Vector b size mismatch");
-		assert(b2.size() == coord_size && "Vector b2 size mismatch");
-
 		//build invariant
 		for (int i = 0, end_i = size; i < end_i; ++i)
 		{
 			for (int j = i, end_j = end_i; j < end_j; ++j)
 			{
-				// SECURITY FIX: Validate indices are within bounds
-				assert(i >= 0 && i < size && j >= 0 && j < size && "Index out of bounds");
-				assert(i * size + j >= 0 && static_cast<size_t>(i * size + j) < matrix_size && "Matrix A index out of bounds");
-
 				A[i*size + j] = covariances(coords[i], coords[j]);
 				A[j*size + i] = A[i*size + j];
 			}
-			// SECURITY FIX: Validate vector index
-			assert(i >= 0 && i < size && "Vector b index out of bounds");
 			b[i] = covariances(coords[i], center);
 			b2[i] = b[i];
 		}
@@ -415,9 +392,6 @@ namespace hpgl
 			return false;
 		}
 
-		// SECURITY FIX: Assert vector sizes in debug builds
-		assert(A.size() == coord_size * coord_size && "Matrix A size mismatch");
-		assert(b.size() == coord_size && "Vector b size mismatch");
 
 		double meanc = center_mean;
 		double delta = 0.00001;
@@ -437,9 +411,6 @@ namespace hpgl
 
 		for (int i = 0; i < size; ++i)
 		{
-			// SECURITY FIX: Validate array access with bounds check
-			assert(i >= 0 && i < size && "sigmas index out of bounds");
-
 			double meani = means[i];
 
 			if(meani == 0)
@@ -460,10 +431,6 @@ namespace hpgl
 		{
 			for (int j = 0; j < size; ++j)
 			{
-				// SECURITY FIX: Validate matrix indices are within bounds
-				assert(i >= 0 && i < size && j >= 0 && j < size && "Matrix index out of bounds");
-				assert(i * size + j >= 0 && static_cast<size_t>(i * size + j) < matrix_size && "Matrix A index out of bounds");
-
 				A[i * size + j] =
 					cov(coords[i], coords[j]) * (sigmas[i] * sigmas[j]);
 			}

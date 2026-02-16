@@ -272,8 +272,8 @@ HPGL_API void hpgl_simple_kriging(
     hpgl_shape_t * output_data_shape)
 {
 	using namespace hpgl;
-	int in_size = input_data_shape->m_data[0] * input_data_shape->m_data[1] * input_data_shape->m_data[2];
-	int out_size = output_data_shape->m_data[0] * output_data_shape->m_data[1] * output_data_shape->m_data[2];
+	int in_size = get_shape_volume(input_data_shape);
+	int out_size = get_shape_volume(output_data_shape);
 		
 	cont_property_array_t in_prop(input_data, input_mask, in_size);
 	cont_property_array_t out_prop(output_data, output_mask, out_size);

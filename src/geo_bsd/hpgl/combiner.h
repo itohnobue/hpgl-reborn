@@ -2,6 +2,7 @@
 #define COMBINER_H_INCLUDED_ASDLJASLKDJASDLJAKSJDLAKSJDKA345KL09I8UYHG56YHJM
 
 #include "select.h"
+#include "property_array.h"
 
 namespace hpgl
 {
@@ -13,8 +14,8 @@ namespace hpgl
 		const std::vector<mean_t> & means,
 		mean_t center_mean)
 	{
-		assert(values.size() == weights.size());
-		assert(values.size() == means.size());
+		HPGL_CHECK(values.size() == weights.size() && values.size() == means.size(),
+			"combine: size mismatch between values, weights, and means");
 		result_t result = center_mean;
 		for (size_t i = 0, end_i = values.size(); i < end_i; ++i)
 		{			

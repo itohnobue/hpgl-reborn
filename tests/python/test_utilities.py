@@ -69,8 +69,8 @@ class TestCalcMean:
         mask = np.array([0, 0, 0], dtype='uint8')
         prop = ContProperty(data, mask)
 
-        # Should handle division by zero or return 0
-        with pytest.raises(ZeroDivisionError):
+        # Should raise ValueError for all-masked property
+        with pytest.raises(ValueError, match="no informed values"):
             calc_mean(prop)
 
     def test_calc_mean_single_value(self):

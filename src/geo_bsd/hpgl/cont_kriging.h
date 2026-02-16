@@ -49,8 +49,8 @@ namespace hpgl
 			kriging_failure_handling fh = mean_on_failure //!< Way of handling kriging errors (absence of neighbours, singularity).
 		)
 	{
-		assert(input_property.size() == output_property.size());
-		assert(grid.size() == input_property.size());
+		HPGL_CHECK(input_property.size() == output_property.size() && grid.size() == input_property.size(),
+			"cont_kriging: size mismatch between grid, input, and output");
 		
 		double sum = 0;
 		stats.m_points_calculated = 0;

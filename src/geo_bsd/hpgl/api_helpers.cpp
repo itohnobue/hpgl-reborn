@@ -1,4 +1,6 @@
 #include "stdafx.h"
+#include <stdexcept>
+#include <climits>
 #include "api.h"
 #include "covariance_type.h"
 #include "sugarbox_grid.h"
@@ -26,12 +28,17 @@ set_last_exception_message(const char * message)
 
 int get_shape_volume(hpgl_shape_t * shape)
 {
-	int result = 1;
+	long long result = 1;
 	for (int i = 0; i < 3; ++i)
 	{
 		result *= shape->m_data[i];
 	}
-	return result;
+	if (result > INT_MAX || result <= 0)
+	{
+		set_last_exception_message("get_shape_volume: grid volume exceeds INT_MAX");
+		return -1;
+	}
+	return static_cast<int>(result);
 }
 
 

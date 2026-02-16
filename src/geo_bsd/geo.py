@@ -316,7 +316,7 @@ def _load_prop_cont_slow(filename, undefined_value):
 						mask.append(0)
 					else:
 						mask.append(1)
-				except:
+				except (ValueError, TypeError):
 					pass
 
 	return ContProperty(numpy.array(values, dtype="float32"), numpy.array(mask, dtype="uint8"))
@@ -346,7 +346,7 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
 					else:
 						values.append(dict_map[val])
 						mask.append(1)
-				except:
+				except (ValueError, TypeError, KeyError):
 					pass
 
 	return IndProperty(numpy.array(values, dtype="uint8", order='F'), numpy.array(mask, dtype="uint8", order='F'), len(ind_values))
@@ -415,9 +415,12 @@ def accepts_tuple(arg_name, arg_pos):
 	return decorator
 		
 @accepts_tuple('prop', 0)
-def write_property(prop, filename, prop_name, undefined_value, indicator_values=[]):
+def write_property(prop, filename, prop_name, undefined_value, indicator_values=None):
 	# Security: Validate filename to prevent directory traversal attacks
 	safe_path = _validate_filepath(filename)
+
+	if indicator_values is None:
+		indicator_values = []
 
 	if (prop.data.ndim == 3):
 		sh = _create_hpgl_shape(prop.data.shape)
@@ -454,9 +457,12 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
 			len(indicator_values))
 
 @accepts_tuple('prop', 0)
-def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=[]):
+def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=None):
 	# Security: Validate filename to prevent directory traversal attacks
 	safe_path = _validate_filepath(filename)
+
+	if indicator_values is None:
+		indicator_values = []
 
 	if isinstance(prop, ContProperty):
 		_hpgl_so.hpgl_write_gslib_cont_property(
@@ -547,6 +553,8 @@ def calc_mean(prop):
 		if prop.mask.flat[i] == 1:
 			sum += prop.data.flat[i]
 			count += 1
+	if count == 0:
+		raise ValueError("calc_mean: no informed values (all masked)")
 	return sum/count
 
 @accepts_tuple('prop', 0)

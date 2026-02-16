@@ -1473,14 +1473,9 @@ class TestUtilityEdgeCases:
         mask = np.zeros(3, dtype='uint8')
         prop = ContProperty(data, mask)
 
-        # calc_mean should handle division by zero
-        try:
-            mean = calc_mean(prop)
-            # If succeeds, may return 0 or NaN
-            assert mean == 0 or np.isnan(mean)
-        except ZeroDivisionError:
-            # Expected
-            pass
+        # calc_mean should raise ValueError for all-masked property
+        with pytest.raises(ValueError, match="no informed values"):
+            calc_mean(prop)
 
     def test_calc_mean_with_single_value(self):
         """Test calc_mean with single informed value"""
@@ -1531,6 +1526,95 @@ class TestUtilityEdgeCases:
         # Modifying clone should not affect original
         cloned.data[0] = 999.0
         assert prop.data[0] == 1.0
+
+
+@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+class TestProductionFixes:
+    """Tests for production readiness fixes applied to the codebase."""
+
+    def test_calc_mean_raises_valueerror_on_all_masked(self):
+        """calc_mean must raise ValueError (not ZeroDivisionError) when all values masked."""
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
+        mask = np.zeros(5, dtype='uint8')
+        prop = ContProperty(data, mask)
+
+        with pytest.raises(ValueError, match="no informed values"):
+            calc_mean(prop)
+
+    def test_calc_mean_works_with_partial_mask(self):
+        """calc_mean returns correct result when some values are masked."""
+        data = np.array([10.0, 20.0, 30.0], dtype='float32')
+        mask = np.array([1, 0, 1], dtype='uint8')
+        prop = ContProperty(data, mask)
+
+        result = calc_mean(prop)
+        assert result == pytest.approx(20.0)  # (10 + 30) / 2
+
+    def test_write_property_none_indicator_values(self):
+        """write_property with indicator_values=None should behave same as empty list."""
+        from geo_bsd.geo import write_property
+        import tempfile, os
+
+        data = np.array([1.0, 2.0, 3.0], dtype='float32')
+        mask = np.ones(3, dtype='uint8')
+        prop = ContProperty(data, mask)
+
+        with tempfile.NamedTemporaryFile(suffix='.inc', delete=False) as f:
+            tmpfile = f.name
+        try:
+            # Should not raise with indicator_values=None (default)
+            write_property(prop, tmpfile, "TEST", -99.0)
+        finally:
+            if os.path.exists(tmpfile):
+                os.remove(tmpfile)
+
+    def test_write_gslib_property_none_indicator_values(self):
+        """write_gslib_property with indicator_values=None should behave same as empty list."""
+        from geo_bsd.geo import write_gslib_property
+        import tempfile, os
+
+        data = np.array([1.0, 2.0, 3.0], dtype='float32')
+        mask = np.ones(3, dtype='uint8')
+        prop = ContProperty(data, mask)
+
+        with tempfile.NamedTemporaryFile(suffix='.gslib', delete=False) as f:
+            tmpfile = f.name
+        try:
+            write_gslib_property(prop, tmpfile, "TEST", -99.0)
+        finally:
+            if os.path.exists(tmpfile):
+                os.remove(tmpfile)
+
+    def test_load_cont_slow_skips_non_numeric_tokens(self):
+        """_load_prop_cont_slow should skip non-numeric tokens without crashing."""
+        from geo_bsd.geo import _load_prop_cont_slow
+        import tempfile, os
+
+        content = "-- comment line\n1.0 2.0 BADTOKEN 3.0\n-- another comment\n4.0\n"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.inc', delete=False, encoding='utf-8') as f:
+            f.write(content)
+            tmpfile = f.name
+        try:
+            prop = _load_prop_cont_slow(tmpfile, -99.0)
+            assert len(prop.data) == 4  # 1.0, 2.0, 3.0, 4.0 (BADTOKEN skipped)
+            assert np.all(prop.mask == 1)
+        finally:
+            os.remove(tmpfile)
+
+    def test_load_ind_slow_skips_non_numeric_tokens(self):
+        """_load_prop_ind_slow should skip non-numeric tokens without crashing."""
+        from geo_bsd.geo import _load_prop_ind_slow
+        import tempfile, os
+
+        content = "0 1 BADTOKEN 0 1\n"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.inc', delete=False, encoding='utf-8') as f:
+            f.write(content)
+            tmpfile = f.name
+        try:
+            prop = _load_prop_ind_slow(tmpfile, -99, [0, 1])
+            assert len(prop.data) == 4  # 0, 1, 0, 1 (BADTOKEN skipped)
+        finally:
+            os.remove(tmpfile)
 
 
 if __name__ == '__main__':
