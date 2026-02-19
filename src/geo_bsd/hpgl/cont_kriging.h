@@ -119,7 +119,7 @@ namespace hpgl
 		report.stop();
 		stats.m_points_calculated = points_calculated;
 		stats.m_points_without_neighbours = points_without_neighbours;
-		stats.m_mean = sum / output_property.size();
+		stats.m_mean = output_property.size() > 0 ? sum / output_property.size() : 0;
 		stats.m_speed_nps = report.iterations_per_second();
 		{
 			std::ostringstream oss;

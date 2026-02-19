@@ -168,14 +168,14 @@ hpgl_set_progress_handler(int (*handler)(char * stage, int percentage, void * pa
 HPGL_API void hpgl_set_thread_num(int n_threads);
 HPGL_API int hpgl_get_thread_num();
 
-HPGL_API void hpgl_read_inc_file_float(
+HPGL_API int hpgl_read_inc_file_float(
 		char * filename,
 		float undefined_value,
 		int size,
 		float * data,
 		unsigned char * mask);
 
-HPGL_API void hpgl_read_inc_file_byte(
+HPGL_API int hpgl_read_inc_file_byte(
 		char * filename,
 		int undefined_value,
 		int size,
@@ -184,28 +184,28 @@ HPGL_API void hpgl_read_inc_file_byte(
 		unsigned char * values,
 		int values_count);
 
-HPGL_API void hpgl_write_inc_file_float(
+HPGL_API int hpgl_write_inc_file_float(
 		char * filename,
 		hpgl_cont_masked_array_t * arr,
 		float undefined_value,
 		char * name);
 
-HPGL_API void hpgl_write_inc_file_byte(
+HPGL_API int hpgl_write_inc_file_byte(
 		char * filename,
 		hpgl_ind_masked_array_t * arr,
-		int undefined_value,		
+		int undefined_value,
 		char * name,
 		unsigned char * values,
 		int values_count);
 
-HPGL_API void
+HPGL_API int
 hpgl_write_gslib_cont_property(
 		hpgl_cont_masked_array_t * data,
 		const char * filename,
 		const char * name,
 		double undefined_value);
 
-HPGL_API void
+HPGL_API int
 hpgl_write_gslib_byte_property(
 		hpgl_ind_masked_array_t * data,
 		const char * filename,

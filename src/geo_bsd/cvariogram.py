@@ -155,6 +155,10 @@ class VariogramSearchTemplate:
 
 
 def CalcVariograms(templ, hard_data, percent=100):
+    if templ.num_lags <= 0:
+        raise ValueError("CalcVariograms: num_lags must be positive")
+    if percent < 1 or percent > 100:
+        raise ValueError(f"CalcVariograms: percent must be in [1, 100], got {percent}")
     variogram = numpy.array([0] * templ.num_lags, dtype='float32')
     
     hd = checked_create(
@@ -181,6 +185,11 @@ def CalcVariograms(templ, hard_data, percent=100):
     return (lags_borders, variogram)
 
 def CalcVariogramsFromPointSet(templ, point_set, variogram):
+    if templ.num_lags <= 0:
+        raise ValueError("CalcVariogramsFromPointSet: num_lags must be positive")
+    for key in ("X", "Y", "Z", "Property"):
+        if key not in point_set:
+            raise ValueError(f"CalcVariogramsFromPointSet: point_set missing required key '{key}'")
     variogram = numpy.array([0] * templ.num_lags, dtype='float32')
 
     ps = checked_create(
@@ -212,6 +221,10 @@ def _create_float_data(array):
         data_strides = _c_array(C.c_int, 3, __strides(array)))
 
 def CStackLayers(layers, markers, nz, scalez, blank_value, result):
+    if len(layers) == 0:
+        raise ValueError("CStackLayers: layers list is empty")
+    if nz <= 0:
+        raise ValueError(f"CStackLayers: nz must be positive, got {nz}")
     layers2 = []
     for layer in layers:
         layers2.append(_create_float_data(layer))

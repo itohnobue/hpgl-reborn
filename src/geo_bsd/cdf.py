@@ -20,6 +20,8 @@ def calc_cdf(prop):
                     else:
                         counts[value] = 1
     full_count = float(full_count)
+    if full_count == 0:
+        raise ValueError("calc_cdf: no informed values (all cells are masked)")
     values = numpy.sort(list(counts.keys()))
     if values.size == 0:
         size = 0

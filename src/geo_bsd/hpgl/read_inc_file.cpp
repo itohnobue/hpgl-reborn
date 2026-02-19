@@ -141,19 +141,26 @@ start:
 		{
 			throw hpgl_exception("read_inc_file_float", std::string("Error opening file:") + file_name + ".");
 		}
-		std::string prop_name;
-		read_prop_name(file, prop_name);
-			
-		load_floats_into_vector(file, data_buffer, size);
-
-		if (mask_buffer != 0)
+		try
 		{
-			for (int i = 0; i < size; ++i)
+			std::string prop_name;
+			read_prop_name(file, prop_name);
+
+			load_floats_into_vector(file, data_buffer, size);
+
+			if (mask_buffer != 0)
 			{
-				mask_buffer[i] = data_buffer[i] == undefined_value ? 0 : 1;
+				for (int i = 0; i < size; ++i)
+				{
+					mask_buffer[i] = data_buffer[i] == undefined_value ? 0 : 1;
+				}
 			}
 		}
-
+		catch (...)
+		{
+			fclose(file);
+			throw;
+		}
 		fclose(file);
 	}
 
@@ -168,14 +175,20 @@ start:
 		FILE * file = fopen(file_name, "r");
 		if (file == 0)
 		{
-			throw hpgl_exception("read_inc_file_float", std::string("Error opening file:") + file_name + ".");
+			throw hpgl_exception("read_inc_file_byte", std::string("Error opening file:") + file_name + ".");
 		}
+		try
+		{
+			std::string prop_name;
+			read_prop_name(file, prop_name);
 
-		std::string prop_name;
-		read_prop_name(file, prop_name);
-			
-		read_bytes(file, undefined_value, data_buffer, mask_buffer, size);
-
+			read_bytes(file, undefined_value, data_buffer, mask_buffer, size);
+		}
+		catch (...)
+		{
+			fclose(file);
+			throw;
+		}
 		fclose(file);
 	}
 }

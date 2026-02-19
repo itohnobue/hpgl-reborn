@@ -178,21 +178,23 @@ namespace hpgl
 			{		
 			
 				sugarbox_location_t center_loc;
-				double cr0 = covariances(center_coord, center_coord);				
+				double cr0 = covariances(center_coord, center_coord);
 				variance = cr0;
 				for (int i = 0, end_i = (int) coords.size(); i < end_i; ++i)
 				{
 					variance -= weights[i] * b2[i];
 				}
+				// Clamp to zero — floating-point subtraction can produce small negatives
+				if (variance < 0) variance = 0;
 			}
 			else
 			{
 				variance = -1;
 			}
-		}	
+		}
 		return system_solved;
-	}	
-	
+	}
+
 	template<typename covariances_t, bool calc_variance, typename coord_t>
 	bool ok_kriging_weights_3(
 			coord_t center,
@@ -316,6 +318,14 @@ namespace hpgl
 			SumOnes += ones_result[k];
 		}
 
+		if (std::abs(SumOnes) < 1e-15)
+		{
+			// Degenerate case: SumOnes is zero, cannot compute OK weights
+			weights.resize(coords.size());
+			if (calc_variance) variance = -1;
+			return false;
+		}
+
 		double mu = (SumSK - 1) / SumOnes;
 
 		for (int k = 0; k < size; k++)
@@ -338,6 +348,8 @@ namespace hpgl
 				}
 				// OK kriging variance: subtract the Lagrange multiplier (mu)
 				variance -= mu;
+				// Clamp to zero — floating-point subtraction can produce small negatives
+				if (variance < 0) variance = 0;
 			}
 			else
 			{

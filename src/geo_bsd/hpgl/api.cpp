@@ -50,22 +50,31 @@ HPGL_API int hpgl_get_thread_num()
 	return hpgl::get_thread_num();
 }
 
-HPGL_API void hpgl_read_inc_file_float(
+HPGL_API int hpgl_read_inc_file_float(
 		char * filename,
 		float undefined_value,
 		int size,
 		float * data,
 		unsigned char * mask)
 {
-	hpgl::read_inc_file_float(
-			filename,
-			undefined_value,
-			size,
-			data,
-			mask);
+	try
+	{
+		hpgl::read_inc_file_float(
+				filename,
+				undefined_value,
+				size,
+				data,
+				mask);
+		return 0;
+	}
+	catch (const std::exception & ex)
+	{
+		handle_exception(ex);
+		return -1;
+	}
 }
 
-HPGL_API void hpgl_read_inc_file_byte(
+HPGL_API int hpgl_read_inc_file_byte(
 		char * filename,
 		int undefined_value,
 		int size,
@@ -74,43 +83,61 @@ HPGL_API void hpgl_read_inc_file_byte(
 		unsigned char * values,
 		int values_count)
 {
-	hpgl::read_inc_file_byte(
-			filename,
-			undefined_value,
-			size,
-			data,
-			mask);
-
-	for (int i = 0; i < size; ++i)
+	try
 	{
-		if (mask[i] != 0)
+		hpgl::read_inc_file_byte(
+				filename,
+				undefined_value,
+				size,
+				data,
+				mask);
+
+		for (int i = 0; i < size; ++i)
 		{
-			for (int j = 0; j < values_count; ++j)
+			if (mask[i] != 0)
 			{
-				if (data[i] == values[j])
+				for (int j = 0; j < values_count; ++j)
 				{
-					data[i] = j;
-					break;
+					if (data[i] == values[j])
+					{
+						data[i] = j;
+						break;
+					}
 				}
 			}
 		}
+		return 0;
+	}
+	catch (const std::exception & ex)
+	{
+		handle_exception(ex);
+		return -1;
 	}
 }
 
-HPGL_API void hpgl_write_inc_file_float(
+HPGL_API int hpgl_write_inc_file_float(
 		char * filename,
 		hpgl_cont_masked_array_t * arr,
 		float undefined_value,
 		char * name)
 {
-	using namespace hpgl;
-	property_writer_t writer;
-	writer.init(filename, name);
-	cont_property_array_t prop(
-			arr->m_data,
-			arr->m_mask,
-			get_shape_volume(&(arr->m_shape)));
-	writer.write_double(prop, undefined_value);
+	try
+	{
+		using namespace hpgl;
+		property_writer_t writer;
+		writer.init(filename, name);
+		cont_property_array_t prop(
+				arr->m_data,
+				arr->m_mask,
+				get_shape_volume(&(arr->m_shape)));
+		writer.write_double(prop, undefined_value);
+		return 0;
+	}
+	catch (const std::exception & ex)
+	{
+		handle_exception(ex);
+		return -1;
+	}
 }
 
 void init_remap_table(unsigned char * values, int values_count, int indicator_count, std::vector<unsigned char> & remap_table)
@@ -139,44 +166,62 @@ void init_remap_table(unsigned char * values, int values_count, int indicator_co
 	}
 }
 
-HPGL_API void hpgl_write_inc_file_byte(
+HPGL_API int hpgl_write_inc_file_byte(
 		char * filename,
 		hpgl_ind_masked_array_t * arr,
-		int undefined_value,		
+		int undefined_value,
 		char * name,
 		unsigned char * values,
 		int values_count)
 {
-	using namespace hpgl;
-	std::vector<unsigned char> remap_table;
-	init_remap_table(values, values_count, arr->m_indicator_count, remap_table);
+	try
+	{
+		using namespace hpgl;
+		std::vector<unsigned char> remap_table;
+		init_remap_table(values, values_count, arr->m_indicator_count, remap_table);
 
-	property_writer_t writer;
-	writer.init(filename, name);
-	indicator_property_array_t prop(
-			arr->m_data, 
-			arr->m_mask, 
-			get_shape_volume(&(arr->m_shape)),
-			arr->m_indicator_count);
-	writer.write_byte(prop, undefined_value, remap_table);
+		property_writer_t writer;
+		writer.init(filename, name);
+		indicator_property_array_t prop(
+				arr->m_data,
+				arr->m_mask,
+				get_shape_volume(&(arr->m_shape)),
+				arr->m_indicator_count);
+		writer.write_byte(prop, undefined_value, remap_table);
+		return 0;
+	}
+	catch (const std::exception & ex)
+	{
+		handle_exception(ex);
+		return -1;
+	}
 }
 
-HPGL_API void
+HPGL_API int
 hpgl_write_gslib_cont_property(
 		hpgl_cont_masked_array_t * data,
 		const char * filename,
 		const char * name,
 		double undefined_value)
 {
-	using namespace hpgl;
-	int size = get_shape_volume(&data->m_shape);
-	sp_double_property_array_t prop(new cont_property_array_t(data->m_data, data->m_mask, size));
-	hpgl::property_writer_t writer;
-	writer.init(filename, name);
-	writer.write_gslib_double(prop, undefined_value);
+	try
+	{
+		using namespace hpgl;
+		int size = get_shape_volume(&data->m_shape);
+		sp_double_property_array_t prop(new cont_property_array_t(data->m_data, data->m_mask, size));
+		hpgl::property_writer_t writer;
+		writer.init(filename, name);
+		writer.write_gslib_double(prop, undefined_value);
+		return 0;
+	}
+	catch (const std::exception & ex)
+	{
+		handle_exception(ex);
+		return -1;
+	}
 }
 
-HPGL_API void
+HPGL_API int
 hpgl_write_gslib_byte_property(
 		hpgl_ind_masked_array_t * data,
 		const char * filename,
@@ -185,15 +230,24 @@ hpgl_write_gslib_byte_property(
 		unsigned char * values,
 		int values_count)
 {
-	using namespace hpgl;
-	int size = get_shape_volume(&data->m_shape);
-	sp_byte_property_array_t prop( new indicator_property_array_t(data->m_data, data->m_mask, size, data->m_indicator_count));
-	std::vector<unsigned char> remap_table;
-	init_remap_table(values, values_count, data->m_indicator_count, remap_table);
+	try
+	{
+		using namespace hpgl;
+		int size = get_shape_volume(&data->m_shape);
+		sp_byte_property_array_t prop( new indicator_property_array_t(data->m_data, data->m_mask, size, data->m_indicator_count));
+		std::vector<unsigned char> remap_table;
+		init_remap_table(values, values_count, data->m_indicator_count, remap_table);
 
-	property_writer_t writer;
-	writer.init(filename, name);
-	writer.write_gslib_byte(prop, (unsigned char)undefined_value, remap_table);
+		property_writer_t writer;
+		writer.init(filename, name);
+		writer.write_gslib_byte(prop, (unsigned char)undefined_value, remap_table);
+		return 0;
+	}
+	catch (const std::exception & ex)
+	{
+		handle_exception(ex);
+		return -1;
+	}
 }
 
 HPGL_API void hpgl_ordinary_kriging(
@@ -201,13 +255,15 @@ HPGL_API void hpgl_ordinary_kriging(
     hpgl_ok_params_t * params,
     hpgl_cont_masked_array_t * output_data)
 {
+	try
+	{
 	using namespace hpgl;
 	int in_size = get_shape_volume(&input_data->m_shape);
 	int out_size = get_shape_volume(&output_data->m_shape);
-		
+
 	cont_property_array_t in_prop(input_data->m_data, input_data->m_mask, in_size);
 	cont_property_array_t out_prop(output_data->m_data, output_data->m_mask, out_size);
-	
+
 	sugarbox_grid_t grid;
 	init_grid(grid, &input_data->m_shape);
 
@@ -223,7 +279,7 @@ HPGL_API void hpgl_ordinary_kriging(
 			params->m_angles[2]);
 	ok_p.m_sill = params->m_sill;
 	ok_p.m_nugget = params->m_nugget;
-	
+
 	ok_p.set_radiuses(
 			params->m_radiuses[0],
 			params->m_radiuses[1],
@@ -232,6 +288,8 @@ HPGL_API void hpgl_ordinary_kriging(
 	ok_p.m_max_neighbours = params->m_max_neighbours;
 
 	hpgl::ordinary_kriging(in_prop, grid, ok_p, out_prop, true);
+	}
+	catch (const std::exception & ex) { handle_exception(ex); }
 }
 
 static void init_sk_params(hpgl_sk_params_t * params, hpgl::sk_params_t & sk_p)
@@ -262,7 +320,7 @@ static void init_sk_params(hpgl_sk_params_t * params, hpgl::sk_params_t & sk_p)
 	}
 }
 
-HPGL_API void hpgl_simple_kriging(   
+HPGL_API void hpgl_simple_kriging(
     float * input_data,
     unsigned char * input_mask,
     hpgl_shape_t * input_data_shape,
@@ -271,13 +329,15 @@ HPGL_API void hpgl_simple_kriging(
     unsigned char * output_mask,
     hpgl_shape_t * output_data_shape)
 {
+	try
+	{
 	using namespace hpgl;
 	int in_size = get_shape_volume(input_data_shape);
 	int out_size = get_shape_volume(output_data_shape);
-		
+
 	cont_property_array_t in_prop(input_data, input_mask, in_size);
 	cont_property_array_t out_prop(output_data, output_mask, out_size);
-	
+
 	sugarbox_grid_t grid;
 	grid.init(
 			input_data_shape->m_data[0],
@@ -290,7 +350,7 @@ HPGL_API void hpgl_simple_kriging(
 
 	hpgl::simple_kriging(in_prop, grid, sk_p, out_prop);
 	}
-
+	catch (const std::exception & ex) { handle_exception(ex); }
 }
 
 HPGL_API int
@@ -303,9 +363,11 @@ hpgl_simple_kriging_weights(
 		hpgl_cov_params_t * params,
 		float * weights)
 {
+	try
+	{
 	using namespace hpgl;
 	real_location_t center(center_coords[0], center_coords[1], center_coords[2]);
-	
+
 	std::vector<real_location_t> neighbour_coords(neighbours_count);
 	for (int i = 0; i < neighbours_count; ++i)
 	{
@@ -343,6 +405,8 @@ hpgl_simple_kriging_weights(
 		weights[i] = weights2.at(i);
 	}
 	return 0;
+	}
+	catch (const std::exception & ex) { handle_exception(ex); return -1; }
 }
 
 HPGL_API void hpgl_lvm_kriging(
@@ -356,6 +420,8 @@ HPGL_API void hpgl_lvm_kriging(
     unsigned char * output_mask,
     hpgl_shape_t * output_data_shape)
 {
+	try
+	{
 	using namespace hpgl;
 	int size = get_shape_volume(input_data_shape);
 	cont_property_array_t input_prop(input_data, input_mask, size);
@@ -374,7 +440,7 @@ HPGL_API void hpgl_lvm_kriging(
 			params->m_angles[2]);
 	ok_p.m_sill = params->m_sill;
 	ok_p.m_nugget = params->m_nugget;
-	
+
 	ok_p.set_radiuses(
 			params->m_radiuses[0],
 			params->m_radiuses[1],
@@ -384,6 +450,8 @@ HPGL_API void hpgl_lvm_kriging(
 
 	cont_property_array_t out_prop(output_data, output_mask, size);
 	lvm_kriging(input_prop, mean_data, grid, ok_p, out_prop);
+	}
+	catch (const std::exception & ex) { handle_exception(ex); }
 }
 
 HPGL_API void
@@ -393,10 +461,12 @@ hpgl_indicator_kriging(
 		hpgl_ik_params_t * params,
 		int indicator_count)
 {
+	try
+	{
 	using namespace hpgl;
 	int size = get_shape_volume(&in_data->m_shape);
 	int size2 = get_shape_volume(&out_data->m_shape);
-	assert (size == size2);
+	HPGL_CHECK(size == size2, "hpgl_indicator_kriging: input and output size mismatch");
 	indicator_property_array_t in_prop(in_data->m_data, in_data->m_mask, size, in_data->m_indicator_count);
 	indicator_property_array_t out_prop(out_data->m_data, out_data->m_mask, size2, out_data->m_indicator_count);
 
@@ -407,17 +477,20 @@ hpgl_indicator_kriging(
 	init_grid(grid, &(in_data->m_shape));
 
 	indicator_kriging(in_prop, grid, ikp, out_prop);
+	}
+	catch (const std::exception & ex) { handle_exception(ex); }
 }
 
-HPGL_API void 
+HPGL_API void
 hpgl_sgs_simulation(
 		hpgl_cont_masked_array_t * data,
-		hpgl_sgs_params_t * params,		
+		hpgl_sgs_params_t * params,
 		hpgl_non_parametric_cdf_t * cdf,
 		double * mean,
 		hpgl_ubyte_array_t * simulation_mask)
-
 {
+	try
+	{
 	using namespace hpgl;
 	int size = get_shape_volume(&(data->m_shape));
 	cont_property_array_t prop(data->m_data, data->m_mask, size);
@@ -427,7 +500,7 @@ hpgl_sgs_simulation(
 
 	sgs_params_t sgs_p;
 	init_sgs_params(params, &sgs_p);
-	
+
 	if (mean != 0)
 		sgs_p.set_mean(*mean);
 	sgs_p.m_lvm = 0;
@@ -437,7 +510,9 @@ hpgl_sgs_simulation(
 		    sgs_p,
 			prop,
 			cdf,
-			simulation_mask != 0 ? simulation_mask->m_data : 0);	
+			simulation_mask != 0 ? simulation_mask->m_data : 0);
+	}
+	catch (const std::exception & ex) { handle_exception(ex); }
 }
 
 
@@ -448,6 +523,8 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 		hpgl_float_array_t * means,
 		hpgl_ubyte_array_t * simulation_mask)
 {
+	try
+	{
 	using namespace hpgl;
 	int size = get_shape_volume(&(data->m_shape));
 	cont_property_array_t prop(data->m_data, data->m_mask, size);
@@ -460,7 +537,7 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 
 	sgs_p.m_lvm = means->m_data;
 	sgs_p.m_mean_kind = e_mean_varying;
-	
+
 	hpgl::sequential_gaussian_simulation_lvm(
 			grid,
 			sgs_p,
@@ -468,6 +545,8 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 			prop,
 			cdf,
 			simulation_mask != 0 ? simulation_mask->m_data : 0);
+	}
+	catch (const std::exception & ex) { handle_exception(ex); }
 }
 
 HPGL_API void hpgl_median_ik(
@@ -475,6 +554,8 @@ HPGL_API void hpgl_median_ik(
 		hpgl_median_ik_params_t * params,
 		hpgl_ind_masked_array_t * out_data)
 {
+	try
+	{
 	using namespace hpgl;
 
 	int size = get_shape_volume(&(in_data->m_shape));
@@ -494,7 +575,7 @@ HPGL_API void hpgl_median_ik(
 			params->m_angles[2]);
 	mik_p.m_sill = params->m_sill;
 	mik_p.m_nugget = params->m_nugget;
-	
+
 	mik_p.set_radiuses(
 			params->m_radiuses[0],
 			params->m_radiuses[1],
@@ -505,7 +586,7 @@ HPGL_API void hpgl_median_ik(
 	mik_p.m_marginal_probs[1] = params->m_marginal_probs[1];
 
 	indicator_property_array_t in_prop(
-			in_data->m_data, 
+			in_data->m_data,
 			in_data->m_mask,
 			size,
 			2);
@@ -515,7 +596,8 @@ HPGL_API void hpgl_median_ik(
 			size,
 			2);
 	median_ik_for_two_indicators(mik_p, grid, in_prop, out_prop);
-		
+	}
+	catch (const std::exception & ex) { handle_exception(ex); }
 }
 
 HPGL_API void
@@ -526,10 +608,12 @@ hpgl_sis_simulation(
 		int seed,
 		hpgl_ubyte_array_t * simulation_mask)
 {
+	try
+	{
 	using namespace hpgl;
 	int size = get_shape_volume(&data->m_shape);
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
-	
+
 	sugarbox_grid_t grid;
 	init_grid(grid, &data->m_shape);
 
@@ -546,6 +630,8 @@ hpgl_sis_simulation(
 			rep,
 			false,
 			simulation_mask !=0 ? simulation_mask->m_data : 0);
+	}
+	catch (const std::exception & ex) { handle_exception(ex); }
 }
 
 HPGL_API void
@@ -558,10 +644,12 @@ hpgl_sis_simulation_lvm(
 		hpgl_ubyte_array_t * simulation_mask,
 		int use_correlograms)
 {
+	try
+	{
 	using namespace hpgl;
 	int size = get_shape_volume(&data->m_shape);
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
-	
+
 	sugarbox_grid_t grid;
 	init_grid(grid, &data->m_shape);
 
@@ -569,13 +657,13 @@ hpgl_sis_simulation_lvm(
 	init_sis_params(params, indicator_count, &ikp);
 
 	progress_reporter_t rep(size);
-	
+
 	std::vector<const mean_t *> means;
 	for (int i = 0; i < indicator_count; ++i)
 	{
 		means.push_back(mean_data[i].m_data);
 	}
-	
+
 	sequential_indicator_simulation_lvm(
 			prop,
 			grid,
@@ -585,7 +673,8 @@ hpgl_sis_simulation_lvm(
 			rep,
 			use_correlograms != 0,
 			simulation_mask != 0 ? simulation_mask->m_data : 0);
-		
+	}
+	catch (const std::exception & ex) { handle_exception(ex); }
 }
 
 HPGL_API void
@@ -725,3 +814,5 @@ hpgl_simple_cokriging_mark2(
 		handle_exception(ex);
 	}
 }
+
+} // extern "C"

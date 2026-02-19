@@ -579,6 +579,64 @@ class ParameterValidator:
                 "indicator_count"
             )
 
+    @staticmethod
+    def validate_correlation_coef(coef, name: str = "correlation_coef") -> None:
+        """
+        Validates correlation coefficient is in [-1, 1] range.
+
+        Args:
+            coef: Correlation coefficient value
+            name: Parameter name for error messages
+
+        Raises:
+            CriticalValidationError: If coefficient is out of range or invalid
+        """
+        import math
+        if not isinstance(coef, (int, float)):
+            raise CriticalValidationError(
+                f"{name} must be a number, got {type(coef).__name__}",
+                name
+            )
+        if math.isnan(coef) or math.isinf(coef):
+            raise CriticalValidationError(
+                f"{name} must be finite, got {coef}",
+                name
+            )
+        if coef < -1.0 or coef > 1.0:
+            raise CriticalValidationError(
+                f"{name} must be in [-1, 1] range, got {coef}",
+                name
+            )
+
+    @staticmethod
+    def validate_variance(variance, name: str = "variance") -> None:
+        """
+        Validates variance is non-negative and finite.
+
+        Args:
+            variance: Variance value
+            name: Parameter name for error messages
+
+        Raises:
+            CriticalValidationError: If variance is negative or invalid
+        """
+        import math
+        if not isinstance(variance, (int, float)):
+            raise CriticalValidationError(
+                f"{name} must be a number, got {type(variance).__name__}",
+                name
+            )
+        if math.isnan(variance) or math.isinf(variance):
+            raise CriticalValidationError(
+                f"{name} must be finite, got {variance}",
+                name
+            )
+        if variance < 0:
+            raise CriticalValidationError(
+                f"{name} must be non-negative, got {variance}",
+                name
+            )
+
 
 # ============================================================================
 # Decorators for Function Validation

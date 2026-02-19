@@ -181,7 +181,7 @@ namespace blue_sky {
 						BREAK_HERE;
 					}
 #endif
-					exit(-1);
+					abort();
 				}
 			}
 		}

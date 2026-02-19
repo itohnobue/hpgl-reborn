@@ -4,6 +4,8 @@
 #include <hpgl_core.h>
 #include "hpgl_exception.h"
 #include <index_3d.h>
+#include <cstdio>
+#include <cstdlib>
 
 namespace hpgl
 {
@@ -114,10 +116,10 @@ namespace hpgl
 			int node = m_strides.get_flat_idx(idx);
 			if (node < 0)
 			{
-				std::ostringstream oss;
-				oss << "Index is out of range: (" << idx[0] << ", " << idx[1] << ", " << idx[2] << "). Shape: ("
-					<< m_strides.get_shape()[0] << ", " << m_strides.get_shape()[1] << ", " << m_strides.get_shape()[2] << ")";
-				throw hpgl_exception("buffer_accessor_3d_t::get_flat_index", oss.str());
+				fprintf(stderr, "HPGL FATAL: buffer_accessor_3d_t::get_flat_index: index out of range (%d, %d, %d), shape (%d, %d, %d)\n",
+					idx[0], idx[1], idx[2],
+					m_strides.get_shape()[0], m_strides.get_shape()[1], m_strides.get_shape()[2]);
+				abort();
 			}
 
 			return node;
@@ -173,9 +175,9 @@ namespace hpgl
 			int node = m_strides.get_flat_idx(idx);
 			if (node < 0)
 			{
-				std::ostringstream oss;
-				oss << "Index is out of range: (" << idx[0] << ", " << idx[1] << ", " << idx[2] << "). Shape: " << m_strides.get_shape();
-				throw hpgl_exception("buffer_accessor_3d_t::get_flat_index", oss.str());
+				fprintf(stderr, "HPGL FATAL: masked_buffer_3d_t::get_flat_index: index out of range (%d, %d, %d)\n",
+					idx[0], idx[1], idx[2]);
+				abort();
 			}
 
 			return node;

@@ -6,6 +6,8 @@
 #include "hpgl_exception.h"
 #include <memory>
 #include <vector>
+#include <cstdio>
+#include <cstdlib>
 
 namespace hpgl
 {
@@ -38,8 +40,8 @@ namespace hpgl
 		inline bool limit_exceeded() const { return m_limit_exceeded;}
 		inline size_t count() const
 		{
-			if (m_limit_exceeded)	
-				throw hpgl_exception("cluster_t", "Limit exceeded.");
+			if (m_limit_exceeded)
+				{ fprintf(stderr, "HPGL FATAL: cluster_t::count: limit exceeded\n"); abort(); }
 			return m_nodes->size();
 		}
 		const std::vector<node_index_t> & nodes() const{ return *m_nodes;}
@@ -131,7 +133,7 @@ namespace hpgl
 					if (cluster_idx >= 0)
 					{
 						if (m_state->m_clusters[cluster_idx]->limit_exceeded())
-							throw hpgl_exception("clusterizer_t", "Limit exceeded.");
+							{ fprintf(stderr, "HPGL FATAL: clusterizer_t: cluster limit exceeded\n"); abort(); }
 			   			size_t cluster_size = m_state->m_clusters[cluster_idx]->count();
 						result += cluster_size;				
 					}

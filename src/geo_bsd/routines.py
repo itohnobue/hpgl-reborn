@@ -96,6 +96,8 @@ def PointSet2Cube(X, Y, Z, Property, Cube):
     return Cube, Mask == 1
 
 def SaveGSLIBPointSet(PointSet, FileName, Caption):
+    if not FileName or not isinstance(FileName, str):
+        raise ValueError("SaveGSLIBPointSet: FileName must be a non-empty string")
     f = open(FileName, "w")
     
     # 1. Caption
@@ -123,6 +125,8 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
     f.close()
 
 def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
+    if not FileName or not isinstance(FileName, str):
+        raise ValueError("SaveGSLIBCubes: FileName must be a non-empty string")
     f = open(FileName, "w")
 
     # 1. Caption
@@ -213,6 +217,8 @@ def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
 	return MACube
 
 def LoadGslibFile(filename, property_size):
+	if not filename or not isinstance(filename, str):
+		raise ValueError("LoadGslibFile: filename must be a non-empty string")
 	dict = {}
 	list_prop = []
 	points = []

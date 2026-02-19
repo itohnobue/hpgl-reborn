@@ -346,7 +346,9 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
             Values2[i] = Values[i][Point2]
             SoftValues1[i] = SoftData[i][Point1]
             SoftValues2[i] = SoftData[i][Point2]
-        Covariances = float32((Values1 - SoftValues1)*(Values2 - SoftValues2) / (SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1-SoftValues2)) ** 0.5)
+        denom = (SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1-SoftValues2)) ** 0.5
+        denom[denom == 0] = 1.0  # Avoid div/0; numerator is 0 when soft value is 0 or 1
+        Covariances = float32((Values1 - SoftValues1)*(Values2 - SoftValues2) / denom)
         Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Covariances
         Result[NumValues + NumValues] += 1
         Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues]

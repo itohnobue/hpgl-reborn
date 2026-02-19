@@ -24,7 +24,7 @@ namespace hpgl
 				if (min_t > m_data[i])
 				{					
 					min_t = m_data[i];
-					min_idx = 0;
+					min_idx = i;
 				}
 			}
 			m_min_t = min_t;

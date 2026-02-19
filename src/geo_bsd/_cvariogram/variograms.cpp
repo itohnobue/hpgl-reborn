@@ -150,7 +150,7 @@ void init_lag_list(variogram_search_template_t * templ, lag_t * lags, int count)
 
 lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_count)
 {
-    assert(templ->m_num_lags > 0);
+    if (templ->m_num_lags <= 0) { fprintf(stderr, "HPGL FATAL: calc_lag_areas: num_lags must be positive\n"); abort(); }
 
     search_template_window_t window;
     calc_search_template_window(templ, &window);
@@ -215,7 +215,7 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
                             && lag->m_start <= dist
                             && dist < lag->m_end)
                     {
-                        assert(current_point < *points_count);
+                        if (current_point >= *points_count) { fprintf(stderr, "HPGL FATAL: calc_lag_areas: buffer overflow\n"); abort(); }
                         lag_point_t * lp = &result[current_point++];
                         lp->m_coords[0] = i;
                         lp->m_coords[1] = j;

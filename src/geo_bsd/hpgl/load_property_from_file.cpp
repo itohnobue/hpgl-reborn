@@ -116,15 +116,23 @@ void load_variable_mean_from_file(
 	const std::string & file_name)
 {
 	blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
-	FILE * file = fopen(file_name.c_str(), "r");	
+	FILE * file = fopen(file_name.c_str(), "r");
 	if (file == 0)
 	{
 		throw hpgl_exception("load_variable_mean_from_file", std::string("Error opening file:") + file_name + ".");
 	}
-	
-	std::string prop_name;
-	read_prop_name(file, prop_name);		
-	load_doubles_into_vector(file, data);	
+	try
+	{
+		std::string prop_name;
+		read_prop_name(file, prop_name);
+		load_doubles_into_vector(file, data);
+	}
+	catch (...)
+	{
+		fclose(file);
+		throw;
+	}
+	fclose(file);
 }
 
 bool is_comment(char * buffer)

@@ -174,17 +174,14 @@ class TestCalcCdf:
         assert len(result.values) == 1
 
     def test_calc_cdf_all_masked(self):
-        """Test CDF when all values are masked"""
+        """Test CDF when all values are masked raises ValueError"""
         data = np.array([1.0, 2.0, 3.0], dtype='float32')
         mask = np.zeros((3, 1, 1), dtype='uint8')
         prop = ContProperty(data.reshape((3, 1, 1), order='F'),
                            mask.reshape((3, 1, 1), order='F'))
 
-        result = calc_cdf(prop)
-
-        # Should return empty CDF
-        assert len(result.values) == 0
-        assert len(result.probs) == 0
+        with pytest.raises(ValueError, match="no informed values"):
+            calc_cdf(prop)
 
     def test_calc_cdf_monotonic_probabilities(self):
         """Test that CDF probabilities are monotonically increasing"""

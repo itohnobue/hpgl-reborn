@@ -433,11 +433,13 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
 			shape = sh)
 		# Security: Keep array references to prevent use-after-free
 		marr._array_refs = (prop.data, prop.mask)
-		_hpgl_so.hpgl_write_inc_file_float(
+		rc = _hpgl_so.hpgl_write_inc_file_float(
 			safe_path.encode("utf-8"),
 			C.byref(marr),
 			undefined_value,
 			prop_name.encode("utf-8"))
+		if rc != 0:
+			raise RuntimeError("write_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
 	else:
 		# Security: Keep reference to indicator_values array
 		ind_arr = numpy.array(indicator_values, dtype='uint8')
@@ -448,13 +450,15 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
 			indicator_count = prop.indicator_count)
 		# Security: Keep array references to prevent use-after-free
 		marr._array_refs = (prop.data, prop.mask, ind_arr)
-		_hpgl_so.hpgl_write_inc_file_byte(
+		rc = _hpgl_so.hpgl_write_inc_file_byte(
 			safe_path.encode("utf-8"),
 			C.byref(marr),
 			undefined_value,
 			prop_name.encode("utf-8"),
 			ind_arr.ctypes.data_as(C.POINTER(C.c_ubyte)),
 			len(indicator_values))
+		if rc != 0:
+			raise RuntimeError("write_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
 
 @accepts_tuple('prop', 0)
 def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=None):
@@ -465,19 +469,23 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
 		indicator_values = []
 
 	if isinstance(prop, ContProperty):
-		_hpgl_so.hpgl_write_gslib_cont_property(
+		rc = _hpgl_so.hpgl_write_gslib_cont_property(
 			_create_hpgl_cont_masked_array(prop, None),
 			safe_path.encode("utf-8"),
 			prop_name.encode("utf-8"),
 			undefined_value)
+		if rc != 0:
+			raise RuntimeError("write_gslib_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
 	else:
-		_hpgl_so.hpgl_write_gslib_byte_property(
+		rc = _hpgl_so.hpgl_write_gslib_byte_property(
 			_create_hpgl_ind_masked_array(prop, None),
 			safe_path.encode("utf-8"),
 			prop_name.encode("utf-8"),
 			undefined_value,
 			_c_array(C.c_ubyte, len(indicator_values), indicator_values),
 			len(indicator_values))
+		if rc != 0:
+			raise RuntimeError("write_gslib_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
 
 def load_cont_property(filename, undefined_value, size=None):
 	# Validate filename for security
@@ -501,12 +509,14 @@ def read_inc_file_float(filename, undefined_value, size):
 	data = numpy.zeros(total_elements, dtype='float32', order='F')
 	mask = numpy.zeros(total_elements, dtype='uint8', order='F')
 
-	_hpgl_so.hpgl_read_inc_file_float(
+	rc = _hpgl_so.hpgl_read_inc_file_float(
 		safe_path.encode("utf-8"),
 		undefined_value,
 		total_elements,
 		data,
 		mask)
+	if rc != 0:
+		raise RuntimeError("read_inc_file_float failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
 
 	return ContProperty(data, mask)
 
@@ -521,7 +531,7 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
 	total_elements = size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
 	data = numpy.zeros(total_elements, dtype='uint8', order='F')
 	mask = numpy.zeros(total_elements, dtype='uint8', order='F')
-	_hpgl_so.hpgl_read_inc_file_byte(
+	rc = _hpgl_so.hpgl_read_inc_file_byte(
 		safe_path.encode("utf-8"),
 		undefined_value,
 		total_elements,
@@ -529,6 +539,8 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
 		mask,
 		numpy.array(indicator_values, dtype='uint8'),
 		len(indicator_values))
+	if rc != 0:
+		raise RuntimeError("read_inc_file_byte failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
 	return IndProperty(data, mask, len(indicator_values))
 
 def load_ind_property(filename, undefined_value, indicator_values, size=None):
@@ -638,6 +650,29 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
 
 @accepts_tuple('prop', 0)
 def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
+	# Validate grid dimensions
+	GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+
+	# Validate radiuses
+	valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+
+	# Validate max_neighbours
+	ParameterValidator.validate_max_neighbors(max_neighbours)
+
+	# Validate covariance model
+	ParameterValidator.validate_covariance_parameters(
+		cov_model.sill,
+		cov_model.nugget,
+		cov_model.ranges,
+		cov_model.angles
+	)
+
+	# Validate mean_data
+	if not isinstance(mean_data, numpy.ndarray):
+		raise ValueError("lvm_kriging: mean_data must be a numpy array")
+	if mean_data.dtype != numpy.float32:
+		mean_data = numpy.require(mean_data, dtype='float32')
+
 	out_prop = _clone_prop(prop)
 
 	okp = _HPGL_OK_PARAMS(
@@ -646,7 +681,7 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 		angles = cov_model.angles,
 		sill = cov_model.sill,
 		nugget = cov_model.nugget,
-		radiuses = radiuses,
+		radiuses = valid_radiuses,
 		max_neighbours = max_neighbours)
 
 	sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
@@ -662,6 +697,29 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 
 @accepts_tuple('prop', 0)
 def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
+	# Validate grid dimensions
+	GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+
+	# Validate radiuses
+	valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+
+	# Validate max_neighbours
+	ParameterValidator.validate_max_neighbors(max_neighbours)
+
+	# Validate covariance model
+	ParameterValidator.validate_covariance_parameters(
+		cov_model.sill,
+		cov_model.nugget,
+		cov_model.ranges,
+		cov_model.angles
+	)
+
+	# Validate marginal_probs
+	if len(marginal_probs) != 2:
+		raise ValueError("median_ik: marginal_probs must have exactly 2 elements")
+	for i, p in enumerate(marginal_probs):
+		ParameterValidator.validate_probability(p, f'marginal_probs[{i}]')
+
 	out_prop = _clone_prop(prop)
 
 	miksp = _HPGL_MEDIAN_IK_PARAMS(
@@ -670,7 +728,7 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
 		angles = cov_model.angles,
 		sill = cov_model.sill,
 		nugget = cov_model.nugget,
-		radiuses = radiuses,
+		radiuses = valid_radiuses,
 		max_neighbours = max_neighbours,
 		marginal_probs = marginal_probs)
 
@@ -699,6 +757,29 @@ def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
 
 @accepts_tuple('prop', 0)
 def indicator_kriging(prop, grid, data, marginal_probs):
+	# Validate grid dimensions
+	GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+
+	# Validate indicator count
+	ParameterValidator.validate_indicator_count(len(data))
+
+	# Validate marginal_probs
+	if len(marginal_probs) != len(data):
+		raise ValueError(f"indicator_kriging: marginal_probs length ({len(marginal_probs)}) must match data length ({len(data)})")
+	for i, p in enumerate(marginal_probs):
+		ParameterValidator.validate_probability(p, f'marginal_probs[{i}]')
+
+	# Validate per-indicator parameters
+	for i, ikd in enumerate(data):
+		ParameterValidator.validate_radius(ikd["radiuses"], f'data[{i}].radiuses')
+		ParameterValidator.validate_max_neighbors(ikd["max_neighbours"])
+		ParameterValidator.validate_covariance_parameters(
+			ikd["cov_model"].sill,
+			ikd["cov_model"].nugget,
+			ikd["cov_model"].ranges,
+			ikd["cov_model"].angles
+		)
+
 	for i in range(len(data)):
 		data[i]['marginal_prob'] = marginal_probs[i]
 	if(len(data) == 2):
@@ -720,9 +801,24 @@ def indicator_kriging(prop, grid, data, marginal_probs):
 	return out_prop
 
 @accepts_tuple('prop', 0)
-def simple_cokriging_markI(prop, grid, 
+def simple_cokriging_markI(prop, grid,
 		secondary_data, primary_mean, secondary_mean, secondary_variance, correlation_coef,
 		radiuses, max_neighbours, cov_model):
+	# Validate grid dimensions
+	GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+
+	# Validate radiuses and max_neighbours
+	ParameterValidator.validate_radius(radiuses, 'radiuses')
+	ParameterValidator.validate_max_neighbors(max_neighbours)
+
+	# Validate covariance model
+	ParameterValidator.validate_covariance_parameters(
+		cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles)
+
+	# Validate cokriging-specific parameters
+	ParameterValidator.validate_correlation_coef(correlation_coef)
+	ParameterValidator.validate_variance(secondary_variance, 'secondary_variance')
+
 	out_prop = _clone_prop(prop)
 
 	_hpgl_so.hpgl_simple_cokriging_mark1(
@@ -750,6 +846,22 @@ def simple_cokriging_markII(grid,
 		correlation_coef,
 		radiuses,
 		max_neighbours):
+	# Validate grid dimensions
+	GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+
+	# Validate radiuses and max_neighbours
+	ParameterValidator.validate_radius(radiuses, 'radiuses')
+	ParameterValidator.validate_max_neighbors(max_neighbours)
+
+	# Validate correlation coefficient
+	ParameterValidator.validate_correlation_coef(correlation_coef)
+
+	# Validate both covariance models
+	for label, d in [("primary", primary_data), ("secondary", secondary_data)]:
+		cm = d["cov_model"]
+		ParameterValidator.validate_covariance_parameters(
+			cm.sill, cm.nugget, cm.ranges, cm.angles)
+
 	out_prop = _clone_prop(primary_data["data"])
 
 	pcp = primary_data["cov_model"]
@@ -787,21 +899,27 @@ def simple_kriging_weights(center_point, n_x, n_y, n_z, ranges = (100000,100000,
 		angles = (0,0,0)
 	if nugget is None:
 		nugget = 0
+
+	# Validate covariance parameters
+	ParameterValidator.validate_covariance_parameters(sill, nugget, ranges, angles)
+
+	# Validate pointset arrays have matching lengths
+	if len(n_x) != len(n_y) or len(n_x) != len(n_z):
+		raise RuntimeError("Invalid pointset. %s,%s,%s." % (len(n_x), len(n_y), len(n_z)))
+
+	# Validate pointset arrays for NaN/inf
+	for name, arr in [('n_x', n_x), ('n_y', n_y), ('n_z', n_z)]:
+		arr_np = numpy.asarray(arr, dtype='float32')
+		if numpy.any(numpy.isnan(arr_np)) or numpy.any(numpy.isinf(arr_np)):
+			raise ValueError(f"simple_kriging_weights: {name} contains NaN or infinite values")
+
 	covp = C.byref(__checked_create(
-			__hpgl_cov_params_t, 
+			__hpgl_cov_params_t,
 			covariance_type = cov_type,
 			ranges = _c_array(C.c_double, 3, ranges),
 			angles = _c_array(C.c_double, 3, angles),
 			sill = sill,
 			nugget = nugget))
-
-	if len(n_x) != len(n_y) or len(n_x) != len(n_z):
-		raise RuntimeError("Invalid pointset. %s,%s,%s." % (len(n_x), len(n_y), len(n_z)))
-	assert(len(n_x) == len(n_y)) 
-	assert(len(n_x) == len(n_z))
-
-	if nugget > sill:
-		raise RuntimeError("Nugget value must be less or equal to Sill value.")
 
 	weights = numpy.array([0]*len(n_x), dtype='float32')
 

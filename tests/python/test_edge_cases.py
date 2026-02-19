@@ -1309,18 +1309,15 @@ class TestCDFEdgeCases:
     """
 
     def test_empty_cdf_no_values(self):
-        """Test CDF calculation with property with no informed values"""
+        """Test CDF calculation with property with no informed values raises ValueError"""
         grid = SugarboxGrid(x=2, y=2, z=2)  # 8 cells
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], dtype='float32')
         mask = np.zeros(8, dtype='uint8')  # All uninformed
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
-        cdf = calc_cdf(prop)
-
-        # Empty CDF should have zero size - HPGL calc_cdf returns empty arrays when no values
-        assert cdf.values.size == 0
-        assert cdf.probs.size == 0
+        with pytest.raises(ValueError, match="no informed values"):
+            calc_cdf(prop)
 
     def test_single_value_cdf(self):
         """Test CDF with only one unique value"""

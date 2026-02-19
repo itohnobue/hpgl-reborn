@@ -51,7 +51,7 @@ def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
     return pk_prop
 
 def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
-               tk_mean=0.0, tk_std_dev=1.0):
+               tk_mean=0.0, tk_std_dev=1.0, seed=3439275):
     """
     Gaussian Truncated Simulation for 2 indicators (facies).
 
@@ -117,7 +117,7 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     if (sgs_params is None):
         sgs_params = sk_params
     print("Testing SGS...")
-    prop1 = sgs_simulation(prop, grid, seed=3439275, **sgs_params)
+    prop1 = sgs_simulation(prop, grid, seed=seed, **sgs_params)
     print("Done.")
     write_property(prop1,"2.INC","PROP1",-99)
 

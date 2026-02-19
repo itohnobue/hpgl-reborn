@@ -2,13 +2,16 @@
 
 #include "cdf_utils.h"
 #include "hpgl_exception.h"
+#include <cstdio>
+#include <cstdlib>
 
 namespace hpgl
 {
 
 indicator_index_t most_probable_category(const std::vector<indicator_probability_t> & cdf)
 {
-	size_t size = cdf.size();	
+	size_t size = cdf.size();
+	if (size == 0) { fprintf(stderr, "HPGL FATAL: most_probable_category: empty cdf vector\n"); abort(); }
 	double max_prob = cdf[0];
 	indicator_index_t max_idx = 0;
 	for (indicator_index_t i = 1; i < size; i++)

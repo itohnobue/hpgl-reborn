@@ -31,20 +31,11 @@ void median_ik_for_two_indicators(
 	typedef sugarbox_grid_t grid_t;
 
 	progress_reporter_t report(grid.size());
-	assert(input_property.size() == output_property.size());
-	if (input_property.size() != output_property.size())
-	{
-		std::ostringstream oss;
-		oss << "Input property size " << input_property.size() << " is not equal output property size " << output_property.size();
-		throw hpgl_exception("median_ik_for_two_indicators", oss.str());
-	}
+	HPGL_CHECK(input_property.size() == output_property.size(),
+		"median_ik_for_two_indicators: input property size does not match output property size");
 
-	if (input_property.size() != grid.size())
-	{
-		std::ostringstream oss;
-		oss << "Properties size '" << input_property.size() << "' is not equal to grid size '" << grid.size() << "'";
-		throw hpgl_exception("median_ik_for_two_indicators", oss.str());
-	}
+	HPGL_CHECK(input_property.size() == grid.size(),
+		"median_ik_for_two_indicators: property size does not match grid size");
 
 
 	size_t prop_size = input_property.size();

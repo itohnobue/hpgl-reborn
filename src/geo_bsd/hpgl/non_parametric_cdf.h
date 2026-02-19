@@ -2,7 +2,8 @@
 #define __NON_PARAMETRIC_CDF_H__6BBB60EA_BA86_4AE3_98FF_3B287C1D1522____
 
 #include "api.h"
-#include <cassert>
+#include <cstdio>
+#include <cstdlib>
 
 namespace hpgl
 {
@@ -51,7 +52,7 @@ namespace hpgl
 			if (count <= 0)
 				return;
 
-			assert(occ.size() > 0);
+			if (occ.empty()) { fprintf(stderr, "HPGL FATAL: non_parametric_cdf: occ is empty but count > 0\n"); abort(); }
 
 			vector<pair<value_t, prob_t> > pdf;
 			pdf.reserve(occ.size());
@@ -96,7 +97,7 @@ namespace hpgl
 			if (count <= 0)
 				return;
 
-			assert(occ.size() > 0);
+			if (occ.empty()) { fprintf(stderr, "HPGL FATAL: non_parametric_cdf: occ is empty but count > 0\n"); abort(); }
 
 			vector<pair<value_t, prob_t> > pdf;
 			pdf.reserve(occ.size());

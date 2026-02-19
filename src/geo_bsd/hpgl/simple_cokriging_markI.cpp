@@ -151,7 +151,15 @@ public:
 	cross_cov_model_mark_i_t(double p12, double d2, cov_model_t * cov_model)
 		: m_cov_model(cov_model)
 	{
-		m_coef = p12 * sqrt(d2) / sqrt((*cov_model)(coord_t(0,0,0), coord_t(0,0,0)));
+		double cov_at_zero = (*cov_model)(coord_t(0,0,0), coord_t(0,0,0));
+		if (cov_at_zero <= 0)
+		{
+			m_coef = 0;
+		}
+		else
+		{
+			m_coef = p12 * sqrt(d2) / sqrt(cov_at_zero);
+		}
 	}
 
 	template<typename coord1_t, typename coord2_t>
@@ -173,7 +181,14 @@ public:
 	{
 		double primary_variance = (*primary_cov_model)(coord_t(0,0,0), coord_t(0,0,0));
 		double secondary_variance = (*secondary_cov_model)(coord_t(0,0,0), coord_t(0,0,0));
-		m_coef = p12 * sqrt( primary_variance / secondary_variance );
+		if (secondary_variance <= 0)
+		{
+			m_coef = 0;
+		}
+		else
+		{
+			m_coef = p12 * sqrt( primary_variance / secondary_variance );
+		}
 	}
 
 	template<typename coord1_t, typename coord2_t>

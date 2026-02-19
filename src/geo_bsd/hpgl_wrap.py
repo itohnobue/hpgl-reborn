@@ -352,7 +352,7 @@ _hpgl_so.hpgl_set_thread_num.argtypes = [C.c_int]
 _hpgl_so.hpgl_get_thread_num.restype = C.c_int
 _hpgl_so.hpgl_get_thread_num.argtypes = []
 
-_hpgl_so.hpgl_read_inc_file_float.restype = None
+_hpgl_so.hpgl_read_inc_file_float.restype = C.c_int
 _hpgl_so.hpgl_read_inc_file_float.argtypes = [
 	C.c_char_p,
 	C.c_float,
@@ -360,7 +360,7 @@ _hpgl_so.hpgl_read_inc_file_float.argtypes = [
 	NC.ndpointer(dtype = numpy.float32, flags=['F', 'W', 'A']),
 	NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A'])]
 
-_hpgl_so.hpgl_read_inc_file_byte.restype = None
+_hpgl_so.hpgl_read_inc_file_byte.restype = C.c_int
 _hpgl_so.hpgl_read_inc_file_byte.argtypes = [
 	C.c_char_p,
 	C.c_int,
@@ -370,7 +370,7 @@ _hpgl_so.hpgl_read_inc_file_byte.argtypes = [
 	NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A']),
 	C.c_int]
 
-_hpgl_so.hpgl_write_inc_file_float.restype = None
+_hpgl_so.hpgl_write_inc_file_float.restype = C.c_int
 _hpgl_so.hpgl_write_inc_file_float.argtypes = [
 	C.c_char_p,
 	C.POINTER(_HPGL_CONT_MASKED_ARRAY),
@@ -378,7 +378,7 @@ _hpgl_so.hpgl_write_inc_file_float.argtypes = [
 	C.c_char_p
 ]
 
-_hpgl_so.hpgl_write_inc_file_byte.restype = None
+_hpgl_so.hpgl_write_inc_file_byte.restype = C.c_int
 _hpgl_so.hpgl_write_inc_file_byte.argtypes = [
 	C.c_char_p,
 	C.POINTER(_HPGL_IND_MASKED_ARRAY),
@@ -387,14 +387,14 @@ _hpgl_so.hpgl_write_inc_file_byte.argtypes = [
 	C.POINTER(C.c_ubyte),
 	C.c_int]
 
-_hpgl_so.hpgl_write_gslib_cont_property.restype = None
+_hpgl_so.hpgl_write_gslib_cont_property.restype = C.c_int
 _hpgl_so.hpgl_write_gslib_cont_property.argtypes = [
 		C.POINTER(_HPGL_CONT_MASKED_ARRAY),
 		C.c_char_p,
 		C.c_char_p,
 		C.c_double]
 
-_hpgl_so.hpgl_write_gslib_byte_property.restype = None
+_hpgl_so.hpgl_write_gslib_byte_property.restype = C.c_int
 _hpgl_so.hpgl_write_gslib_byte_property.argtypes = [
 	C.POINTER(_HPGL_IND_MASKED_ARRAY),
 	C.c_char_p,

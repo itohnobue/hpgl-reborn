@@ -4,6 +4,8 @@
 #include "typedefs.h"
 #include "geometry.h"
 #include "var_radix_utils.h"
+#include <cstdio>
+#include <cstdlib>
 
 namespace hpgl
 {
@@ -54,7 +56,7 @@ namespace hpgl
 						m_covariances[index] = cov(c1, c2);
 					}
 			m_box = rect_3d_t<int>(-rx, -ry, -rz, rx, ry, rz);
-			assert(m_box.volume_inclusive() == size);
+			if (m_box.volume_inclusive() != size) { fprintf(stderr, "HPGL FATAL: precalculated_covariance: box volume mismatch\n"); abort(); }
 		}
 
 		template<typename coord_t>
