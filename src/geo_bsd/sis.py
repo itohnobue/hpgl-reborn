@@ -1,7 +1,7 @@
 import numpy
 import ctypes as C
 
-from .geo import _clone_prop, _empty_clone, _require_cont_data, _requite_ind_data, __checked_create, _create_hpgl_ind_masked_array, _create_hpgl_ubyte_array, _create_hpgl_float_array
+from .geo import _clone_prop, _empty_clone, _require_cont_data, _require_ind_data, __checked_create, _create_hpgl_ind_masked_array, _create_hpgl_ubyte_array, _create_hpgl_float_array
 from .geo import _c_array
 
 from .geo import accepts_tuple
@@ -31,7 +31,7 @@ def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
 		else:
 			data[i]['marginal_prob'] = marginal_probs[i]
 	if not mask is None:
-		mask = _requite_ind_data(mask)
+		mask = _require_ind_data(mask)
 
 	return out_prop, is_lvm, marginal_probs, mask
 

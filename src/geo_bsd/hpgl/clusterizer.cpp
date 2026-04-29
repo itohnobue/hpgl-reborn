@@ -79,6 +79,9 @@ namespace hpgl
 	{		
 		m_state->m_limit = limit;
 		m_ellipsoid = ellipsoid;
+		if (m_ellipsoid[0] == 0) m_ellipsoid[0] = 1;
+		if (m_ellipsoid[1] == 0) m_ellipsoid[1] = 1;
+		if (m_ellipsoid[2] == 0) m_ellipsoid[2] = 1;
 		m_state->m_geometry = grid;
 		
 		int gx, gy, gz;

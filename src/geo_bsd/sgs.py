@@ -1,6 +1,6 @@
 from .hpgl_wrap import _HPGL_KRIGING_KIND, _HPGL_SGS_PARAMS, hpgl_non_parametric_cdf_t,  _hpgl_so
 
-from .geo import _empty_clone, _clone_prop, _create_hpgl_cont_masked_array, _create_hpgl_float_array, _create_hpgl_ubyte_array, _require_cont_data, _requite_ind_data, __checked_create
+from .geo import _empty_clone, _clone_prop, _create_hpgl_cont_masked_array, _create_hpgl_float_array, _create_hpgl_ubyte_array, _require_cont_data, _require_ind_data, __checked_create
 
 from .geo import CovarianceModel
 from .geo import accepts_tuple
@@ -27,7 +27,7 @@ def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
 	if not mean is None and not numpy.isscalar(mean):
 		mean = _require_cont_data(mean)
 	if not mask is None:
-		mask = _requite_ind_data(mask)
+		mask = _require_ind_data(mask)
 	return out_prop, mean, mask
 
 def _create_hpgl_nonparam_cdf(cdf_data):

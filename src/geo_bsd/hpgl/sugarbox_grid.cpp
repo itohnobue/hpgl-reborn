@@ -63,7 +63,7 @@ namespace hpgl
 
 	node_index_t sugarbox_grid_t::size()const
 	{
-		return m_x * m_y * m_z;
+		return static_cast<node_index_t>(static_cast<long long>(m_x) * m_y * m_z);
 	}
 
 

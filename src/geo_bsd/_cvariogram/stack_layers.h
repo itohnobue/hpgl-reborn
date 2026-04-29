@@ -30,16 +30,16 @@ void stack_layers(
 					float new_k = cumulative_k[map_index];
 
 					//int k_next = floor((thick_layers[layer].m_data[map_index] / scalez) + cumulative_k[map_index]);
-					int k_next = floor(new_k) + 1;
+					int k_next = static_cast<int>(floor(new_k)) + 1;
 					if(k_next > nz)
 					{
 						k_next = nz;
 					}
 
-					for(int k = ceil(old_k); k < k_next; k++)
+					for(int k = static_cast<int>(ceil(old_k)); k < k_next; k++)
 					{
 						int cube_index = result.m_data_strides[0]*i + result.m_data_strides[1]*j + result.m_data_strides[2]*k;
-						result.m_data[cube_index] = layers_markers[layer];
+						result.m_data[cube_index] = static_cast<float>(layers_markers[layer]);
 						
 					}
 					//cumulative_k[map_index] += (thick_layers[layer].m_data[map_index] / scalez);
@@ -47,11 +47,11 @@ void stack_layers(
 				// negative layer
 				else
 				{
-					int k_start = ceil(cumulative_k[map_index] + (thick_layers[layer].m_data[map_index] / scalez));
+					int k_start = static_cast<int>(ceil(cumulative_k[map_index] + (thick_layers[layer].m_data[map_index] / scalez)));
 					for(int k = k_start; k < nz; k++)
 					{
 						int cube_index = result.m_data_strides[0]*i + result.m_data_strides[1]*j + result.m_data_strides[2]*k;
-						result.m_data[cube_index] = blank_value;
+						result.m_data[cube_index] = static_cast<float>(blank_value);
 
 					}
 					cumulative_k[map_index] +=(thick_layers[layer].m_data[map_index] / scalez);

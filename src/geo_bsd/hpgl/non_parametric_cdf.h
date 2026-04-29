@@ -154,7 +154,10 @@ namespace hpgl
 				value_t x2 = it->first;
 				prob_t y1 = it2->second;
 				prob_t y2 = it->second;
-				result = y1 + (double)(y2 - y1) / (double)(x2 - x1) * (value - x1);
+				if (x2 == x1)
+					result = (y1 + y2) / 2;
+				else
+					result = y1 + (double)(y2 - y1) / (double)(x2 - x1) * (value - x1);
 			}			
 			return result;
 		}
@@ -180,7 +183,10 @@ namespace hpgl
 				value_t x2 = it->first;
 				prob_t y1 = it2->second;
 				prob_t y2 = it->second;
-				result = x1 + (double)(x2 - x1) / (double)(y2 - y1) * (prob - y1);				
+				if (y2 == y1)
+					result = (x1 + x2) / 2;
+				else
+					result = x1 + (double)(x2 - x1) / (double)(y2 - y1) * (prob - y1);				
 			}			
 			return result;
 		}
@@ -236,7 +242,10 @@ namespace hpgl
 				prob_t y1, y2;
 				y1 = m_probs[idx1];
 				y2 = m_probs[idx2];
-				result = y1 + (y2 - y1) / (x2 - x1) * (value - x1);
+				if (x2 == x1)
+					result = (y1 + y2) / 2;
+				else
+					result = y1 + (y2 - y1) / (x2 - x1) * (value - x1);
 			}
 			return result;
 		}
@@ -264,7 +273,10 @@ namespace hpgl
 				x2 = m_values[idx2];
 				y1 = m_probs[idx1];
 				y2 = m_probs[idx2];
-				result = x1 + (x2 - x1) / (y2 - y1) * (prob - y1);
+				if (y2 == y1)
+					result = (x1 + x2) / 2;
+				else
+					result = x1 + (x2 - x1) / (y2 - y1) * (prob - y1);
 			}
 			return result;
 		}

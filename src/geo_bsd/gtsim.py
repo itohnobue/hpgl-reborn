@@ -119,7 +119,6 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     print("Testing SGS...")
     prop1 = sgs_simulation(prop, grid, seed=seed, **sgs_params)
     print("Done.")
-    write_property(prop1,"2.INC","PROP1",-99)
 
     # 5. Truncation
     # if sgs_result(u) >= tk_prop(u) -> sgs_result(u) = 1
@@ -131,6 +130,5 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
             prop1.data.flat[i] = 1
         if (prop1.data.flat[i] < tk_prop.data.flat[i]):
             prop1.data.flat[i] = 0
-    write_property(prop1,"3.INC","prop1",-99)
     print("Done.")
     return prop1

@@ -14,7 +14,7 @@ try:
     from geo_bsd.geo import (
         ContProperty, IndProperty, SugarboxGrid,
         CovarianceModel, covariance, _require_cont_data,
-        _requite_ind_data, _create_hpgl_float_array,
+        _require_ind_data, _create_hpgl_float_array,
         _create_hpgl_ubyte_array
     )
     HPGL_AVAILABLE = True

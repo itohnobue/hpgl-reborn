@@ -72,25 +72,6 @@ def _validate_filepath(filename: Union[str, pathlib.Path], allow_directories: bo
     return str(resolved_path)
 
 
-# Security: Array reference holder to prevent use-after-free with ctypes
-class _ArrayReferenceHolder:
-    """
-    Holds references to NumPy arrays to prevent garbage collection
-    while C code holds pointers to their data.
-
-    This prevents use-after-free vulnerabilities where the C code
-    might access freed memory if the Python array is garbage collected.
-    """
-    def __init__(self):
-        self._arrays = []
-
-    def add(self, *arrays):
-        """Add arrays to be kept alive"""
-        self._arrays.extend(arrays)
-
-    def clear(self):
-        """Clear all references"""
-        self._arrays.clear()
 from .hpgl_wrap import hpgl_output_handler, hpgl_progress_handler
 
 def _c_array(ar_type, size, values):
@@ -228,7 +209,6 @@ class ContProperty:
 			if self.mask.size == grid.x * grid.y * grid.z:
 				self.mask = self.mask.reshape((grid.x, grid.y, grid.z), order='F')
 	def __getitem__(self, idx):
-#		print "Warning. ContProperty.__getitem__ is deprecated."
 		if idx == 0:
 			return self.data
 		elif idx == 1:
@@ -249,7 +229,6 @@ class IndProperty:
 		checkFWA(self.mask)
 		assert(self.data.shape == self.mask.shape)
 	def __getitem__(self, idx):
-#		print "Warning. IndPoroperty.__getitem__ is deprecated."
 		if idx == 0:
 			return self.data
 		elif idx == 1:
@@ -384,7 +363,7 @@ def _require_cont_data(data):
 		return None
 	return numpy.require(data, dtype='float32', requirements='F')
 
-def _requite_ind_data(data):
+def _require_ind_data(data):
 	if data is None:
 		return None
 	return numpy.require(data, dtype='uint8', requirements='F')
@@ -492,7 +471,7 @@ def load_cont_property(filename, undefined_value, size=None):
 	safe_path = PathValidator.validate_filepath(filename, must_exist=True)
 
 	if size is None:
-		print("[WARNING]. load_cont_property: Size is not specified. Using slow and ineficcient method.")
+		print("[WARNING]. load_cont_property: Size is not specified. Using slow and inefficient method.")
 		return _load_prop_cont_slow(safe_path, undefined_value)
 	else:
 		return read_inc_file_float(safe_path, undefined_value, size)
@@ -506,6 +485,8 @@ def read_inc_file_float(filename, undefined_value, size):
 		GridValidator.validate_grid_dimensions(size[0], size[1], size[2])
 
 	total_elements = size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+	if total_elements > 2147483647:
+		raise ValueError(f"Grid too large: {total_elements} elements exceeds c_int max (2147483647)")
 	data = numpy.zeros(total_elements, dtype='float32', order='F')
 	mask = numpy.zeros(total_elements, dtype='uint8', order='F')
 
@@ -529,6 +510,8 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
 		GridValidator.validate_grid_dimensions(size[0], size[1], size[2])
 
 	total_elements = size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+	if total_elements > 2147483647:
+		raise ValueError(f"Grid too large: {total_elements} elements exceeds c_int max (2147483647)")
 	data = numpy.zeros(total_elements, dtype='uint8', order='F')
 	mask = numpy.zeros(total_elements, dtype='uint8', order='F')
 	rc = _hpgl_so.hpgl_read_inc_file_byte(
@@ -545,7 +528,7 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
 
 def load_ind_property(filename, undefined_value, indicator_values, size=None):
 	if (size is None):
-		print("[WARNING]. load_ind_property: Size is not specified. Using slow and ineficcient method.")
+		print("[WARNING]. load_ind_property: Size is not specified. Using slow and inefficient method.")
 		return _load_prop_ind_slow(filename, undefined_value, indicator_values)
 	else:
 		return read_inc_file_byte(filename, undefined_value, size, indicator_values)

@@ -1,4 +1,6 @@
-from numpy import *
+from numpy import (array, bitwise_and, ceil, column_stack, cos, float32, floor,
+    mgrid, ones, power, prod, radians, repeat, reshape, row_stack,
+    shape, sin, sum, zeros)
 
 class TVEllipsoid:
     Direction1 = [1, 0, 0]
@@ -59,6 +61,9 @@ def _IsInTunnel(VariogramSearchTemplate, V):
     SS1 = V * VariogramSearchTemplate.Ellipsoid.Direction1
     SS2 = V * VariogramSearchTemplate.Ellipsoid.Direction2
     SS3 = V * VariogramSearchTemplate.Ellipsoid.Direction3
+    
+    if VariogramSearchTemplate.Ellipsoid.R2 == 0 or VariogramSearchTemplate.Ellipsoid.R3 == 0:
+        return zeros(len(V), dtype=bool)
     
     S2 = SS2 / VariogramSearchTemplate.Ellipsoid.R2
     S3 = SS3 / VariogramSearchTemplate.Ellipsoid.R3
@@ -152,8 +157,8 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     MinX, MinY, MinZ, MaxX, MaxY, MaxZ = _CalcSearchTemplateWindow(VariogramSearchTemplate)
     
     LagIndex, LagDistance, LagStart, LagEnd = _CalcLagDistances(VariogramSearchTemplate)
-    MinDistance2 = max(0, min(LagStart)) ** 2
-    MaxDistance2 = max(LagEnd) ** 2
+    MinDistance2 = max(0, LagStart.min()) ** 2
+    MaxDistance2 = LagEnd.max() ** 2
     
     if Function is not None:
         Result = Function(0, 0, None, Params)  
@@ -200,9 +205,9 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
 
 def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params):
     LI,  LJ,  LK,  LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
-    IMin, IMax = min(LI), max(LI)
-    JMin, JMax = min(LJ), max(LJ)
-    KMin, KMax = min(LK), max(LK)
+    IMin, IMax = LI.min(), LI.max()
+    JMin, JMax = LJ.min(), LJ.max()
+    KMin, KMax = LK.min(), LK.max()
     
     PI = PointSetXYZ[0]
     PJ = PointSetXYZ[1]
@@ -247,9 +252,9 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
     NI, NJ, NK = Mask.shape
     
     LI, LJ, LK, LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
-    IMin, IMax = min(LI), max(LI)
-    JMin, JMax = min(LJ), max(LJ)
-    KMin, KMax = min(LK), max(LK)
+    IMin, IMax = LI.min(), LI.max()
+    JMin, JMax = LJ.min(), LJ.max()
+    KMin, KMax = LK.min(), LK.max()
     
     if Function is not None:
         Result = Function(0, 0, None, Params)  

@@ -26,7 +26,7 @@ void build_system(
 	std::vector<double> & A,
 	std::vector<double> & b)
 {
-	int neighbour_count = coords.size();
+	int neighbour_count = static_cast<int>(coords.size());
 	int matrix_size = neighbour_count + 1;
 
 	A.resize(matrix_size * matrix_size);

@@ -31,6 +31,9 @@ bool is_in_tunnel(
 	double ss2 = dot_product(vec, &(templ->m_ellipsoid.m_direction2));
 	double ss3 = dot_product(vec, &(templ->m_ellipsoid.m_direction3));
 
+	if (templ->m_ellipsoid.m_R2 == 0 || templ->m_ellipsoid.m_R3 == 0)
+		return false;
+
 	double s2 = ss2 / templ->m_ellipsoid.m_R2;
 	double s3 = ss3 / templ->m_ellipsoid.m_R3;
 
@@ -336,6 +339,8 @@ update_lags(
 		double dist,
 		double var)
 {
+	if (templ->m_lag_separation == 0)
+		return;
 	int lag_min = (int) ceil( (dist - (templ->m_lag_width / 2) - templ->m_first_lag_distance) / templ->m_lag_separation);
 	if (lag_min >= lag_count)
 		return;
@@ -495,9 +500,10 @@ void calc_variograms_from_point_set(
 
 	for (int i = 0; i < lag_count; ++i)
 	{
-		result_covariations[i] = lag_stats[i].m_cov_sum / lag_stats[i].m_cov_count / 2;
 		if (lag_stats[i].m_cov_count == 0)
 			result_covariations[i] = 0;
+		else
+			result_covariations[i] = lag_stats[i].m_cov_sum / lag_stats[i].m_cov_count / 2;
 	}
 
 	free(lag_stats);
