@@ -1,6 +1,6 @@
 from .hpgl_wrap import _HPGL_KRIGING_KIND, _HPGL_SGS_PARAMS, hpgl_non_parametric_cdf_t,  _hpgl_so
 
-from .geo import _empty_clone, _clone_prop, _create_hpgl_cont_masked_array, _create_hpgl_float_array, _create_hpgl_ubyte_array, _require_cont_data, _require_ind_data, __checked_create
+from .geo import _empty_clone, _clone_prop, _create_hpgl_cont_masked_array, _create_hpgl_float_array, _create_hpgl_ubyte_array, _require_cont_data, _require_ind_data, __checked_create, _check_hpgl_error
 
 from .geo import CovarianceModel
 from .geo import accepts_tuple
@@ -138,6 +138,7 @@ mask: None or array_like, optional:
 			C.byref(C.c_double(mean)) if mean is not None else None,
 			hpgl_mask
 			)
+		_check_hpgl_error("sgs_simulation")
 
 
 	else:
@@ -147,5 +148,6 @@ mask: None or array_like, optional:
 			hpgl_cdf,
 			C.byref(_create_hpgl_float_array(mean, grid)),
 			hpgl_mask)
+		_check_hpgl_error("sgs_lvm_simulation")
 
 	return out_prop

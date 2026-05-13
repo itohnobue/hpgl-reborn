@@ -272,6 +272,9 @@ if 'HPGL_DEBUG' in os.environ:
 else:
 	_hpgl_so = _safe_load_library('hpgl', __file__)
 
+_hpgl_so.hpgl_get_last_exception_message.restype = C.c_char_p
+_hpgl_so.hpgl_get_last_exception_message.argtypes = []
+
 _hpgl_so.hpgl_set_output_handler.restype = None
 _hpgl_so.hpgl_set_output_handler.argtypes = [hpgl_output_handler, C.py_object]
 

@@ -1,7 +1,7 @@
 import numpy
 import ctypes as C
 
-from .geo import _clone_prop, _empty_clone, _require_cont_data, _require_ind_data, __checked_create, _create_hpgl_ind_masked_array, _create_hpgl_ubyte_array, _create_hpgl_float_array
+from .geo import _clone_prop, _empty_clone, _require_cont_data, _require_ind_data, __checked_create, _create_hpgl_ind_masked_array, _create_hpgl_ubyte_array, _create_hpgl_float_array, _check_hpgl_error
 from .geo import _c_array
 
 from .geo import accepts_tuple
@@ -109,6 +109,7 @@ def sis_simulation(prop, grid, data, seed, marginal_probs, use_correlogram=True,
 			len(data),
 			seed,
 			_create_hpgl_ubyte_array(mask, grid) if mask is not None else None)
+		_check_hpgl_error("sis_simulation")
 #		hpgl.sis_simulation(_prop_to_tuple(out_prop), grid.grid, data, seed, False, use_correlogram, mask)
 	else:
 		_hpgl_so.hpgl_sis_simulation_lvm(
@@ -120,5 +121,6 @@ def sis_simulation(prop, grid, data, seed, marginal_probs, use_correlogram=True,
 			_create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
 			use_correlogram
 			)
+		_check_hpgl_error("sis_simulation_lvm")
 		#hpgl.sis_simulation_lvm(_prop_to_tuple(out_prop), grid.grid, data, seed, marginal_probs, use_correlogram, mask)
 	return out_prop

@@ -38,47 +38,67 @@ echo Building...
 echo.
 
 REM Build with MSBuild (using x64 version for better performance)
+echo Building hpgl.vcxproj...
 "%MSBUILD_PATH%" "%SolutionDir%hpgl.vcxproj" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%" /nologo
+if %ERRORLEVEL% NEQ 0 goto :build_failed
 
-if %ERRORLEVEL% EQU 0 (
-    echo.
-    echo ========================================
-    echo Build completed successfully!
-    echo ========================================
-    echo.
+echo.
+echo Building cvariogram.vcxproj...
+"%MSBUILD_PATH%" "%SolutionDir%cvariogram.vcxproj" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%;Append" /nologo
+if %ERRORLEVEL% NEQ 0 goto :build_failed
 
-    REM Copy built DLLs to runtime location (src\geo_bsd\) where Python loads them
-    if exist "%~dp0src\msvc\geo_bsd\hpgl.dll" (
-        copy /Y "%~dp0src\msvc\geo_bsd\hpgl.dll" "%~dp0src\geo_bsd\hpgl.dll" >nul
-        echo   Copied hpgl.dll to src\geo_bsd\
-    )
-    if exist "%~dp0src\msvc\geo_bsd\_cvariogram.dll" (
-        copy /Y "%~dp0src\msvc\geo_bsd\_cvariogram.dll" "%~dp0src\geo_bsd\_cvariogram.dll" >nul
-        echo   Copied _cvariogram.dll to src\geo_bsd\
-    )
+:build_failed
+echo.
+echo ========================================
+echo Build FAILED!
+echo ========================================
+echo.
+echo Check %LogFile% for details.
+echo.
+type "%LogFile%"
+pause
+exit /b 1
 
-    echo.
-    echo Built files:
-    if exist "%~dp0src\geo_bsd\hpgl.dll" (
-        echo   - src\geo_bsd\hpgl.dll
-    )
-    if exist "%~dp0src\geo_bsd\_cvariogram.dll" (
-        echo   - src\geo_bsd\_cvariogram.dll
-    )
-    echo.
-    echo Build log: %LogFile%
+:build_succeeded
+echo.
+echo ========================================
+echo Build completed successfully!
+echo ========================================
+echo.
+
+REM Copy built DLLs to runtime location (src\geo_bsd\) where Python loads them
+if exist "%~dp0src\msvc\geo_bsd\hpgl.dll" (
+	copy /Y "%~dp0src\msvc\geo_bsd\hpgl.dll" "%~dp0src\geo_bsd\hpgl.dll" >nul 2>&1
+	if %ERRORLEVEL% EQU 0 (
+		echo   Copied hpgl.dll to src\geo_bsd\
+	) else (
+		echo   WARNING: Failed to copy hpgl.dll
+	)
 ) else (
-    echo.
-    echo ========================================
-    echo Build FAILED!
-    echo ========================================
-    echo.
-    echo Check %LogFile% for details.
-    echo.
-    type "%LogFile%"
-    pause
-    exit /b 1
+	echo   WARNING: hpgl.dll not found at src\msvc\geo_bsd\
 )
+if exist "%~dp0src\msvc\geo_bsd\_cvariogram.dll" (
+	copy /Y "%~dp0src\msvc\geo_bsd\_cvariogram.dll" "%~dp0src\geo_bsd\_cvariogram.dll" >nul 2>&1
+	if %ERRORLEVEL% EQU 0 (
+		echo   Copied _cvariogram.dll to src\geo_bsd\
+	) else (
+		echo   WARNING: Failed to copy _cvariogram.dll
+	)
+) else (
+	echo   WARNING: _cvariogram.dll not found at src\msvc\geo_bsd\
+)
+
+echo.
+echo Built files:
+if exist "%~dp0src\geo_bsd\hpgl.dll" (
+	echo   - src\geo_bsd\hpgl.dll
+)
+if exist "%~dp0src\geo_bsd\_cvariogram.dll" (
+	echo   - src\geo_bsd\_cvariogram.dll
+)
+echo.
+echo Build log: %LogFile%
+goto :eof
 
 echo.
 endlocal

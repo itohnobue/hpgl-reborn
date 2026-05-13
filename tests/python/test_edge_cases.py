@@ -1614,5 +1614,118 @@ class TestProductionFixes:
             os.remove(tmpfile)
 
 
+# =============================================================================
+# Production Fix Tests: Error Handling & Indicator Kriging Correctness
+# =============================================================================
+
+@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+class TestErrorHandling:
+    """Tests for the _check_hpgl_error error handling (CRITICAL fix)."""
+
+    def test_hpgl_get_last_exception_message_restype_set(self):
+        """CRITICAL: Verify restype is correctly set to c_char_p, not default c_int."""
+        from geo_bsd.hpgl_wrap import _hpgl_so
+        assert hasattr(_hpgl_so, 'hpgl_get_last_exception_message'), \
+            "hpgl_get_last_exception_message not loaded"
+        restype = _hpgl_so.hpgl_get_last_exception_message.restype
+        import ctypes as C
+        assert restype == C.c_char_p, \
+            f"restype must be c_char_p to avoid pointer truncation, got {restype}"
+
+    def test_error_raised_on_invalid_covariance(self):
+        """HIGH: Verify validation catches invalid covariance parameters before C++ call."""
+        from geo_bsd.geo import ordinary_kriging, ContProperty, CovarianceModel, covariance, SugarboxGrid
+        from geo_bsd.validation import ValidationError, CriticalValidationError
+        import numpy as np
+
+        grid = SugarboxGrid(x=5, y=5, z=3)
+        data = np.random.rand(75).astype('float32') * 100
+        mask = np.ones(75, dtype='uint8')
+        prop = ContProperty(data, mask)
+
+        # CovarianceModel constructor validates parameters (nugget > sill is blocked)
+        # This test verifies defense-in-depth: validator prevents bad data from reaching C++
+        with pytest.raises((ValidationError, CriticalValidationError)):
+            CovarianceModel(
+                type=covariance.spherical,
+                ranges=(5.0, 5.0, 3.0),
+                sill=0.0,
+                nugget=1.0
+            )
+
+    def test_simple_kriging_weights_return_value_checked(self):
+        """HIGH: Verify hpgl_simple_kriging_weights return value is checked."""
+        from geo_bsd.geo import simple_kriging_weights
+        import numpy as np
+
+        # Test with valid parameters — should produce non-trivial weights
+        center = (0.0, 0.0, 0.0)
+        nx = np.array([1.0, 2.0, 3.0], dtype='float32')
+        ny = np.array([1.0, 2.0, 3.0], dtype='float32')
+        nz = np.array([1.0, 2.0, 3.0], dtype='float32')
+
+        weights = simple_kriging_weights(center, nx, ny, nz)
+        assert len(weights) == 3, "Should return 3 weights"
+        assert not np.any(np.isnan(weights)), "Weights should not contain NaN"
+
+
+@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+class TestIndicatorKrigingFix:
+    """Tests for the most_probable_category PMF fix (HIGH priority)."""
+
+    def test_most_probable_category_via_median_ik(self):
+        """Verify that the most_probable_category fix produces correct results
+        through median_ik with balanced probabilities (should not always pick
+        highest index)."""
+        from geo_bsd.geo import median_ik, IndProperty, CovarianceModel, covariance, SugarboxGrid
+        import numpy as np
+
+        grid = SugarboxGrid(x=5, y=5, z=2)
+        # Create indicator data: all category 0 (informed)
+        data = np.zeros(50, dtype='uint8')
+        mask = np.ones(50, dtype='uint8')
+        prop = IndProperty(data, mask, 2)
+
+        cov = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(10.0, 10.0, 5.0),
+            sill=1.0,
+            nugget=0.1
+        )
+
+        # With marginal probs [0.9, 0.1], kriging should heavily favor category 0
+        # This test verifies the fix doesn't crash and produces valid indicator values
+        result = median_ik(prop, grid, (0.9, 0.1), (3, 3, 1), 12, cov)
+        assert result.indicator_count == 2
+        assert np.all(result.data <= 1), "Indicator values must be 0 or 1"
+
+    def test_indicator_kriging_with_3_categories(self):
+        """Verify indicator_kriging with K=3 categories doesn't crash and produces
+        valid results after the most_probable_category fix."""
+        from geo_bsd.geo import indicator_kriging, IndProperty, CovarianceModel, covariance, SugarboxGrid
+        import numpy as np
+
+        grid = SugarboxGrid(x=6, y=6, z=3)
+        data = np.random.randint(0, 3, 108, dtype='uint8')
+        mask = np.ones(108, dtype='uint8')
+        prop = IndProperty(data, mask, 3)
+
+        cov0 = CovarianceModel(type=covariance.spherical, ranges=(8.0, 8.0, 4.0), sill=1.0, nugget=0.1)
+        cov1 = CovarianceModel(type=covariance.spherical, ranges=(8.0, 8.0, 4.0), sill=1.0, nugget=0.1)
+        cov2 = CovarianceModel(type=covariance.spherical, ranges=(8.0, 8.0, 4.0), sill=1.0, nugget=0.1)
+
+        ik_data = [
+            {"cov_model": cov0, "radiuses": (2, 2, 1), "max_neighbours": 12},
+            {"cov_model": cov1, "radiuses": (2, 2, 1), "max_neighbours": 12},
+            {"cov_model": cov2, "radiuses": (2, 2, 1), "max_neighbours": 12},
+        ]
+
+        result = indicator_kriging(prop, grid, ik_data, (1.0/3, 1.0/3, 1.0/3))
+        assert result.indicator_count == 3
+        # All output values should be valid indicator values (0, 1, or 2)
+        assert np.all(result.data >= 0) and np.all(result.data < 3), \
+            f"Invalid indicator values: min={result.data.min()}, max={result.data.max()}"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

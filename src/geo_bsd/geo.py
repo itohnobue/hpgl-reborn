@@ -22,6 +22,25 @@ from .validation import (
 from .hpgl_wrap import _HPGL_SHAPE, _HPGL_CONT_MASKED_ARRAY, _HPGL_IND_MASKED_ARRAY, _HPGL_UBYTE_ARRAY, _HPGL_FLOAT_ARRAY, _HPGL_OK_PARAMS, _HPGL_SK_PARAMS, _HPGL_IK_PARAMS, _HPGL_MEDIAN_IK_PARAMS, __hpgl_cov_params_t, __hpgl_cockriging_m1_params_t, __hpgl_cockriging_m2_params_t, _hpgl_so
 
 
+def _check_hpgl_error(context=""):
+	"""
+	Check for HPGL C++ errors after a computation call.
+	
+	Raises RuntimeError if hpgl_get_last_exception_message returns a non-empty message,
+	indicating that the C++ computation encountered an error (e.g. singular kriging
+	matrix, invalid covariance parameters, out of memory).
+	
+	Args:
+		context: Description of the operation being checked (e.g. "ordinary_kriging")
+	
+	Raises:
+		RuntimeError: If the C++ computation failed
+	"""
+	err = _hpgl_so.hpgl_get_last_exception_message()
+	if err is not None and len(err) > 0:
+		err_str = err.decode("utf-8", errors="replace")
+		raise RuntimeError(f"{context} failed: {err_str}" if context else f"HPGL error: {err_str}")
+
 # Security: Path validation utilities to prevent directory traversal attacks
 def _validate_filepath(filename: Union[str, pathlib.Path], allow_directories: bool = False) -> str:
     """
@@ -586,6 +605,7 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
 		_create_hpgl_cont_masked_array(prop, grid),
 		C.byref(okp),
 		_create_hpgl_cont_masked_array(out_prop, grid))
+	_check_hpgl_error("ordinary_kriging")
 
 	return out_prop
 
@@ -628,6 +648,7 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
 		C.byref(sh), C.byref(skp),
 		out_prop[0], out_prop[1],
 		C.byref(sh))
+	_check_hpgl_error("simple_kriging")
 
 	return out_prop
 
@@ -675,6 +696,7 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 		C.byref(okp),
 		out_prop.data, out_prop.mask,
 		C.byref(sh))
+	_check_hpgl_error("lvm_kriging")
 
 	return out_prop
 
@@ -718,6 +740,7 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
 	inp = _create_hpgl_ind_masked_array(prop, grid)
 	outp = _create_hpgl_ind_masked_array(out_prop, grid)
 	_hpgl_so.hpgl_median_ik(C.byref(inp), C.byref(miksp), C.byref(outp))
+	_check_hpgl_error("median_ik")
 	return out_prop
 
 def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
@@ -780,6 +803,7 @@ def indicator_kriging(prop, grid, data, marginal_probs):
 		C.byref(_create_hpgl_ind_masked_array(out_prop, grid)),
 		__create_hpgl_ik_params(data, len(data), False, marginal_probs),
 		len(data))
+	_check_hpgl_error("indicator_kriging")
 
 	return out_prop
 
@@ -821,6 +845,7 @@ def simple_cokriging_markI(prop, grid,
 				secondary_variance = secondary_variance,
 				correlation_coef = correlation_coef)),
 		C.byref(_create_hpgl_cont_masked_array(out_prop, grid)))
+	_check_hpgl_error("simple_cokriging_markI")
 	return out_prop
 
 def simple_cokriging_markII(grid,
@@ -875,6 +900,7 @@ def simple_cokriging_markII(grid,
 				secondary_mean = secondary_data["mean"],
 				correlation_coef = correlation_coef)),
 		C.byref(_create_hpgl_cont_masked_array(out_prop, grid)))
+	_check_hpgl_error("simple_cokriging_markII")
 	return out_prop
 
 def simple_kriging_weights(center_point, n_x, n_y, n_z, ranges = (100000,100000,100000), sill = 1, cov_type = covariance.exponential, nugget = None, angles = None):
@@ -906,7 +932,7 @@ def simple_kriging_weights(center_point, n_x, n_y, n_z, ranges = (100000,100000,
 
 	weights = numpy.array([0]*len(n_x), dtype='float32')
 
-	_hpgl_so.hpgl_simple_kriging_weights(
+	rc = _hpgl_so.hpgl_simple_kriging_weights(
 		_c_array(C.c_float, 3, center_point),
 		numpy.array(n_x, dtype='float32'),
 		numpy.array(n_y, dtype='float32'),
@@ -914,6 +940,9 @@ def simple_kriging_weights(center_point, n_x, n_y, n_z, ranges = (100000,100000,
 		len(n_x),
 		covp,
 		weights)
+	if rc != 0:
+		_check_hpgl_error("simple_kriging_weights")
+		raise RuntimeError("simple_kriging_weights failed: unknown error (empty exception message)")
 
 	return weights
 
