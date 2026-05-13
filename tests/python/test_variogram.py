@@ -152,7 +152,6 @@ class TestIsInTunnel:
         result = _IsInTunnel(templ, V)
         assert result[0] == False
 
-    @pytest.mark.xfail(reason="Known bug: _IsInTunnel reshape fails with 2D input (NumPy 2.0)")
     def test_along_direction1_2d(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
@@ -163,7 +162,6 @@ class TestIsInTunnel:
         result = _IsInTunnel(templ, V)
         assert result[0] == True
 
-    @pytest.mark.xfail(reason="Known bug: _IsInTunnel reshape fails with 2D input (NumPy 2.0)")
     def test_perpendicular_outside_tunnel_2d(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(

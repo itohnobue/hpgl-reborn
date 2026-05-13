@@ -1,4 +1,4 @@
-from numpy import (array, bitwise_and, ceil, column_stack, cos, float32, floor,
+from numpy import (array, bitwise_and, ceil, column_stack, cos, dot, float32, floor,
     mgrid, ones, power, prod, radians, repeat, reshape, row_stack,
     shape, sin, sum, zeros)
 
@@ -58,12 +58,24 @@ class TVVariogramSearchTemplate:
         self.FirstLagDistance = FirstLagDistance
 
 def _IsInTunnel(VariogramSearchTemplate, V):
-    SS1 = V * VariogramSearchTemplate.Ellipsoid.Direction1
-    SS2 = V * VariogramSearchTemplate.Ellipsoid.Direction2
-    SS3 = V * VariogramSearchTemplate.Ellipsoid.Direction3
+    # Compute projections of each vector onto ellipsoid axes via dot product.
+    # V is expected as (N, 3) where each row is a displacement vector (dx, dy, dz).
+    # Returns a 1D boolean array of length N indicating which vectors are inside the tunnel.
+    D1 = VariogramSearchTemplate.Ellipsoid.Direction1
+    D2 = VariogramSearchTemplate.Ellipsoid.Direction2
+    D3 = VariogramSearchTemplate.Ellipsoid.Direction3
+
+    # Ensure V is 2D for consistent dot product behavior
+    V = array(V, ndmin=2)
+    if V.ndim != 2 or V.shape[1] != 3:
+        raise ValueError(f"_IsInTunnel: V must have shape (N, 3), got {V.shape}")
+
+    SS1 = abs(dot(V, D1))
+    SS2 = abs(dot(V, D2))
+    SS3 = abs(dot(V, D3))
     
     if VariogramSearchTemplate.Ellipsoid.R2 == 0 or VariogramSearchTemplate.Ellipsoid.R3 == 0:
-        return zeros(len(V), dtype=bool)
+        return zeros(V.shape[0], dtype=bool)
     
     S2 = SS2 / VariogramSearchTemplate.Ellipsoid.R2
     S3 = SS3 / VariogramSearchTemplate.Ellipsoid.R3
@@ -71,7 +83,7 @@ def _IsInTunnel(VariogramSearchTemplate, V):
     Dist = power(power(S2, 2) + power(S3, 2), 0.5)
     Result = array(bitwise_and(Dist <= 1, VariogramSearchTemplate.TolDistance * Dist <= SS1))
         
-    return reshape(Result, len(Result))
+    return Result.ravel()
     
 def _CalcSearchTemplateWindow(VariogramSearchTemplate):
     Max = 1E10
