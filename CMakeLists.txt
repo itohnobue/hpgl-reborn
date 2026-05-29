@@ -9,6 +9,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Compiler warning flags
+if(MSVC)
+    add_compile_options(/W4 /wd4100 /wd4127 /wd4514 /wd4710 /wd4820)
+else()
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
 # Build options
 option(HPGL_BUILD_PYTHON "Build Python bindings" ON)
 option(HPGL_BUILD_TESTS "Build tests" OFF)
@@ -64,6 +71,7 @@ if(HPGL_FETCH_EIGEN)
         eigen
         GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
         GIT_TAG 3.4.0
+        GIT_SHALLOW TRUE
         GIT_PROGRESS TRUE
     )
     # For Windows: make sure to pull content even if already present
@@ -155,17 +163,6 @@ endif()
 # ============================================================================
 
 if(HPGL_BUILD_PYTHON)
-    # Python binding sources
-    file(GLOB_RECURSE HPGL_PYTHON_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/_cvariogram/*.cpp
-    )
-
-    # Main C API file (for ctypes interface)
-    set(HPGL_C_API_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/hpgl/api.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/hpgl/output.cpp
-    )
-
 endif()
 
 # ============================================================================

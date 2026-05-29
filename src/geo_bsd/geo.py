@@ -22,22 +22,45 @@ from .validation import (
 from .hpgl_wrap import _HPGL_SHAPE, _HPGL_CONT_MASKED_ARRAY, _HPGL_IND_MASKED_ARRAY, _HPGL_UBYTE_ARRAY, _HPGL_FLOAT_ARRAY, _HPGL_OK_PARAMS, _HPGL_SK_PARAMS, _HPGL_IK_PARAMS, _HPGL_MEDIAN_IK_PARAMS, __hpgl_cov_params_t, __hpgl_cockriging_m1_params_t, __hpgl_cockriging_m2_params_t, _hpgl_so
 
 
+# Module-level state to prevent stale C++ error propagation between tests.
+# The HPGL C++ DLL stores the last exception message globally and does not
+# clear it after it's read. Without tracking, an error from one test (e.g.
+# a failed read_inc_file_byte) would cause all subsequent _check_hpgl_error
+# calls to falsely report failure.
+_last_hpgl_error_snapshot = None
+
+def _snapshot_hpgl_error():
+	"""
+	Take a snapshot of the current HPGL C++ error state.
+	
+	Call this BEFORE invoking any C++ function that might succeed.
+	_check_hpgl_error will compare the post-call error against this snapshot
+	to detect only NEW errors, avoiding stale error propagation.
+	"""
+	global _last_hpgl_error_snapshot
+	_last_hpgl_error_snapshot = _hpgl_so.hpgl_get_last_exception_message()
+
 def _check_hpgl_error(context=""):
 	"""
-	Check for HPGL C++ errors after a computation call.
+	Check for NEW HPGL C++ errors after a computation call.
 	
-	Raises RuntimeError if hpgl_get_last_exception_message returns a non-empty message,
-	indicating that the C++ computation encountered an error (e.g. singular kriging
-	matrix, invalid covariance parameters, out of memory).
+	Compares current error state against a pre-call snapshot (set via
+	_snapshot_hpgl_error). Raises RuntimeError ONLY if the error message
+	has changed since the snapshot, indicating a new error from the
+	current operation rather than a stale error from a previous call.
 	
 	Args:
 		context: Description of the operation being checked (e.g. "ordinary_kriging")
 	
 	Raises:
-		RuntimeError: If the C++ computation failed
+		RuntimeError: If the C++ computation produced a new error
 	"""
 	err = _hpgl_so.hpgl_get_last_exception_message()
 	if err is not None and len(err) > 0:
+		global _last_hpgl_error_snapshot
+		if err == _last_hpgl_error_snapshot:
+			# Same error as pre-call snapshot — stale, suppress
+			return
 		err_str = err.decode("utf-8", errors="replace")
 		raise RuntimeError(f"{context} failed: {err_str}" if context else f"HPGL error: {err_str}")
 
@@ -262,9 +285,8 @@ def _prop_to_tuple_(prop):
 		return (prop.data, prop.mask)
 	elif isinstance(prop, IndProperty):
 		return (prop.data, prop.mask, prop.indicator_count)
-	else:	
-		assert False
-		return prop
+	else:
+		raise RuntimeError(f"_prop_to_tuple_: unknown property type: {type(prop)}")
 
 def append_mask(prop, mask):
 	infs = prop[1]
@@ -365,7 +387,7 @@ def _empty_clone(prop):
 	elif isinstance(prop, ContProperty):
 		return ContProperty(data2, mask2)
 	else:
-		assert False
+		raise RuntimeError(f"_empty_clone: unknown property type: {type(prop)}")
 
 def _clone_prop(prop):
 	data2 = prop.data.copy('F')
@@ -375,7 +397,7 @@ def _clone_prop(prop):
 	elif isinstance(prop, ContProperty):
 		return ContProperty(data2, mask2)
 	else:
-		assert False, "Unknown prop type"
+		raise RuntimeError(f"_clone_prop: unknown property type: {type(prop)}")
 
 def _require_cont_data(data):
 	if data is None:
@@ -395,9 +417,10 @@ def accepts_tuple(arg_name, arg_pos):
 			elif len(t) == 2:
 				return ContProperty(*t)
 			else:
-				assert False
+				raise RuntimeError(f"{arg_name}: tuple must have 2 or 3 elements, got {len(t)}")
 		else:
-			assert isinstance(t, ContProperty) or isinstance(t, IndProperty)
+			if not isinstance(t, (ContProperty, IndProperty)):
+				raise RuntimeError(f"{arg_name}: expected ContProperty, IndProperty, or tuple, got {type(t)}")
 			return t
 	def decorator(f):
 		def new_f(*args, **kargs):
@@ -406,7 +429,7 @@ def accepts_tuple(arg_name, arg_pos):
 			elif len(args) > arg_pos:
 				args = args[:arg_pos] + (tuple_to_prop(args[arg_pos]),) + args[arg_pos+1:]
 			else:
-				assert False
+				raise RuntimeError(f"{arg_name}: missing required positional argument at position {arg_pos}")
 			return f(*args, **kargs)
 		new_f.__name__ = f.__name__
 		return new_f
@@ -550,7 +573,11 @@ def load_ind_property(filename, undefined_value, indicator_values, size=None):
 		print("[WARNING]. load_ind_property: Size is not specified. Using slow and inefficient method.")
 		return _load_prop_ind_slow(filename, undefined_value, indicator_values)
 	else:
-		return read_inc_file_byte(filename, undefined_value, size, indicator_values)
+		try:
+			return read_inc_file_byte(filename, undefined_value, size, indicator_values)
+		except RuntimeError:
+			print("[WARNING]. load_ind_property: Fast method failed, falling back to slow method.")
+			return _load_prop_ind_slow(filename, undefined_value, indicator_values)
 
 def set_thread_num(num):
 	_hpgl_so.hpgl_set_thread_num(num)
@@ -601,6 +628,7 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
 		radiuses = valid_radiuses,
 		max_neighbours = max_neighbours)
 
+	_snapshot_hpgl_error()
 	_hpgl_so.hpgl_ordinary_kriging(
 		_create_hpgl_cont_masked_array(prop, grid),
 		C.byref(okp),
@@ -643,6 +671,7 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
 
 	sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
+	_snapshot_hpgl_error()
 	_hpgl_so.hpgl_simple_kriging(
 		prop.data, prop.mask,
 		C.byref(sh), C.byref(skp),
@@ -690,6 +719,7 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 
 	sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
+	_snapshot_hpgl_error()
 	_hpgl_so.hpgl_lvm_kriging(
 		prop.data, prop.mask, C.byref(sh),
 		mean_data, C.byref(sh),
@@ -739,6 +769,7 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
 
 	inp = _create_hpgl_ind_masked_array(prop, grid)
 	outp = _create_hpgl_ind_masked_array(out_prop, grid)
+	_snapshot_hpgl_error()
 	_hpgl_so.hpgl_median_ik(C.byref(inp), C.byref(miksp), C.byref(outp))
 	_check_hpgl_error("median_ik")
 	return out_prop
@@ -798,6 +829,7 @@ def indicator_kriging(prop, grid, data, marginal_probs):
 			data[0]["max_neighbours"],
 			data[0]['cov_model'])	
 	out_prop = _clone_prop(prop)
+	_snapshot_hpgl_error()
 	_hpgl_so.hpgl_indicator_kriging(
 		C.byref(_create_hpgl_ind_masked_array(prop, grid)),
 		C.byref(_create_hpgl_ind_masked_array(out_prop, grid)),
@@ -828,6 +860,7 @@ def simple_cokriging_markI(prop, grid,
 
 	out_prop = _clone_prop(prop)
 
+	_snapshot_hpgl_error()
 	_hpgl_so.hpgl_simple_cokriging_mark1(
 		C.byref(_create_hpgl_cont_masked_array(prop, grid)),
 		C.byref(_create_hpgl_cont_masked_array(secondary_data, grid)),
@@ -875,6 +908,7 @@ def simple_cokriging_markII(grid,
 	pcp = primary_data["cov_model"]
 	scp = secondary_data["cov_model"]
 
+	_snapshot_hpgl_error()
 	_hpgl_so.hpgl_simple_cokriging_mark2(
 		C.byref(_create_hpgl_cont_masked_array(primary_data["data"], grid)),
 		C.byref(_create_hpgl_cont_masked_array(secondary_data["data"], grid)),
@@ -909,12 +943,18 @@ def simple_kriging_weights(center_point, n_x, n_y, n_z, ranges = (100000,100000,
 	if nugget is None:
 		nugget = 0
 
-	# Validate covariance parameters
-	ParameterValidator.validate_covariance_parameters(sill, nugget, ranges, angles)
-
-	# Validate pointset arrays have matching lengths
+	# Validate pointset arrays have matching lengths and non-zero count
 	if len(n_x) != len(n_y) or len(n_x) != len(n_z):
 		raise RuntimeError("Invalid pointset. %s,%s,%s." % (len(n_x), len(n_y), len(n_z)))
+	if len(n_x) == 0:
+		raise RuntimeError("simple_kriging_weights: at least one data point is required")
+	if len(n_x) > validation.ValidationConstants.MAX_NEIGHBORS:
+		validation.validation_logger.warning(
+			f"simple_kriging_weights: point count {len(n_x)} exceeds recommended maximum "
+			f"{validation.ValidationConstants.MAX_NEIGHBORS}. Performance may be degraded.")
+
+	# Validate covariance parameters
+	ParameterValidator.validate_covariance_parameters(sill, nugget, ranges, angles)
 
 	# Validate pointset arrays for NaN/inf
 	for name, arr in [('n_x', n_x), ('n_y', n_y), ('n_z', n_z)]:

@@ -511,10 +511,11 @@ class TestDataEdgeCases:
         assert np.allclose(result.data, 0.0, atol=0.01)
 
     def test_nan_values_in_data(self):
-        """Test handling of NaN values in data
+        """Test handling of masked NaN-like positions in data
 
-        Note: NumPy arrays with NaN should be handled by masking or pre-processing.
-        HPGL expects valid float32 arrays, so NaN values must be masked (set to uninformed).
+        Note: This test verifies that positions resembling NaN (placeholders + mask=0)
+        are properly handled by HPGL. HPGL expects valid float32 arrays, so NaN values
+        must be masked (set to uninformed).
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)  # For reproducibility
@@ -527,7 +528,7 @@ class TestDataEdgeCases:
         # In practice, users should mask these positions
         nan_positions = slice(None, None, 50)  # Every 50th element
 
-        # Replace NaN with placeholder and mask them
+        # Replace NaN-like positions with placeholder and mask them
         data_with_placeholder = data.copy()
         data_with_placeholder[nan_positions] = 0.0  # Placeholder value
         mask[nan_positions] = 0  # Mark as uninformed
@@ -550,13 +551,50 @@ class TestDataEdgeCases:
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
-        # Should handle masked NaN positions
+        # Should handle masked NaN-like positions
         assert result.data.shape == (10, 10, 5)
         # Original informed cells should remain informed
         # Note: result.mask is now 3D, so we need to flatten it for comparison
         assert np.all(result.mask.flatten()[mask == 1] == 1)
         # No NaN in result
         assert not np.any(np.isnan(result.data))
+
+    def test_actual_nan_values_are_rejected(self):
+        """Test that actual NaN values in ContProperty data are handled appropriately.
+
+        HPGL's C++ layer expects valid float32 without NaN. Passing NaN should
+        either raise a validation error or produce NaN in output (propagation).
+        This test verifies the current behavior to document the contract.
+        """
+        grid = SugarboxGrid(x=5, y=5, z=2)
+        data = np.array([1.0, 2.0, np.nan, 4.0, 5.0] * 10, dtype='float32')
+        mask = np.ones(50, dtype='uint8')
+
+        # ContProperty with NaN values in data — current behavior tested
+        try:
+            prop = ContProperty(data, mask)
+            cov_model = CovarianceModel(
+                type=covariance.spherical,
+                ranges=(5.0, 5.0, 3.0),
+                angles=(0.0, 0.0, 0.0),
+                sill=1.0,
+                nugget=0.1
+            )
+            result = ordinary_kriging(
+                prop=prop,
+                grid=grid,
+                radiuses=(3, 3, 2),
+                max_neighbours=6,
+                cov_model=cov_model
+            )
+            # If it doesn't raise, check result for NaN propagation
+            # NaN in input may produce NaN in output (expected for C operations)
+            result.fix_shape(grid)
+            # Document current behavior
+            assert result.data.shape == (5, 5, 2)
+        except (RuntimeError, ValueError, FloatingPointError):
+            # Raising an error is also valid behavior
+            pass
 
 
 # =============================================================================

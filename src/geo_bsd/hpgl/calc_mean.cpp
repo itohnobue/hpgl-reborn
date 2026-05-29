@@ -47,7 +47,11 @@ namespace hpgl
 				sum += property->get_at(idx);
 				count_points += 1;
 			}
-		}		
+		}
+		if (count_points == 0)
+		{
+			return false;
+		}
 		*mean = sum / count_points;		
 		return true;
 	}

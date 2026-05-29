@@ -38,28 +38,28 @@ except ImportError as e:
 # =============================================================================
 
 @pytest.fixture
-def small_grid():
-    """Create a small 3D grid for quick testing"""
+def krig_small_grid():
+    """Create a small 3D grid for kriging tests"""
     return SugarboxGrid(x=5, y=5, z=3)
 
 
 @pytest.fixture
-def medium_grid():
-    """Create a medium 3D grid for standard testing"""
+def krig_medium_grid():
+    """Create a medium 3D grid for kriging tests"""
     return SugarboxGrid(x=10, y=10, z=5)
 
 
 @pytest.fixture
-def large_grid():
-    """Create a large 3D grid for stress testing"""
+def krig_large_grid():
+    """Create a large 3D grid for kriging stress tests"""
     return SugarboxGrid(x=20, y=20, z=10)
 
 
 @pytest.fixture
-def continuous_property_small(small_grid):
+def continuous_property_small(krig_small_grid):
     """Create continuous property for small grid"""
     np.random.seed(42)
-    size = small_grid.x * small_grid.y * small_grid.z
+    size = krig_small_grid.x * krig_small_grid.y * krig_small_grid.z
     data = np.random.rand(size).astype('float32') * 100
     mask = np.ones(size, dtype='uint8')
     mask[::5] = 0  # 20% uninformed
@@ -67,10 +67,10 @@ def continuous_property_small(small_grid):
 
 
 @pytest.fixture
-def continuous_property_medium(medium_grid):
+def continuous_property_medium(krig_medium_grid):
     """Create continuous property for medium grid"""
     np.random.seed(42)
-    size = medium_grid.x * medium_grid.y * medium_grid.z
+    size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
     data = np.random.rand(size).astype('float32') * 100
     mask = np.ones(size, dtype='uint8')
     mask[::10] = 0  # 10% uninformed
@@ -78,10 +78,10 @@ def continuous_property_medium(medium_grid):
 
 
 @pytest.fixture
-def indicator_property_small(small_grid):
+def indicator_property_small(krig_small_grid):
     """Create indicator property for small grid"""
     np.random.seed(42)
-    size = small_grid.x * small_grid.z * small_grid.y
+    size = krig_small_grid.x * krig_small_grid.z * krig_small_grid.y
     data = np.random.randint(0, 3, size, dtype='uint8')
     mask = np.ones(size, dtype='uint8')
     mask[::5] = 0
@@ -89,10 +89,10 @@ def indicator_property_small(small_grid):
 
 
 @pytest.fixture
-def indicator_property_medium(medium_grid):
+def indicator_property_medium(krig_medium_grid):
     """Create indicator property for medium grid"""
     np.random.seed(42)
-    size = medium_grid.x * medium_grid.y * medium_grid.z
+    size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
     data = np.random.randint(0, 3, size, dtype='uint8')
     mask = np.ones(size, dtype='uint8')
     mask[::10] = 0
@@ -136,18 +136,18 @@ def covariance_gaussian():
 
 
 @pytest.fixture
-def mean_data_medium(medium_grid):
+def mean_data_medium(krig_medium_grid):
     """Create mean data array for LVM kriging"""
     np.random.seed(42)
-    size = medium_grid.x * medium_grid.y * medium_grid.z
+    size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
     return np.random.rand(size).astype('float32') * 50
 
 
 @pytest.fixture
-def secondary_property_medium(medium_grid):
+def secondary_property_medium(krig_medium_grid):
     """Create secondary property for cokriging"""
     np.random.seed(43)
-    size = medium_grid.x * medium_grid.y * medium_grid.z
+    size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
     data = np.random.rand(size).astype('float32') * 80
     mask = np.ones(size, dtype='uint8')
     mask[::10] = 0
@@ -173,11 +173,11 @@ def neighbor_points():
 class TestOrdinaryKriging:
     """Comprehensive tests for Ordinary Kriging"""
 
-    def test_ok_basic_execution(self, continuous_property_medium, medium_grid, covariance_spherical):
+    def test_ok_basic_execution(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test basic OK execution completes without errors"""
         result = ordinary_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical
@@ -187,7 +187,7 @@ class TestOrdinaryKriging:
         assert result.data.shape == continuous_property_medium.data.shape
         assert result.mask.shape == continuous_property_medium.mask.shape
 
-    def test_ok_all_covariance_types(self, continuous_property_medium, medium_grid):
+    def test_ok_all_covariance_types(self, continuous_property_medium, krig_medium_grid):
         """Test OK with all covariance types (spherical, exponential, gaussian)"""
         cov_types = [
             (covariance.spherical, "spherical"),
@@ -205,7 +205,7 @@ class TestOrdinaryKriging:
             )
             result = ordinary_kriging(
                 prop=continuous_property_medium,
-                grid=medium_grid,
+                grid=krig_medium_grid,
                 radiuses=(5, 5, 3),
                 max_neighbours=12,
                 cov_model=cov_model
@@ -213,12 +213,12 @@ class TestOrdinaryKriging:
             assert isinstance(result, ContProperty), f"Failed for {name}"
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
-    def test_ok_various_neighbor_counts(self, continuous_property_medium, medium_grid,
+    def test_ok_various_neighbor_counts(self, continuous_property_medium, krig_medium_grid,
                                         covariance_spherical, max_neighbours):
         """Test OK with various neighbor counts"""
         result = ordinary_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=max_neighbours,
             cov_model=covariance_spherical
@@ -226,25 +226,25 @@ class TestOrdinaryKriging:
         assert isinstance(result, ContProperty)
 
     @pytest.mark.parametrize("radiuses", [(3, 3, 2), (5, 5, 3), (10, 10, 5), (15, 15, 8)])
-    def test_ok_various_radiuses(self, continuous_property_medium, medium_grid,
+    def test_ok_various_radiuses(self, continuous_property_medium, krig_medium_grid,
                                   covariance_spherical, radiuses):
         """Test OK with various search radius sizes"""
         result = ordinary_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=radiuses,
             max_neighbours=12,
             cov_model=covariance_spherical
         )
         assert isinstance(result, ContProperty)
 
-    def test_ok_reproducibility(self, continuous_property_medium, medium_grid, covariance_spherical):
+    def test_ok_reproducibility(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test OK produces reproducible results"""
         np.random.seed(42)
 
         result1 = ordinary_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical
@@ -253,7 +253,7 @@ class TestOrdinaryKriging:
         np.random.seed(42)
         result2 = ordinary_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical
@@ -261,11 +261,11 @@ class TestOrdinaryKriging:
 
         np.testing.assert_array_almost_equal(result1.data, result2.data, decimal=5)
 
-    def test_ok_result_validation(self, continuous_property_medium, medium_grid, covariance_spherical):
+    def test_ok_result_validation(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test OK produces valid results (no NaN, Inf, reasonable bounds)"""
         result = ordinary_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical
@@ -284,18 +284,18 @@ class TestOrdinaryKriging:
             assert np.all(result.data >= original_min - 50)
             assert np.all(result.data <= original_max + 50)
 
-    def test_ok_small_grid(self, continuous_property_small, small_grid, covariance_spherical):
+    def test_ok_small_grid(self, continuous_property_small, krig_small_grid, covariance_spherical):
         """Test OK with small grid"""
         result = ordinary_kriging(
             prop=continuous_property_small,
-            grid=small_grid,
+            grid=krig_small_grid,
             radiuses=(2, 2, 2),
             max_neighbours=4,
             cov_model=covariance_spherical
         )
         assert isinstance(result, ContProperty)
 
-    def test_ok_with_nugget(self, continuous_property_medium, medium_grid):
+    def test_ok_with_nugget(self, continuous_property_medium, krig_medium_grid):
         """Test OK with various nugget values"""
         for nugget in [0.0, 0.1, 0.5, 1.0]:
             cov_model = CovarianceModel(
@@ -307,7 +307,7 @@ class TestOrdinaryKriging:
             )
             result = ordinary_kriging(
                 prop=continuous_property_medium,
-                grid=medium_grid,
+                grid=krig_medium_grid,
                 radiuses=(5, 5, 3),
                 max_neighbours=12,
                 cov_model=cov_model
@@ -323,11 +323,11 @@ class TestOrdinaryKriging:
 class TestSimpleKriging:
     """Comprehensive tests for Simple Kriging"""
 
-    def test_sk_basic_execution(self, continuous_property_medium, medium_grid, covariance_spherical):
+    def test_sk_basic_execution(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test basic SK execution completes without errors"""
         result = simple_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical,
@@ -337,7 +337,7 @@ class TestSimpleKriging:
         assert isinstance(result, ContProperty)
         assert result.data.shape == continuous_property_medium.data.shape
 
-    def test_sk_all_covariance_types(self, continuous_property_medium, medium_grid):
+    def test_sk_all_covariance_types(self, continuous_property_medium, krig_medium_grid):
         """Test SK with all covariance types"""
         cov_types = [
             (covariance.spherical, "spherical"),
@@ -355,7 +355,7 @@ class TestSimpleKriging:
             )
             result = simple_kriging(
                 prop=continuous_property_medium,
-                grid=medium_grid,
+                grid=krig_medium_grid,
                 radiuses=(5, 5, 3),
                 max_neighbours=12,
                 cov_model=cov_model,
@@ -364,12 +364,12 @@ class TestSimpleKriging:
             assert isinstance(result, ContProperty), f"Failed for {name}"
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
-    def test_sk_various_neighbor_counts(self, continuous_property_medium, medium_grid,
+    def test_sk_various_neighbor_counts(self, continuous_property_medium, krig_medium_grid,
                                         covariance_spherical, max_neighbours):
         """Test SK with various neighbor counts"""
         result = simple_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=max_neighbours,
             cov_model=covariance_spherical,
@@ -377,12 +377,12 @@ class TestSimpleKriging:
         )
         assert isinstance(result, ContProperty)
 
-    def test_sk_explicit_mean(self, continuous_property_medium, medium_grid, covariance_spherical):
+    def test_sk_explicit_mean(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test SK with explicit mean value"""
         mean = 50.0
         result = simple_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical,
@@ -390,11 +390,11 @@ class TestSimpleKriging:
         )
         assert isinstance(result, ContProperty)
 
-    def test_sk_automatic_mean(self, continuous_property_medium, medium_grid, covariance_spherical):
+    def test_sk_automatic_mean(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test SK with automatic mean calculation"""
         result = simple_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical,
@@ -402,13 +402,13 @@ class TestSimpleKriging:
         )
         assert isinstance(result, ContProperty)
 
-    def test_sk_reproducibility(self, continuous_property_medium, medium_grid, covariance_spherical):
+    def test_sk_reproducibility(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test SK produces reproducible results"""
         np.random.seed(42)
 
         result1 = simple_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical,
@@ -418,7 +418,7 @@ class TestSimpleKriging:
         np.random.seed(42)
         result2 = simple_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical,
@@ -427,11 +427,11 @@ class TestSimpleKriging:
 
         np.testing.assert_array_almost_equal(result1.data, result2.data, decimal=5)
 
-    def test_sk_result_validation(self, continuous_property_medium, medium_grid, covariance_spherical):
+    def test_sk_result_validation(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test SK produces valid results"""
         result = simple_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=covariance_spherical,
@@ -441,11 +441,11 @@ class TestSimpleKriging:
         assert not np.any(np.isnan(result.data.astype('float64')))
         assert not np.any(np.isinf(result.data.astype('float64')))
 
-    def test_sk_small_grid(self, continuous_property_small, small_grid, covariance_spherical):
+    def test_sk_small_grid(self, continuous_property_small, krig_small_grid, covariance_spherical):
         """Test SK with small grid"""
         result = simple_kriging(
             prop=continuous_property_small,
-            grid=small_grid,
+            grid=krig_small_grid,
             radiuses=(2, 2, 2),
             max_neighbours=4,
             cov_model=covariance_spherical,
@@ -462,12 +462,12 @@ class TestSimpleKriging:
 class TestLVMKriging:
     """Comprehensive tests for Locally Varying Mean (LVM) Kriging"""
 
-    def test_lvm_basic_execution(self, continuous_property_medium, medium_grid,
+    def test_lvm_basic_execution(self, continuous_property_medium, krig_medium_grid,
                                   mean_data_medium, covariance_spherical):
         """Test basic LVM kriging execution"""
         result = lvm_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             mean_data=mean_data_medium,
             radiuses=(5, 5, 3),
             max_neighbours=12,
@@ -477,7 +477,7 @@ class TestLVMKriging:
         assert isinstance(result, ContProperty)
         assert result.data.shape == continuous_property_medium.data.shape
 
-    def test_lvm_all_covariance_types(self, continuous_property_medium, medium_grid, mean_data_medium):
+    def test_lvm_all_covariance_types(self, continuous_property_medium, krig_medium_grid, mean_data_medium):
         """Test LVM kriging with all covariance types"""
         cov_types = [
             (covariance.spherical, "spherical"),
@@ -495,7 +495,7 @@ class TestLVMKriging:
             )
             result = lvm_kriging(
                 prop=continuous_property_medium,
-                grid=medium_grid,
+                grid=krig_medium_grid,
                 mean_data=mean_data_medium,
                 radiuses=(5, 5, 3),
                 max_neighbours=12,
@@ -504,12 +504,12 @@ class TestLVMKriging:
             assert isinstance(result, ContProperty), f"Failed for {name}"
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
-    def test_lvm_various_neighbor_counts(self, continuous_property_medium, medium_grid,
+    def test_lvm_various_neighbor_counts(self, continuous_property_medium, krig_medium_grid,
                                          mean_data_medium, covariance_spherical, max_neighbours):
         """Test LVM kriging with various neighbor counts"""
         result = lvm_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             mean_data=mean_data_medium,
             radiuses=(5, 5, 3),
             max_neighbours=max_neighbours,
@@ -517,14 +517,14 @@ class TestLVMKriging:
         )
         assert isinstance(result, ContProperty)
 
-    def test_lvm_reproducibility(self, continuous_property_medium, medium_grid,
+    def test_lvm_reproducibility(self, continuous_property_medium, krig_medium_grid,
                                   mean_data_medium, covariance_spherical):
         """Test LVM kriging produces reproducible results"""
         np.random.seed(42)
 
         result1 = lvm_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             mean_data=mean_data_medium,
             radiuses=(5, 5, 3),
             max_neighbours=12,
@@ -534,7 +534,7 @@ class TestLVMKriging:
         np.random.seed(42)
         result2 = lvm_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             mean_data=mean_data_medium,
             radiuses=(5, 5, 3),
             max_neighbours=12,
@@ -543,12 +543,12 @@ class TestLVMKriging:
 
         np.testing.assert_array_almost_equal(result1.data, result2.data, decimal=5)
 
-    def test_lvm_result_validation(self, continuous_property_medium, medium_grid,
+    def test_lvm_result_validation(self, continuous_property_medium, krig_medium_grid,
                                     mean_data_medium, covariance_spherical):
         """Test LVM kriging produces valid results"""
         result = lvm_kriging(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             mean_data=mean_data_medium,
             radiuses=(5, 5, 3),
             max_neighbours=12,
@@ -558,14 +558,14 @@ class TestLVMKriging:
         assert not np.any(np.isnan(result.data.astype('float64')))
         assert not np.any(np.isinf(result.data.astype('float64')))
 
-    def test_lvm_small_grid(self, continuous_property_small, small_grid, covariance_spherical):
+    def test_lvm_small_grid(self, continuous_property_small, krig_small_grid, covariance_spherical):
         """Test LVM kriging with small grid"""
-        size = small_grid.x * small_grid.y * small_grid.z
+        size = krig_small_grid.x * krig_small_grid.y * krig_small_grid.z
         mean_data = np.random.rand(size).astype('float32') * 50
 
         result = lvm_kriging(
             prop=continuous_property_small,
-            grid=small_grid,
+            grid=krig_small_grid,
             mean_data=mean_data,
             radiuses=(2, 2, 2),
             max_neighbours=4,
@@ -582,7 +582,7 @@ class TestLVMKriging:
 class TestIndicatorKriging:
     """Comprehensive tests for Indicator Kriging"""
 
-    def test_ik_basic_execution(self, indicator_property_medium, medium_grid):
+    def test_ik_basic_execution(self, indicator_property_medium, krig_medium_grid):
         """Test basic IK execution"""
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
@@ -602,7 +602,7 @@ class TestIndicatorKriging:
 
         result = indicator_kriging(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             data=ik_data,
             marginal_probs=marginal_probs
         )
@@ -610,7 +610,7 @@ class TestIndicatorKriging:
         assert isinstance(result, IndProperty)
         assert result.indicator_count == 3
 
-    def test_ik_all_covariance_types(self, indicator_property_medium, medium_grid):
+    def test_ik_all_covariance_types(self, indicator_property_medium, krig_medium_grid):
         """Test IK with all covariance types"""
         cov_types = [
             (covariance.spherical, "spherical"),
@@ -637,14 +637,14 @@ class TestIndicatorKriging:
 
             result = indicator_kriging(
                 prop=indicator_property_medium,
-                grid=medium_grid,
+                grid=krig_medium_grid,
                 data=ik_data,
                 marginal_probs=marginal_probs
             )
             assert isinstance(result, IndProperty), f"Failed for {name}"
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12])
-    def test_ik_various_neighbor_counts(self, indicator_property_medium, medium_grid, max_neighbours):
+    def test_ik_various_neighbor_counts(self, indicator_property_medium, krig_medium_grid, max_neighbours):
         """Test IK with various neighbor counts"""
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
@@ -664,13 +664,13 @@ class TestIndicatorKriging:
 
         result = indicator_kriging(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             data=ik_data,
             marginal_probs=marginal_probs
         )
         assert isinstance(result, IndProperty)
 
-    def test_ik_reproducibility(self, indicator_property_medium, medium_grid):
+    def test_ik_reproducibility(self, indicator_property_medium, krig_medium_grid):
         """Test IK produces reproducible results"""
         np.random.seed(42)
 
@@ -692,7 +692,7 @@ class TestIndicatorKriging:
 
         result1 = indicator_kriging(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             data=ik_data,
             marginal_probs=marginal_probs
         )
@@ -700,14 +700,14 @@ class TestIndicatorKriging:
         np.random.seed(42)
         result2 = indicator_kriging(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             data=ik_data,
             marginal_probs=marginal_probs
         )
 
         np.testing.assert_array_equal(result1.data, result2.data)
 
-    def test_ik_result_validation(self, indicator_property_medium, medium_grid):
+    def test_ik_result_validation(self, indicator_property_medium, krig_medium_grid):
         """Test IK produces valid results (indicators in valid range)"""
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
@@ -727,7 +727,7 @@ class TestIndicatorKriging:
 
         result = indicator_kriging(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             data=ik_data,
             marginal_probs=marginal_probs
         )
@@ -735,7 +735,7 @@ class TestIndicatorKriging:
         # Check indicators are within valid range
         assert np.all(result.data < result.indicator_count)
 
-    def test_ik_small_grid(self, indicator_property_small, small_grid):
+    def test_ik_small_grid(self, indicator_property_small, krig_small_grid):
         """Test IK with small grid"""
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
@@ -755,7 +755,7 @@ class TestIndicatorKriging:
 
         result = indicator_kriging(
             prop=indicator_property_small,
-            grid=small_grid,
+            grid=krig_small_grid,
             data=ik_data,
             marginal_probs=marginal_probs
         )
@@ -770,13 +770,13 @@ class TestIndicatorKriging:
 class TestMedianIK:
     """Comprehensive tests for Median Indicator Kriging"""
 
-    def test_median_ik_basic_execution(self, indicator_property_medium, medium_grid):
+    def test_median_ik_basic_execution(self, indicator_property_medium, krig_medium_grid):
         """Test basic median IK execution"""
         marginal_probs = (0.5, 0.5)
 
         result = median_ik(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             marginal_probs=marginal_probs,
             radiuses=(5, 5, 3),
             max_neighbours=12,
@@ -791,7 +791,7 @@ class TestMedianIK:
 
         assert isinstance(result, IndProperty)
 
-    def test_median_ik_all_covariance_types(self, indicator_property_medium, medium_grid):
+    def test_median_ik_all_covariance_types(self, indicator_property_medium, krig_medium_grid):
         """Test median IK with all covariance types"""
         cov_types = [
             (covariance.spherical, "spherical"),
@@ -812,7 +812,7 @@ class TestMedianIK:
 
             result = median_ik(
                 prop=indicator_property_medium,
-                grid=medium_grid,
+                grid=krig_medium_grid,
                 marginal_probs=marginal_probs,
                 radiuses=(5, 5, 3),
                 max_neighbours=12,
@@ -821,12 +821,12 @@ class TestMedianIK:
             assert isinstance(result, IndProperty), f"Failed for {name}"
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
-    def test_median_ik_various_neighbor_counts(self, indicator_property_medium, medium_grid,
+    def test_median_ik_various_neighbor_counts(self, indicator_property_medium, krig_medium_grid,
                                                 max_neighbours):
         """Test median IK with various neighbor counts"""
         result = median_ik(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             marginal_probs=(0.5, 0.5),
             radiuses=(5, 5, 3),
             max_neighbours=max_neighbours,
@@ -840,7 +840,7 @@ class TestMedianIK:
         )
         assert isinstance(result, IndProperty)
 
-    def test_median_ik_reproducibility(self, indicator_property_medium, medium_grid):
+    def test_median_ik_reproducibility(self, indicator_property_medium, krig_medium_grid):
         """Test median IK produces reproducible results"""
         np.random.seed(42)
 
@@ -854,7 +854,7 @@ class TestMedianIK:
 
         result1 = median_ik(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             marginal_probs=(0.5, 0.5),
             radiuses=(5, 5, 3),
             max_neighbours=12,
@@ -864,7 +864,7 @@ class TestMedianIK:
         np.random.seed(42)
         result2 = median_ik(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             marginal_probs=(0.5, 0.5),
             radiuses=(5, 5, 3),
             max_neighbours=12,
@@ -873,11 +873,11 @@ class TestMedianIK:
 
         np.testing.assert_array_equal(result1.data, result2.data)
 
-    def test_median_ik_result_validation(self, indicator_property_medium, medium_grid):
+    def test_median_ik_result_validation(self, indicator_property_medium, krig_medium_grid):
         """Test median IK produces valid results"""
         result = median_ik(
             prop=indicator_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             marginal_probs=(0.5, 0.5),
             radiuses=(5, 5, 3),
             max_neighbours=12,
@@ -893,11 +893,11 @@ class TestMedianIK:
         # Check result shape
         assert result.data.shape == indicator_property_medium.data.shape
 
-    def test_median_ik_small_grid(self, indicator_property_small, small_grid):
+    def test_median_ik_small_grid(self, indicator_property_small, krig_small_grid):
         """Test median IK with small grid"""
         result = median_ik(
             prop=indicator_property_small,
-            grid=small_grid,
+            grid=krig_small_grid,
             marginal_probs=(0.5, 0.5),
             radiuses=(2, 2, 2),
             max_neighbours=4,
@@ -920,12 +920,12 @@ class TestMedianIK:
 class TestSimpleCokrigingMarkI:
     """Comprehensive tests for Simple Cokriging Mark I"""
 
-    def test_ck_markI_basic_execution(self, continuous_property_medium, medium_grid,
+    def test_ck_markI_basic_execution(self, continuous_property_medium, krig_medium_grid,
                                       secondary_property_medium, covariance_spherical):
         """Test basic cokriging Mark I execution"""
         result = simple_cokriging_markI(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             secondary_data=secondary_property_medium,
             primary_mean=50.0,
             secondary_mean=40.0,
@@ -939,7 +939,7 @@ class TestSimpleCokrigingMarkI:
         assert isinstance(result, ContProperty)
         assert result.data.shape == continuous_property_medium.data.shape
 
-    def test_ck_markI_all_covariance_types(self, continuous_property_medium, medium_grid,
+    def test_ck_markI_all_covariance_types(self, continuous_property_medium, krig_medium_grid,
                                            secondary_property_medium):
         """Test cokriging Mark I with all covariance types"""
         cov_types = [
@@ -959,7 +959,7 @@ class TestSimpleCokrigingMarkI:
 
             result = simple_cokriging_markI(
                 prop=continuous_property_medium,
-                grid=medium_grid,
+                grid=krig_medium_grid,
                 secondary_data=secondary_property_medium,
                 primary_mean=50.0,
                 secondary_mean=40.0,
@@ -972,13 +972,13 @@ class TestSimpleCokrigingMarkI:
             assert isinstance(result, ContProperty), f"Failed for {name}"
 
     @pytest.mark.parametrize("correlation_coef", [0.2, 0.5, 0.8, 0.95])
-    def test_ck_markI_various_correlations(self, continuous_property_medium, medium_grid,
+    def test_ck_markI_various_correlations(self, continuous_property_medium, krig_medium_grid,
                                             secondary_property_medium, covariance_spherical,
                                             correlation_coef):
         """Test cokriging Mark I with various correlation coefficients"""
         result = simple_cokriging_markI(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             secondary_data=secondary_property_medium,
             primary_mean=50.0,
             secondary_mean=40.0,
@@ -991,13 +991,13 @@ class TestSimpleCokrigingMarkI:
         assert isinstance(result, ContProperty)
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
-    def test_ck_markI_various_neighbor_counts(self, continuous_property_medium, medium_grid,
+    def test_ck_markI_various_neighbor_counts(self, continuous_property_medium, krig_medium_grid,
                                                secondary_property_medium, covariance_spherical,
                                                max_neighbours):
         """Test cokriging Mark I with various neighbor counts"""
         result = simple_cokriging_markI(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             secondary_data=secondary_property_medium,
             primary_mean=50.0,
             secondary_mean=40.0,
@@ -1009,14 +1009,14 @@ class TestSimpleCokrigingMarkI:
         )
         assert isinstance(result, ContProperty)
 
-    def test_ck_markI_reproducibility(self, continuous_property_medium, medium_grid,
+    def test_ck_markI_reproducibility(self, continuous_property_medium, krig_medium_grid,
                                        secondary_property_medium, covariance_spherical):
         """Test cokriging Mark I produces reproducible results"""
         np.random.seed(42)
 
         result1 = simple_cokriging_markI(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             secondary_data=secondary_property_medium,
             primary_mean=50.0,
             secondary_mean=40.0,
@@ -1030,7 +1030,7 @@ class TestSimpleCokrigingMarkI:
         np.random.seed(42)
         result2 = simple_cokriging_markI(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             secondary_data=secondary_property_medium,
             primary_mean=50.0,
             secondary_mean=40.0,
@@ -1043,12 +1043,12 @@ class TestSimpleCokrigingMarkI:
 
         np.testing.assert_array_almost_equal(result1.data, result2.data, decimal=5)
 
-    def test_ck_markI_result_validation(self, continuous_property_medium, medium_grid,
+    def test_ck_markI_result_validation(self, continuous_property_medium, krig_medium_grid,
                                          secondary_property_medium, covariance_spherical):
         """Test cokriging Mark I produces valid results"""
         result = simple_cokriging_markI(
             prop=continuous_property_medium,
-            grid=medium_grid,
+            grid=krig_medium_grid,
             secondary_data=secondary_property_medium,
             primary_mean=50.0,
             secondary_mean=40.0,
@@ -1062,10 +1062,10 @@ class TestSimpleCokrigingMarkI:
         assert not np.any(np.isnan(result.data.astype('float64')))
         assert not np.any(np.isinf(result.data.astype('float64')))
 
-    def test_ck_markI_small_grid(self, continuous_property_small, small_grid,
+    def test_ck_markI_small_grid(self, continuous_property_small, krig_small_grid,
                                   covariance_spherical):
         """Test cokriging Mark I with small grid"""
-        size = small_grid.x * small_grid.y * small_grid.z
+        size = krig_small_grid.x * krig_small_grid.y * krig_small_grid.z
         np.random.seed(43)
         sec_data = np.random.rand(size).astype('float32') * 80
         sec_mask = np.ones(size, dtype='uint8')
@@ -1074,7 +1074,7 @@ class TestSimpleCokrigingMarkI:
 
         result = simple_cokriging_markI(
             prop=continuous_property_small,
-            grid=small_grid,
+            grid=krig_small_grid,
             secondary_data=secondary_property,
             primary_mean=50.0,
             secondary_mean=40.0,
@@ -1095,7 +1095,7 @@ class TestSimpleCokrigingMarkI:
 class TestSimpleCokrigingMarkII:
     """Comprehensive tests for Simple Cokriging Mark II"""
 
-    def test_ck_markII_basic_execution(self, continuous_property_medium, medium_grid,
+    def test_ck_markII_basic_execution(self, continuous_property_medium, krig_medium_grid,
                                        secondary_property_medium):
         """Test basic cokriging Mark II execution"""
         primary_data = {
@@ -1123,7 +1123,7 @@ class TestSimpleCokrigingMarkII:
         }
 
         result = simple_cokriging_markII(
-            grid=medium_grid,
+            grid=krig_medium_grid,
             primary_data=primary_data,
             secondary_data=secondary_data,
             correlation_coef=0.8,
@@ -1134,7 +1134,7 @@ class TestSimpleCokrigingMarkII:
         assert isinstance(result, ContProperty)
         assert result.data.shape == continuous_property_medium.data.shape
 
-    def test_ck_markII_all_covariance_types(self, continuous_property_medium, medium_grid,
+    def test_ck_markII_all_covariance_types(self, continuous_property_medium, krig_medium_grid,
                                             secondary_property_medium):
         """Test cokriging Mark II with all covariance types"""
         cov_types = [
@@ -1169,7 +1169,7 @@ class TestSimpleCokrigingMarkII:
             }
 
             result = simple_cokriging_markII(
-                grid=medium_grid,
+                grid=krig_medium_grid,
                 primary_data=primary_data,
                 secondary_data=secondary_data,
                 correlation_coef=0.8,
@@ -1179,7 +1179,7 @@ class TestSimpleCokrigingMarkII:
             assert isinstance(result, ContProperty), f"Failed for {name}"
 
     @pytest.mark.parametrize("correlation_coef", [0.2, 0.5, 0.8, 0.95])
-    def test_ck_markII_various_correlations(self, continuous_property_medium, medium_grid,
+    def test_ck_markII_various_correlations(self, continuous_property_medium, krig_medium_grid,
                                              secondary_property_medium, correlation_coef):
         """Test cokriging Mark II with various correlation coefficients"""
         primary_data = {
@@ -1207,7 +1207,7 @@ class TestSimpleCokrigingMarkII:
         }
 
         result = simple_cokriging_markII(
-            grid=medium_grid,
+            grid=krig_medium_grid,
             primary_data=primary_data,
             secondary_data=secondary_data,
             correlation_coef=correlation_coef,
@@ -1217,7 +1217,7 @@ class TestSimpleCokrigingMarkII:
         assert isinstance(result, ContProperty)
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
-    def test_ck_markII_various_neighbor_counts(self, continuous_property_medium, medium_grid,
+    def test_ck_markII_various_neighbor_counts(self, continuous_property_medium, krig_medium_grid,
                                                 secondary_property_medium, max_neighbours):
         """Test cokriging Mark II with various neighbor counts"""
         primary_data = {
@@ -1245,7 +1245,7 @@ class TestSimpleCokrigingMarkII:
         }
 
         result = simple_cokriging_markII(
-            grid=medium_grid,
+            grid=krig_medium_grid,
             primary_data=primary_data,
             secondary_data=secondary_data,
             correlation_coef=0.8,
@@ -1254,7 +1254,7 @@ class TestSimpleCokrigingMarkII:
         )
         assert isinstance(result, ContProperty)
 
-    def test_ck_markII_reproducibility(self, continuous_property_medium, medium_grid,
+    def test_ck_markII_reproducibility(self, continuous_property_medium, krig_medium_grid,
                                         secondary_property_medium):
         """Test cokriging Mark II produces reproducible results"""
         np.random.seed(42)
@@ -1284,7 +1284,7 @@ class TestSimpleCokrigingMarkII:
         }
 
         result1 = simple_cokriging_markII(
-            grid=medium_grid,
+            grid=krig_medium_grid,
             primary_data=primary_data,
             secondary_data=secondary_data,
             correlation_coef=0.8,
@@ -1294,7 +1294,7 @@ class TestSimpleCokrigingMarkII:
 
         np.random.seed(42)
         result2 = simple_cokriging_markII(
-            grid=medium_grid,
+            grid=krig_medium_grid,
             primary_data=primary_data,
             secondary_data=secondary_data,
             correlation_coef=0.8,
@@ -1304,7 +1304,7 @@ class TestSimpleCokrigingMarkII:
 
         np.testing.assert_array_almost_equal(result1.data, result2.data, decimal=5)
 
-    def test_ck_markII_result_validation(self, continuous_property_medium, medium_grid,
+    def test_ck_markII_result_validation(self, continuous_property_medium, krig_medium_grid,
                                           secondary_property_medium):
         """Test cokriging Mark II produces valid results"""
         primary_data = {
@@ -1332,7 +1332,7 @@ class TestSimpleCokrigingMarkII:
         }
 
         result = simple_cokriging_markII(
-            grid=medium_grid,
+            grid=krig_medium_grid,
             primary_data=primary_data,
             secondary_data=secondary_data,
             correlation_coef=0.8,

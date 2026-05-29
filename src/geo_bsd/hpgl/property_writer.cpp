@@ -17,7 +17,7 @@ namespace hpgl
 
 	void write_value(FILE * f, unsigned char value)
 	{
-		fprintf(f, "%d\n", (int)(char)value );
+		fprintf(f, "%d\n", static_cast<int>(value) );
 	}
 
 	void write_value(FILE * f, double value)

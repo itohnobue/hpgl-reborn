@@ -57,15 +57,17 @@ void median_ik_for_two_indicators(
 	}	
 
 	report.start();
+	static const int LP_BATCH_SIZE = 1000;
 	#pragma omp parallel
 	{
-		#pragma omp for
+		int local_lap_count = 0;
+		#pragma omp for schedule(dynamic)
 		for (node_index_t idx = 0; idx < prop_size; ++idx)
 		{
 			double prob;
 			indicator_index_t ind_index;
 
-			kriging_interpolation(
+			ki_result_t ki_result = kriging_interpolation(
 				prop_adapter, 
 				is_informed_predicate_t<indicator_property_array_t>(input_property), 
 				idx, 				 
@@ -73,12 +75,33 @@ void median_ik_for_two_indicators(
 				single_mean_t(params.m_marginal_probs[1]), 
 				nl, sk_weight_calculator_t(), prob);
 		
+			if (ki_result != ki_result_t::KI_SUCCESS)
+			{
+				prob = params.m_marginal_probs[1];
+			}
+
 			ind_index = choose_indicator(prob);
 			output_property.set_at(idx, ind_index);
 			
+			// Batch progress updates to reduce critical section contention.
+			// Each thread accumulates laps locally and flushes in batches,
+			// reducing lock acquisitions from ~10M to ~10M/LP_BATCH_SIZE.
+			local_lap_count++;
+			if (local_lap_count >= LP_BATCH_SIZE)
+			{
+				#pragma omp critical
+				{
+					report.next_lap(local_lap_count);
+				}
+				local_lap_count = 0;
+			}
+		}
+		// Flush remaining laps for this thread
+		if (local_lap_count > 0)
+		{
 			#pragma omp critical
 			{
-				report.next_lap();
+				report.next_lap(local_lap_count);
 			}
 		}
 	}

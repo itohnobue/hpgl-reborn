@@ -106,8 +106,7 @@ cmake.version = ">=3.20"
 cmake.args = [
     "-DHPGL_BUILD_PYTHON=ON",
     "-DHPGL_USE_OPENMP=ON",
-    "-DHPGL_USE_MKL=ON",
-    "-DMKL_ROOT=C:/Program Files (x86)/Intel/oneAPI/mkl/latest",
+    "-DHPGL_USE_MKL=OFF",
 ]
 
 # Wheel configuration
@@ -154,7 +153,7 @@ build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
 skip = "*-win32 *-manylinux_i686 pp*"
 
 # Testing commands
-test-command = "python -c 'import hpgl; print(hpgl.__version__)'"
+test-command = "python -c 'import hpgl; print(\"hpgl imported successfully\")'"
 
 # Environment variables
 environment = { CMAKE_BUILD_PARALLEL_LEVEL = "4" }

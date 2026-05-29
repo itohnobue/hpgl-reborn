@@ -46,7 +46,7 @@ namespace hpgl
 
 	bool sugarbox_grid_t::contains(node_index_t index)const
 	{
-		return (unsigned) index < unsigned(m_x * m_y * m_z);
+		return static_cast<unsigned>(index) < static_cast<unsigned>(static_cast<long long>(m_x) * m_y * m_z);
 	}
 
 	node_index_t sugarbox_grid_t::get_index(const sugarbox_location_t & loc)const

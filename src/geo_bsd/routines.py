@@ -1,4 +1,5 @@
 from .geo import *
+from .validation import PathValidator
 from numpy import *
 import numpy.ma as ma
 from numpy import savetxt
@@ -98,60 +99,58 @@ def PointSet2Cube(X, Y, Z, Property, Cube):
 def SaveGSLIBPointSet(PointSet, FileName, Caption):
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBPointSet: FileName must be a non-empty string")
-    f = open(FileName, "w")
-    
-    # 1. Caption
-    f.write(Caption + '\n')
-    
-    # 2. Number of properties in file
-    f.write(str(len(PointSet)) + '\n')
-    
-    # 3. Properties names
+
+    # Validate all properties have the same length before writing any data
     lens = numpy.array([])
-    
     for Key in PointSet.keys():
-        f.write(Key + '\n')
         lens = numpy.append(lens, len(PointSet[Key].flat))
-    
-    # Check that all properties have the same length
-    if(sum(lens - lens[0]) == 0):
+
+    if sum(lens - lens[0]) != 0:
+        raise RuntimeError("SaveGSLIBPointSet: All properties in GSLIB dictionary must have equal size")
+
+    with open(FileName, "w") as f:
+        # 1. Caption
+        f.write(Caption + '\n')
+
+        # 2. Number of properties in file
+        f.write(str(len(PointSet)) + '\n')
+
+        # 3. Properties names
+        for Key in PointSet.keys():
+            f.write(Key + '\n')
+
         MegaPointSet = zeros((int(lens[0]), 0))
         for Key in PointSet.keys():
             MegaPointSet = column_stack((MegaPointSet, PointSet[Key]))
         savetxt(f, MegaPointSet)
-    else:
-        print("ERROR! All properties in GSLIB dictionary must have equal size")
-
-    f.close()
 
 def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBCubes: FileName must be a non-empty string")
-    f = open(FileName, "w")
 
-    # 1. Caption
-    f.write(Caption + '\n')
-
-    # 2. Number of properties in file
-    f.write(str(len(CubesDictionary)) + '\n')
-
-    # 3. Properties names
+    # Validate all properties have the same length before writing any data
     lens = numpy.array([])
-
     for Key in CubesDictionary.keys():
-        f.write(Key + '\n')
         lens = numpy.append(lens, len(CubesDictionary[Key].flat))
 
-    # Check that all properties have the same length
-    if(sum(lens - lens[0]) == 0):
+    if sum(lens - lens[0]) != 0:
+        raise RuntimeError("SaveGSLIBCubes: All properties in GSLIB dictionary must have equal size")
+
+    with open(FileName, "w") as f:
+        # 1. Caption
+        f.write(Caption + '\n')
+
+        # 2. Number of properties in file
+        f.write(str(len(CubesDictionary)) + '\n')
+
+        # 3. Properties names
+        for Key in CubesDictionary.keys():
+            f.write(Key + '\n')
+
         MegaCube = zeros((int(lens[0]), 0))
         for Key in CubesDictionary.keys():
             MegaCube = column_stack((MegaCube, CubesDictionary[Key].copy().swapaxes(0, 2).swapaxes(1, 2).flat))
         savetxt(f, MegaCube, Format)
-    else:
-        print("ERROR! All properties in GSLIB dictionary must have equal size")
-    
-    f.close()
 
 def GetCubicalMask(Radiuses):
 	MeanMask = ones( (Radiuses[0]*2, Radiuses[1]*2, Radiuses[2]*2), dtype = uint8)
@@ -219,32 +218,33 @@ def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
 def LoadGslibFile(filename, property_size):
 	if not filename or not isinstance(filename, str):
 		raise ValueError("LoadGslibFile: filename must be a non-empty string")
-	dict = {}
+
+	# Validate filepath for security (path traversal prevention, exists check)
+	safe_path = PathValidator.validate_filepath(filename, must_exist=True)
+
+	result = {}
 	list_prop = []
 	points = []
 
-	f = open(filename)
-	name = f.readline()
-	num_p = int(f.readline())
-	#print num_p
+	with open(safe_path) as f:
+		f.readline()  # Skip caption line
+		num_p = int(f.readline())
 
-	for i in range(num_p):
-		list_prop.append(str(f.readline().strip()))
-	#print list_prop
+		for _ in range(num_p):
+			list_prop.append(str(f.readline().strip()))
 
-	for i in range(len(list_prop)):
-		dict[ list_prop[i] ] = zeros((property_size[0]*property_size[1]*property_size[2]))
+		for i in range(len(list_prop)):
+			result[list_prop[i]] = zeros((property_size[0]*property_size[1]*property_size[2]))
 
-	index = zeros(len(list_prop), dtype=int)
+		index = zeros(len(list_prop), dtype=int)
 
-	for line in f:
-		points = line.split()
-		for j in range(len(points)):
-			dict[ list_prop[j] ][index[j]] = float64(points[j])
-			index[j]+=1
-	
-	for dkey in dict.keys():
-		dict[dkey] = dict[dkey].reshape(property_size)
+		for line in f:
+			points = line.split()
+			for j in range(len(points)):
+				result[list_prop[j]][index[j]] = float64(points[j])
+				index[j] += 1
 
-	f.close()
-	return dict
+	for dkey in result.keys():
+		result[dkey] = result[dkey].reshape(property_size)
+
+	return result

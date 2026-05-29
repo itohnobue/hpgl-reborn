@@ -270,3 +270,283 @@ class TestCalcLagDistances:
         )
         indexes, _, _, _ = _CalcLagDistances(templ)
         np.testing.assert_array_equal(indexes, np.arange(5))
+
+
+# =============================================================================
+# Core Computation Function Tests (Q2 fix — previously untested)
+# =============================================================================
+
+def _make_ellipsoid(r1=10, r2=5, r3=3):
+    """Helper to create a TVEllipsoid with typical parameters."""
+    return TVEllipsoid(R1=r1, R2=r2, R3=r3)
+
+
+def _make_template(ell, num_lags=5, lag_width=1.0, lag_sep=2.0, tol_dist=1.0):
+    """Helper to create a TVVariogramSearchTemplate."""
+    return TVVariogramSearchTemplate(
+        LagWidth=lag_width, LagSeparation=lag_sep,
+        TolDistance=tol_dist, NumLags=num_lags, Ellipsoid=ell
+    )
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestCalcLagsAreas:
+    """Tests for _CalcLagsAreas function."""
+
+    def test_returns_five_values(self):
+        """_CalcLagsAreas returns I, J, K, LagIndexes, LagDistance."""
+        from geo_bsd.variogram import _CalcLagsAreas
+        ell = _make_ellipsoid()
+        templ = _make_template(ell)
+        result = _CalcLagsAreas(templ)
+        assert len(result) == 5
+        I, J, K, LagIndexes, LagDistance = result
+
+    def test_lag_indexes_within_range(self):
+        """Lag indexes are within [0, NumLags)."""
+        from geo_bsd.variogram import _CalcLagsAreas
+        ell = _make_ellipsoid()
+        templ = _make_template(ell, num_lags=4)
+        I, J, K, LagIndexes, LagDistance = _CalcLagsAreas(templ)
+        assert LagIndexes.min() >= 0
+        assert LagIndexes.max() <= 3  # 0-indexed, < num_lags
+
+    def test_output_arrays_same_size(self):
+        """I, J, K, LagIndexes have same length."""
+        from geo_bsd.variogram import _CalcLagsAreas
+        ell = _make_ellipsoid()
+        templ = _make_template(ell, num_lags=3)
+        I, J, K, LagIndexes, LagDistance = _CalcLagsAreas(templ)
+        n = len(I)
+        assert n == len(J) == len(K) == len(LagIndexes)
+        assert n > 0, "Should have at least one lag point"
+
+    def test_lag_distances_correct_order(self):
+        """LagDistance values are increasing."""
+        from geo_bsd.variogram import _CalcLagsAreas
+        ell = _make_ellipsoid()
+        templ = _make_template(ell, num_lags=5, lag_sep=3.0)
+        I, J, K, LagIndexes, LagDistance = _CalcLagsAreas(templ)
+        expected = np.array([0, 3, 6, 9, 12])
+        np.testing.assert_array_equal(LagDistance, expected)
+
+    def test_all_coordinates_are_integers(self):
+        """I, J, K are integer arrays."""
+        from geo_bsd.variogram import _CalcLagsAreas
+        ell = _make_ellipsoid()
+        templ = _make_template(ell, num_lags=3)
+        I, J, K, _, _ = _CalcLagsAreas(templ)
+        assert I.dtype == np.int32 or I.dtype == np.int64
+        assert J.dtype == np.int32 or J.dtype == np.int64
+        assert K.dtype == np.int32 or K.dtype == np.int64
+
+    def test_zero_radii_returns_empty_arrays(self):
+        """Zero R2/R3 produces empty lag area arrays."""
+        from geo_bsd.variogram import _CalcLagsAreas
+        ell = _make_ellipsoid(r1=10, r2=0, r3=0)
+        templ = _make_template(ell, num_lags=3)
+        I, J, K, LagIndexes, _ = _CalcLagsAreas(templ)
+        assert len(I) == 0 and len(J) == 0 and len(K) == 0
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestVariogramCoreFunctions:
+    """Tests for CalcVariogramFunction, CalcCovarianceFunction, CalcIndCorrelationFunction."""
+
+    # ---- CalcVariogramFunction ----
+
+    def test_calc_variogram_initializes_result(self):
+        """CalcVariogramFunction initializes result on first call (Result=None)."""
+        from geo_bsd.variogram import CalcVariogramFunction
+        # Point1=None, Point2=None triggers initialization path (Result is None)
+        params = {"HardData": [np.array([1.0, 2.0, 3.0], dtype='float32')]}
+        result = CalcVariogramFunction(None, None, None, params)
+        assert result is not None
+        num_vals = len(params["HardData"])
+        # Result shape: NumValues + NumValues + 1 = 2*n + 1
+        assert len(result) == 2 * num_vals + 1
+
+    def test_calc_variogram_identity(self):
+        """CalcVariogramFunction with identical points gives zero variance."""
+        from geo_bsd.variogram import CalcVariogramFunction
+        values = [np.array([10.0, 20.0, 30.0, 40.0], dtype='float32')]
+        params = {"HardData": values}
+        # Initialization: Result=None creates zeros
+        result = CalcVariogramFunction(None, None, None, params)
+        n_vals = len(values)
+        assert len(result) == 2 * n_vals + 1
+        # Compute variogram for two identical point indices
+        # Point1/Point2 are single indices (as lists, per scan function convention)
+        result = CalcVariogramFunction([0], [1], result, params)
+        assert np.all(np.isfinite(result))
+        variogram_vals = result[:n_vals]
+        # Variogram for different values should be non-zero
+        assert np.any(variogram_vals > 0)
+
+    # ---- CalcCovarianceFunction ----
+
+    def test_calc_covariance_initializes_result(self):
+        """CalcCovarianceFunction initializes result on first call."""
+        from geo_bsd.variogram import CalcCovarianceFunction
+        values = [np.array([1.0, 2.0, 3.0], dtype='float32')]
+        soft = [np.array([0.5, 1.5, 2.5], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcCovarianceFunction(None, None, None, params)
+        assert result is not None
+        n_vals = len(values)
+        assert len(result) == 2 * n_vals + 1
+
+    def test_calc_covariance_computes_values(self):
+        """CalcCovarianceFunction computes covariance between point pairs."""
+        from geo_bsd.variogram import CalcCovarianceFunction
+        values = [np.array([10.0, 20.0, 30.0], dtype='float32')]
+        soft = [np.array([10.0, 20.0, 30.0], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcCovarianceFunction(None, None, None, params)
+        n_vals = len(values)
+
+        p1 = np.int64(0)
+        p2 = np.int64(1)
+        result = CalcCovarianceFunction(p1, p2, result, params)
+        assert np.all(np.isfinite(result))
+
+    # ---- CalcIndCorrelationFunction ----
+
+    def test_calc_ind_correlation_initializes_result(self):
+        """CalcIndCorrelationFunction initializes result on first call."""
+        from geo_bsd.variogram import CalcIndCorrelationFunction
+        values = [np.array([1.0, 0.0], dtype='float32')]
+        soft = [np.array([0.5, 0.5], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcIndCorrelationFunction(None, None, None, params)
+        assert result is not None
+        n_vals = len(values)
+        assert len(result) == 2 * n_vals + 1
+
+    def test_calc_ind_correlation_div_zero_guard(self):
+        """CalcIndCorrelationFunction handles soft data with value 0 or 1."""
+        from geo_bsd.variogram import CalcIndCorrelationFunction
+        # Soft data 0 or 1 causes denom=0 → guarded to 1.0
+        values = [np.array([0.0, 1.0, 0.0], dtype='float32')]
+        soft = [np.array([0.0, 0.0, 1.0], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcIndCorrelationFunction(None, None, None, params)
+        p1 = np.int64(0)
+        p2 = np.int64(1)
+        result = CalcIndCorrelationFunction(p1, p2, result, params)
+        assert np.all(np.isfinite(result)), "Denom guard should prevent NaN/Inf"
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestPointSetScanContStyle:
+    """Tests for PointSetScanContStyle function.
+
+    Note: Passing Function=None triggers an UnboundLocalError in variogram.py
+    (Result variable not initialized when Function is None). These tests use
+    a trivial function to exercise the scan path.
+    """
+
+    def _trivial_fn(self, p1, p2, result, params):
+        """A trivial accumulator function for scan tests."""
+        return result if result is not None else np.zeros(3)
+
+    def test_scans_with_function_completes(self):
+        """PointSetScanContStyle with a trivial function returns result."""
+        from geo_bsd.variogram import PointSetScanContStyle
+        ell = _make_ellipsoid(r1=20, r2=10, r3=5)
+        templ = _make_template(ell, num_lags=3, lag_width=2.0, lag_sep=5.0)
+        point_set = {
+            "X": np.array([0, 1, 2], dtype='int32'),
+            "Y": np.array([0, 0, 0], dtype='int32'),
+            "Z": np.array([0, 0, 0], dtype='int32'),
+        }
+        result, lag_dist = PointSetScanContStyle(templ, point_set, self._trivial_fn, None)
+        assert result is not None
+        assert len(lag_dist) == templ.NumLags
+        assert np.all(np.isfinite(result))
+
+    def test_scan_with_empty_pointset_completes(self):
+        """PointSetScanContStyle with empty point set doesn't crash."""
+        from geo_bsd.variogram import PointSetScanContStyle
+        ell = _make_ellipsoid()
+        templ = _make_template(ell, num_lags=3)
+        point_set = {
+            "X": np.array([], dtype='int32'),
+            "Y": np.array([], dtype='int32'),
+            "Z": np.array([], dtype='int32'),
+        }
+        result, lag_dist = PointSetScanContStyle(templ, point_set, self._trivial_fn, None)
+        assert lag_dist is not None
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestPointSetScanGridStyle:
+    """Tests for PointSetScanGridStyle function.
+
+    Note: Passing Function=None triggers an UnboundLocalError in variogram.py
+    (same bug as PointSetScanContStyle).
+    """
+
+    def _trivial_fn(self, p1, p2, result, params):
+        return result if result is not None else np.zeros(3)
+
+    def test_scan_with_function_completes(self):
+        """PointSetScanGridStyle with a trivial function returns result."""
+        from geo_bsd.variogram import PointSetScanGridStyle
+        ell = _make_ellipsoid(r1=20, r2=10, r3=5)
+        templ = _make_template(ell, num_lags=3, lag_width=2.0, lag_sep=5.0)
+        xyz = (
+            np.array([0, 5, 10], dtype='int32'),
+            np.array([0, 0, 0], dtype='int32'),
+            np.array([0, 0, 0], dtype='int32'),
+        )
+        result, lag_dist = PointSetScanGridStyle(templ, xyz, self._trivial_fn, None)
+        assert result is not None
+        assert len(lag_dist) == templ.NumLags
+        assert np.all(np.isfinite(result))
+
+    def test_scan_with_empty_points_completes(self):
+        """PointSetScanGridStyle with empty arrays doesn't crash."""
+        from geo_bsd.variogram import PointSetScanGridStyle
+        ell = _make_ellipsoid()
+        templ = _make_template(ell, num_lags=3)
+        xyz = (
+            np.array([], dtype='int32'),
+            np.array([], dtype='int32'),
+            np.array([], dtype='int32'),
+        )
+        result, lag_dist = PointSetScanGridStyle(templ, xyz, self._trivial_fn, None)
+        assert lag_dist is not None
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestCubeScan:
+    """Tests for CubeScan function.
+
+    Note: Passing Function=None triggers an UnboundLocalError in variogram.py
+    (Result variable not initialized when Function is None — same bug as scan functions).
+    """
+
+    def _trivial_fn(self, p1, p2, result, params):
+        return result if result is not None else np.zeros(3)
+
+    def test_cube_scan_with_function_completes(self):
+        """CubeScan with a small mask returns result."""
+        from geo_bsd.variogram import CubeScan
+        ell = _make_ellipsoid(r1=10, r2=5, r3=3)
+        # Use lag_sep small enough that all lag offsets fit within mask
+        templ = _make_template(ell, num_lags=2, lag_width=1.0, lag_sep=1.0)
+        mask = np.ones((10, 10, 5), dtype='uint8')
+        result, lag_dist = CubeScan(templ, mask, self._trivial_fn, None)
+        assert result is not None
+        assert len(lag_dist) == templ.NumLags
+
+    def test_cube_scan_with_zero_mask_completes(self):
+        """CubeScan with a mask of all zeros doesn't crash."""
+        from geo_bsd.variogram import CubeScan
+        ell = _make_ellipsoid()
+        templ = _make_template(ell, num_lags=3)
+        mask = np.zeros((5, 5, 3), dtype='uint8')
+        result, lag_dist = CubeScan(templ, mask, self._trivial_fn, None)
+        assert result is not None
+        assert len(lag_dist) == templ.NumLags

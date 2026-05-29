@@ -5,8 +5,12 @@ REM Rebuilds the hpgl-bsd project (main DLL) in Release x64 configuration
 setlocal enabledelayedexpansion
 
 REM Set environment variables
-set "MKL_ROOT=C:\Program Files (x86)\Intel\oneAPI\mkl\latest"
-set "VCTargetsPath=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Microsoft\VC\v170\"
+REM Override these with environment variables before running build.bat if needed:
+REM   set MKL_ROOT=...      (default: C:\Program Files (x86)\Intel\oneAPI\mkl\latest)
+REM   set VCTargetsPath=... (default: VS 2022 BuildTools v170)
+REM   set MSBUILD_PATH=...  (default: auto-detected under VS 2022 BuildTools)
+if not defined MKL_ROOT set "MKL_ROOT=C:\Program Files (x86)\Intel\oneAPI\mkl\latest"
+if not defined VCTargetsPath set "VCTargetsPath=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Microsoft\VC\v170\"
 set "SolutionDir=%~dp0src\msvc\"
 set "LogFile=%~dp0build.log"
 
@@ -21,10 +25,12 @@ echo Project: hpgl.vcxproj
 echo Configuration: Release x64
 echo.
 
-REM Find BuildTools MSBuild
-set "MSBUILD_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe"
-if not exist "%MSBUILD_PATH%" (
-    set "MSBUILD_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+REM Find BuildTools MSBuild (can be overridden via MSBUILD_PATH env var)
+if not defined MSBUILD_PATH (
+    set "MSBUILD_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe"
+    if not exist "!MSBUILD_PATH!" (
+        set "MSBUILD_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+    )
 )
 
 if not exist "%MSBUILD_PATH%" (
@@ -46,6 +52,9 @@ echo.
 echo Building cvariogram.vcxproj...
 "%MSBUILD_PATH%" "%SolutionDir%cvariogram.vcxproj" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%;Append" /nologo
 if %ERRORLEVEL% NEQ 0 goto :build_failed
+
+REM Both builds succeeded — jump to success handler
+goto :build_succeeded
 
 :build_failed
 echo.
@@ -100,5 +109,4 @@ echo.
 echo Build log: %LogFile%
 goto :eof
 
-echo.
 endlocal

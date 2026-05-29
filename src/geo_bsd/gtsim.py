@@ -1,5 +1,6 @@
 # GTSIM for 2 indicators (facies)
 from .geo import *
+from .sgs import sgs_simulation
 from numpy import *
 try:
     from scipy import *

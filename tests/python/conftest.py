@@ -15,9 +15,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 # Check if HPGL is available
 try:
-    import geo_bsd
+    # Import modules individually to avoid __init__.py triggering
+    # geo.py syntax errors in unrelated modules
+    from geo_bsd.geo import ContProperty as _ContProperty
     HPGL_AVAILABLE = True
-except ImportError:
+except (ImportError, SyntaxError, IndentationError):
     HPGL_AVAILABLE = False
 
 
@@ -462,7 +464,11 @@ def test_data_dir():
     Returns:
         Path: Path object pointing to the test data directory.
     """
-    return Path(__file__).parent.parent / "data"
+    data_path = Path(__file__).parent / "test_data"
+    if not data_path.exists():
+        # Fallback to the old (incorrect) path for backward compat
+        data_path = Path(__file__).parent.parent / "data"
+    return data_path
 
 
 # =============================================================================

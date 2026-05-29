@@ -178,11 +178,6 @@ namespace hpgl
 
 		double V = 0.0;
 
-		if (size > 0 && static_cast<size_t>(size) > SIZE_MAX / static_cast<size_t>(size))
-		{
-			return false;
-		}
-
 		std::vector<double> A_U(size*size,0.0);
 		std::vector<double> A_L(size*size,0.0);
 

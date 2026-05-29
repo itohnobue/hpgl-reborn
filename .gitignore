@@ -15,8 +15,7 @@ dist/
 *.egg
 .pytest_cache/
 
-# UV package manager lock file (not needed for library)
-uv.lock
+# UV package manager lock file — committed for reproducible builds
 
 # CMake/CPack (alternative build system - MSVC is primary)
 CMakeCache.txt

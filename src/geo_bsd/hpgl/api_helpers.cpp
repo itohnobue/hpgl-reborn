@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include <stdexcept>
 #include <climits>
+#include <mutex>
 #include "api.h"
 #include "covariance_type.h"
 #include "sugarbox_grid.h"
@@ -13,16 +14,19 @@ namespace hpgl
 {
 
 static std::string last_exception_message;
+static std::mutex last_exception_mutex;
 
 const std::string & 
 get_last_exception_message()
 {
+	std::lock_guard<std::mutex> lock(last_exception_mutex);
 	return last_exception_message;
 }
 
 void
 set_last_exception_message(const char * message)
 {
+	std::lock_guard<std::mutex> lock(last_exception_mutex);
 	last_exception_message = message;
 }
 

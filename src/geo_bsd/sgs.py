@@ -1,6 +1,6 @@
 from .hpgl_wrap import _HPGL_KRIGING_KIND, _HPGL_SGS_PARAMS, hpgl_non_parametric_cdf_t,  _hpgl_so
 
-from .geo import _empty_clone, _clone_prop, _create_hpgl_cont_masked_array, _create_hpgl_float_array, _create_hpgl_ubyte_array, _require_cont_data, _require_ind_data, __checked_create, _check_hpgl_error
+from .geo import _empty_clone, _clone_prop, _create_hpgl_cont_masked_array, _create_hpgl_float_array, _create_hpgl_ubyte_array, _require_cont_data, _require_ind_data, __checked_create, _check_hpgl_error, _snapshot_hpgl_error
 
 from .geo import CovarianceModel
 from .geo import accepts_tuple
@@ -24,9 +24,9 @@ def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
 		out_prop = _clone_prop(prop)
 	else:
 		out_prop = _empty_clone(prop)
-	if not mean is None and not numpy.isscalar(mean):
+	if mean is not None and not numpy.isscalar(mean):
 		mean = _require_cont_data(mean)
-	if not mask is None:
+	if mask is not None:
 		mask = _require_ind_data(mask)
 	return out_prop, mean, mask
 
@@ -41,6 +41,8 @@ def _create_hpgl_nonparam_cdf(cdf_data):
 
 def normed_cov_model(cov_model):
 	coef = cov_model.sill
+	if coef == 0.0:
+		raise ValueError("normed_cov_model: sill cannot be zero (division by zero)")
 	return CovarianceModel(
 		cov_model.type, 
 		cov_model.ranges, 
@@ -131,6 +133,7 @@ mask: None or array_like, optional:
 	hpgl_mask = C.byref(_create_hpgl_ubyte_array(mask, grid)) if mask is not None else None
 
 	if mean is None or numpy.isscalar(mean):
+		_snapshot_hpgl_error()
 		_hpgl_so.hpgl_sgs_simulation(
 			C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
 			C.byref(sgsp),
@@ -142,6 +145,7 @@ mask: None or array_like, optional:
 
 
 	else:
+		_snapshot_hpgl_error()
 		_hpgl_so.hpgl_sgs_lvm_simulation(
 			C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
 			C.byref(sgsp),

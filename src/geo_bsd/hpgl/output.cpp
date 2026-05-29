@@ -2,9 +2,11 @@
 #include "api.h"
 #include <string>
 
+// Handler function pointers — set once at startup (before any concurrent calls).
+// Using raw pointers here to match C callback ABI (cannot use std::function across C boundary).
+// This is the standard ctypes callback pattern; synchronization deferred to caller.
 static int (*s_handler)(char * data, void * param) = nullptr;
 static void * s_param = nullptr;
-
 
 static int (*s_progress_handler)(char * stage, int percentage, void * param) = nullptr;
 static void * s_progress_handler_param = nullptr;
@@ -16,7 +18,7 @@ namespace hpgl
 	{
 		if (s_handler)
 		{
-			s_handler((char*)str, s_param);
+			s_handler(const_cast<char*>(str), s_param);
 		}
 		else
 		{
@@ -35,7 +37,7 @@ namespace hpgl
 	{
 		if (s_progress_handler)
 		{
-			s_progress_handler((char*)stage, percentage, s_progress_handler_param);
+			s_progress_handler(const_cast<char*>(stage), percentage, s_progress_handler_param);
 		}
 		else
 		{

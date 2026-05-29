@@ -1,5 +1,7 @@
 #include "stdafx.h"
 #include <iostream>
+#include <memory>
+#include <sstream>
 
 #include "api.h"
 #include "api_helpers.hpp"
@@ -33,16 +35,73 @@ handle_exception(const std::exception & ex)
 	hpgl::set_last_exception_message(ex.what());
 }
 
+/// Validates that a C API struct pointer parameter is non-null.
+/// Returns 0 on success, -1 on null (stores error message).
+static int validate_pointer(const void * ptr, const char * param_name)
+{
+	if (ptr == nullptr)
+	{
+		std::ostringstream oss;
+		oss << "Null pointer argument: " << param_name;
+		hpgl::set_last_exception_message(oss.str().c_str());
+		return -1;
+	}
+	return 0;
+}
+
+/// Validates a struct pointer parameter for void-returning C API functions.
+/// Throws hpgl_exception if null (caught by existing try/catch handlers).
+static void validate_pointer_or_throw(const void * ptr, const char * param_name)
+{
+	if (ptr == nullptr)
+	{
+		std::ostringstream oss;
+		oss << "Null pointer argument: " << param_name;
+		throw hpgl::hpgl_exception("C API", oss.str());
+	}
+}
+
+/// Validates get_shape_volume result, returns negative size.
+/// Returns original value if >= 0, -1 otherwise (stores error message).
+static int validate_shape_volume(int volume, const char * context)
+{
+	if (volume < 0)
+	{
+		std::ostringstream oss;
+		oss << context << ": grid volume overflow or invalid shape";
+		hpgl::set_last_exception_message(oss.str().c_str());
+		return -1;
+	}
+	return volume;
+}
+
+/// Validates get_shape_volume result for void-returning functions.
+/// Throws hpgl_exception if volume is invalid.
+static void validate_shape_volume_or_throw(int volume, const char * context)
+{
+	if (volume < 0)
+	{
+		std::ostringstream oss;
+		oss << context << ": grid volume overflow or invalid shape";
+		throw hpgl::hpgl_exception("C API", oss.str());
+	}
+}
+
 extern "C" {
 
 HPGL_API char * hpgl_get_last_exception_message()
 {
-	return (char *) hpgl::get_last_exception_message().c_str();
+	return const_cast<char *>(hpgl::get_last_exception_message().c_str());
 }
 
 HPGL_API void hpgl_set_thread_num(int n_threads)
 {
-	hpgl::set_thread_num(n_threads);
+	if (!hpgl::set_thread_num(n_threads))
+	{
+		std::ostringstream oss;
+		oss << "hpgl_set_thread_num: invalid thread count " << n_threads;
+		hpgl::set_last_exception_message(oss.str().c_str());
+	}
 }
 
 HPGL_API int hpgl_get_thread_num()
@@ -121,15 +180,18 @@ HPGL_API int hpgl_write_inc_file_float(
 		float undefined_value,
 		char * name)
 {
+	if (validate_pointer(arr, "arr (write_inc_file_float)") != 0) return -1;
 	try
 	{
 		using namespace hpgl;
+		int vol = get_shape_volume(&(arr->m_shape));
+		if (vol < 0) return -1;
 		property_writer_t writer;
 		writer.init(filename, name);
 		cont_property_array_t prop(
 				arr->m_data,
 				arr->m_mask,
-				get_shape_volume(&(arr->m_shape)));
+				vol);
 		writer.write_double(prop, undefined_value);
 		return 0;
 	}
@@ -174,9 +236,12 @@ HPGL_API int hpgl_write_inc_file_byte(
 		unsigned char * values,
 		int values_count)
 {
+	if (validate_pointer(arr, "arr (write_inc_file_byte)") != 0) return -1;
 	try
 	{
 		using namespace hpgl;
+		int vol = get_shape_volume(&(arr->m_shape));
+		if (vol < 0) return -1;
 		std::vector<unsigned char> remap_table;
 		init_remap_table(values, values_count, arr->m_indicator_count, remap_table);
 
@@ -185,7 +250,7 @@ HPGL_API int hpgl_write_inc_file_byte(
 		indicator_property_array_t prop(
 				arr->m_data,
 				arr->m_mask,
-				get_shape_volume(&(arr->m_shape)),
+				vol,
 				arr->m_indicator_count);
 		writer.write_byte(prop, undefined_value, remap_table);
 		return 0;
@@ -204,11 +269,13 @@ hpgl_write_gslib_cont_property(
 		const char * name,
 		double undefined_value)
 {
+	if (validate_pointer(data, "data (write_gslib_cont_property)") != 0) return -1;
 	try
 	{
 		using namespace hpgl;
 		int size = get_shape_volume(&data->m_shape);
-		sp_double_property_array_t prop(new cont_property_array_t(data->m_data, data->m_mask, size));
+		if (size < 0) return -1;
+		sp_double_property_array_t prop = std::make_shared<cont_property_array_t>(data->m_data, data->m_mask, size);
 		hpgl::property_writer_t writer;
 		writer.init(filename, name);
 		writer.write_gslib_double(prop, undefined_value);
@@ -230,11 +297,13 @@ hpgl_write_gslib_byte_property(
 		unsigned char * values,
 		int values_count)
 {
+	if (validate_pointer(data, "data (write_gslib_byte_property)") != 0) return -1;
 	try
 	{
 		using namespace hpgl;
 		int size = get_shape_volume(&data->m_shape);
-		sp_byte_property_array_t prop( new indicator_property_array_t(data->m_data, data->m_mask, size, data->m_indicator_count));
+		if (size < 0) return -1;
+		sp_byte_property_array_t prop = std::make_shared<indicator_property_array_t>(data->m_data, data->m_mask, size, data->m_indicator_count);
 		std::vector<unsigned char> remap_table;
 		init_remap_table(values, values_count, data->m_indicator_count, remap_table);
 
@@ -258,8 +327,14 @@ HPGL_API void hpgl_ordinary_kriging(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(input_data, "input_data (ordinary_kriging)");
+	validate_pointer_or_throw(params, "params (ordinary_kriging)");
+	validate_pointer_or_throw(output_data, "output_data (ordinary_kriging)");
+
 	int in_size = get_shape_volume(&input_data->m_shape);
+	validate_shape_volume_or_throw(in_size, "ordinary_kriging input");
 	int out_size = get_shape_volume(&output_data->m_shape);
+	validate_shape_volume_or_throw(out_size, "ordinary_kriging output");
 
 	cont_property_array_t in_prop(input_data->m_data, input_data->m_mask, in_size);
 	cont_property_array_t out_prop(output_data->m_data, output_data->m_mask, out_size);
@@ -332,8 +407,14 @@ HPGL_API void hpgl_simple_kriging(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(input_data_shape, "input_data_shape (simple_kriging)");
+	validate_pointer_or_throw(params, "params (simple_kriging)");
+	validate_pointer_or_throw(output_data_shape, "output_data_shape (simple_kriging)");
+
 	int in_size = get_shape_volume(input_data_shape);
+	validate_shape_volume_or_throw(in_size, "simple_kriging input");
 	int out_size = get_shape_volume(output_data_shape);
+	validate_shape_volume_or_throw(out_size, "simple_kriging output");
 
 	cont_property_array_t in_prop(input_data, input_mask, in_size);
 	cont_property_array_t out_prop(output_data, output_mask, out_size);
@@ -363,6 +444,13 @@ hpgl_simple_kriging_weights(
 		hpgl_cov_params_t * params,
 		float * weights)
 {
+	if (validate_pointer(params, "params (simple_kriging_weights)") != 0) return -1;
+	if (validate_pointer(weights, "weights (simple_kriging_weights)") != 0) return -1;
+	if (neighbours_count < 0)
+	{
+		hpgl::set_last_exception_message("simple_kriging_weights: negative neighbours_count");
+		return -1;
+	}
 	try
 	{
 	using namespace hpgl;
@@ -423,7 +511,13 @@ HPGL_API void hpgl_lvm_kriging(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(input_data_shape, "input_data_shape (lvm_kriging)");
+	validate_pointer_or_throw(mean_data_shape, "mean_data_shape (lvm_kriging)");
+	validate_pointer_or_throw(params, "params (lvm_kriging)");
+	validate_pointer_or_throw(output_data_shape, "output_data_shape (lvm_kriging)");
+
 	int size = get_shape_volume(input_data_shape);
+	validate_shape_volume_or_throw(size, "lvm_kriging input");
 	cont_property_array_t input_prop(input_data, input_mask, size);
 	sugarbox_grid_t grid;
 	init_grid(grid, input_data_shape);
@@ -464,8 +558,14 @@ hpgl_indicator_kriging(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(in_data, "in_data (indicator_kriging)");
+	validate_pointer_or_throw(out_data, "out_data (indicator_kriging)");
+	validate_pointer_or_throw(params, "params (indicator_kriging)");
+
 	int size = get_shape_volume(&in_data->m_shape);
+	validate_shape_volume_or_throw(size, "indicator_kriging input");
 	int size2 = get_shape_volume(&out_data->m_shape);
+	validate_shape_volume_or_throw(size2, "indicator_kriging output");
 	HPGL_CHECK(size == size2, "hpgl_indicator_kriging: input and output size mismatch");
 	indicator_property_array_t in_prop(in_data->m_data, in_data->m_mask, size, in_data->m_indicator_count);
 	indicator_property_array_t out_prop(out_data->m_data, out_data->m_mask, size2, out_data->m_indicator_count);
@@ -492,7 +592,11 @@ hpgl_sgs_simulation(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(data, "data (sgs_simulation)");
+	validate_pointer_or_throw(params, "params (sgs_simulation)");
+
 	int size = get_shape_volume(&(data->m_shape));
+	validate_shape_volume_or_throw(size, "sgs_simulation");
 	cont_property_array_t prop(data->m_data, data->m_mask, size);
 
 	sugarbox_grid_t grid;
@@ -526,7 +630,12 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(data, "data (sgs_lvm_simulation)");
+	validate_pointer_or_throw(params, "params (sgs_lvm_simulation)");
+	validate_pointer_or_throw(means, "means (sgs_lvm_simulation)");
+
 	int size = get_shape_volume(&(data->m_shape));
+	validate_shape_volume_or_throw(size, "sgs_lvm_simulation");
 	cont_property_array_t prop(data->m_data, data->m_mask, size);
 
 	sugarbox_grid_t grid;
@@ -557,8 +666,12 @@ HPGL_API void hpgl_median_ik(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(in_data, "in_data (median_ik)");
+	validate_pointer_or_throw(params, "params (median_ik)");
+	validate_pointer_or_throw(out_data, "out_data (median_ik)");
 
 	int size = get_shape_volume(&(in_data->m_shape));
+	validate_shape_volume_or_throw(size, "median_ik");
 
 	sugarbox_grid_t grid;
 	init_grid(grid, &(in_data->m_shape));
@@ -611,7 +724,11 @@ hpgl_sis_simulation(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(data, "data (sis_simulation)");
+	validate_pointer_or_throw(params, "params (sis_simulation)");
+
 	int size = get_shape_volume(&data->m_shape);
+	validate_shape_volume_or_throw(size, "sis_simulation");
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
 
 	sugarbox_grid_t grid;
@@ -647,7 +764,12 @@ hpgl_sis_simulation_lvm(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(data, "data (sis_simulation_lvm)");
+	validate_pointer_or_throw(params, "params (sis_simulation_lvm)");
+	validate_pointer_or_throw(mean_data, "mean_data (sis_simulation_lvm)");
+
 	int size = get_shape_volume(&data->m_shape);
+	validate_shape_volume_or_throw(size, "sis_simulation_lvm");
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
 
 	sugarbox_grid_t grid;
@@ -687,9 +809,17 @@ hpgl_simple_cokriging_mark1(
 	try
 	{
 		using namespace hpgl;
+		validate_pointer_or_throw(input_data, "input_data (cokriging_m1)");
+		validate_pointer_or_throw(secondary_data, "secondary_data (cokriging_m1)");
+		validate_pointer_or_throw(params, "params (cokriging_m1)");
+		validate_pointer_or_throw(output_data, "output_data (cokriging_m1)");
+
 		int size = get_shape_volume(&input_data->m_shape);
+		validate_shape_volume_or_throw(size, "cokriging_m1 primary");
 		int size2 = get_shape_volume(&secondary_data->m_shape);
+		validate_shape_volume_or_throw(size2, "cokriging_m1 secondary");
 		int size3 = get_shape_volume(&output_data->m_shape);
+		validate_shape_volume_or_throw(size3, "cokriging_m1 output");
 
 		if (size != size2)
 		{
@@ -758,9 +888,17 @@ hpgl_simple_cokriging_mark2(
 	try
 	{
 		using namespace hpgl;
+		validate_pointer_or_throw(primary_data, "primary_data (cokriging_m2)");
+		validate_pointer_or_throw(secondary_data, "secondary_data (cokriging_m2)");
+		validate_pointer_or_throw(params, "params (cokriging_m2)");
+		validate_pointer_or_throw(output_data, "output_data (cokriging_m2)");
+
 		int size = get_shape_volume(&primary_data->m_shape);
+		validate_shape_volume_or_throw(size, "cokriging_m2 primary");
 		int size2 = get_shape_volume(&secondary_data->m_shape);
+		validate_shape_volume_or_throw(size2, "cokriging_m2 secondary");
 		int size3 = get_shape_volume(&output_data->m_shape);
+		validate_shape_volume_or_throw(size3, "cokriging_m2 output");
 
 		if (size != size2)
 		{

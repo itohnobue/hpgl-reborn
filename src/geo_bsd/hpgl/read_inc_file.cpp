@@ -54,7 +54,9 @@ start:
 			for (int i = 0; i < size; ++i)
 			{		
 start:
-				fscanf(file, "%255s", buffer);
+				if (fscanf(file, "%255s", buffer) == EOF)
+					throw hpgl_exception("load_floats_into_vector",
+						"Unexpected end of file.");
 				if (ferror(file))
 					throw hpgl_exception("load_floats_into_vector",
 						"Error reading file.");
@@ -95,7 +97,9 @@ start:
 			for (int i = 0; i < size; ++i)
 			{		
 start:
-				fscanf(file, "%255s", buffer);
+				if (fscanf(file, "%255s", buffer) == EOF)
+					throw hpgl_exception("read_bytes",
+						"Unexpected end of file.");
 				if (ferror(file))
 					throw hpgl_exception("read_bytes",
 						"Error reading file.");
@@ -120,8 +124,14 @@ start:
 						std::ostringstream oss;
 						oss << "Error parsing '" << buffer << "' string.";
 						throw hpgl_exception("load_floats_into_vector", oss.str());
-					}					
-					data[i] = value;											
+					}
+					if (value < 0 || value > 255)
+					{
+						std::ostringstream oss;
+						oss << "Byte value " << value << " out of range [0, 255] at position " << i;
+						throw hpgl_exception("read_bytes", oss.str());
+					}
+					data[i] = static_cast<unsigned char>(value);											
 					mask[i] = value == undefined_value ? 0 : 1;
 				}		
 			};
