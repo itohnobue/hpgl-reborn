@@ -539,7 +539,7 @@ requires-dist = [
     { name = "hpgl", extras = ["dev", "test", "docs"], marker = "extra == 'all'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=2.0" },
-    { name = "numpy", specifier = ">=1.24" },
+    { name = "numpy", specifier = ">=2.0,<3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
     { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=4.0" },

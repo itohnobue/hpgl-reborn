@@ -5,18 +5,10 @@ import numpy
 # NumPy 2.0+ compatibility: try new location first, fall back to old
 try:
     from numpy import ctypeslib as NC
-    import numpy as np
-    if tuple(map(int, np.__version__.split('.')[:2])) >= (2, 0):
-        _load_lib_func = lambda libpath: C.CDLL(str(libpath))
-    else:
-        _load_lib_func = lambda libpath: NC.load_library(libpath)
 except ImportError:
     from numpy import _ctypeslib as NC
-    import numpy as np
-    if tuple(map(int, np.__version__.split('.')[:2])) >= (2, 0):
-        _load_lib_func = lambda libpath: C.CDLL(str(libpath))
-    else:
-        _load_lib_func = lambda libpath: NC.load_library(libpath)
+# Since numpy>=2.0 is required, always use direct ctypes.CDLL
+_load_lib_func = lambda libpath: C.CDLL(str(libpath))
 
 # In NumPy 2.0+, ndpointer might be in different location
 try:
@@ -26,13 +18,9 @@ except AttributeError:
 
 #from _cvariogram import CStackLayers
 
-try:
-    cvar = NC.load_library('_cvariogram', __file__)
-except (OSError, AttributeError):
-    # NumPy 2.0+ fallback: load directly using ctypes
-    import pathlib
-    _cvar_dir = pathlib.Path(__file__).resolve().parent
-    cvar = _load_lib_func(os.path.join(str(_cvar_dir), '_cvariogram'))
+from .hpgl_wrap import _safe_load_library
+
+cvar = _safe_load_library('_cvariogram', __file__)
 
 class vector_t(C.Structure):
     _fields_ = [("data", C.c_double * 3)]
@@ -71,7 +59,7 @@ class cont_point_set_t (C.Structure):
         ("ys", C.POINTER(C.c_float)),
         ("zs", C.POINTER(C.c_float)),
         ("values", C.POINTER(C.c_float)),
-        ("values_count", C.c_int)]
+        ("size", C.c_int)]
 
 class float_data_t (C.Structure):
     _fields_ = [
@@ -190,7 +178,8 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
     for key in ("X", "Y", "Z", "Property"):
         if key not in point_set:
             raise ValueError(f"CalcVariogramsFromPointSet: point_set missing required key '{key}'")
-    variogram = numpy.array([0] * templ.num_lags, dtype='float32')
+    if variogram is None:
+        variogram = numpy.array([0] * templ.num_lags, dtype='float32')
 
     ps = checked_create(
         cont_point_set_t,
@@ -198,7 +187,7 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
         ys = point_set["Y"].ctypes.data_as(C.POINTER(C.c_float)),
         zs = point_set["Z"].ctypes.data_as(C.POINTER(C.c_float)),
         values = point_set["Property"].ctypes.data_as(C.POINTER(C.c_float)),
-        values_count = point_set["Property"].size)
+        size = point_set["Property"].size)
 
     cvar.calc_variograms_from_point_set(
         C.byref(templ.templ),

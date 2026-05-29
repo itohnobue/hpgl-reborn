@@ -7,7 +7,7 @@
 
 // Detect ILP64 vs LP64 interface for LAPACK
 // ILP64 uses 64-bit integers (long long), LP64 uses 32-bit integers (int)
-#if defined(_WIN32) || defined(_WIN64)
+#if (defined(_WIN32) || defined(_WIN64)) && (defined(USE_INTEL_MKL) || defined(HPGL_USE_MKL))
     // Windows: Intel MKL uses MKL_INT which is typically int
     #include <mkl_lapack.h>
     #include <mkl_types.h>

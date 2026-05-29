@@ -49,6 +49,9 @@ class TestSequentialGaussianSimulation:
 
         assert isinstance(result, ContProperty)
         assert result.data.shape == sample_property.data.shape
+        # Value assertions
+        assert np.isfinite(result.data.astype('float64')).all()
+        assert not np.all(result.data == 0)
 
 
 

@@ -23,7 +23,7 @@ namespace hpgl
 
 	inline std::ostream & operator<<(std::ostream & o, const sgs_params_t & p)
 	{
-		return o << (sk_params_t)p << "\tSeed: " << p.m_seed << "\n" << "Mean type: ";
+		o << (sk_params_t)p << "\tSeed: " << p.m_seed << "\n" << "Mean type: ";
 		switch (p.m_mean_kind)
 		{
 		case mean_kind_t::e_mean_stationary_auto:
@@ -36,7 +36,7 @@ namespace hpgl
 		default:
 			o << "unknown";
 		}
-		o << "\n";
+		return o << "\n";
 	}
 }
 #endif //__SGS_PARAMS_H__DD8E93BC_D7B4_4C04_A0AC_6FD6AF563A4C__

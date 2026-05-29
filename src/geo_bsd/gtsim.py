@@ -3,10 +3,6 @@ from .geo import *
 from .sgs import sgs_simulation
 from .cdf import calc_cdf
 from numpy import *
-try:
-    from scipy import *
-except ImportError:
-    pass
 import os
 
 def pseudo_gaussian_transform(prop, pk_prop):

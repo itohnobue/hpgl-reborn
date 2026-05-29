@@ -69,7 +69,7 @@ class TestCStructTypes:
         assert 'ys' in field_names
         assert 'zs' in field_names
         assert 'values' in field_names
-        assert 'values_count' in field_names
+        assert 'size' in field_names
 
     def test_float_data_t_fields_exist(self):
         field_names = [f for f, _ in float_data_t._fields_]

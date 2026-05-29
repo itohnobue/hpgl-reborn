@@ -7,7 +7,7 @@ Tests cover:
 3. lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model)
 4. indicator_kriging(prop, grid, data, marginal_probs)
 5. median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model)
-6. simple_cokriging_markI(prop, grid, secondary_data, primary_mean, secondary_mean, secondary_variance, correlation_coef, radiuses, max_neighbours, cov_model)
+6. simple_cokriging_markI(prop, grid, radiuses, max_neighbours, cov_model, secondary_data, primary_mean, secondary_mean, secondary_variance, correlation_coef)
 7. simple_cokriging_markII(grid, primary_data, secondary_data, correlation_coef, radiuses, max_neighbours)
 8. simple_kriging_weights(center_point, n_x, n_y, n_z, ranges, sill, cov_type, nugget, angles)
 """
@@ -313,6 +313,7 @@ class TestOrdinaryKriging:
                 cov_model=cov_model
             )
             assert isinstance(result, ContProperty)
+            assert np.isfinite(result.data.astype('float64')).all()
 
 
 # =============================================================================

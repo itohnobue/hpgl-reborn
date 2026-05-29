@@ -1,5 +1,5 @@
 from numpy import (array, bitwise_and, ceil, column_stack, cos, dot, float32, floor,
-    mgrid, ones, power, prod, radians, repeat, reshape, row_stack,
+    mgrid, ones, power, prod, radians, repeat, reshape, vstack,
     shape, sin, sum, zeros)
 
 class TVEllipsoid:
@@ -151,10 +151,10 @@ def _CalcLagsAreas(VariogramSearchTemplate):
     for i in Index:
         Filter = bitwise_and(LagStart[i] <= Dist, Dist < LagEnd[i])
         NumPoints = sum(Filter)
-        I = row_stack((I, GI[Filter].reshape(NumPoints, 1)))
-        J = row_stack((J, GJ[Filter].reshape(NumPoints, 1)))
-        K = row_stack((K, GK[Filter].reshape(NumPoints, 1)))
-        LagIndexes = row_stack((LagIndexes, ones((NumPoints, 1)) * i))
+        I = vstack((I, GI[Filter].reshape(NumPoints, 1)))
+        J = vstack((J, GJ[Filter].reshape(NumPoints, 1)))
+        K = vstack((K, GK[Filter].reshape(NumPoints, 1)))
+        LagIndexes = vstack((LagIndexes, ones((NumPoints, 1)) * i))
     I = reshape(I[1:], len(I[1:])).astype(int)
     J = reshape(J[1:], len(J[1:])).astype(int)
     K = reshape(K[1:], len(K[1:])).astype(int)
@@ -254,7 +254,6 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
             ActiveLags = LagIndexes[LFilter]
             
             if Function is not None:
-                I2, J2, K2 = FPI[j], FPJ[j], FPK[j]
                 for Lag in ActiveLags:
                     Result[Lag, :] = Function(i, FIndex[j], Result[Lag, :], Params)
     
@@ -264,9 +263,6 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
     NI, NJ, NK = Mask.shape
     
     LI, LJ, LK, LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
-    IMin, IMax = LI.min(), LI.max()
-    JMin, JMax = LJ.min(), LJ.max()
-    KMin, KMax = LK.min(), LK.max()
     
     if Function is not None:
         Result = Function(0, 0, None, Params)  

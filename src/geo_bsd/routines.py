@@ -3,10 +3,6 @@ from .validation import PathValidator
 from numpy import *
 import numpy.ma as ma
 from numpy import savetxt
-try:
-    from scipy import *
-except ImportError:
-    pass
 
 
 def CalcMean(Cube, Mask):
@@ -99,6 +95,7 @@ def PointSet2Cube(X, Y, Z, Property, Cube):
 def SaveGSLIBPointSet(PointSet, FileName, Caption):
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBPointSet: FileName must be a non-empty string")
+    PathValidator.validate_filepath(FileName)
 
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
@@ -127,6 +124,7 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
 def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBCubes: FileName must be a non-empty string")
+    PathValidator.validate_filepath(FileName)
 
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])

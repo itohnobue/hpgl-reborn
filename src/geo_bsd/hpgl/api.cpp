@@ -91,7 +91,9 @@ extern "C" {
 
 HPGL_API char * hpgl_get_last_exception_message()
 {
-	return const_cast<char *>(hpgl::get_last_exception_message().c_str());
+	thread_local std::string cached_message;
+	cached_message = hpgl::get_last_exception_message();
+	return const_cast<char *>(cached_message.c_str());
 }
 
 HPGL_API void hpgl_set_thread_num(int n_threads)
@@ -446,6 +448,10 @@ hpgl_simple_kriging_weights(
 {
 	if (validate_pointer(params, "params (simple_kriging_weights)") != 0) return -1;
 	if (validate_pointer(weights, "weights (simple_kriging_weights)") != 0) return -1;
+	if (validate_pointer(center_coords, "center_coords (simple_kriging_weights)") != 0) return -1;
+	if (validate_pointer(neighbours_x, "neighbours_x (simple_kriging_weights)") != 0) return -1;
+	if (validate_pointer(neighbours_y, "neighbours_y (simple_kriging_weights)") != 0) return -1;
+	if (validate_pointer(neighbours_z, "neighbours_z (simple_kriging_weights)") != 0) return -1;
 	if (neighbours_count < 0)
 	{
 		hpgl::set_last_exception_message("simple_kriging_weights: negative neighbours_count");
@@ -608,7 +614,7 @@ hpgl_sgs_simulation(
 	if (mean != 0)
 		sgs_p.set_mean(*mean);
 	sgs_p.m_lvm = 0;
-	sgs_p.m_mean_kind = mean != 0 ? e_mean_stationary : e_mean_stationary_auto;
+	sgs_p.m_mean_kind = mean != 0 ? mean_kind_t::e_mean_stationary : mean_kind_t::e_mean_stationary_auto;
 	hpgl::sequential_gaussian_simulation(
 			grid,
 		    sgs_p,
@@ -645,7 +651,7 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	init_sgs_params(params, &sgs_p);
 
 	sgs_p.m_lvm = means->m_data;
-	sgs_p.m_mean_kind = e_mean_varying;
+	sgs_p.m_mean_kind = mean_kind_t::e_mean_varying;
 
 	hpgl::sequential_gaussian_simulation_lvm(
 			grid,

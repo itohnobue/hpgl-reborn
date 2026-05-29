@@ -40,6 +40,9 @@ class TestOrdinaryKriging:
         assert isinstance(result, ContProperty)
         assert result.data.shape == sample_property.data.shape
         assert result.mask.shape == sample_property.mask.shape
+        # Value assertions
+        assert np.isfinite(result.data.astype('float64')).all()
+        assert not np.all(result.data == 0)
     
     def test_ok_result_bounds(self, sample_property, sample_grid, sample_covariance_model):
         """Test OK produces results within reasonable bounds"""
@@ -74,6 +77,8 @@ class TestSimpleKriging:
         
         assert isinstance(result, ContProperty)
         assert result.data.shape == sample_property.data.shape
+        # Value assertions
+        assert np.isfinite(result.data.astype('float64')).all()
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")

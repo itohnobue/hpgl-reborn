@@ -91,7 +91,7 @@ void covariance_field_t::init(
 
 	double treshold = value(0, 0, 0) / 100;
 
-	for (int idx = 0, end_idx = m_vectors.size(); idx < end_idx; ++idx)
+	for (size_t idx = 0, end_idx = m_vectors.size(); idx < end_idx; ++idx)
 	{
 		sugarbox_vector_t vec = m_vectors[idx];
 		if (value(vec[0],vec[1],vec[2]) < treshold)

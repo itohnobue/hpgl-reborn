@@ -1,8 +1,32 @@
 @echo off
 REM HPGL Build Script
-REM Rebuilds the hpgl-bsd project (main DLL) in Release x64 configuration
+REM Rebuilds the hpgl-bsd project.
+REM Default: Release x64. Override with --config Debug|Release --platform Win32|x64
 
 setlocal enabledelayedexpansion
+
+REM CLI argument parsing
+set "BUILD_CONFIG=Release"
+set "BUILD_PLATFORM=x64"
+
+:parse_args
+if "%~1"=="" goto :args_done
+if /i "%~1"=="--config" (
+    set "BUILD_CONFIG=%~2"
+    shift
+    shift
+    goto :parse_args
+)
+if /i "%~1"=="--platform" (
+    set "BUILD_PLATFORM=%~2"
+    shift
+    shift
+    goto :parse_args
+)
+echo WARNING: Unknown argument: %~1
+shift
+goto :parse_args
+:args_done
 
 REM Set environment variables
 REM Override these with environment variables before running build.bat if needed:
@@ -10,7 +34,12 @@ REM   set MKL_ROOT=...      (default: C:\Program Files (x86)\Intel\oneAPI\mkl\la
 REM   set VCTargetsPath=... (default: VS 2022 BuildTools v170)
 REM   set MSBUILD_PATH=...  (default: auto-detected under VS 2022 BuildTools)
 if not defined MKL_ROOT set "MKL_ROOT=C:\Program Files (x86)\Intel\oneAPI\mkl\latest"
-if not defined VCTargetsPath set "VCTargetsPath=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Microsoft\VC\v170\"
+if not defined VCTargetsPath (
+    set "VCTargetsPath=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Microsoft\VC\v170\"
+    if not exist "!VCTargetsPath!" set "VCTargetsPath=C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\"
+    if not exist "!VCTargetsPath!" set "VCTargetsPath=C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\"
+    if not exist "!VCTargetsPath!" set "VCTargetsPath=C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Microsoft\VC\v170\"
+)
 set "SolutionDir=%~dp0src\msvc\"
 set "LogFile=%~dp0build.log"
 
@@ -22,20 +51,26 @@ echo MKL_ROOT: %MKL_ROOT%
 echo VCTargetsPath: %VCTargetsPath%
 echo Solution Dir: %SolutionDir%
 echo Project: hpgl.vcxproj
-echo Configuration: Release x64
+echo Configuration: %BUILD_CONFIG% %BUILD_PLATFORM%
 echo.
 
-REM Find BuildTools MSBuild (can be overridden via MSBUILD_PATH env var)
+REM Find MSBuild (can be overridden via MSBUILD_PATH env var)
+REM Tries BuildTools, then Community, then Professional editions
 if not defined MSBUILD_PATH (
     set "MSBUILD_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\amd64\MSBuild.exe"
-    if not exist "!MSBUILD_PATH!" (
-        set "MSBUILD_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
-    )
+    if not exist "!MSBUILD_PATH!" set "MSBUILD_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+    if not exist "!MSBUILD_PATH!" set "MSBUILD_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe"
+    if not exist "!MSBUILD_PATH!" set "MSBUILD_PATH=C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
+    if not exist "!MSBUILD_PATH!" set "MSBUILD_PATH=C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe"
+    if not exist "!MSBUILD_PATH!" set "MSBUILD_PATH=C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\amd64\MSBuild.exe"
+    if not exist "!MSBUILD_PATH!" set "MSBUILD_PATH=C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
+    if not exist "!MSBUILD_PATH!" set "MSBUILD_PATH=C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe"
 )
 
 if not exist "%MSBUILD_PATH%" (
     echo ERROR: MSBuild not found!
     pause
+    endlocal
     exit /b 1
 )
 
@@ -45,12 +80,12 @@ echo.
 
 REM Build with MSBuild (using x64 version for better performance)
 echo Building hpgl.vcxproj...
-"%MSBUILD_PATH%" "%SolutionDir%hpgl.vcxproj" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%" /nologo
+"%MSBUILD_PATH%" "%SolutionDir%hpgl.vcxproj" /p:Configuration=%BUILD_CONFIG% /p:Platform=%BUILD_PLATFORM% /p:PlatformToolset=v143 /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%" /nologo
 if %ERRORLEVEL% NEQ 0 goto :build_failed
 
 echo.
 echo Building cvariogram.vcxproj...
-"%MSBUILD_PATH%" "%SolutionDir%cvariogram.vcxproj" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%;Append" /nologo
+"%MSBUILD_PATH%" "%SolutionDir%cvariogram.vcxproj" /p:Configuration=%BUILD_CONFIG% /p:Platform=%BUILD_PLATFORM% /p:PlatformToolset=v143 /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%;Append" /nologo
 if %ERRORLEVEL% NEQ 0 goto :build_failed
 
 REM Both builds succeeded — jump to success handler
@@ -66,6 +101,7 @@ echo Check %LogFile% for details.
 echo.
 type "%LogFile%"
 pause
+endlocal
 exit /b 1
 
 :build_succeeded
@@ -107,6 +143,5 @@ if exist "%~dp0src\geo_bsd\_cvariogram.dll" (
 )
 echo.
 echo Build log: %LogFile%
-goto :eof
-
 endlocal
+goto :eof

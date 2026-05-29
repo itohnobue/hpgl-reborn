@@ -5,23 +5,10 @@ import numpy
 # NumPy 2.0+ compatibility: try new location first, fall back to old
 try:
     from numpy import ctypeslib as NC
-    # NumPy 2.0+ changed load_library signature
-    # Old: load_library(libname, path)
-    # New: load_library(filepath, loader_path=None)
-    import numpy as np
-    if tuple(map(int, np.__version__.split('.')[:2])) >= (2, 0):
-        # NumPy 2.0+: use direct ctypes.CDLL with full path
-        _load_lib_func = lambda libpath: C.CDLL(str(libpath))
-    else:
-        # NumPy < 2.0: use the original load_library
-        _load_lib_func = lambda libpath: NC.load_library(libpath)
 except ImportError:
     from numpy import _ctypeslib as NC
-    import numpy as np
-    if tuple(map(int, np.__version__.split('.')[:2])) >= (2, 0):
-        _load_lib_func = lambda libpath: C.CDLL(str(libpath))
-    else:
-        _load_lib_func = lambda libpath: NC.load_library(libpath)
+# Since numpy>=2.0 is required, always use direct ctypes.CDLL
+_load_lib_func = lambda libpath: C.CDLL(str(libpath))
 
 # In NumPy 2.0+, ndpointer might be in different location
 try:
@@ -42,8 +29,8 @@ class _HPGL_KRIGING_KIND:
 	simple = 1
 
 class _HPGL_SHAPE(C.Structure):
-	_fields_ = [("data", C.c_int * 3 ),
-		    ("strides", C.c_int * 3)]
+	_fields_ = [("m_data", C.c_int * 3 ),
+		    ("m_strides", C.c_int * 3)]
 
 class _HPGL_CONT_MASKED_ARRAY(C.Structure):
 	_fields_ = [

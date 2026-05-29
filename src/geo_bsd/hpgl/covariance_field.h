@@ -92,7 +92,7 @@ namespace hpgl
 
 		double treshold = cov(coord_t(0, 0, 0), coord_t(0,0,0)) / 100;
 
-		for (int idx = 0, end_idx = (int) vectors.size(); idx < end_idx; ++idx)
+		for (size_t idx = 0, end_idx = vectors.size(); idx < end_idx; ++idx)
 		{
 			sugarbox_vector_t vec = vectors[idx];
 			if (cov(coord_t(0,0,0), coord_t(vec[0], vec[1], vec[2])) < treshold)
@@ -136,7 +136,7 @@ public:
 		return m_vectors;
 	};
 	
-	size_t size()
+	size_t size() const
 	{
 		return m_data.size();
 	}

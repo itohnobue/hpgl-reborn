@@ -5,6 +5,7 @@
 #include "typedefs.h"
 #include "property_array.h"
 #include "geometry.h"
+#include <memory>
 
 namespace hpgl
 {
@@ -17,7 +18,7 @@ class sugarbox_grid_t;
 class clusterizer_t
 {
 	struct state;
-	state * m_state;
+	std::unique_ptr<state> m_state;
 	typedef sugarbox_location_t cluster_coord_t;
 public:
 	clusterizer_t();
@@ -27,6 +28,9 @@ public:
 			size_t limit);
 	sugarbox_search_ellipsoid_t m_ellipsoid;
 	~clusterizer_t();
+
+	clusterizer_t(const clusterizer_t&) = delete;
+	clusterizer_t& operator=(const clusterizer_t&) = delete;
 
 public:
 

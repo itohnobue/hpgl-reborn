@@ -134,6 +134,11 @@ target_link_libraries(hpgl_core
         ${LAPACK_LIBRARIES}
 )
 
+# MKL compile definition (after target creation)
+if(HPGL_USE_MKL AND MKL_FOUND)
+    target_compile_definitions(hpgl_core PRIVATE HPGL_USE_MKL)
+endif()
+
 # Platform-specific settings
 if(WIN32)
     target_compile_definitions(hpgl_core
@@ -162,9 +167,6 @@ endif()
 # Python Bindings
 # ============================================================================
 
-if(HPGL_BUILD_PYTHON)
-endif()
-
 # ============================================================================
 # Variogram Module (optional)
 # ============================================================================
@@ -185,14 +187,13 @@ if(HPGL_BUILD_VARIOGRAM)
         target_compile_definitions(hpgl_variogram PRIVATE CVAR_DLL CVAR_EXPORTS)
         set_target_properties(hpgl_variogram PROPERTIES
             PREFIX ""
-            SUFFIX ""
             OUTPUT_NAME "_cvariogram"
         )
     elseif(UNIX)
         # On Unix, Python expects underscore prefix for extension modules
         set_target_properties(hpgl_variogram PROPERTIES
             PREFIX "_"
-            OUTPUT_NAME "_cvariogram"
+            OUTPUT_NAME "cvariogram"
         )
     endif()
 endif()

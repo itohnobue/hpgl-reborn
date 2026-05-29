@@ -67,7 +67,7 @@ namespace hpgl
 	};
 	
 	clusterizer_t::clusterizer_t()
-		: m_state(new state())
+		: m_state(std::make_unique<state>())
 	{
 	}
 
@@ -75,7 +75,7 @@ namespace hpgl
 			const sugarbox_grid_t * grid, 			
 			const sugarbox_search_ellipsoid_t & ellipsoid,
 			size_t limit)
-		: m_state(new state())
+		: m_state(std::make_unique<state>())
 	{		
 		m_state->m_limit = limit;
 		m_ellipsoid = ellipsoid;
@@ -101,7 +101,6 @@ namespace hpgl
 
 	clusterizer_t::~clusterizer_t()
 	{
-		delete m_state;
 	}
 
 
@@ -116,7 +115,9 @@ namespace hpgl
 	{
 		sugarbox_location_t loc = m_state->m_geometry->operator[](idx);	
 		
-		m_state->m_clusters[get_index_from_grid_point(loc)]->add_node(idx);
+		int cluster_idx = get_index_from_grid_point(loc);
+		if (cluster_idx >= 0)
+			m_state->m_clusters[cluster_idx]->add_node(idx);
 	}
 	
 	int clusterizer_t::get_nearby_harddata_count(node_index_t idx)const

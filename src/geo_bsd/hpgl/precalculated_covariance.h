@@ -44,7 +44,7 @@ namespace hpgl
 			sx = rx * 2 + 1;
 			sy = ry * 2 + 1;
 			sz = rz * 2 + 1;
-			size_t size = sx * sy * sz;	
+			size_t size = (size_t)sx * sy * sz;	
 			m_covariances.resize(size);
 			for (int z = 0; z < sz; ++z)
 				for (int y = 0; y < sy; ++y)

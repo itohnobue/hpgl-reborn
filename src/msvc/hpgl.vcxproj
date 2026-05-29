@@ -127,7 +127,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>mkl_core.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
@@ -264,6 +264,7 @@
     <ClInclude Include="..\geo_bsd\hpgl\kriging_constraints.h" />
     <ClInclude Include="..\geo_bsd\hpgl\kriging_interpolation.h" />
     <ClInclude Include="..\geo_bsd\hpgl\kriging_stats.h" />
+    <ClInclude Include="..\geo_bsd\hpgl\lapack_compat.h" />
     <ClInclude Include="..\geo_bsd\hpgl\load_property_from_file.h" />
     <ClInclude Include="..\geo_bsd\hpgl\locale_keeper.h" />
     <ClInclude Include="..\geo_bsd\hpgl\logging.h" />

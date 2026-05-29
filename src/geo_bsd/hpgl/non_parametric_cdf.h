@@ -222,6 +222,9 @@ namespace hpgl
 		{
 			prob_t result;
 			long long idx1, idx2;
+
+			if (m_size <= 0)
+				return 0;
 			
 			cont_value_t * it = std::lower_bound(m_values, m_values + m_size, value);
 			if (it == m_values + m_size)

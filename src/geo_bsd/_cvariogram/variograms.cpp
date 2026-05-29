@@ -166,6 +166,7 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
     int maxk = (int) ceil(window.m_max_k);
 
     lag_t * lags = (lag_t *) calloc(templ->m_num_lags, sizeof(lag_t));
+    if (!lags) { fprintf(stderr, "HPGL FATAL: calc_lag_areas: calloc(lags) failed\n"); abort(); }
     //lag_t * first_lag = lags;
     //lag_t * last_lag = &lags[templ->m_num_lags - 1];
 
@@ -198,6 +199,7 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
     }
 
     lag_point_t * result = (lag_point_t *) calloc(*points_count, sizeof(lag_point_t));
+    if (!result) { fprintf(stderr, "HPGL FATAL: calc_lag_areas: calloc(result) failed\n"); abort(); }
 
     int current_point = 0;
 
@@ -376,6 +378,7 @@ void calc_variograms(
 		: result_length;
 
 	lag_statistics_t * lag_stats = (lag_statistics_t *) calloc(lag_count, sizeof(lag_statistics_t));
+	if (!lag_stats) { fprintf(stderr, "HPGL FATAL: calc_variograms: calloc(lag_stats) failed\n"); abort(); }
 	for (int i = 0; i < lag_count; ++i)
 	{
 		lag_stats[i].m_cov_count = 0;
@@ -464,6 +467,7 @@ void calc_variograms_from_point_set(
 		: result_length;
 
 	lag_statistics_t * lag_stats = (lag_statistics_t *) calloc(lag_count, sizeof(lag_statistics_t));
+	if (!lag_stats) { fprintf(stderr, "HPGL FATAL: calc_variograms_from_point_set: calloc(lag_stats) failed\n"); abort(); }
 	for (int i = 0; i < lag_count; ++i)
 	{
 		lag_stats[i].m_cov_count = 0;
@@ -471,6 +475,7 @@ void calc_variograms_from_point_set(
 	}
 
 	lag_t * lags = (lag_t*) calloc(lag_count, sizeof(lag_t));
+	if (!lags) { fprintf(stderr, "HPGL FATAL: calc_variograms_from_point_set: calloc(lags) failed\n"); abort(); }
 	init_lag_list(templ, lags, lag_count);
 
 	for (int idx1 = 0; idx1 < point_set->size; ++idx1)

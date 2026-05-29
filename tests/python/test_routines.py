@@ -436,6 +436,16 @@ class TestMeanCalc:
         result = MeanCalc(cube, mask, radii, mean_mask, (1, 1, 1), -999.0)
         assert result == -999.0
 
+    def test_mean_calc_constant_input(self):
+        """MeanCalc with constant input produces expected mean."""
+        cube = np.ones((5, 5, 3), dtype='float32') * 42.0
+        mask = np.ones((5, 5, 3), dtype='uint8')
+        radii = (2, 2, 1)
+        mean_mask = GetCubicalMask(radii)
+        result = MeanCalc(cube, mask, radii, mean_mask, (2, 2, 1), -999.0)
+        assert np.isfinite(result)
+        assert result == pytest.approx(42.0)
+
 
 # =============================================================================
 # LoadGslibFile Tests

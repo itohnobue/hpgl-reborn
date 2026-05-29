@@ -199,7 +199,7 @@ namespace hpgl
 		SK_CONSTRAINTS
 	};
 
-	enum mean_kind_t
+	enum class mean_kind_t
 	{
 		e_mean_stationary_auto = 0,
 		e_mean_stationary = 1,

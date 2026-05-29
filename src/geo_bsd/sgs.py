@@ -20,39 +20,39 @@ import ctypes as C
 import numpy
 
 def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
-	if use_harddata:
-		out_prop = _clone_prop(prop)
-	else:
-		out_prop = _empty_clone(prop)
-	if mean is not None and not numpy.isscalar(mean):
-		mean = _require_cont_data(mean)
-	if mask is not None:
-		mask = _require_ind_data(mask)
-	return out_prop, mean, mask
+    if use_harddata:
+        out_prop = _clone_prop(prop)
+    else:
+        out_prop = _empty_clone(prop)
+    if mean is not None and not numpy.isscalar(mean):
+        mean = _require_cont_data(mean)
+    if mask is not None:
+        mask = _require_ind_data(mask)
+    return out_prop, mean, mask
 
 def _create_hpgl_nonparam_cdf(cdf_data):
-	cd2 = cdf_data
-	assert isinstance(cdf_data, CdfData)
-	return __checked_create(
-		hpgl_non_parametric_cdf_t,
-		values = cd2.values.ctypes.data_as(C.POINTER(C.c_float)),
-		probs = cd2.probs.ctypes.data_as(C.POINTER(C.c_float)),
-		size = cd2.values.size)
+    cd2 = cdf_data
+    assert isinstance(cdf_data, CdfData)
+    return __checked_create(
+        hpgl_non_parametric_cdf_t,
+        values = cd2.values.ctypes.data_as(C.POINTER(C.c_float)),
+        probs = cd2.probs.ctypes.data_as(C.POINTER(C.c_float)),
+        size = cd2.values.size)
 
 def normed_cov_model(cov_model):
-	coef = cov_model.sill
-	if coef == 0.0:
-		raise ValueError("normed_cov_model: sill cannot be zero (division by zero)")
-	return CovarianceModel(
-		cov_model.type, 
-		cov_model.ranges, 
-		cov_model.angles, 
-		cov_model.sill / coef,
-		cov_model.nugget / coef)
+    coef = cov_model.sill
+    if coef == 0.0:
+        raise ValueError("normed_cov_model: sill cannot be zero (division by zero)")
+    return CovarianceModel(
+        cov_model.type, 
+        cov_model.ranges, 
+        cov_model.angles, 
+        cov_model.sill / coef,
+        cov_model.nugget / coef)
 
 @accepts_tuple('prop', 0)
 def sgs_simulation(prop, grid, cdf_data, radiuses, max_neighbours, cov_model, seed, kriging_type="sk", mean=None, use_harddata = True, use_regions=False, region_size = None, mask=None, force_single_thread=False, force_parallel=False, min_neighbours = 0, **params):
-	"""Performs Sequential Gaussian Simulation
+    """Performs Sequential Gaussian Simulation
 
 Parameters:
 -----------
@@ -79,79 +79,79 @@ mask: None or array_like, optional:
     Array containing 1 in cell that need to be simulated and 0 in cell that aren't.
     If None simulate all cells. Defualt: None.
 """
-	# Validate grid dimensions
-	GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+    # Validate grid dimensions
+    GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
-	# Validate radiuses - convert to int for ctypes compatibility
-	valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
-	# Ensure radiuses are integers for ctypes (c_int * 3)
-	valid_radiuses = tuple(int(r) for r in valid_radiuses)
+    # Validate radiuses - convert to int for ctypes compatibility
+    valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+    # Ensure radiuses are integers for ctypes (c_int * 3)
+    valid_radiuses = tuple(int(r) for r in valid_radiuses)
 
-	# Validate max_neighbours
-	ParameterValidator.validate_max_neighbors(max_neighbours)
+    # Validate max_neighbours
+    ParameterValidator.validate_max_neighbors(max_neighbours)
 
-	# Validate covariance model
-	ParameterValidator.validate_covariance_parameters(
-		cov_model.sill,
-		cov_model.nugget,
-		cov_model.ranges,
-		cov_model.angles
-	)
+    # Validate covariance model
+    ParameterValidator.validate_covariance_parameters(
+        cov_model.sill,
+        cov_model.nugget,
+        cov_model.ranges,
+        cov_model.angles
+    )
 
-	# Validate seed
-	ParameterValidator.validate_seed(seed)
+    # Validate seed
+    ParameterValidator.validate_seed(seed)
 
-	# Validate min_neighbours
-	ParameterValidator.validate_min_neighbors(min_neighbours, max_neighbours)
+    # Validate min_neighbours
+    ParameterValidator.validate_min_neighbors(min_neighbours, max_neighbours)
 
-	prop.fix_shape(grid)
-	cov_model = normed_cov_model(cov_model)
+    prop.fix_shape(grid)
+    cov_model = normed_cov_model(cov_model)
 
-	out_prop, mean, mask = __prepare_sgs(
-		prop=prop,
-		mean=mean,
-		use_harddata=use_harddata,
-		mask=mask)
+    out_prop, mean, mask = __prepare_sgs(
+        prop=prop,
+        mean=mean,
+        use_harddata=use_harddata,
+        mask=mask)
 
-	sgsp = _HPGL_SGS_PARAMS(
-		covariance_type = cov_model.type,
-		ranges = cov_model.ranges,
-		angles = cov_model.angles,
-		sill = cov_model.sill,
-		nugget = cov_model.nugget,
-		radiuses = valid_radiuses,
-		max_neighbours = max_neighbours,
-		kriging_kind = {"sk" : _HPGL_KRIGING_KIND.simple, "ok" : _HPGL_KRIGING_KIND.ordinary}[kriging_type],
-		seed = seed,
-		min_neighbours = min_neighbours)
+    sgsp = _HPGL_SGS_PARAMS(
+        covariance_type = cov_model.type,
+        ranges = cov_model.ranges,
+        angles = cov_model.angles,
+        sill = cov_model.sill,
+        nugget = cov_model.nugget,
+        radiuses = valid_radiuses,
+        max_neighbours = max_neighbours,
+        kriging_kind = {"sk" : _HPGL_KRIGING_KIND.simple, "ok" : _HPGL_KRIGING_KIND.ordinary}[kriging_type],
+        seed = seed,
+        min_neighbours = min_neighbours)
 
-	if cdf_data is None:
-		hpgl_cdf = None
-	else:
-		hpgl_cdf = C.byref(_create_hpgl_nonparam_cdf(cdf_data))
+    if cdf_data is None:
+        hpgl_cdf = None
+    else:
+        hpgl_cdf = C.byref(_create_hpgl_nonparam_cdf(cdf_data))
 
-	hpgl_mask = C.byref(_create_hpgl_ubyte_array(mask, grid)) if mask is not None else None
+    hpgl_mask = C.byref(_create_hpgl_ubyte_array(mask, grid)) if mask is not None else None
 
-	if mean is None or numpy.isscalar(mean):
-		_snapshot_hpgl_error()
-		_hpgl_so.hpgl_sgs_simulation(
-			C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
-			C.byref(sgsp),
-			hpgl_cdf,
-			C.byref(C.c_double(mean)) if mean is not None else None,
-			hpgl_mask
-			)
-		_check_hpgl_error("sgs_simulation")
+    if mean is None or numpy.isscalar(mean):
+        _snapshot_hpgl_error()
+        _hpgl_so.hpgl_sgs_simulation(
+            C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
+            C.byref(sgsp),
+            hpgl_cdf,
+            C.byref(C.c_double(mean)) if mean is not None else None,
+            hpgl_mask
+            )
+        _check_hpgl_error("sgs_simulation")
 
 
-	else:
-		_snapshot_hpgl_error()
-		_hpgl_so.hpgl_sgs_lvm_simulation(
-			C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
-			C.byref(sgsp),
-			hpgl_cdf,
-			C.byref(_create_hpgl_float_array(mean, grid)),
-			hpgl_mask)
-		_check_hpgl_error("sgs_lvm_simulation")
+    else:
+        _snapshot_hpgl_error()
+        _hpgl_so.hpgl_sgs_lvm_simulation(
+            C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
+            C.byref(sgsp),
+            hpgl_cdf,
+            C.byref(_create_hpgl_float_array(mean, grid)),
+            hpgl_mask)
+        _check_hpgl_error("sgs_lvm_simulation")
 
-	return out_prop
+    return out_prop
