@@ -1,6 +1,7 @@
 # GTSIM for 2 indicators (facies)
 from .geo import *
 from .sgs import sgs_simulation
+from .cdf import calc_cdf
 from numpy import *
 try:
     from scipy import *
@@ -117,8 +118,11 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
 
     if (sgs_params is None):
         sgs_params = sk_params
+    print("Computing CDF...")
+    cdf_data = calc_cdf(prop)
+    print("Done.")
     print("Testing SGS...")
-    prop1 = sgs_simulation(prop, grid, seed=seed, **sgs_params)
+    prop1 = sgs_simulation(prop, grid, cdf_data, seed=seed, **sgs_params)
     print("Done.")
 
     # 5. Truncation

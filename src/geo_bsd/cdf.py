@@ -6,19 +6,27 @@ class CdfData:
         self.probs = numpy.require(probs, 'float32')
 
 def calc_cdf(prop):
-    dx, dy, dz = prop.data.shape
+    # Handle both 1D (flat) and 3D (grid) property data
+    if prop.data.ndim == 3:
+        dx, dy, dz = prop.data.shape
+        total_cells = dx * dy * dz
+        data_flat = prop.data.flat
+        mask_flat = prop.mask.flat
+    else:
+        total_cells = prop.data.size
+        data_flat = prop.data.flat
+        mask_flat = prop.mask.flat
+
     counts = {}
     full_count = 0
-    for x in range(dx):
-        for y in range(dy):
-            for z in range(dz):
-                if prop.mask[x,y,z] != 0:
-                    value = prop.data[x,y,z]
-                    full_count += 1
-                    if value in counts:
-                        counts[value] += 1
-                    else:
-                        counts[value] = 1
+    for i in range(total_cells):
+        if mask_flat[i] != 0:
+            value = data_flat[i]
+            full_count += 1
+            if value in counts:
+                counts[value] += 1
+            else:
+                counts[value] = 1
     full_count = float(full_count)
     if full_count == 0:
         raise ValueError("calc_cdf: no informed values (all cells are masked)")

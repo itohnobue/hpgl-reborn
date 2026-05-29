@@ -215,19 +215,13 @@ class TestGtsim2Ind:
         }
 
     def test_gtsim_2ind_basic_execution(self):
-        """gtsim_2ind with default parameters — documents known A5 bug."""
+        """gtsim_2ind with default parameters."""
         grid, prop = self._make_grid_prop()
         sk_params = self._make_sk_params()
 
-        # gtsim_2ind has known A5 bug: sgs_simulation called without cdf_data
-        # The SK step and tk_calculation should complete before sgs fails.
-        try:
-            result = gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=42)
-            assert isinstance(result, ContProperty)
-            assert np.all(np.isfinite(result.data))
-        except (TypeError, RuntimeError) as e:
-            # Expected failure mode for known A5 bug
-            pytest.skip(f"Known A5 bug: sgs_simulation missing cdf_data parameter: {e}")
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=42)
+        assert isinstance(result, ContProperty)
+        assert np.all(np.isfinite(result.data))
 
     def test_gtsim_2ind_with_provided_pk_prop(self):
         """gtsim_2ind with pre-computed pk_prop (skips SK step)."""
@@ -238,37 +232,32 @@ class TestGtsim2Ind:
         pk_mask = np.ones(prop.data.size, dtype='uint8')
         pk_prop = ContProperty(pk_data, pk_mask)
 
-        try:
-            result = gtsim_2ind(grid, prop, sk_params, do_sk=False,
-                               pk_prop=pk_prop, seed=42)
-            assert isinstance(result, ContProperty)
-        except (TypeError, RuntimeError) as e:
-            pytest.skip(f"Known A5 bug: {e}")
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=False,
+                           pk_prop=pk_prop, seed=42)
+        assert isinstance(result, ContProperty)
 
     def test_gtsim_2ind_with_custom_tk_params(self):
         """gtsim_2ind accepts custom tk_mean and tk_std_dev."""
         grid, prop = self._make_grid_prop()
         sk_params = self._make_sk_params()
 
-        try:
-            result = gtsim_2ind(grid, prop, sk_params, do_sk=True,
-                               tk_mean=0.5, tk_std_dev=2.0, seed=42)
-            assert isinstance(result, ContProperty)
-        except (TypeError, RuntimeError) as e:
-            pytest.skip(f"Known A5 bug: {e}")
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=True,
+                           tk_mean=0.5, tk_std_dev=2.0, seed=42)
+        assert isinstance(result, ContProperty)
 
     def test_gtsim_2ind_reproducibility_same_seed(self):
-        """gtsim_2ind with same seed produces identical output."""
+        """gtsim_2ind with same seed and same global random state produces identical output."""
         grid, prop1 = self._make_grid_prop()
         _, prop2 = self._make_grid_prop()
         sk_params = self._make_sk_params()
 
-        try:
-            result1 = gtsim_2ind(grid, prop1, sk_params, do_sk=True, seed=42)
-            result2 = gtsim_2ind(grid, prop2, sk_params, do_sk=True, seed=42)
-            np.testing.assert_array_equal(result1.data, result2.data)
-        except (TypeError, RuntimeError) as e:
-            pytest.skip(f"Known A5 bug: {e}")
+        # Reset global random state before each call to ensure reproducibility
+        # (gtsim_2ind uses global np.random via pseudo_gaussian_transform)
+        np.random.seed(42)
+        result1 = gtsim_2ind(grid, prop1, sk_params, do_sk=True, seed=42)
+        np.random.seed(42)
+        result2 = gtsim_2ind(grid, prop2, sk_params, do_sk=True, seed=42)
+        np.testing.assert_array_equal(result1.data, result2.data)
 
     def test_gtsim_2ind_different_seeds_produce_different(self):
         """gtsim_2ind with different seeds produces different output."""
@@ -276,45 +265,33 @@ class TestGtsim2Ind:
         _, prop2 = self._make_grid_prop()
         sk_params = self._make_sk_params()
 
-        try:
-            result1 = gtsim_2ind(grid, prop1, sk_params, do_sk=True, seed=42)
-            result2 = gtsim_2ind(grid, prop2, sk_params, do_sk=True, seed=12345)
-            assert not np.array_equal(result1.data, result2.data)
-        except (TypeError, RuntimeError) as e:
-            pytest.skip(f"Known A5 bug: {e}")
+        result1 = gtsim_2ind(grid, prop1, sk_params, do_sk=True, seed=42)
+        result2 = gtsim_2ind(grid, prop2, sk_params, do_sk=True, seed=12345)
+        assert not np.array_equal(result1.data, result2.data)
 
     def test_gtsim_2ind_produces_both_categories(self):
         """gtsim_2ind with mixed input produces both 0 and 1 in output."""
         grid, prop = self._make_grid_prop(x=10, y=10, z=5)
         sk_params = self._make_sk_params()
 
-        try:
-            result = gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=42)
-            unique = np.unique(result.data)
-            assert 0.0 in unique
-            assert 1.0 in unique
-        except (TypeError, RuntimeError) as e:
-            pytest.skip(f"Known A5 bug: {e}")
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=42)
+        unique = np.unique(result.data)
+        assert 0.0 in unique
+        assert 1.0 in unique
 
     def test_gtsim_2ind_returns_same_size(self):
         """gtsim_2ind output size matches input."""
         grid, prop = self._make_grid_prop(x=6, y=6, z=3)
         sk_params = self._make_sk_params()
 
-        try:
-            result = gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=42)
-            assert result.data.size == prop.data.size
-            assert result.mask.size == prop.mask.size
-        except (TypeError, RuntimeError) as e:
-            pytest.skip(f"Known A5 bug: {e}")
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=42)
+        assert result.data.size == prop.data.size
+        assert result.mask.size == prop.mask.size
 
     def test_gtsim_2ind_no_nan_in_output(self):
         """gtsim_2ind output contains no NaN values."""
         grid, prop = self._make_grid_prop(x=8, y=8, z=4)
         sk_params = self._make_sk_params()
 
-        try:
-            result = gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=42)
-            assert not np.any(np.isnan(result.data))
-        except (TypeError, RuntimeError) as e:
-            pytest.skip(f"Known A5 bug: {e}")
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=42)
+        assert not np.any(np.isnan(result.data))
