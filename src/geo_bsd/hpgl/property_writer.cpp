@@ -77,7 +77,14 @@ namespace hpgl
 			for (int i = 0, end_i = property.size(); i < end_i; ++i)
 			{
 				if (property.is_informed(i))
-					write_value(f.get(), remap_table[property.get_at(i)]);
+				{
+					indicator_value_t val = property.get_at(i);
+					// Bounds check: invalid data produces undefined_value instead of UB
+					if (static_cast<size_t>(val) >= remap_table.size())
+						write_value(f.get(), undefined_value);
+					else
+						write_value(f.get(), remap_table[val]);
+				}
 				else
 					write_value(f.get(), undefined_value);
 			}
@@ -133,7 +140,14 @@ namespace hpgl
 			for (int i = 0, end_i = property.size(); i < end_i; ++i)
 			{
 				if (property.is_informed(i))
-					write_value(f.get(), remap_table[property.get_at(i)]);
+				{
+					indicator_value_t val = property.get_at(i);
+					// Bounds check: invalid data produces undefined_value instead of UB
+					if (static_cast<size_t>(val) >= remap_table.size())
+						write_value(f.get(), undefined_value);
+					else
+						write_value(f.get(), remap_table[val]);
+				}
 				else
 					write_value(f.get(), undefined_value);
 			}

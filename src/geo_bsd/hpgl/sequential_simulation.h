@@ -19,27 +19,6 @@
 namespace hpgl
 {
 
-	// predicate function for std::remove_if, to check is coordinates in grid, or not
-	class bigger_grid_size
-	{
-	public:
-		bigger_grid_size(int x, int y, int z)
-		{
-			m_x = x;
-			m_y = y;
-			m_z = z;
-		};
-		//~bigger_grid_size(){};
-		
-		bool operator()(sugarbox_grid_t::coord_t value) const
-		{
-			return (value[0]>=m_x || value[1]>=m_y || value[2]>=m_z);
-		};
-	private:
-		int m_x,m_y,m_z;
-		
-	};
-
 	struct no_mask_t
 	{
 		int operator[](node_index_t node)const
@@ -82,10 +61,7 @@ namespace hpgl
 		
 		progress_reporter_t report(property.size());	
 		report.start();
-		node_index_t node = path_gen.next();
-
-		std::vector<sugarbox_location_t> coords;
-		
+		node_index_t node = path_gen.next();		
 		for (node_index_t counter = 0, counter_end = property.size(); counter < counter_end; ++counter, node = path_gen.next(), report.next_lap())		
 		{
 			if(property.is_informed(node)) 
@@ -153,10 +129,7 @@ namespace hpgl
 		progress_reporter_t report(points_indexes.size());	
 		report.start();
 		node_index_t node = points_indexes[path_gen.next()];
-		//node_index_t node = path_gen.next();
-
-		std::vector<sugarbox_location_t> coords;
-		
+		//node_index_t node = path_gen.next();		
 		for (node_index_t counter = 0, counter_end = points_indexes.size(); counter < counter_end; ++counter, node = points_indexes[path_gen.next()])		
 		//for (node_index_t counter = 0, counter_end = points_indexes.size(); counter < counter_end; ++counter, node = path_gen.next())		
 		{

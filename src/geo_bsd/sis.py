@@ -166,7 +166,6 @@ RuntimeError
             seed,
             _create_hpgl_ubyte_array(mask, grid) if mask is not None else None)
         _check_hpgl_error("sis_simulation")
-#        hpgl.sis_simulation(_prop_to_tuple(out_prop), grid.grid, data, seed, False, use_correlogram, mask)
     else:
         _snapshot_hpgl_error()
         _hpgl_so.hpgl_sis_simulation_lvm(
@@ -179,5 +178,4 @@ RuntimeError
             use_correlogram
             )
         _check_hpgl_error("sis_simulation_lvm")
-        #hpgl.sis_simulation_lvm(_prop_to_tuple(out_prop), grid.grid, data, seed, marginal_probs, use_correlogram, mask)
     return out_prop

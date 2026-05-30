@@ -1193,12 +1193,13 @@ class TestSimulationEdgeCases:
             mask=simulate_mask
         )
 
-        # Original hard data should be preserved
+        # Verify result shape and no NaN
         assert result.data.shape == (10, 10, 5)
-        # With mask=0 for all cells, hard data is used as starting point
-        # Some cells may be simulated depending on HPGL's mask interpretation
-        # The key is that the operation completes without error
         assert not np.any(np.isnan(result.data))
+        # The C++ engine processes the mask; with all-zero mask the result
+        # may still contain simulated values (HPGL's mask interpretation).
+        # The key check is that the result is finite and the operation completes.
+        assert np.all(np.isfinite(result.data.astype('float64')))
 
     def test_mask_covering_no_cells_simulate_all(self):
         """Test simulation with mask covering no cells (simulate all)

@@ -46,7 +46,7 @@ def ntg_calc_hist(x, y, z, n, sis_prop):
             },
         ]
         print("Done.\n")
-        sis_result = sis_simulation(sis_prop, grid, sis_data, seed=3141347 - 1000 * c + 500, use_vpc=False)
+        sis_result = sis_simulation(sis_prop, grid, sis_data, seed=3141347 - 1000 * c + 500)
         write_property(sis_result, "RESULT.INC", "S_RESULT", -99)
         values_result = load_property_python(x, y, z, "RESULT.INC", True)
 

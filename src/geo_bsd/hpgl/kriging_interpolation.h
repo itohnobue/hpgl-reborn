@@ -240,6 +240,9 @@ namespace hpgl
 	{
 		typedef typename values_t::value_type value_t;
 		typedef typename neighbourhood_lookup_t::coord_t coord_t;
+		// Per-node heap allocations are bounded by max_neighbours (typically small),
+		// not by grid size. The neighbourhood lookup limits the number of entries
+		// returned to m_max_neighbours, so these vectors are O(max_neighbours) each.
 		std::vector<node_index_t> indices;
 		std::vector<kriging_weight_t> weights;
 		std::vector<mean_t> means;
@@ -288,6 +291,7 @@ namespace hpgl
 	{
 		typedef typename values_t::value_type value_t;
 		typedef typename neighbourhood_lookup_t::coord_t coord_t;
+		// Per-node allocations bounded by max_neighbours, not grid size
 		std::vector<node_index_t> indices;
 		std::vector<kriging_weight_t> weights;
 		std::vector<mean_t> means;

@@ -164,14 +164,37 @@ class TestMemoryLeaks:
     
     def test_array_reference_leaks(self):
         """Test for array reference leaks"""
-        for _ in range(100):
-            data = np.zeros(1000, dtype='float32', order='F')
-            mask = np.ones(1000, dtype='uint8', order='F')
-            prop = ContProperty(data, mask)
-            del prop
-        
-        gc.collect()
-        # If we get here without crashing, no obvious leak
+        try:
+            import tracemalloc
+            tracemalloc.start()
+            gc.collect()
+            snapshot1 = tracemalloc.take_snapshot()
+
+            for _ in range(100):
+                data = np.zeros(1000, dtype='float32', order='F')
+                mask = np.ones(1000, dtype='uint8', order='F')
+                prop = ContProperty(data, mask)
+                del prop
+
+            gc.collect()
+            snapshot2 = tracemalloc.take_snapshot()
+
+            top_stats = snapshot2.compare_to(snapshot1, 'lineno')
+            total_increase = sum(stat.size_diff for stat in top_stats)
+
+            # Repeated create/delete should not cause significant leaks
+            assert total_increase < 10 * 1024 * 1024, f"Array reference leak detected: {total_increase / 1024 / 1024:.2f} MB"
+            tracemalloc.stop()
+        except ImportError:
+            # Without tracemalloc, verify the loop at least completes without error
+            for _ in range(100):
+                data = np.zeros(1000, dtype='float32', order='F')
+                mask = np.ones(1000, dtype='uint8', order='F')
+                prop = ContProperty(data, mask)
+                del prop
+            gc.collect()
+            # If we get here without crashing, no obvious crash-level leak
+            assert True
 
 
 if __name__ == '__main__':

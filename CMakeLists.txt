@@ -24,8 +24,6 @@ option(HPGL_BUILD_PYTHON "Build Python bindings" ON)
 option(HPGL_BUILD_TESTS "Build tests" OFF)
 option(HPGL_USE_OPENMP "Enable OpenMP parallelization" ON)
 option(HPGL_USE_MKL "Use Intel MKL instead of OpenBLAS" OFF)
-option(HPGL_FETCH_EIGEN "Fetch Eigen with FetchContent" ON)
-option(HPGL_BUILD_SHARED "Build shared libraries" ON)
 
 # Export compile commands for IDEs
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -71,32 +69,8 @@ else()
     endif()
 endif()
 
-# Eigen (linear algebra)
-if(HPGL_FETCH_EIGEN)
-    include(FetchContent)
-    FetchContent_Declare(
-        eigen
-        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-        GIT_TAG 3.4.0
-        GIT_SHALLOW TRUE
-        GIT_PROGRESS TRUE
-    )
-    # For Windows: make sure to pull content even if already present
-    FetchContent_GetProperties(eigen)
-    if(NOT eigen_POPULATED)
-        message(STATUS "Fetching Eigen from GitLab...")
-        FetchContent_Populate(eigen)
-    else()
-        message(STATUS "Eigen already populated at ${eigen_SOURCE_DIR}")
-    endif()
-    add_library(eigen INTERFACE)
-    target_include_directories(eigen INTERFACE
-        $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>
-    )
-else()
-    find_package(Eigen3 3.4 REQUIRED)
-    add_library(eigen ALIAS Eigen3::Eigen)
-endif()
+# Eigen is not a direct dependency (no #include <Eigen/...> in HPGL source).
+# The code uses LAPACK via the configured BLAS/LAPACK libraries above.
 
 # Python (for bindings)
 if(HPGL_BUILD_PYTHON)
@@ -122,8 +96,13 @@ endif()
 # Library: hpgl_core
 # ============================================================================
 
-add_library(hpgl_core ${HPGL_CORE_SOURCES})
+add_library(hpgl_core SHARED ${HPGL_CORE_SOURCES})
 add_library(hpgl::core ALIAS hpgl_core)
+
+# Ensure consistent output name across platforms (Python bindings expect "hpgl")
+set_target_properties(hpgl_core PROPERTIES
+    OUTPUT_NAME "hpgl"
+)
 
 target_include_directories(hpgl_core
     PRIVATE
@@ -136,7 +115,6 @@ target_include_directories(hpgl_core
 
 target_link_libraries(hpgl_core
     PUBLIC
-        eigen
         ${BLAS_LIBRARIES}
         ${LAPACK_LIBRARIES}
 )
@@ -155,9 +133,9 @@ if(WIN32)
             _CRT_SECURE_NO_WARNINGS
     )
     # Windows-specific runtime library
-    if(NOT HPGL_BUILD_SHARED)
-        set_property(TARGET hpgl_core PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    endif()
+    # NOTE: hpgl_core is built as SHARED; when linking dynamically this default is appropriate.
+    # To link statically, change add_library to STATIC and set runtime library:
+    #   set_property(TARGET hpgl_core PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else()
     target_compile_definitions(hpgl_core PUBLIC HPGL_SO)
 endif()
@@ -251,12 +229,6 @@ if(HPGL_BUILD_VARIOGRAM)
     )
 endif()
 
-# Install Eigen interface library (needed for exports)
-install(TARGETS eigen
-    EXPORT hpglTargets
-    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-)
-
 # Create export targets
 install(EXPORT hpglTargets
     FILE hpglTargets.cmake
@@ -294,7 +266,7 @@ message(STATUS "")
 message(STATUS "Dependencies:")
 message(STATUS "  BLAS:                ${BLAS_LIBRARIES}")
 message(STATUS "  LAPACK:              ${LAPACK_LIBRARIES}")
-message(STATUS "  Eigen:               ${eigen_SOURCE_DIR}")
+message(STATUS "  Eigen:               not used (no Eigen headers in source)")
 message(STATUS "  OpenMP:              ${OPENMP_FOUND}")
 if(HPGL_BUILD_PYTHON)
     message(STATUS "  Python:              ${Python3_EXECUTABLE}")

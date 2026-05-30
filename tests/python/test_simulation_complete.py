@@ -368,7 +368,7 @@ class TestSequentialGaussianSimulationKrigingType:
     def test_sgs_invalid_kriging_type_raises_error(self, sample_property, sample_grid,
                                                     sample_covariance_model, sgs_cdf_data_multi):
         """Test invalid kriging type raises appropriate error"""
-        with pytest.raises(KeyError):
+        with pytest.raises(ValueError, match="invalid kriging_type"):
             sgs_simulation(
                 prop=sample_property,
                 grid=sample_grid,
@@ -405,6 +405,7 @@ class TestSequentialGaussianSimulationLVM:
 
         assert isinstance(result, ContProperty)
         assert result.data.shape == sample_property.data.shape
+        assert not np.any(np.isnan(result.data.astype('float64')))
 
     def test_sgs_with_scalar_mean(self, sample_property, sample_grid,
                                    sample_covariance_model, sgs_cdf_data_multi):
@@ -421,6 +422,7 @@ class TestSequentialGaussianSimulationLVM:
         )
 
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
 
     def test_sgs_with_mean_none(self, sample_property, sample_grid,
                                   sample_covariance_model, sgs_cdf_data_multi):
@@ -437,6 +439,7 @@ class TestSequentialGaussianSimulationLVM:
         )
 
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
 
 
 # =============================================================================
@@ -1157,6 +1160,137 @@ class TestSimulationEdgeCases:
             marginal_probs=[0.5, 0.5]
         )
 
+        assert isinstance(result, IndProperty)
+
+
+# =============================================================================
+# SGS/SIS Advanced Parameter Tests (F097)
+# =============================================================================
+
+@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+class TestSGSAdvancedParams:
+    """Test SGS parameters: use_regions, region_size, force_single_thread, force_parallel"""
+
+    def test_sgs_use_regions(self, sample_property, sample_grid,
+                              sample_covariance_model, sgs_cdf_data_multi):
+        """Test SGS with use_regions=True"""
+        result = sgs_simulation(
+            prop=sample_property,
+            grid=sample_grid,
+            cdf_data=sgs_cdf_data_multi,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=sample_covariance_model,
+            seed=42,
+            use_regions=True,
+            region_size=(5, 5, 5)
+        )
+        assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
+
+    def test_sgs_region_size(self, sample_property, sample_grid,
+                              sample_covariance_model, sgs_cdf_data_multi):
+        """Test SGS with explicit region_size"""
+        result = sgs_simulation(
+            prop=sample_property,
+            grid=sample_grid,
+            cdf_data=sgs_cdf_data_multi,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=sample_covariance_model,
+            seed=42,
+            use_regions=True,
+            region_size=(10, 10, 5)
+        )
+        assert isinstance(result, ContProperty)
+
+    def test_sgs_force_single_thread(self, sample_property, sample_grid,
+                                      sample_covariance_model, sgs_cdf_data_multi):
+        """Test SGS with force_single_thread=True"""
+        result = sgs_simulation(
+            prop=sample_property,
+            grid=sample_grid,
+            cdf_data=sgs_cdf_data_multi,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=sample_covariance_model,
+            seed=42,
+            force_single_thread=True
+        )
+        assert isinstance(result, ContProperty)
+
+    def test_sgs_force_parallel(self, sample_property, sample_grid,
+                                 sample_covariance_model, sgs_cdf_data_multi):
+        """Test SGS with force_parallel=True"""
+        result = sgs_simulation(
+            prop=sample_property,
+            grid=sample_grid,
+            cdf_data=sgs_cdf_data_multi,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=sample_covariance_model,
+            seed=42,
+            force_parallel=True
+        )
+        assert isinstance(result, ContProperty)
+
+
+@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+class TestSISAdvancedParams:
+    """Test SIS parameters: use_regions, region_size, force_single_thread, force_parallel"""
+
+    def test_sis_use_regions(self, sample_indicator_property, sample_grid,
+                              sis_data_3indicator):
+        """Test SIS with use_regions=True"""
+        result = sis_simulation(
+            prop=sample_indicator_property,
+            grid=sample_grid,
+            data=sis_data_3indicator,
+            seed=42,
+            marginal_probs=[0.3, 0.4, 0.3],
+            use_regions=True,
+            region_size=(5, 5, 5)
+        )
+        assert isinstance(result, IndProperty)
+
+    def test_sis_region_size(self, sample_indicator_property, sample_grid,
+                              sis_data_3indicator):
+        """Test SIS with explicit region_size"""
+        result = sis_simulation(
+            prop=sample_indicator_property,
+            grid=sample_grid,
+            data=sis_data_3indicator,
+            seed=42,
+            marginal_probs=[0.3, 0.4, 0.3],
+            use_regions=True,
+            region_size=(10, 10, 5)
+        )
+        assert isinstance(result, IndProperty)
+
+    def test_sis_force_single_thread(self, sample_indicator_property, sample_grid,
+                                      sis_data_3indicator):
+        """Test SIS with force_single_thread=True"""
+        result = sis_simulation(
+            prop=sample_indicator_property,
+            grid=sample_grid,
+            data=sis_data_3indicator,
+            seed=42,
+            marginal_probs=[0.3, 0.4, 0.3],
+            force_single_thread=True
+        )
+        assert isinstance(result, IndProperty)
+
+    def test_sis_force_parallel(self, sample_indicator_property, sample_grid,
+                                 sis_data_3indicator):
+        """Test SIS with force_parallel=True"""
+        result = sis_simulation(
+            prop=sample_indicator_property,
+            grid=sample_grid,
+            data=sis_data_3indicator,
+            seed=42,
+            marginal_probs=[0.3, 0.4, 0.3],
+            force_parallel=True
+        )
         assert isinstance(result, IndProperty)
 
 

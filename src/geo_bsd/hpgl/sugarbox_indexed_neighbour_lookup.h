@@ -95,13 +95,17 @@ namespace hpgl
 					}
 				}
 				
-				//my_sort(temp_sort_vector, params.m_max_neighbours);
-				//if (temp_sort_vector.size() > m_max_neighbours)
-					std::sort(temp_sort_vector.begin(), temp_sort_vector.end());				
-
 				int count = 0;	
 				int result_size = //temp_sort_vector.get_them().size();
 					m_max_neighbours > temp_sort_vector.size() ? temp_sort_vector.size() : m_max_neighbours;
+				
+				// Partial sort: only need top result_size entries by covariance
+				// operator< returns cov_value > e.cov_value (descending by cov)
+				if (result_size < static_cast<int>(temp_sort_vector.size()))
+					std::partial_sort(temp_sort_vector.begin(), temp_sort_vector.begin() + result_size, temp_sort_vector.end());
+				else
+					std::sort(temp_sort_vector.begin(), temp_sort_vector.end());				
+
 				
 				
 				indices.resize(result_size);

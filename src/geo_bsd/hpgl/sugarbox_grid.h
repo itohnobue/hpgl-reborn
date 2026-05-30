@@ -13,7 +13,6 @@ namespace hpgl
 	class sugarbox_grid_t
 	{
 		int m_x, m_y, m_z; //grid dimensions
-		bool m_initialized;
 	public:
 		typedef int size_type;
 		typedef sugarbox_location_t value_type;

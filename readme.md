@@ -134,8 +134,6 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 | `HPGL_BUILD_TESTS` | OFF | Build C++ test suite |
 | `HPGL_USE_OPENMP` | ON | Enable OpenMP parallelization |
 | `HPGL_USE_MKL` | OFF | Use Intel MKL (instead of OpenBLAS) |
-| `HPGL_FETCH_EIGEN` | ON | Auto-download Eigen via FetchContent |
-| `HPGL_BUILD_SHARED` | ON | Build shared libraries |
 | `HPGL_BUILD_VARIOGRAM` | ON | Build cvariogram extension module |
 
 ## Installation
@@ -169,6 +167,7 @@ import geo_bsd
 grid = geo_bsd.SugarboxGrid(100, 100, 50)
 
 # Load property data from INC file
+# NOTE: "data.inc" is a placeholder — replace with your actual data file path
 prop = geo_bsd.load_cont_property("data.inc", -99, (100, 100, 50))
 
 # Define a covariance model (spherical variogram)
@@ -224,8 +223,8 @@ geo_bsd.write_property(sim, "simulation_result.inc", "SGS_REAL1", -99)
 | `lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model)` | Kriging with Locally Varying Mean |
 | `indicator_kriging(prop, grid, data, marginal_probs)` | Indicator Kriging for categorical data |
 | `median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model)` | Median Indicator Kriging (2 categories) |
-| `simple_cokriging_markI(...)` | Cokriging using Markov Model I |
-| `simple_cokriging_markII(...)` | Cokriging using Markov Model II |
+| `simple_cokriging_markI(prop, grid, secondary_data, primary_mean, secondary_mean, secondary_variance, correlation_coef, radiuses, max_neighbours, cov_model)` | Cokriging using Markov Model I |
+| `simple_cokriging_markII(grid, primary_data, secondary_data, correlation_coef, radiuses, max_neighbours)` | Cokriging using Markov Model II |
 
 ### Simulation Functions
 
@@ -251,6 +250,8 @@ geo_bsd.write_property(sim, "simulation_result.inc", "SGS_REAL1", -99)
 | `calc_cdf(prop)` | Calculate empirical CDF from property data |
 | `set_thread_num(n)` | Set number of OpenMP threads |
 | `get_thread_num()` | Get current OpenMP thread count |
+| `simple_kriging_weights(center_point, n_x, n_y, n_z, ...)` | Compute kriging weights for a set of neighbor points |
+| `get_gslib_property(filename, name, undefined_value, size)` | Read a named property from a GSLIB-format file |
 
 ## Testing
 

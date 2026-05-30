@@ -106,10 +106,20 @@ def checked_create(T, **kargs):
     return result
 
 def __strides(array):
-    return (array.strides[0] // array.itemsize, array.strides[1] // array.itemsize, array.strides[2] // array.itemsize)
+    ndim = array.ndim
+    if ndim == 1:
+        return (1, array.shape[0], array.shape[0])
+    elif ndim == 2:
+        return (1, array.shape[0], array.shape[0] * array.shape[1])
+    elif ndim >= 3:
+        return (array.strides[0] // array.itemsize, array.strides[1] // array.itemsize, array.strides[2] // array.itemsize)
+    else:
+        raise ValueError(f"__strides: array must have at least 1 dimension, got ndim={ndim}")
 
 def _c_array(t, size, values):
-    return (t * size)(*values)
+    arr = (t * size)(*values)
+    arr._array_refs = tuple(values)
+    return arr
 
 class Ellipsoid:
     def __init__(self, R1, R2, R3, azimuth, dip, rotation):
@@ -145,6 +155,10 @@ def CalcVariograms(templ, hard_data, percent=100):
         raise ValueError("CalcVariograms: num_lags must be positive")
     if percent < 1 or percent > 100:
         raise ValueError(f"CalcVariograms: percent must be in [1, 100], got {percent}")
+    if not isinstance(hard_data[0], numpy.ndarray) or hard_data[0].dtype != numpy.float32:
+        raise TypeError(f"CalcVariograms: hard_data[0] must be a float32 ndarray, got {type(hard_data[0]).__name__}")
+    if not isinstance(hard_data[1], numpy.ndarray) or hard_data[1].dtype != numpy.uint8:
+        raise TypeError(f"CalcVariograms: hard_data[1] must be a uint8 ndarray, got {type(hard_data[1]).__name__}")
     variogram = numpy.array([0] * templ.num_lags, dtype='float32')
 
     hd = checked_create(

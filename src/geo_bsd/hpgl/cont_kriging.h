@@ -72,9 +72,10 @@ namespace hpgl
 		node_index_t idx_end = input_property.size();
 		unsigned long points_calculated = 0;
 		unsigned long points_without_neighbours = 0;
+		unsigned long points_processed = 0;
 #pragma omp parallel
 {
-		#pragma omp for reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: sum) 
+		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_processed) reduction(+: sum) 
 		for(node_index_t idx = 0; idx < idx_end; ++idx)	
 		{	
 			if (!input_property.is_informed(idx))
@@ -85,6 +86,7 @@ namespace hpgl
 				case ki_result_t::KI_SUCCESS:
 					output_property.set_at(idx, value);
 					points_calculated++;				
+					points_processed++;
 					sum += value;
 					break;
 				case ki_result_t::KI_NO_NEIGHBOURS:
@@ -92,6 +94,7 @@ namespace hpgl
 					if (fh == kriging_failure_handling::mean_on_failure)
 					{
 						output_property.set_at(idx, means[idx]);
+						points_processed++;
 						sum += means[idx];
 					}
 					break;
@@ -99,6 +102,7 @@ namespace hpgl
 					if (fh == kriging_failure_handling::mean_on_failure)
 					{
 						output_property.set_at(idx, means[idx]);
+						points_processed++;
 						sum += means[idx];
 					}
 					break;
@@ -122,7 +126,7 @@ namespace hpgl
 		report.stop();
 		stats.m_points_calculated = points_calculated;
 		stats.m_points_without_neighbours = points_without_neighbours;
-		stats.m_mean = output_property.size() > 0 ? sum / output_property.size() : 0;
+		stats.m_mean = points_processed > 0 ? sum / points_processed : 0;
 		stats.m_speed_nps = report.iterations_per_second();
 		{
 			std::ostringstream oss;

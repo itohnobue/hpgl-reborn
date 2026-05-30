@@ -5,6 +5,8 @@ Addresses vulnerability IV-001 (CVSS 7.5) - Insufficient Input Validation
 This module provides comprehensive input validation for all HPGL Python functions.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import pathlib
@@ -746,8 +748,8 @@ class ValidationContext:
             strict: If True, raise exception on first error. If False, collect all errors.
         """
         self.strict = strict
-        self.errors = []
-        self.warnings = []
+        self.errors: list[str] = []
+        self.warnings: list[str] = []
 
     def validate_grid_dimensions(self, x: int, y: int, z: int) -> None:
         """Validate grid dimensions and record results"""

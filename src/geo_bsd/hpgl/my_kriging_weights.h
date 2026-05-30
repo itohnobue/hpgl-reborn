@@ -108,6 +108,8 @@ namespace hpgl
 				A[j*size + i] = A[i*size + j];
 			}
 			b[i] = covariances(coords[i], center_coord);
+			// b2 preserves original RHS values for variance calculation;
+			// b is overwritten by dpotrs_ during the solve step
 			b2[i] = b[i];
 		}
 
@@ -143,6 +145,9 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
+		// NOTE: LAPACK call within OpenMP parallel region may cause thread
+		// oversubscription with BLAS internal threading. Set MKL_NUM_THREADS=1
+		// or link sequential BLAS for best performance.
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
@@ -170,7 +175,7 @@ namespace hpgl
 
 #endif
 
-		//bool system_solved = cholesky_old(&A[0], &b[0], &weights[0], size);	
+		//bool system_solved = cholesky_old(&A[0], &b[0], &weights[0], size);
 
 		if (calc_variance)
 		{
@@ -245,6 +250,7 @@ namespace hpgl
 				A[j*size + i] = A[i*size + j];
 			}
 			b[i] = covariances(coords[i], center);
+			// b2 preserves original RHS values for variance calculation
 			b2[i] = b[i];
 		}
 
@@ -281,6 +287,7 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
+		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
@@ -474,6 +481,7 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
+		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 

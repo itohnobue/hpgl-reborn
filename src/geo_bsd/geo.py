@@ -65,7 +65,11 @@ def _check_hpgl_error(context=""):
     if err is not None and len(err) > 0:
         global _last_hpgl_error_snapshot
         if err == _last_hpgl_error_snapshot:
-            # Same error as pre-call snapshot — stale, suppress
+            # Same error as pre-call snapshot — stale, suppress.
+            # NOTE: In the extremely unlikely event that a new C++ operation produces
+            # an error message byte-for-byte identical to the pre-call snapshot,
+            # it would be falsely suppressed. The C++ library always includes
+            # __FILE__:__LINE__ in error messages, making collision infeasible.
             return
         err_str = err.decode("utf-8", errors="replace")
         raise RuntimeError(f"{context} failed: {err_str}" if context else f"HPGL error: {err_str}")
@@ -75,7 +79,7 @@ from .hpgl_wrap import hpgl_output_handler, hpgl_progress_handler
 
 def _c_array(ar_type, size, values):
     if len(values) != size:
-        raise RuntimeError("%s values specified for array of %s elements" % (len(values), size))
+        raise RuntimeError(f"{len(values)} values specified for array of {size} elements")
     result = (ar_type * size)(*values)
     # Preserve references to input values to prevent garbage collection
     # while C code holds pointers to the underlying data
@@ -415,6 +419,7 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
             shape = sh)
         # Security: Keep array references to prevent use-after-free
         marr._array_refs = (prop.data, prop.mask)
+        _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_inc_file_float(
             safe_path.encode("utf-8"),
             C.byref(marr),
@@ -432,6 +437,7 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
             indicator_count = prop.indicator_count)
         # Security: Keep array references to prevent use-after-free
         marr._array_refs = (prop.data, prop.mask, ind_arr)
+        _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_inc_file_byte(
             safe_path.encode("utf-8"),
             C.byref(marr),
@@ -451,6 +457,7 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
         indicator_values = []
 
     if isinstance(prop, ContProperty):
+        _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_gslib_cont_property(
             _create_hpgl_cont_masked_array(prop, None),
             safe_path.encode("utf-8"),
@@ -459,6 +466,7 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
         if rc != 0:
             raise RuntimeError("write_gslib_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
     else:
+        _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_gslib_byte_property(
             _create_hpgl_ind_masked_array(prop, None),
             safe_path.encode("utf-8"),
@@ -493,6 +501,7 @@ def read_inc_file_float(filename, undefined_value, size):
     data = numpy.zeros(total_elements, dtype='float32', order='F')
     mask = numpy.zeros(total_elements, dtype='uint8', order='F')
 
+    _snapshot_hpgl_error()
     rc = _hpgl_so.hpgl_read_inc_file_float(
         safe_path.encode("utf-8"),
         undefined_value,
@@ -517,6 +526,7 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
         raise ValueError(f"Grid too large: {total_elements} elements exceeds c_int max (2147483647)")
     data = numpy.zeros(total_elements, dtype='uint8', order='F')
     mask = numpy.zeros(total_elements, dtype='uint8', order='F')
+    _snapshot_hpgl_error()
     rc = _hpgl_so.hpgl_read_inc_file_byte(
         safe_path.encode("utf-8"),
         undefined_value,
@@ -978,3 +988,17 @@ def set_progress_handler(handler, param):
     else:
         progress_handler = hpgl_progress_handler(handler)
         _hpgl_so.hpgl_set_progress_handler(progress_handler, param)
+
+__all__ = [
+    "ContProperty", "IndProperty", "SugarboxGrid", "CovarianceModel", "covariance",
+    "checkFWA", "append_mask", "accepts_tuple",
+    "ordinary_kriging", "simple_kriging", "lvm_kriging",
+    "indicator_kriging", "median_ik",
+    "simple_cokriging_markI", "simple_cokriging_markII",
+    "simple_kriging_weights",
+    "write_property", "write_gslib_property",
+    "load_cont_property", "load_ind_property",
+    "read_inc_file_float", "read_inc_file_byte",
+    "calc_mean", "set_thread_num", "get_thread_num",
+    "get_gslib_property", "set_output_handler", "set_progress_handler",
+]

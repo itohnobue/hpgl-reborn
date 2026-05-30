@@ -4,6 +4,7 @@
 #include <ostream>
 #include <vector>
 #include <memory>
+#include <cassert>
 
 namespace hpgl
 {
@@ -28,11 +29,13 @@ namespace hpgl
 
 		T & operator[](int idx)
 		{
+			assert(idx >= 0 && idx < 3);
 			return c[idx];
 		}
 
 		T operator[](int idx)const
 		{
+			assert(idx >= 0 && idx < 3);
 			return c[idx];
 		}
 
@@ -65,11 +68,13 @@ namespace hpgl
 
 		T & operator[](int idx)
 		{
+			assert(idx >= 0 && idx < 3);
 			return c[idx];
 		}
 
 		T operator[](int idx)const
 		{
+			assert(idx >= 0 && idx < 3);
 			return c[idx];
 		}
 

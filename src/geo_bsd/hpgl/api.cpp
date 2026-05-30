@@ -122,6 +122,7 @@ HPGL_API int hpgl_read_inc_file_float(
 {
 	if (validate_pointer(filename, "filename (read_inc_file_float)") != 0) return -1;
 	if (validate_pointer(data, "data (read_inc_file_float)") != 0) return -1;
+	// mask is optional: may be nullptr (all cells active)
 	try
 	{
 		hpgl::read_inc_file_float(
@@ -151,6 +152,7 @@ HPGL_API int hpgl_read_inc_file_byte(
 	if (validate_pointer(filename, "filename (read_inc_file_byte)") != 0) return -1;
 	if (validate_pointer(data, "data (read_inc_file_byte)") != 0) return -1;
 	if (validate_pointer(mask, "mask (read_inc_file_byte)") != 0) return -1;
+	if (validate_pointer(values, "values (read_inc_file_byte)") != 0) return -1;
 	try
 	{
 		hpgl::read_inc_file_byte(
@@ -191,6 +193,7 @@ HPGL_API int hpgl_write_inc_file_float(
 {
 	if (validate_pointer(filename, "filename (write_inc_file_float)") != 0) return -1;
 	if (validate_pointer(arr, "arr (write_inc_file_float)") != 0) return -1;
+	if (validate_pointer(name, "name (write_inc_file_float)") != 0) return -1;
 	try
 	{
 		using namespace hpgl;
@@ -214,6 +217,13 @@ HPGL_API int hpgl_write_inc_file_float(
 
 void init_remap_table(unsigned char * values, int values_count, int indicator_count, std::vector<unsigned char> & remap_table)
 {
+	if (values == nullptr)
+	{
+		// No remap table provided: use identity mapping [0, 1, 2, ...]
+		for (int i = 0; i < indicator_count; ++i)
+			remap_table.push_back(i);
+		return;
+	}
 	if (values_count == indicator_count)
 	{
 		remap_table.assign(values, values+values_count);
@@ -281,6 +291,8 @@ hpgl_write_gslib_cont_property(
 		double undefined_value)
 {
 	if (validate_pointer(data, "data (write_gslib_cont_property)") != 0) return -1;
+	if (validate_pointer(filename, "filename (write_gslib_cont_property)") != 0) return -1;
+	if (validate_pointer(name, "name (write_gslib_cont_property)") != 0) return -1;
 	try
 	{
 		using namespace hpgl;
@@ -309,6 +321,9 @@ hpgl_write_gslib_byte_property(
 		int values_count)
 {
 	if (validate_pointer(data, "data (write_gslib_byte_property)") != 0) return -1;
+	if (validate_pointer(filename, "filename (write_gslib_byte_property)") != 0) return -1;
+	if (validate_pointer(name, "name (write_gslib_byte_property)") != 0) return -1;
+	if (validate_pointer(values, "values (write_gslib_byte_property)") != 0) return -1;
 	try
 	{
 		using namespace hpgl;
@@ -582,6 +597,9 @@ hpgl_indicator_kriging(
 	validate_pointer_or_throw(out_data, "out_data (indicator_kriging)");
 	validate_pointer_or_throw(params, "params (indicator_kriging)");
 
+	// NOTE: indicator_count is provided by the Python caller which ensures it matches
+	// the actual data dimensions (in_data->m_indicator_count). This is a contract
+	// requirement of the C API — no cross-check is performed here for performance.
 	int size = get_shape_volume(&in_data->m_shape);
 	validate_shape_volume_or_throw(size, "indicator_kriging input");
 	int size2 = get_shape_volume(&out_data->m_shape);
@@ -664,6 +682,11 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	sgs_params_t sgs_p;
 	init_sgs_params(params, &sgs_p);
 
+	// Defensive: ensure means data pointer is valid before use
+	if (means->m_data == nullptr)
+	{
+		throw hpgl_exception("hpgl_sgs_lvm_simulation", "Null means data pointer");
+	}
 	sgs_p.m_lvm = means->m_data;
 	sgs_p.m_mean_kind = mean_kind_t::e_mean_varying;
 
@@ -803,6 +826,9 @@ hpgl_sis_simulation_lvm(
 
 	progress_reporter_t rep(size);
 
+	// Build means array from mean_data structs.
+	// NOTE: The Python caller guarantees indicator_count <= mean_data array size
+	// (contract enforced in hpgl_wrap.py). No bounds check performed here for perf.
 	std::vector<const mean_t *> means;
 	for (int i = 0; i < indicator_count; ++i)
 	{

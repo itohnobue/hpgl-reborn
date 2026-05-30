@@ -12,7 +12,7 @@ try:
     from geo_bsd.geo import (
         ordinary_kriging, simple_kriging, indicator_kriging,
         ContProperty, IndProperty, CovarianceModel, covariance,
-        SugarboxGrid, calc_mean, write_property
+        SugarboxGrid, calc_mean, write_property, load_cont_property
     )
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
@@ -133,6 +133,18 @@ class TestIOIntegration:
         
         # Verify file was created
         assert output_file.exists()
+        
+        # Read back and verify data integrity
+        read_prop = load_cont_property(str(output_file), -999.0, (10, 10, 5))
+        assert isinstance(read_prop, ContProperty)
+        # Data is returned as 1D Fortran-order array of total grid size
+        assert read_prop.data.shape == (500,)
+        # Informed cells should match original data
+        informed = mask.astype(bool)
+        np.testing.assert_array_equal(
+            read_prop.data[informed],
+            data[informed]
+        )
 
 
 if __name__ == '__main__':

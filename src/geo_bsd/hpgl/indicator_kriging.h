@@ -31,6 +31,7 @@ namespace hpgl
 		// Correct indicator kriging probabilities for order relations
 		// Ensures: 1) Monotonicity P(k) <= P(k+1), 2) Bounds [0,1]
 		// Reference: Deutsch & Journel (1998), Section V.6.3
+		// Iterative averaging: repeat until monotonic to handle cascading violations
 		inline void correct_order_relations(std::vector<indicator_probability_t> & probs)
 		{
 			if (probs.empty())
@@ -45,15 +46,22 @@ namespace hpgl
 					probs[i] = 1.0;
 			}
 
-			// Step 2: Enforce monotonicity using averaging method
-			// For each pair, if P(k) > P(k+1), replace both with average
-			for (size_t i = 0; i + 1 < probs.size(); ++i)
+			// Step 2: Iterative averaging until monotonic
+			// A single pass may not fix cascading violations, so repeat until
+			// no inversions remain (max iterations = probs.size() ensures termination)
+			bool changed = true;
+			for (size_t iter = 0; iter < probs.size() && changed; ++iter)
 			{
-				if (probs[i] > probs[i + 1])
+				changed = false;
+				for (size_t i = 0; i + 1 < probs.size(); ++i)
 				{
-					double avg = (probs[i] + probs[i + 1]) / 2.0;
-					probs[i] = avg;
-					probs[i + 1] = avg;
+					if (probs[i] > probs[i + 1])
+					{
+						double avg = (probs[i] + probs[i + 1]) / 2.0;
+						probs[i] = avg;
+						probs[i + 1] = avg;
+						changed = true;
+					}
 				}
 			}
 		}

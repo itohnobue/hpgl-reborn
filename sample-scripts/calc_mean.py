@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""
+Standalone script: calculates the mean of valid values (non -99) in an INC file.
+
+This is a minimal, self-contained demo that does NOT use the HPGL library.
+For programmatic use, prefer `geo_bsd.calc_mean()` which operates on HPGL
+ContProperty objects.
+
+Usage: calc_mean.py <file>
+"""
 
 import sys
 

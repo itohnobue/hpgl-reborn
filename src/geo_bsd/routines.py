@@ -23,7 +23,7 @@ from .validation import PathValidator
 
 
 def CalcMean(Cube, Mask):
-    CubeMasked = ma.masked_array(Cube, Mask == False)
+    CubeMasked = ma.masked_array(Cube, Mask == 0)
     return CubeMasked.mean()
 
 def CalcMarginalProbsIndicator(Cube, Mask, Indicators):
@@ -35,8 +35,8 @@ def CalcMarginalProbsIndicator(Cube, Mask, Indicators):
 def CalcVPC(Cube, Mask, MarginalMean):
     NZ = Cube.shape[2]
     MaskSum = Mask.sum(0).sum(0)
-    CubeMasked = Cube
-    CubeMasked[Mask == False] = 0
+    CubeMasked = copy(Cube)
+    CubeMasked[Mask == 0] = 0
 
     CubeSum = Cube.sum(0).sum(0)
     Result = ones(NZ) * MarginalMean
@@ -168,98 +168,104 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
         savetxt(f, MegaCube, Format)
 
 def GetCubicalMask(Radiuses):
-	MeanMask = ones( (Radiuses[0]*2, Radiuses[1]*2, Radiuses[2]*2), dtype = uint8)
-	MeanMask = require(MeanMask, requirements = 'F')
-	return MeanMask
+    MeanMask = ones( (Radiuses[0]*2, Radiuses[1]*2, Radiuses[2]*2), dtype = uint8)
+    MeanMask = require(MeanMask, requirements = 'F')
+    return MeanMask
 
 def GetEllipseMask(Radiuses):
-	MeanMask = zeros( (Radiuses[0]*2, Radiuses[1]*2, Radiuses[2]*2), dtype = uint8)
-	MeanMask = require(MeanMask, requirements = 'F')
+    MeanMask = zeros( (Radiuses[0]*2, Radiuses[1]*2, Radiuses[2]*2), dtype = uint8)
+    MeanMask = require(MeanMask, requirements = 'F')
 
-	x0 = Radiuses[0]
-	y0 = Radiuses[1]
-	z0 = Radiuses[2]
+    x0 = Radiuses[0]
+    y0 = Radiuses[1]
+    z0 = Radiuses[2]
 
-	for a in range(Radiuses[0]*2):
-		for b in range(Radiuses[1]*2):
-			for c in range(Radiuses[2]*2):
-				if ( ((a-x0)**2 / float32(Radiuses[0]**2)) + ((b-y0)**2 / float32(Radiuses[1]**2)) + ((c-z0)**2 / float32(Radiuses[2]**2)) <= 1):
-					MeanMask[a,b,c] = 1
-	return MeanMask
+    for a in range(Radiuses[0]*2):
+        for b in range(Radiuses[1]*2):
+            for c in range(Radiuses[2]*2):
+                if ( ((a-x0)**2 / float32(Radiuses[0]**2)) + ((b-y0)**2 / float32(Radiuses[1]**2)) + ((c-z0)**2 / float32(Radiuses[2]**2)) <= 1):
+                    MeanMask[a,b,c] = 1
+    return MeanMask
 
 def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):
-	i, j, k = coords
-	imin = i-Radiuses[0]
-	imax = i+Radiuses[0]
+    i, j, k = coords
+    imin = i-Radiuses[0]
+    imax = i+Radiuses[0]
 
-	jmin = j-Radiuses[1]
-	jmax = j+Radiuses[1]
+    jmin = j-Radiuses[1]
+    jmax = j+Radiuses[1]
 
-	kmin = k-Radiuses[2]
-	kmax = k+Radiuses[2]
+    kmin = k-Radiuses[2]
+    kmax = k+Radiuses[2]
 
-	if imin < 0:
-		imin = 0
-	if jmin < 0:
-		jmin = 0
-	if kmin < 0:
-		kmin = 0
+    if imin < 0:
+        imin = 0
+    if jmin < 0:
+        jmin = 0
+    if kmin < 0:
+        kmin = 0
 
-	if imax > Cube.shape[0]:
-		imax = Cube.shape[0]
-	if jmax > Cube.shape[1]:
-		jmax = Cube.shape[1]
-	if kmax > Cube.shape[2]:
-		kmax = Cube.shape[2]
+    if imax > Cube.shape[0]:
+        imax = Cube.shape[0]
+    if jmax > Cube.shape[1]:
+        jmax = Cube.shape[1]
+    if kmax > Cube.shape[2]:
+        kmax = Cube.shape[2]
 
-	if (sum ( (Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[0:(imax-imin), 0:(jmax-jmin), 0:(kmax-kmin)]==1) ) > 0):
-		return Cube[imin:imax, jmin:jmax, kmin:kmax][nonzero((Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[0:(imax-imin), 0:(jmax-jmin), 0:(kmax-kmin)]==1))].mean()
-	else:
-		return undefined_value
+    if (sum ( (Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[0:(imax-imin), 0:(jmax-jmin), 0:(kmax-kmin)]==1) ) > 0):
+        return Cube[imin:imax, jmin:jmax, kmin:kmax][nonzero((Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[0:(imax-imin), 0:(jmax-jmin), 0:(kmax-kmin)]==1))].mean()
+    else:
+        return undefined_value
 
 
 def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
-	Cube, Mask = cube_mask
-	MACube = copy(Cube)
-	MeanMask = MaskCalcFunction(Radiuses)
+    Cube, Mask = cube_mask
+    MACube = copy(Cube)
+    MeanMask = MaskCalcFunction(Radiuses)
 
-	for i in range(Cube.shape[0]):
-		for j in range(Cube.shape[1]):
-			for k in range(Cube.shape[2]):
-				MACube[i,j,k] = MeanCalc(Cube, Mask, Radiuses, MeanMask, (i,j,k), undefined_value)
+    for i in range(Cube.shape[0]):
+        for j in range(Cube.shape[1]):
+            for k in range(Cube.shape[2]):
+                MACube[i,j,k] = MeanCalc(Cube, Mask, Radiuses, MeanMask, (i,j,k), undefined_value)
 
-	return MACube
+    return MACube
 
 def LoadGslibFile(filename, property_size):
-	if not filename or not isinstance(filename, str):
-		raise ValueError("LoadGslibFile: filename must be a non-empty string")
+    if not filename or not isinstance(filename, str):
+        raise ValueError("LoadGslibFile: filename must be a non-empty string")
 
-	# Validate filepath for security (path traversal prevention, exists check)
-	safe_path = PathValidator.validate_filepath(filename, must_exist=True)
+    # Validate filepath for security (path traversal prevention, exists check)
+    safe_path = PathValidator.validate_filepath(filename, must_exist=True)
 
-	result = {}
-	list_prop = []
-	points = []
+    result = {}
+    list_prop = []
+    points = []
 
-	with open(safe_path, encoding='utf-8') as f:
-		f.readline()  # Skip caption line
-		num_p = int(f.readline())
+    with open(safe_path, encoding='utf-8') as f:
+        f.readline()  # Skip caption line
+        num_p = int(f.readline())
 
-		for _ in range(num_p):
-			list_prop.append(str(f.readline().strip()))
+        for _ in range(num_p):
+            list_prop.append(str(f.readline().strip()))
 
-		for i in range(len(list_prop)):
-			result[list_prop[i]] = zeros(property_size[0]*property_size[1]*property_size[2])
+        for i in range(len(list_prop)):
+            result[list_prop[i]] = zeros(property_size[0]*property_size[1]*property_size[2])
 
-		index = zeros(len(list_prop), dtype=int)
+        index = zeros(len(list_prop), dtype=int)
 
-		for line in f:
-			points = line.split()
-			for j in range(len(points)):
-				result[list_prop[j]][index[j]] = float64(points[j])
-				index[j] += 1
+        for line in f:
+            points = line.split()
+            for j in range(len(points)):
+                if index[j] >= len(result[list_prop[j]]):
+                    raise RuntimeError(
+                        f"LoadGslibFile: too many values for property '{list_prop[j]}'. "
+                        f"Expected {property_size[0]*property_size[1]*property_size[2]} elements "
+                        f"(grid {property_size}), got more."
+                    )
+                result[list_prop[j]][index[j]] = float64(points[j])
+                index[j] += 1
 
-	for dkey in result.keys():
-		result[dkey] = result[dkey].reshape(property_size)
+    for dkey in result.keys():
+        result[dkey] = result[dkey].reshape(property_size)
 
-	return result
+    return result

@@ -147,10 +147,10 @@ def _CalcLagsAreas(VariogramSearchTemplate):
     MaxJ = int(ceil(MaxJ))
     MaxK = int(ceil(MaxK))
 
-    I = zeros([])
-    J = zeros([])
-    K = zeros([])
-    LagIndexes = zeros([])
+    idx_i = zeros([])
+    idx_j = zeros([])
+    idx_k = zeros([])
+    lag_indexes = zeros([])
 
     (Index, LagDistance, LagStart, LagEnd) = _CalcLagDistances(VariogramSearchTemplate)
 
@@ -171,15 +171,15 @@ def _CalcLagsAreas(VariogramSearchTemplate):
     for i in Index:
         Filter = bitwise_and(LagStart[i] <= Dist, Dist < LagEnd[i])
         NumPoints = sum(Filter)
-        I = vstack((I, GI[Filter].reshape(NumPoints, 1)))
-        J = vstack((J, GJ[Filter].reshape(NumPoints, 1)))
-        K = vstack((K, GK[Filter].reshape(NumPoints, 1)))
-        LagIndexes = vstack((LagIndexes, ones((NumPoints, 1)) * i))
-    I = reshape(I[1:], len(I[1:])).astype(int)
-    J = reshape(J[1:], len(J[1:])).astype(int)
-    K = reshape(K[1:], len(K[1:])).astype(int)
-    LagIndexes = reshape(LagIndexes[1:], len(LagIndexes[1:])).astype(int)
-    return I, J, K, LagIndexes, LagDistance
+        idx_i = vstack((idx_i, GI[Filter].reshape(NumPoints, 1)))
+        idx_j = vstack((idx_j, GJ[Filter].reshape(NumPoints, 1)))
+        idx_k = vstack((idx_k, GK[Filter].reshape(NumPoints, 1)))
+        lag_indexes = vstack((lag_indexes, ones((NumPoints, 1)) * i))
+    idx_i = reshape(idx_i[1:], len(idx_i[1:])).astype(int)
+    idx_j = reshape(idx_j[1:], len(idx_j[1:])).astype(int)
+    idx_k = reshape(idx_k[1:], len(idx_k[1:])).astype(int)
+    lag_indexes = reshape(lag_indexes[1:], len(lag_indexes[1:])).astype(int)
+    return idx_i, idx_j, idx_k, lag_indexes, LagDistance
 
 def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     PX = PointSet['X']

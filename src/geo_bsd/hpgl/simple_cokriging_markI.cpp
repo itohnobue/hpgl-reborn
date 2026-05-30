@@ -58,7 +58,7 @@ void build_system(
 bool solve_system(std::vector<double> & A, std::vector<double> & b, std::vector<kriging_weight_t> & weights)
 {
 	weights.resize(b.size());
-	return gauss_solve(&A[0], &b[0], &weights[0], b.size());
+	return gauss_solve(&A[0], &b[0], &weights[0], static_cast<int>(b.size()));
 }
 
 template<typename coord_t, typename primary_cov_model_t, typename cross_cov_model_t>

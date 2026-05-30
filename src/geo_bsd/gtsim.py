@@ -138,7 +138,7 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     for i in range(prop.data.size):
         if (prop1.data.flat[i] >= tk_prop.data.flat[i]):
             prop1.data.flat[i] = 1
-        if (prop1.data.flat[i] < tk_prop.data.flat[i]):
+        elif (prop1.data.flat[i] < tk_prop.data.flat[i]):
             prop1.data.flat[i] = 0
     logger.info("Done.")
     return prop1

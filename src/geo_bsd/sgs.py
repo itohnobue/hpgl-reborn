@@ -35,7 +35,8 @@ def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
 
 def _create_hpgl_nonparam_cdf(cdf_data):
     cd2 = cdf_data
-    assert isinstance(cdf_data, CdfData)
+    if not isinstance(cdf_data, CdfData):
+        raise TypeError(f"_create_hpgl_nonparam_cdf: expected CdfData, got {type(cdf_data).__name__}")
     result = __checked_create(
         hpgl_non_parametric_cdf_t,
         values = cd2.values.ctypes.data_as(C.POINTER(C.c_float)),
@@ -147,6 +148,12 @@ CriticalValidationError
         use_harddata=use_harddata,
         mask=mask)
 
+    kriging_kind_map = {"sk": _HPGL_KRIGING_KIND.simple, "ok": _HPGL_KRIGING_KIND.ordinary}
+    if kriging_type not in kriging_kind_map:
+        raise ValueError(
+            f"sgs_simulation: invalid kriging_type '{kriging_type}'. "
+            f"Choose from: {', '.join(sorted(kriging_kind_map.keys()))}"
+        )
     sgsp = _HPGL_SGS_PARAMS(
         covariance_type = cov_model.type,
         ranges = cov_model.ranges,
@@ -155,7 +162,7 @@ CriticalValidationError
         nugget = cov_model.nugget,
         radiuses = valid_radiuses,
         max_neighbours = max_neighbours,
-        kriging_kind = {"sk" : _HPGL_KRIGING_KIND.simple, "ok" : _HPGL_KRIGING_KIND.ordinary}[kriging_type],
+        kriging_kind = kriging_kind_map[kriging_type],
         seed = seed,
         min_neighbours = min_neighbours)
 

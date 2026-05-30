@@ -91,7 +91,7 @@ void load_doubles_into_vector(FILE * file, std::vector<T> & data)
 {
 	char buffer[256];
 	float value;	
-	while (fscanf(file, "%255s", buffer))	
+	while (fscanf(file, "%255s", buffer) == 1)	
 	{
 		size_t len = strlen(buffer);
 		if (len >= 2 && buffer[0] == '-' && buffer[1] == '-')
@@ -133,11 +133,6 @@ void load_variable_mean_from_file(
 		throw;
 	}
 	fclose(file);
-}
-
-bool is_comment(char * buffer)
-{
-	return strlen(buffer) >= 2 && buffer[0] == '-' && buffer[1] == '-';
 }
 
 }// hpgl namespace

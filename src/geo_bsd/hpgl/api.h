@@ -156,6 +156,9 @@ struct hpgl_non_parametric_cdf_t
 extern "C" {
 #endif
 
+// NOTE: Global error state is protected by internal mutex + thread_local
+// caching (see api_helpers.cpp). Python ctypes caller snapshots the message
+// immediately after each C call to avoid races between threads.
 HPGL_API char * 
 hpgl_get_last_exception_message();
 
@@ -221,6 +224,9 @@ HPGL_API void hpgl_ordinary_kriging(
     hpgl_cont_masked_array_t * output_data); 
 
 HPGL_API void hpgl_simple_kriging(   
+	// NOTE: simple_kriging and lvm_kriging use raw float*/unsigned char* parameters
+	// with separate hpgl_shape_t*, unlike most other functions that use array struct
+	// pointers. This is a historical API design choice maintained for compatibility.
     float * input_data,
     unsigned char * input_mask,
     hpgl_shape_t * input_data_shape,
