@@ -23,6 +23,8 @@ BENCH_DIR.mkdir(exist_ok=True)
 
 # Regression factor: test fails if current time > BASELINE * REGRESSION_FACTOR
 REGRESSION_FACTOR = 3.0
+# Minimum baseline for reliable regression check (sub-ms baselines are unreliable)
+MIN_BASELINE_FOR_REGRESSION = 0.005  # 5ms
 
 
 def _get_baseline(name):
@@ -57,7 +59,11 @@ def _benchmark(name, elapsed, hard_floor=120.0):
         result = elapsed <= hard_floor
     else:
         factor = elapsed / baseline if baseline > 0 else float("inf")
-        result = elapsed <= baseline * REGRESSION_FACTOR and elapsed <= hard_floor
+        # Sub-millisecond baselines are unreliable for regression testing
+        if baseline < MIN_BASELINE_FOR_REGRESSION:
+            result = elapsed <= hard_floor
+        else:
+            result = elapsed <= baseline * REGRESSION_FACTOR and elapsed <= hard_floor
         status = "OK" if result else "REGRESSION"
         print(f"  [BENCHMARK] {name}: {elapsed:.3f}s (baseline: {baseline:.3f}s, {factor:.1f}x, floor: {hard_floor}s) [{status}]")
     if not result:

@@ -13,8 +13,6 @@ namespace hpgl
 		std::string m_message;
 	public:
 		hpgl_exception(const std::string & a_where, const std::string & what);
-		template<typename... Args>
-		hpgl_exception(const std::string & a_where, const std::string & format_str, Args... args);
 
 		virtual const char* what()const noexcept
 		{

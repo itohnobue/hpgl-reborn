@@ -1,26 +1,30 @@
-import numpy
-import os
-import pathlib
-from typing import Optional, Tuple, Union
-
 import ctypes as C
+import logging
+
+import numpy
 
 # Import validation framework
 from . import validation
+from .hpgl_wrap import (
+    _HPGL_CONT_MASKED_ARRAY,
+    _HPGL_FLOAT_ARRAY,
+    _HPGL_IK_PARAMS,
+    _HPGL_IND_MASKED_ARRAY,
+    _HPGL_MEDIAN_IK_PARAMS,
+    _HPGL_OK_PARAMS,
+    _HPGL_SHAPE,
+    _HPGL_SK_PARAMS,
+    _HPGL_UBYTE_ARRAY,
+    __hpgl_cockriging_m1_params_t,
+    __hpgl_cockriging_m2_params_t,
+    __hpgl_cov_params_t,
+    _hpgl_so,
+)
 from .validation import (
-    PathValidator,
     GridValidator,
     ParameterValidator,
-    validate_grid_params,
-    validate_kriging_params,
-    validate_simulation_params,
-    validate_file_params,
-    ValidationError,
-    CriticalValidationError
+    PathValidator,
 )
-
-from .hpgl_wrap import _HPGL_SHAPE, _HPGL_CONT_MASKED_ARRAY, _HPGL_IND_MASKED_ARRAY, _HPGL_UBYTE_ARRAY, _HPGL_FLOAT_ARRAY, _HPGL_OK_PARAMS, _HPGL_SK_PARAMS, _HPGL_IK_PARAMS, _HPGL_MEDIAN_IK_PARAMS, __hpgl_cov_params_t, __hpgl_cockriging_m1_params_t, __hpgl_cockriging_m2_params_t, _hpgl_so
-
 
 # Module-level state to prevent stale C++ error propagation between tests.
 # The HPGL C++ DLL stores the last exception message globally and does not
@@ -28,6 +32,8 @@ from .hpgl_wrap import _HPGL_SHAPE, _HPGL_CONT_MASKED_ARRAY, _HPGL_IND_MASKED_AR
 # a failed read_inc_file_byte) would cause all subsequent _check_hpgl_error
 # calls to falsely report failure.
 _last_hpgl_error_snapshot = None
+
+logger = logging.getLogger(__name__)
 
 def _snapshot_hpgl_error():
     """
@@ -64,62 +70,17 @@ def _check_hpgl_error(context=""):
         err_str = err.decode("utf-8", errors="replace")
         raise RuntimeError(f"{context} failed: {err_str}" if context else f"HPGL error: {err_str}")
 
-# Security: Path validation utilities to prevent directory traversal attacks
-def _validate_filepath(filename: Union[str, pathlib.Path], allow_directories: bool = False) -> str:
-    """
-    Validates and sanitizes file paths to prevent directory traversal attacks.
-
-    Args:
-        filename: The file path to validate
-        allow_directories: Whether to allow directory paths (default: False)
-
-    Returns:
-        Absolute, normalized path as string
-
-    Raises:
-        ValueError: If path contains directory traversal attempts or points outside allowed directories
-        FileNotFoundError: If the file doesn't exist when validation requires it
-    """
-    if not filename:
-        raise ValueError("Filename cannot be empty")
-
-    # Convert to Path object for robust handling
-    path = pathlib.Path(filename)
-
-    # Resolve to absolute path and normalize (removes ../ segments)
-    try:
-        resolved_path = path.resolve(strict=False)
-    except (OSError, RuntimeError) as e:
-        raise ValueError(f"Invalid path: {filename}") from e
-
-    # Check for path traversal attempts in the original string
-    # This catches cases where resolve() might behave unexpectedly
-    path_str = os.path.normpath(filename)
-    if '..' in path_str.split(os.sep) or '../' in filename or '..\\' in filename:
-        raise ValueError(f"Path traversal detected in filename: {filename}")
-
-    # If we're reading, verify the file exists (unless allow_directories is True)
-    # For write operations, we don't require existence but validate path safety
-    if allow_directories:
-        # For directories, ensure we're not escaping filesystem root
-        if not resolved_path.is_absolute():
-            # Resolve relative to current working directory
-            resolved_path = pathlib.Path.cwd() / resolved_path
-            resolved_path = resolved_path.resolve()
-    else:
-        # For files, we validate the path structure but may defer existence check
-        # to the caller's context (read vs write)
-        pass
-
-    return str(resolved_path)
-
-
 from .hpgl_wrap import hpgl_output_handler, hpgl_progress_handler
+
 
 def _c_array(ar_type, size, values):
     if len(values) != size:
         raise RuntimeError("%s values specified for array of %s elements" % (len(values), size))
-    return (ar_type * size) (*values)
+    result = (ar_type * size)(*values)
+    # Preserve references to input values to prevent garbage collection
+    # while C code holds pointers to the underlying data
+    result._array_refs = tuple(values)
+    return result
 
 def _create_hpgl_shape(shape, strides=None):
     # Normalize shape to 3D tuple
@@ -236,7 +197,7 @@ def _create_hpgl_float_array(array, grid):
     return result
 
 class ContProperty:
-    def __init__(self, data, mask):
+    def __init__(self, data: numpy.ndarray, mask: numpy.ndarray):
         self.data = numpy.require(data, 'float32', 'F')
         self.mask = numpy.require(mask, 'uint8', 'F')
     def validate(self):
@@ -257,9 +218,9 @@ class ContProperty:
             return self.mask
         else:
             raise RuntimeError("Index out of range.")
-    
+
 class IndProperty:
-    def __init__(self, data, mask, indicator_count):
+    def __init__(self, data: numpy.ndarray, mask: numpy.ndarray, indicator_count: int):
         self.data = numpy.require(data, 'uint8', 'F')
         self.mask = numpy.require(mask, 'uint8', 'F')
         self.indicator_count = indicator_count
@@ -299,7 +260,7 @@ class covariance:
     gaussian = 2
 
 class SugarboxGrid:
-    def __init__(self, x, y, z):
+    def __init__(self, x: int, y: int, z: int):
         # Validate grid dimensions
         GridValidator.validate_grid_dimensions(x, y, z)
         self.x = x
@@ -319,12 +280,12 @@ class CovarianceModel:
 
 def _load_prop_cont_slow(filename, undefined_value):
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = _validate_filepath(filename)
+    safe_path = PathValidator.validate_filepath(filename, must_exist=False)
 
     values = []
     mask = []
     # Use validated path and explicit encoding
-    with open(safe_path, 'r', encoding='utf-8') as f:
+    with open(safe_path, encoding='utf-8') as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -347,13 +308,13 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
         dict_map[ind_values[i]] = i
 
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = _validate_filepath(filename)
+    safe_path = PathValidator.validate_filepath(filename, must_exist=False)
 
     values = []
     mask = []
 
     # Use validated path and explicit encoding
-    with open(safe_path, 'r', encoding='utf-8') as f:
+    with open(safe_path, encoding='utf-8') as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -377,7 +338,7 @@ def _create_cont_prop(size):
 def _create_ind_prop(size, indicator_count):
     return IndProperty(numpy.zeros(size, dtype="uint8"), numpy.zeros(size, dtype='uint8'), indicator_count)
 
-def _empty_clone(prop):    
+def _empty_clone(prop):
     data2 = prop.data.copy('F')
     data2.fill(0)
     mask2 = prop.mask.copy('F')
@@ -434,11 +395,11 @@ def accepts_tuple(arg_name, arg_pos):
         new_f.__name__ = f.__name__
         return new_f
     return decorator
-        
+
 @accepts_tuple('prop', 0)
 def write_property(prop, filename, prop_name, undefined_value, indicator_values=None):
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = _validate_filepath(filename)
+    safe_path = PathValidator.validate_filepath(filename, must_exist=False)
 
     if indicator_values is None:
         indicator_values = []
@@ -484,7 +445,7 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
 @accepts_tuple('prop', 0)
 def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=None):
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = _validate_filepath(filename)
+    safe_path = PathValidator.validate_filepath(filename, must_exist=False)
 
     if indicator_values is None:
         indicator_values = []
@@ -513,7 +474,7 @@ def load_cont_property(filename, undefined_value, size=None):
     safe_path = PathValidator.validate_filepath(filename, must_exist=True)
 
     if size is None:
-        print("[WARNING]. load_cont_property: Size is not specified. Using slow and inefficient method.")
+        logger.warning("load_cont_property: Size is not specified. Using slow and inefficient method.")
         return _load_prop_cont_slow(safe_path, undefined_value)
     else:
         return read_inc_file_float(safe_path, undefined_value, size)
@@ -570,13 +531,13 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
 
 def load_ind_property(filename, undefined_value, indicator_values, size=None):
     if (size is None):
-        print("[WARNING]. load_ind_property: Size is not specified. Using slow and inefficient method.")
+        logger.warning("load_ind_property: Size is not specified. Using slow and inefficient method.")
         return _load_prop_ind_slow(filename, undefined_value, indicator_values)
     else:
         try:
             return read_inc_file_byte(filename, undefined_value, size, indicator_values)
         except RuntimeError:
-            print("[WARNING]. load_ind_property: Fast method failed, falling back to slow method.")
+            logger.warning("load_ind_property: Fast method failed, falling back to slow method.")
             return _load_prop_ind_slow(filename, undefined_value, indicator_values)
 
 def set_thread_num(num):
@@ -587,16 +548,16 @@ def get_thread_num():
 
 @accepts_tuple('prop', 0)
 def calc_mean(prop):
-    l = len(prop.data.flat)
-    sum = 0
+    prop_len = len(prop.data.flat)
+    sum_val = 0
     count = 0
-    for i in range(l):
+    for i in range(prop_len):
         if prop.mask.flat[i] == 1:
-            sum += prop.data.flat[i]
+            sum_val += prop.data.flat[i]
             count += 1
     if count == 0:
         raise ValueError("calc_mean: no informed values (all masked)")
-    return sum/count
+    return sum_val/count
 
 @accepts_tuple('prop', 0)
 def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
@@ -821,13 +782,13 @@ def indicator_kriging(prop, grid, data, marginal_probs):
         data[i]['marginal_prob'] = marginal_probs[i]
     if(len(data) == 2):
         return median_ik(
-            prop, 
-            grid, 
-            (data[0]["marginal_prob"], 
-             1 - data[0]["marginal_prob"]), 
-            data[0]["radiuses"], 
+            prop,
+            grid,
+            (data[0]["marginal_prob"],
+             1 - data[0]["marginal_prob"]),
+            data[0]["radiuses"],
             data[0]["max_neighbours"],
-            data[0]['cov_model'])    
+            data[0]['cov_model'])
     out_prop = _clone_prop(prop)
     _snapshot_hpgl_error()
     _hpgl_so.hpgl_indicator_kriging(
@@ -865,7 +826,7 @@ def simple_cokriging_markI(prop, grid,
         C.byref(_create_hpgl_cont_masked_array(prop, grid)),
         C.byref(_create_hpgl_cont_masked_array(secondary_data, grid)),
         C.byref(__checked_create(
-                __hpgl_cockriging_m1_params_t, 
+                __hpgl_cockriging_m1_params_t,
                 covariance_type = cov_model.type,
                 ranges = _c_array(C.c_double, 3, cov_model.ranges),
                 angles = _c_array(C.c_double, 3, cov_model.angles),

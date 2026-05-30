@@ -1,16 +1,10 @@
-from os import path
 
+# Import validation module for user convenience
+from . import cvariogram, routines, validation, variogram
+from .cdf import *
 from .geo import *
 from .sgs import sgs_simulation
 from .sis import sis_simulation
-
-from . import variogram
-from . import routines
-from . import cvariogram
-from .cdf import *
-
-# Import validation module for user convenience
-from . import validation
 
 __all__ = [
     # Kriging algorithms
@@ -20,6 +14,8 @@ __all__ = [
     "simple_kriging_weights",
     # Simulation algorithms
     "sgs_simulation", "sis_simulation",
+    # CDF
+    "calc_cdf",
     # Data classes
     "ContProperty", "IndProperty", "CovarianceModel", "SugarboxGrid",
     "covariance", "CdfData",

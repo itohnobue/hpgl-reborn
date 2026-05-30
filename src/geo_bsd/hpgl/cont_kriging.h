@@ -109,6 +109,9 @@ namespace hpgl
 				output_property.set_at(idx, input_property.get_at(idx));
 			}
 
+			// NOTE: next_lap() modifies shared progress state (m_counter increment
+			// and update_progress). This must remain #pragma omp critical since
+			// the function call is not a simple atomic updatable expression.
 			#pragma omp critical
 			{
 				report.next_lap();	

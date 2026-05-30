@@ -89,12 +89,12 @@ void covariance_field_t::init(
 
 	std::sort(m_vectors.begin(), m_vectors.end(), predicate(*this));
 
-	double treshold = value(0, 0, 0) / 100;
+	// threshold was already computed above; reuse it for the second pass
 
 	for (size_t idx = 0, end_idx = m_vectors.size(); idx < end_idx; ++idx)
 	{
 		sugarbox_vector_t vec = m_vectors[idx];
-		if (value(vec[0],vec[1],vec[2]) < treshold)
+		if (value(vec[0],vec[1],vec[2]) < threshold)
 		{
 			m_vectors.resize(idx);
 			break;

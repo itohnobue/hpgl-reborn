@@ -1,5 +1,6 @@
 import numpy
 
+
 class CdfData:
     def __init__(self, values, probs):
         self.values = numpy.require(values, 'float32')

@@ -24,7 +24,5 @@ namespace hpgl
 		return sugarbox_location_t(index % m_x, index % (m_x * m_y) / m_x, index / (m_x * m_y) );
 	}
 
-	sugarbox_grid_t::~sugarbox_grid_t()
-	{
-	}
+	sugarbox_grid_t::~sugarbox_grid_t() = default;
 }//namespace hpgl

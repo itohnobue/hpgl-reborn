@@ -1,16 +1,23 @@
 # GTSIM for 2 indicators (facies)
-from .geo import *
-from .sgs import sgs_simulation
+
+import logging
+
+import numpy as np
+from numpy import exp, pi, sqrt, zeros
+
 from .cdf import calc_cdf
-from numpy import *
-import os
+from .geo import simple_kriging
+from .sgs import sgs_simulation
+
+logger = logging.getLogger(__name__)
+
 
 def pseudo_gaussian_transform(prop, pk_prop):
     for i in range(pk_prop.data.size):
         if (prop.data.flat[i] == 0):
-            prop.data.flat[i] = random.uniform(0.0, pk_prop.data.flat[i])
+            prop.data.flat[i] = np.random.uniform(0.0, pk_prop.data.flat[i])
         if (prop.data.flat[i] == 1):
-            prop.data.flat[i] = random.uniform(pk_prop.data.flat[i], 1.0)
+            prop.data.flat[i] = np.random.uniform(pk_prop.data.flat[i], 1.0)
     return prop
 
 def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
@@ -62,7 +69,9 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     sk_params : dict
         Simple kriging parameters
     do_sk : bool, optional
-        Whether to perform simple kriging (default: True)
+        Deprecated — this parameter is unused. Simple kriging is always performed
+        unless pk_prop is provided. Kept for backward compatibility.
+        (default: True)
     pk_prop : ContProperty, optional
         Pre-computed probability property (if None, will compute via SK)
     sgs_params : dict, optional
@@ -84,28 +93,28 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     # check pk_prop, if presented, use it, if not - do SK
 
     if (pk_prop is None):
-        print("Testing SK...")
+        logger.info("Testing SK...")
         pk_prop = simple_kriging(prop, grid, **sk_params)
-        print("Done.")
+        logger.info("Done.")
     else:
-        print("Using provided pk_prop.")
+        logger.info("Using provided pk_prop.")
 
     # 2. calculate tk_prop
     # t0_prop = 0
     # t1_prop = tk_calculation(pk_prop)
     # (for 2 indicators)
 
-    print("Calculate tk_prop...")
+    logger.info("Calculate tk_prop...")
     tk_prop = tk_calculation(pk_prop, mean=tk_mean, std_dev=tk_std_dev)
-    print("Done.")
+    logger.info("Done.")
 
     # 3. pseudo gaussian transform of initial property (prop) with pk_prop
     # del(pk_prop)
 
-    print("Pseudo gaussian transforming...")
+    logger.info("Pseudo gaussian transforming...")
     prop = pseudo_gaussian_transform(prop,pk_prop)
     del(pk_prop)
-    print("Done.")
+    logger.info("Done.")
 
     # 4. SGS on prop (after transfrom in 3)
     # if sgs_params defined - use it
@@ -114,22 +123,22 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
 
     if (sgs_params is None):
         sgs_params = sk_params
-    print("Computing CDF...")
+    logger.info("Computing CDF...")
     cdf_data = calc_cdf(prop)
-    print("Done.")
-    print("Testing SGS...")
+    logger.info("Done.")
+    logger.info("Testing SGS...")
     prop1 = sgs_simulation(prop, grid, cdf_data, seed=seed, **sgs_params)
-    print("Done.")
+    logger.info("Done.")
 
     # 5. Truncation
     # if sgs_result(u) >= tk_prop(u) -> sgs_result(u) = 1
     # if sgs_result(u) < tk_prop(u) -> sgs_result(u) = 0
 
-    print("Truncation.")
+    logger.info("Truncation.")
     for i in range(prop.data.size):
         if (prop1.data.flat[i] >= tk_prop.data.flat[i]):
             prop1.data.flat[i] = 1
         if (prop1.data.flat[i] < tk_prop.data.flat[i]):
             prop1.data.flat[i] = 0
-    print("Done.")
+    logger.info("Done.")
     return prop1

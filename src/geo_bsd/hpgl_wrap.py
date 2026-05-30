@@ -1,20 +1,15 @@
-import os
 import ctypes as C
+import os
+
 import numpy
 
-# NumPy 2.0+ compatibility: try new location first, fall back to old
-try:
-    from numpy import ctypeslib as NC
-except ImportError:
-    from numpy import _ctypeslib as NC
+# NumPy 2.0+ compatibility
+from numpy import ctypeslib as NC
+
 # Since numpy>=2.0 is required, always use direct ctypes.CDLL
 _load_lib_func = lambda libpath: C.CDLL(str(libpath))
 
-# In NumPy 2.0+, ndpointer might be in different location
-try:
-    ndpointer = NC.ndpointer
-except AttributeError:
-    from numpy.ctypeslib import ndpointer
+ndpointer = NC.ndpointer
 
 hpgl_output_handler = C.CFUNCTYPE(C.c_int, C.c_char_p, C.py_object)
 hpgl_progress_handler = C.CFUNCTYPE(C.c_int, C.c_char_p, C.c_int, C.py_object)
@@ -178,12 +173,6 @@ def _safe_load_library(lib_name: str, ref_file: str):
 
 	# Convert to absolute path and normalize
 	ref_path = pathlib.Path(ref_file).resolve()
-
-	# Check for path traversal in the reference path itself
-	ref_str = str(ref_path)
-	if '..' in ref_str.split(os.sep):
-		# This is OK after resolve() as long as it's within allowed directories
-		pass
 
 	# The library should be in the same directory as the reference file
 	lib_dir = ref_path.parent

@@ -276,6 +276,7 @@ namespace hpgl
 
 		integer info_dec = 100;
 		integer info_solve = 100;
+		integer info_solve2 = 100;
 		integer size_lap = size;
 		integer b_size = 1;
 		char matrix_type = 'U';
@@ -300,12 +301,13 @@ namespace hpgl
 		}
 
 		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &sk_weights[0], &size_lap, &info_solve );
-		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &ones_result[0], &size_lap, &info_solve );
+		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &ones_result[0], &size_lap, &info_solve2 );
 
 		// Handle solve errors
 		detail::handle_lapack_error(info_solve, "dpotrs_ (OK Cholesky solver)", size);
+		detail::handle_lapack_error(info_solve2, "dpotrs_ ones (OK Cholesky solver)", size);
 
-		if (info_solve == 0) system_solved = true;
+		if (info_solve == 0 && info_solve2 == 0) system_solved = true;
 
 #endif
 

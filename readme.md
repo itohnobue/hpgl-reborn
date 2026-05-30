@@ -29,7 +29,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 
 - **[uv](https://docs.astral.sh/uv/)**: Package and environment manager (installs Python and dependencies automatically)
 - **Python**: 3.9 or higher (tested up to 3.14) — installed by uv
-- **NumPy**: 1.24 or higher (compatible with NumPy 2.x) — installed by uv
+- **NumPy**: 2.0 or higher — installed by uv
 - **SciPy**: (optional, for `routines` module) — installed by uv
 
 ### Windows Build
@@ -260,7 +260,7 @@ Run the full test suite:
 uv run pytest tests/python/ -v
 ```
 
-The test suite includes 361 tests covering:
+The test suite includes 615 tests covering:
 - All kriging algorithms (OK, SK, LVM, IK, Median IK, Cokriging)
 - All simulation algorithms (SGS, SIS)
 - Edge cases and parameter validation
@@ -344,7 +344,7 @@ Original documentation from earlier HPGL versions, including PDF manuals (Englis
 - **Security**: Path validation, array reference management, safe library loading
 - **Modern build**: MSBuild-based build.bat, pyproject.toml, CMakeLists.txt
 - **Algorithm bug fixes**: Fixed 7 mathematical bugs — covariance C(0) missing nugget contribution, OK kriging variance sign error, correlogram weight adjustment inverted, Cokriging Mark II cross-covariance ratio inverted, SGS normalization coefficient, and spurious /2 in covariance and indicator correlation functions
-- **Test suite**: 361 automated tests with pytest
+- **Test suite**: 615 automated tests with pytest
 - **Legacy cleanup**: Removed unused libraries, old Boost.Python bindings, obsolete build systems (SCons, old Makefiles), Debian packaging, old VS 2008 project files, and a bundled Win32 installer, etc
 
 ## License

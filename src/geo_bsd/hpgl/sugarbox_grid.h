@@ -39,9 +39,9 @@ namespace hpgl
 
 	bool sugarbox_grid_t::contains(const sugarbox_location_t & loc)const
 	{
-		return (unsigned) loc[0] < (unsigned)m_x 
-				&& (unsigned) loc[1] < (unsigned)m_y
-				&& (unsigned) loc[2] < (unsigned)m_z;
+		return static_cast<unsigned>(loc[0]) < static_cast<unsigned>(m_x)
+				&& static_cast<unsigned>(loc[1]) < static_cast<unsigned>(m_y)
+				&& static_cast<unsigned>(loc[2]) < static_cast<unsigned>(m_z);
 	}
 
 	bool sugarbox_grid_t::contains(node_index_t index)const

@@ -1,6 +1,26 @@
-from numpy import (array, bitwise_and, ceil, column_stack, cos, dot, float32, floor,
-    mgrid, ones, power, prod, radians, repeat, reshape, vstack,
-    shape, sin, sum, zeros)
+from numpy import (
+    array,
+    bitwise_and,
+    ceil,
+    column_stack,
+    cos,
+    dot,
+    float32,
+    floor,
+    mgrid,
+    ones,
+    power,
+    prod,
+    radians,
+    repeat,
+    reshape,
+    shape,
+    sin,
+    sum,
+    vstack,
+    zeros,
+)
+
 
 class TVEllipsoid:
     Direction1 = [1, 0, 0]
@@ -12,8 +32,8 @@ class TVEllipsoid:
     def __init__(self, R1, R2, R3, Azimut = 0, Dip = 0, Rotation = 0):
         Azimut = radians(Azimut)
         Dip = radians(Dip)
-        Rotation = radians(Rotation);
-        
+        Rotation = radians(Rotation)
+
         A = array([
              [cos(Azimut), -sin(Azimut), 0],
              [sin(Azimut),  cos(Azimut), 0],
@@ -37,7 +57,7 @@ class TVEllipsoid:
         self.Direction1 = ABC[:, 0]
         self.Direction2 = ABC[:, 1]
         self.Direction3 = ABC[:, 2]
-        
+
         self.R1 = R1
         self.R2 = R2
         self.R3 = R3
@@ -73,18 +93,18 @@ def _IsInTunnel(VariogramSearchTemplate, V):
     SS1 = abs(dot(V, D1))
     SS2 = abs(dot(V, D2))
     SS3 = abs(dot(V, D3))
-    
+
     if VariogramSearchTemplate.Ellipsoid.R2 == 0 or VariogramSearchTemplate.Ellipsoid.R3 == 0:
         return zeros(V.shape[0], dtype=bool)
-    
+
     S2 = SS2 / VariogramSearchTemplate.Ellipsoid.R2
     S3 = SS3 / VariogramSearchTemplate.Ellipsoid.R3
-    
+
     Dist = power(power(S2, 2) + power(S3, 2), 0.5)
     Result = array(bitwise_and(Dist <= 1, VariogramSearchTemplate.TolDistance * Dist <= SS1))
-        
+
     return Result.ravel()
-    
+
 def _CalcSearchTemplateWindow(VariogramSearchTemplate):
     Max = 1E10
     MinI = Max
@@ -100,7 +120,7 @@ def _CalcSearchTemplateWindow(VariogramSearchTemplate):
                 DJ = VariogramSearchTemplate.Ellipsoid.Direction2 * VariogramSearchTemplate.Ellipsoid.R2 * j
                 DK = VariogramSearchTemplate.Ellipsoid.Direction3 * VariogramSearchTemplate.Ellipsoid.R3 * k
                 V = DI + DJ + DK
-                
+
                 MinI = float(min(MinI, V[0]))
                 MaxI = float(max(MaxI, V[0]))
                 MinJ = float(min(MinJ, V[1]))
@@ -115,7 +135,7 @@ def _CalcLagDistances(VariogramSearchTemplate):
     LagWidth = VariogramSearchTemplate.LagWidth
     LagStart = LagDistance - float(LagWidth) / 2
     LagEnd = LagDistance + float(LagWidth) / 2
-    
+
     return LagIndexes, LagDistance, LagStart, LagEnd
 
 def _CalcLagsAreas(VariogramSearchTemplate):
@@ -126,28 +146,28 @@ def _CalcLagsAreas(VariogramSearchTemplate):
     MaxI = int(ceil(MaxI))
     MaxJ = int(ceil(MaxJ))
     MaxK = int(ceil(MaxK))
-    
+
     I = zeros([])
     J = zeros([])
     K = zeros([])
     LagIndexes = zeros([])
-    
+
     (Index, LagDistance, LagStart, LagEnd) = _CalcLagDistances(VariogramSearchTemplate)
-    
+
     GI, GJ, GK = mgrid[MinI:MaxI+1, MinJ:MaxJ+1, MinK:MaxK+1]
-    
+
     GI = GI.reshape(prod(GI.shape), 1)
     GJ = GJ.reshape(prod(GJ.shape), 1)
     GK = GK.reshape(prod(GK.shape), 1)
-    
+
     ActivePoints = _IsInTunnel(VariogramSearchTemplate, column_stack((GI, GJ, GK)))
-    
+
     GI = GI[ActivePoints]
     GJ = GJ[ActivePoints]
     GK = GK[ActivePoints]
-    
+
     Dist = power(power(GI, 2) + power(GJ, 2) + power(GK, 2), 0.5)
-    
+
     for i in Index:
         Filter = bitwise_and(LagStart[i] <= Dist, Dist < LagEnd[i])
         NumPoints = sum(Filter)
@@ -165,54 +185,54 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     PX = PointSet['X']
     PY = PointSet['Y']
     PZ = PointSet['Z']
-    
+
     MinX, MinY, MinZ, MaxX, MaxY, MaxZ = _CalcSearchTemplateWindow(VariogramSearchTemplate)
-    
+
     LagIndex, LagDistance, LagStart, LagEnd = _CalcLagDistances(VariogramSearchTemplate)
     MinDistance2 = max(0, LagStart.min()) ** 2
     MaxDistance2 = LagEnd.max() ** 2
-    
+
     if Function is not None:
-        Result = Function(0, 0, None, Params)  
+        Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
-    
+
     Index = array(range(0, len(PX)))
     for i in range(len(PX)):
         X1, Y1, Z1 = PX[i], PY[i], PZ[i]
         DX, DY, DZ = PX - X1, PY - Y1, PZ - Z1
-        
+
         Filter = MinX <= DX
         Filter = bitwise_and(Filter, DX <= MaxX)
         Filter = bitwise_and(Filter, MinY <= DY)
         Filter = bitwise_and(Filter, DY <= MaxY)
         Filter = bitwise_and(Filter, MinZ <= DZ)
         Filter = bitwise_and(Filter, DZ <= MaxZ)
-        
+
         FDX, FDY, FDZ = DX[Filter], DY[Filter], DZ[Filter]
         FIndex = Index[Filter]
-        
+
         FDistance2 = FDX ** 2 + FDY ** 2 + FDZ ** 2
         Filter = MinDistance2 <= FDistance2
         Filter = bitwise_and(Filter, FDistance2 <= MaxDistance2)
-        
+
         FDX, FDY, FDZ = FDX[Filter], FDY[Filter], FDZ[Filter]
         FIndex = FIndex[Filter]
         FDistance2 = FDistance2[Filter]
-        
+
         Filter = _IsInTunnel(VariogramSearchTemplate, column_stack((FDX, FDY, FDZ)))
-        
+
         FDX, FDY, FDZ = FDX[Filter], FDY[Filter], FDZ[Filter]
         FIndex = FIndex[Filter]
         FDistance2 = FDistance2[Filter]
-        
+
         FDistance = FDistance2 ** 0.5
-        
+
         for Lag in LagIndex:
             Filter = bitwise_and(LagStart[Lag] <= FDistance, FDistance < LagEnd[Lag])
             for j in FIndex[Filter]:
                 Result[Lag, :] = Function([i], [j], Result[Lag, :], Params)
-    
+
     return Result, LagDistance
 
 def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params):
@@ -220,68 +240,68 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
     IMin, IMax = LI.min(), LI.max()
     JMin, JMax = LJ.min(), LJ.max()
     KMin, KMax = LK.min(), LK.max()
-    
+
     PI = PointSetXYZ[0]
     PJ = PointSetXYZ[1]
     PK = PointSetXYZ[2]
-        
+
     if Function is not None:
-        Result = Function(0, 0, None, Params)  
+        Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
-    
+
     Index = array(range(0, len(PI)))
     for i in range(len(PI)):
         I1, J1, K1 = PI[i], PJ[i], PK[i]
         DI, DJ, DK = PI - I1, PJ - J1, PK - K1
-        
+
         Filter = IMin <= DI
         Filter = bitwise_and(Filter, DI <= IMax)
         Filter = bitwise_and(Filter, JMin <= DJ)
         Filter = bitwise_and(Filter, DJ <= JMax)
         Filter = bitwise_and(Filter, KMin <= DK)
         Filter = bitwise_and(Filter, DK <= KMax)
-        
+
         FPI, FPJ, FPK = PI[Filter], PJ[Filter], PK[Filter]
         FDI, FDJ, FDK = FPI - I1, FPJ - J1, FPK - K1
         FIndex = Index[Filter]
-        
+
         for j in range(len(FDI)):
             LFilter = FDI[j] == LI
             LFilter = bitwise_and(LFilter, FDJ[j] == LJ)
             LFilter = bitwise_and(LFilter, FDK[j] == LK)
-            
+
             ActiveLags = LagIndexes[LFilter]
-            
+
             if Function is not None:
                 for Lag in ActiveLags:
                     Result[Lag, :] = Function(i, FIndex[j], Result[Lag, :], Params)
-    
+
     return Result, LagDistance
 
 def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
     NI, NJ, NK = Mask.shape
-    
+
     LI, LJ, LK, LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
-    
+
     if Function is not None:
-        Result = Function(0, 0, None, Params)  
+        Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
-    
+
     GI, GJ, GK = mgrid[0:NI, 0:NJ, 0:NK]
-        
+
     for i in range(len(LagIndexes)):
         DI = LI[i]
         DJ = LJ[i]
         DK = LK[i]
         Lag = LagIndexes[i]
-        
+
         Mask1 = Mask[max(0, 0 + DI):min(NI, NI + DI), max(0, 0 + DJ):min(NJ, NJ + DJ), max(0, 0 + DK):min(NK, NK + DK)]
         Mask2 = Mask[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
-        
+
         Intersection = Mask1 & Mask2
-        
+
         GI1 = GI[max(0, 0 + DI):min(NI, NI + DI), max(0, 0 + DJ):min(NJ, NJ + DJ), max(0, 0 + DK):min(NK, NK + DK)]
         GJ1 = GJ[max(0, 0 + DI):min(NI, NI + DI), max(0, 0 + DJ):min(NJ, NJ + DJ), max(0, 0 + DK):min(NK, NK + DK)]
         GK1 = GK[max(0, 0 + DI):min(NI, NI + DI), max(0, 0 + DJ):min(NJ, NJ + DJ), max(0, 0 + DK):min(NK, NK + DK)]
@@ -289,7 +309,7 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
         GI2 = GI[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
         GJ2 = GJ[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
         GK2 = GK[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
-        
+
         for k in range(Intersection.shape[2]):
             GI1Slice = GI1[:, :, k][Intersection[:, :, k]].flatten()
             GJ1Slice = GJ1[:, :, k][Intersection[:, :, k]].flatten()
@@ -297,7 +317,7 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
             GI2Slice = GI2[:, :, k][Intersection[:, :, k]].flatten()
             GJ2Slice = GJ2[:, :, k][Intersection[:, :, k]].flatten()
             GK2Slice = GK2[:, :, k][Intersection[:, :, k]].flatten()
-        
+
             Result[Lag, :] = Function((GI1Slice, GJ1Slice, GK1Slice), (GI2Slice, GJ2Slice, GK2Slice), Result[Lag, :], Params)
 
     return Result, LagDistance
@@ -309,7 +329,7 @@ def CalcVariogramFunction(Point1, Point2, Result, Params):
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
     else:
         NumPoints = shape(Point1)[len(shape(Point1))-1]
-        
+
         Values1 = zeros((NumValues, NumPoints))
         Values2 = zeros((NumValues, NumPoints))
         for i in range(NumValues):

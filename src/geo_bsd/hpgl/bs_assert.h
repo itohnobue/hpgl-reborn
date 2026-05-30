@@ -110,7 +110,7 @@ namespace blue_sky {
         factory() = f;
       }
 
-      virtual const char *what ()const  throw()
+      virtual const char *what ()const noexcept
       {
         return "asserter";
       }

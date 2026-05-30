@@ -1,20 +1,25 @@
-import numpy
 import ctypes as C
 
-from .geo import _clone_prop, _empty_clone, _require_cont_data, _require_ind_data, __checked_create, _create_hpgl_ind_masked_array, _create_hpgl_ubyte_array, _create_hpgl_float_array, _check_hpgl_error, _snapshot_hpgl_error
-from .geo import _c_array
-
-from .geo import accepts_tuple
-
-from .hpgl_wrap import _HPGL_IK_PARAMS, _HPGL_FLOAT_ARRAY, _hpgl_so
+import numpy
 
 # Import validation framework
-from . import validation
-from .validation import (
-    GridValidator,
-    ParameterValidator,
-    validate_simulation_params
+from .geo import (
+    __checked_create,
+    _c_array,
+    _check_hpgl_error,
+    _clone_prop,
+    _create_hpgl_float_array,
+    _create_hpgl_ind_masked_array,
+    _create_hpgl_ubyte_array,
+    _empty_clone,
+    _require_cont_data,
+    _require_ind_data,
+    _snapshot_hpgl_error,
+    accepts_tuple,
 )
+from .hpgl_wrap import _HPGL_FLOAT_ARRAY, _HPGL_IK_PARAMS, _hpgl_so
+from .validation import GridValidator, ParameterValidator
+
 
 def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
     is_lvm = not numpy.isscalar(marginal_probs[0])
@@ -55,6 +60,56 @@ def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
 
 @accepts_tuple('prop', 0)
 def sis_simulation(prop, grid, data, seed, marginal_probs, use_correlogram=True, mask=None, force_single_thread=False, force_parallel=False, use_harddata=True, use_regions=False, region_size = (), min_neighbours = 0):
+    """Performs Sequential Indicator Simulation (SIS).
+
+Parameters:
+-----------
+prop : IndProperty
+    Input indicator property with data, mask, and indicator_count.
+grid : SugarboxGrid
+    Simulation grid defining (x, y, z) dimensions.
+data : list of dict
+    List of per-indicator dictionaries, each containing:
+    ``{"cov_model": CovarianceModel, "radiuses": tuple, "max_neighbours": int}``.
+seed : int
+    Seed for the random number generator.
+marginal_probs : list of float or list of numpy.ndarray
+    Marginal probabilities for each indicator category. For simple (stationary)
+    simulation, a list of scalar floats that sum to 1.0. For locally varying
+    mean (LVM) simulation, a list of 3D float32 ndarrays matching the grid size.
+use_correlogram : bool, optional
+    If ``True``, use correlogram-based simulation. Only applicable in LVM mode.
+    Default: ``True``.
+mask : numpy.ndarray or None, optional
+    3D uint8 array where ``1`` marks cells to simulate and ``0`` marks cells
+    to skip. If ``None``, all cells are simulated. Default: ``None``.
+force_single_thread : bool, optional
+    Force single-threaded execution. Default: ``False``.
+force_parallel : bool, optional
+    Force parallel execution. Default: ``False``.
+use_harddata : bool, optional
+    If ``True``, use source data values for simulation. If ``False``,
+    ignore source data values. Default: ``True``.
+use_regions : bool, optional
+    If ``True``, use region-based simulation partitioning. Default: ``False``.
+region_size : tuple, optional
+    Size of each simulation region when `use_regions=True`. Default: ``()``.
+min_neighbours : int, optional
+    Minimum number of neighbours required for kriging. Default: ``0``.
+
+Returns:
+--------
+IndProperty
+    Simulated indicator property.
+
+Raises:
+-------
+CriticalValidationError
+    If any parameter fails validation.
+ValueError
+    If marginal probabilities do not sum to 1.0 (non-LVM mode).
+RuntimeError
+    If the underlying C++ simulation fails."""
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 

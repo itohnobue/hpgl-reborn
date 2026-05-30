@@ -44,10 +44,10 @@ namespace hpgl
 		inline void set_at(size_type index, value_type value)
 		{
 			HPGL_CHECK(m_data != nullptr, "cont_property_array_t::set_at: null data pointer");
-			HPGL_CHECK(m_mask != nullptr, "cont_property_array_t::set_at: null mask pointer");
 			HPGL_CHECK(index >= 0 && index < m_size, "cont_property_array_t::set_at: index out of bounds");
 			m_data[index] = value;
-			m_mask[index] = 1;
+			if (m_mask != nullptr)
+				m_mask[index] = 1;
 		}
 
 		bool is_informed(size_type index)const

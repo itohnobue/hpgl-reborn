@@ -1,23 +1,26 @@
-from .hpgl_wrap import _HPGL_KRIGING_KIND, _HPGL_SGS_PARAMS, hpgl_non_parametric_cdf_t,  _hpgl_so
-
-from .geo import _empty_clone, _clone_prop, _create_hpgl_cont_masked_array, _create_hpgl_float_array, _create_hpgl_ubyte_array, _require_cont_data, _require_ind_data, __checked_create, _check_hpgl_error, _snapshot_hpgl_error
-
-from .geo import CovarianceModel
-from .geo import accepts_tuple
-
-from .cdf import CdfData
-
-# Import validation framework
-from . import validation
-from .validation import (
-    GridValidator,
-    ParameterValidator,
-    validate_simulation_params
-)
-
 import ctypes as C
 
 import numpy
+
+# Import validation framework
+from .cdf import CdfData
+from .geo import (
+    CovarianceModel,
+    __checked_create,
+    _check_hpgl_error,
+    _clone_prop,
+    _create_hpgl_cont_masked_array,
+    _create_hpgl_float_array,
+    _create_hpgl_ubyte_array,
+    _empty_clone,
+    _require_cont_data,
+    _require_ind_data,
+    _snapshot_hpgl_error,
+    accepts_tuple,
+)
+from .hpgl_wrap import _HPGL_KRIGING_KIND, _HPGL_SGS_PARAMS, _hpgl_so, hpgl_non_parametric_cdf_t
+from .validation import GridValidator, ParameterValidator
+
 
 def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
     if use_harddata:
@@ -33,52 +36,83 @@ def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
 def _create_hpgl_nonparam_cdf(cdf_data):
     cd2 = cdf_data
     assert isinstance(cdf_data, CdfData)
-    return __checked_create(
+    result = __checked_create(
         hpgl_non_parametric_cdf_t,
         values = cd2.values.ctypes.data_as(C.POINTER(C.c_float)),
         probs = cd2.probs.ctypes.data_as(C.POINTER(C.c_float)),
         size = cd2.values.size)
+    # Preserve references to numpy arrays to prevent garbage collection
+    # while C code holds pointers to the underlying data
+    result._array_refs = (cd2.values, cd2.probs)
+    return result
 
 def normed_cov_model(cov_model):
     coef = cov_model.sill
     if coef == 0.0:
         raise ValueError("normed_cov_model: sill cannot be zero (division by zero)")
     return CovarianceModel(
-        cov_model.type, 
-        cov_model.ranges, 
-        cov_model.angles, 
+        cov_model.type,
+        cov_model.ranges,
+        cov_model.angles,
         cov_model.sill / coef,
         cov_model.nugget / coef)
 
 @accepts_tuple('prop', 0)
 def sgs_simulation(prop, grid, cdf_data, radiuses, max_neighbours, cov_model, seed, kriging_type="sk", mean=None, use_harddata = True, use_regions=False, region_size = None, mask=None, force_single_thread=False, force_parallel=False, min_neighbours = 0, **params):
-    """Performs Sequential Gaussian Simulation
+    """Performs Sequential Gaussian Simulation (SGS).
 
 Parameters:
 -----------
-cdf_data: None or array_like or CdfData:
-    Cumulative distribution data or data to use for calulating it.
-    If None - no cdf transformation is performed.
-radiuses : tuple of 3 integers
-    Search radiuses by X, Y and Z axes.
-max_neighbours: integer
-    Maximum number of neighbour points to use.
-cov_model: CovarianceModel
-    Model of covariance.
-seed: integer
-    Seed for random number generator.
-kriging_type:"sk" or "ok", optional
-    Selects either simple or ordinary kriging type. Defaults to Simple Kriging.
-mean:None or integer or array_like, optional
-    Stationary mean value or varying mean array. None - stationary mean value
-    will be calculated from source data. Default: None
-use_harddata: bool, optional
-    True - to use source data values for simulation. False - to ignore source data
-    values. Default: True.
-mask: None or array_like, optional:
-    Array containing 1 in cell that need to be simulated and 0 in cell that aren't.
-    If None simulate all cells. Defualt: None.
-"""
+prop : ContProperty
+    Input continuous property with data and mask arrays.
+grid : SugarboxGrid
+    Simulation grid defining (x, y, z) dimensions.
+cdf_data : CdfData or None
+    Pre-computed cumulative distribution data for normal-score transform.
+    The underlying `_create_hpgl_nonparam_cdf` asserts CdfData type.
+    If None, no CDF transformation is performed.
+radiuses : tuple of (int, int, int)
+    Search radiuses in (X, Y, Z) directions.
+max_neighbours : int
+    Maximum number of neighbour points to use for kriging.
+cov_model : CovarianceModel
+    Covariance model (type, ranges, angles, sill, nugget).
+seed : int
+    Seed for the random number generator.
+kriging_type : str, optional
+    Kriging method: ``"sk"`` for Simple Kriging or ``"ok"`` for Ordinary Kriging.
+    Default: ``"sk"``.
+mean : None, float, or numpy.ndarray, optional
+    Stationary mean value. If ``None``, the mean is calculated automatically
+    from source data. If a non-scalar ndarray, it is used as a locally
+    varying mean (LVM). Default: ``None``.
+use_harddata : bool, optional
+    If ``True``, use source data values for simulation. If ``False``,
+    ignore source data values. Default: ``True``.
+use_regions : bool, optional
+    If ``True``, use region-based simulation partitioning. Default: ``False``.
+region_size : tuple of int or None, optional
+    Size of each simulation region when `use_regions=True`. Default: ``None``.
+mask : numpy.ndarray or None, optional
+    3D array where ``1`` marks cells to simulate and ``0`` marks cells to skip.
+    If ``None``, all cells are simulated. Default: ``None``.
+force_single_thread : bool, optional
+    Force single-threaded execution. Default: ``False``.
+force_parallel : bool, optional
+    Force parallel execution. Default: ``False``.
+min_neighbours : int, optional
+    Minimum number of neighbours required for kriging. Default: ``0``.
+
+Returns:
+--------
+ContProperty
+    Simulated continuous property.
+
+Raises:
+-------
+CriticalValidationError
+    If any parameter fails validation."""
+    # Validate grid dimensions
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 

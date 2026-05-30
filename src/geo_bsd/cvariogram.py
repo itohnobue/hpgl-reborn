@@ -1,20 +1,14 @@
-import os
 import ctypes as C
+
 import numpy
 
-# NumPy 2.0+ compatibility: try new location first, fall back to old
-try:
-    from numpy import ctypeslib as NC
-except ImportError:
-    from numpy import _ctypeslib as NC
+# NumPy 2.0+ compatibility
+from numpy import ctypeslib as NC
+
 # Since numpy>=2.0 is required, always use direct ctypes.CDLL
 _load_lib_func = lambda libpath: C.CDLL(str(libpath))
 
-# In NumPy 2.0+, ndpointer might be in different location
-try:
-    ndpointer = NC.ndpointer
-except AttributeError:
-    from numpy.ctypeslib import ndpointer
+ndpointer = NC.ndpointer
 
 #from _cvariogram import CStackLayers
 
@@ -74,7 +68,7 @@ cvar.fill_ellipsoid_directions.argtypes = [
 
 cvar.calc_variograms.restype = None
 cvar.calc_variograms.argtypes = [
-            C.POINTER(variogram_search_template_t), 
+            C.POINTER(variogram_search_template_t),
             C.POINTER(hard_data_t),
             NC.ndpointer(dtype = numpy.float32),
             C.c_int,
@@ -105,7 +99,11 @@ def checked_create(T, **kargs):
         if k in fields:
             fields.remove(k)
     assert len(fields) == 0, "No values for parameters: %s" % fields
-    return T(**kargs)
+    result = T(**kargs)
+    # Preserve references to input values to prevent garbage collection
+    # while C code holds pointers to the underlying data
+    result._array_refs = tuple(kargs.values())
+    return result
 
 def __strides(array):
     return (array.strides[0] // array.itemsize, array.strides[1] // array.itemsize, array.strides[2] // array.itemsize)
@@ -148,7 +146,7 @@ def CalcVariograms(templ, hard_data, percent=100):
     if percent < 1 or percent > 100:
         raise ValueError(f"CalcVariograms: percent must be in [1, 100], got {percent}")
     variogram = numpy.array([0] * templ.num_lags, dtype='float32')
-    
+
     hd = checked_create(
         hard_data_t,
         data = hard_data[0].ctypes.data_as(C.POINTER(C.c_float)),
@@ -157,7 +155,7 @@ def CalcVariograms(templ, hard_data, percent=100):
         mask_shape = _c_array(C.c_int, 3, hard_data[1].shape),
         data_strides = _c_array(C.c_int, 3, __strides(hard_data[0])),
         mask_strides = _c_array(C.c_int, 3, __strides(hard_data[1])))
-    
+
     cvar.calc_variograms(
         C.byref(templ.templ),
         C.byref(hd),

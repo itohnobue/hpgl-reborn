@@ -10,6 +10,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Compiler warning flags
+# NOTE: CMake uses /W4 (Level4) here while the MSVC vcxproj uses /W3 (Level3).
+# /W4 catches more potential issues but may produce additional warnings
+# compared to building directly with the Visual Studio project files.
 if(MSVC)
     add_compile_options(/W4 /wd4100 /wd4127 /wd4514 /wd4710 /wd4820)
 else()
@@ -42,6 +45,10 @@ if(HPGL_USE_OPENMP)
 endif()
 
 # BLAS/LAPACK
+# NOTE: MKL link order differs between CMake and MSVC vcxproj builds.
+# The vcxproj uses: mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib (Debug|Win32, Debug|x64, Release|Win32)
+#                    mkl_intel_lp64.lib;mkl_core.lib;mkl_sequential.lib (Release|x64 only — inconsistent with other 3 configs)
+# CMake delegates link order to FindMKL which resolves MKL::MKL target dependencies automatically.
 if(HPGL_USE_MKL)
     find_package(MKL CONFIG QUIET)
     if(MKL_FOUND)
@@ -102,7 +109,7 @@ endif()
 # ============================================================================
 
 # HPGL core library sources
-file(GLOB_RECURSE HPGL_CORE_SOURCES
+file(GLOB_RECURSE HPGL_CORE_SOURCES CONFIGURE_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/hpgl/*.cpp
 )
 
@@ -223,11 +230,16 @@ install(DIRECTORY
 if(HPGL_BUILD_PYTHON)
     install(FILES
         src/geo_bsd/__init__.py
+        src/geo_bsd/cdf.py
+        src/geo_bsd/cvariogram.py
         src/geo_bsd/geo.py
+        src/geo_bsd/gtsim.py
+        src/geo_bsd/hpgl_wrap.py
+        src/geo_bsd/routines.py
         src/geo_bsd/sgs.py
         src/geo_bsd/sis.py
-        src/geo_bsd/variogram.py
         src/geo_bsd/validation.py
+        src/geo_bsd/variogram.py
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
     )
 endif()

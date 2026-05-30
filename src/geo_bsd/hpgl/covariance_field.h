@@ -90,19 +90,19 @@ namespace hpgl
 
 		std::sort(vectors.begin(), vectors.end(), detail::predicate_2(data, m_xradius, m_yradius, m_zradius));
 
-		double treshold = cov(coord_t(0, 0, 0), coord_t(0,0,0)) / 100;
+		// threshold was already computed above; reuse it for the second pass
 
 		for (size_t idx = 0, end_idx = vectors.size(); idx < end_idx; ++idx)
 		{
 			sugarbox_vector_t vec = vectors[idx];
-			if (cov(coord_t(0,0,0), coord_t(vec[0], vec[1], vec[2])) < treshold)
+			if (cov(coord_t(0,0,0), coord_t(vec[0], vec[1], vec[2])) < threshold)
 			{
 				vectors.resize(idx);
 				break;
 			}		
 		}
 
-		//It seems there is duplicate treshold cutt-off....
+		//It seems there is duplicate threshold cutt-off....
 	}
 
 class covariance_field_t

@@ -2,6 +2,7 @@
 
 #include "progress_reporter.h"
 #include "output.h"
+#include <chrono>
 
 int progress_bar_length = 20;
 
@@ -39,10 +40,7 @@ namespace hpgl
 	void progress_reporter_t::start()
 	{
 		update_progress("", 0);
-		//		write("\n");
-		//std::cout << |--------------------|
-		//print_progressbar(0);
-		time(&m_start);
+		m_start = std::chrono::high_resolution_clock::now();
 	}
 
 	void progress_reporter_t::start(long n_iterations)
@@ -70,19 +68,17 @@ namespace hpgl
 
 	void progress_reporter_t::stop()
 	{
-		time(&m_end);
+		m_end = std::chrono::high_resolution_clock::now();
 		write("\n");
-		//		std::cout << std::endl;
-		//print_progressbar(100);
 	}
 
 	double progress_reporter_t::iterations_per_second()
 	{
-		return m_iterations / difftime(m_end, m_start);
+		return m_iterations / duration();
 	}
 
 	double progress_reporter_t::duration()
 	{
-		return difftime(m_end, m_start);
+		return std::chrono::duration<double>(m_end - m_start).count();
 	}
 }

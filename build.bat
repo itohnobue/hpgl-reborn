@@ -112,25 +112,42 @@ echo ========================================
 echo.
 
 REM Copy built DLLs to runtime location (src\geo_bsd\) where Python loads them
-if exist "%~dp0src\msvc\geo_bsd\hpgl.dll" (
-	copy /Y "%~dp0src\msvc\geo_bsd\hpgl.dll" "%~dp0src\geo_bsd\hpgl.dll" >nul 2>&1
-	if %ERRORLEVEL% EQU 0 (
-		echo   Copied hpgl.dll to src\geo_bsd\
+REM DLL filenames differ by configuration: Release uses hpgl.dll, Debug uses hpgl_d.dll
+set "DLL_SUFFIX="
+if /i "%BUILD_CONFIG%"=="Debug" set "DLL_SUFFIX=_d"
+
+set "DLL_COPY_FAILED=0"
+if exist "%~dp0src\msvc\geo_bsd\hpgl%DLL_SUFFIX%.dll" (
+	copy /Y "%~dp0src\msvc\geo_bsd\hpgl%DLL_SUFFIX%.dll" "%~dp0src\geo_bsd\hpgl.dll" >nul 2>&1
+	if !ERRORLEVEL! EQU 0 (
+		echo   Copied hpgl%DLL_SUFFIX%.dll to src\geo_bsd\hpgl.dll
 	) else (
-		echo   WARNING: Failed to copy hpgl.dll
+		echo   ERROR: Failed to copy hpgl%DLL_SUFFIX%.dll
+		set "DLL_COPY_FAILED=1"
 	)
 ) else (
-	echo   WARNING: hpgl.dll not found at src\msvc\geo_bsd\
+	echo   ERROR: hpgl%DLL_SUFFIX%.dll not found at src\msvc\geo_bsd\
+	set "DLL_COPY_FAILED=1"
 )
-if exist "%~dp0src\msvc\geo_bsd\_cvariogram.dll" (
-	copy /Y "%~dp0src\msvc\geo_bsd\_cvariogram.dll" "%~dp0src\geo_bsd\_cvariogram.dll" >nul 2>&1
-	if %ERRORLEVEL% EQU 0 (
-		echo   Copied _cvariogram.dll to src\geo_bsd\
+if exist "%~dp0src\msvc\geo_bsd\_cvariogram%DLL_SUFFIX%.dll" (
+	copy /Y "%~dp0src\msvc\geo_bsd\_cvariogram%DLL_SUFFIX%.dll" "%~dp0src\geo_bsd\_cvariogram.dll" >nul 2>&1
+	if !ERRORLEVEL! EQU 0 (
+		echo   Copied _cvariogram%DLL_SUFFIX%.dll to src\geo_bsd\_cvariogram.dll
 	) else (
-		echo   WARNING: Failed to copy _cvariogram.dll
+		echo   ERROR: Failed to copy _cvariogram%DLL_SUFFIX%.dll
+		set "DLL_COPY_FAILED=1"
 	)
 ) else (
-	echo   WARNING: _cvariogram.dll not found at src\msvc\geo_bsd\
+	echo   ERROR: _cvariogram%DLL_SUFFIX%.dll not found at src\msvc\geo_bsd\
+	set "DLL_COPY_FAILED=1"
+)
+
+if "!DLL_COPY_FAILED!"=="1" (
+	echo.
+	echo ERROR: DLL copy step failed.
+	pause
+	endlocal
+	exit /b 1
 )
 
 echo.

@@ -29,7 +29,8 @@ void build_system(
 	int neighbour_count = static_cast<int>(coords.size());
 	int matrix_size = neighbour_count + 1;
 
-	A.resize(matrix_size * matrix_size);
+	size_t ms = static_cast<size_t>(matrix_size);
+	A.resize(ms * ms);
 
 	b.resize(matrix_size);
 

@@ -5,12 +5,12 @@ Addresses vulnerability IV-001 (CVSS 7.5) - Insufficient Input Validation
 This module provides comprehensive input validation for all HPGL Python functions.
 """
 
+import logging
 import os
 import pathlib
-import numpy
-import logging
-from typing import Union, Tuple, Optional, List
 from functools import wraps
+
+import numpy
 
 # Configure validation logger
 validation_logger = logging.getLogger('hpgl.validation')
@@ -98,10 +98,10 @@ class PathValidator:
 
     @staticmethod
     def validate_filepath(
-        filename: Union[str, pathlib.Path],
+        filename: str | pathlib.Path,
         must_exist: bool = False,
         allow_directories: bool = False,
-        allowed_extensions: Optional[List[str]] = None
+        allowed_extensions: list[str] | None = None
     ) -> str:
         """
         Validates and sanitizes file paths to prevent directory traversal attacks.
@@ -164,7 +164,7 @@ class PathValidator:
         return str(resolved_path)
 
     @staticmethod
-    def validate_write_filepath(filename: Union[str, pathlib.Path]) -> str:
+    def validate_write_filepath(filename: str | pathlib.Path) -> str:
         """
         Validates a file path for writing operations.
 
@@ -234,7 +234,7 @@ class GridValidator:
             )
 
     @staticmethod
-    def validate_array_size(array: numpy.ndarray, grid: Tuple[int, int, int]) -> None:
+    def validate_array_size(array: numpy.ndarray, grid: tuple[int, int, int]) -> None:
         """
         Validates that array size matches grid dimensions.
 
@@ -281,7 +281,7 @@ class ParameterValidator:
     """Validates numerical parameters for geostatistical operations"""
 
     @staticmethod
-    def validate_radius(radius: Union[float, int, Tuple], name: str = "radius") -> Tuple[float, float, float]:
+    def validate_radius(radius: float | int | tuple, name: str = "radius") -> tuple[float, float, float]:
         """
         Validates radius parameters.
 
@@ -397,8 +397,8 @@ class ParameterValidator:
     def validate_covariance_parameters(
         sill: float,
         nugget: float,
-        ranges: Optional[Tuple] = None,
-        angles: Optional[Tuple] = None
+        ranges: tuple | None = None,
+        angles: tuple | None = None
     ) -> None:
         """
         Validates covariance model parameters.
@@ -520,7 +520,7 @@ class ParameterValidator:
             )
 
     @staticmethod
-    def validate_probability_sum(probs: List[float]) -> None:
+    def validate_probability_sum(probs: list[float]) -> None:
         """
         Validates that probabilities sum to approximately 1.0.
 
@@ -758,7 +758,7 @@ class ValidationContext:
                 raise
             self.errors.append(e)
 
-    def validate_radius(self, radius: Union[float, int, Tuple], name: str = "radius") -> Tuple[float, float, float]:
+    def validate_radius(self, radius: float | int | tuple, name: str = "radius") -> tuple[float, float, float]:
         """Validate radius and record results"""
         try:
             return ParameterValidator.validate_radius(radius, name)

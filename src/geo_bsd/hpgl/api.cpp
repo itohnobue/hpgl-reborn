@@ -93,6 +93,8 @@ HPGL_API char * hpgl_get_last_exception_message()
 {
 	thread_local std::string cached_message;
 	cached_message = hpgl::get_last_exception_message();
+	// Returns pointer to thread_local buffer. Valid until next call on same thread.
+	// Python ctypes (c_char_p) copies the data immediately, so no lifetime issue.
 	return const_cast<char *>(cached_message.c_str());
 }
 
@@ -118,6 +120,8 @@ HPGL_API int hpgl_read_inc_file_float(
 		float * data,
 		unsigned char * mask)
 {
+	if (validate_pointer(filename, "filename (read_inc_file_float)") != 0) return -1;
+	if (validate_pointer(data, "data (read_inc_file_float)") != 0) return -1;
 	try
 	{
 		hpgl::read_inc_file_float(
@@ -144,6 +148,9 @@ HPGL_API int hpgl_read_inc_file_byte(
 		unsigned char * values,
 		int values_count)
 {
+	if (validate_pointer(filename, "filename (read_inc_file_byte)") != 0) return -1;
+	if (validate_pointer(data, "data (read_inc_file_byte)") != 0) return -1;
+	if (validate_pointer(mask, "mask (read_inc_file_byte)") != 0) return -1;
 	try
 	{
 		hpgl::read_inc_file_byte(
@@ -182,6 +189,7 @@ HPGL_API int hpgl_write_inc_file_float(
 		float undefined_value,
 		char * name)
 {
+	if (validate_pointer(filename, "filename (write_inc_file_float)") != 0) return -1;
 	if (validate_pointer(arr, "arr (write_inc_file_float)") != 0) return -1;
 	try
 	{
@@ -238,6 +246,7 @@ HPGL_API int hpgl_write_inc_file_byte(
 		unsigned char * values,
 		int values_count)
 {
+	if (validate_pointer(filename, "filename (write_inc_file_byte)") != 0) return -1;
 	if (validate_pointer(arr, "arr (write_inc_file_byte)") != 0) return -1;
 	try
 	{
@@ -409,6 +418,8 @@ HPGL_API void hpgl_simple_kriging(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(input_data, "input_data (simple_kriging)");
+	validate_pointer_or_throw(output_data, "output_data (simple_kriging)");
 	validate_pointer_or_throw(input_data_shape, "input_data_shape (simple_kriging)");
 	validate_pointer_or_throw(params, "params (simple_kriging)");
 	validate_pointer_or_throw(output_data_shape, "output_data_shape (simple_kriging)");
@@ -517,6 +528,9 @@ HPGL_API void hpgl_lvm_kriging(
 	try
 	{
 	using namespace hpgl;
+	validate_pointer_or_throw(input_data, "input_data (lvm_kriging)");
+	validate_pointer_or_throw(mean_data, "mean_data (lvm_kriging)");
+	validate_pointer_or_throw(output_data, "output_data (lvm_kriging)");
 	validate_pointer_or_throw(input_data_shape, "input_data_shape (lvm_kriging)");
 	validate_pointer_or_throw(mean_data_shape, "mean_data_shape (lvm_kriging)");
 	validate_pointer_or_throw(params, "params (lvm_kriging)");
@@ -778,6 +792,9 @@ hpgl_sis_simulation_lvm(
 	validate_shape_volume_or_throw(size, "sis_simulation_lvm");
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
 
+	// NOTE: The Python caller always ensures indicator_count matches mean_data's
+	// array size before calling this function. This is a contract requirement — no
+	// bounds check is performed here for performance reasons.
 	sugarbox_grid_t grid;
 	init_grid(grid, &data->m_shape);
 
