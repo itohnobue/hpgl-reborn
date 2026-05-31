@@ -3,6 +3,7 @@
 #include <climits>
 #include <mutex>
 #include "api.h"
+#include "hpgl_exception.h"
 #include "covariance_type.h"
 #include "sugarbox_grid.h"
 #include "sgs_params.h"
@@ -83,6 +84,17 @@ init_sis_params(
 		int indicator_count,
 		hpgl::ik_params_t * ikp)
 {
+	if (params == nullptr)
+	{
+		throw hpgl_exception("init_sis_params", "Null params pointer");
+	}
+	if (indicator_count < 0)
+	{
+		throw hpgl_exception("init_sis_params", "Negative indicator count");
+	}
+	// NOTE: params array size is caller-provided. Python callers guarantee
+	// indicator_count matches. Direct C callers must ensure params has at least
+	// indicator_count elements. A zero indicator_count is valid (no-op).
 	ikp->m_category_count = indicator_count;
 	for (int i = 0; i < indicator_count; ++i)
 	{

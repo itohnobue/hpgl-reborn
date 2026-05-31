@@ -8,7 +8,6 @@ This module provides comprehensive input validation for all HPGL Python function
 from __future__ import annotations
 
 import logging
-import os
 import pathlib
 from functools import wraps
 
@@ -103,7 +102,8 @@ class PathValidator:
         filename: str | pathlib.Path,
         must_exist: bool = False,
         allow_directories: bool = False,
-        allowed_extensions: list[str] | None = None
+        allowed_extensions: list[str] | None = None,
+        basedir: str | pathlib.Path | None = None
     ) -> str:
         """
         Validates and sanitizes file paths to prevent directory traversal attacks.
@@ -113,13 +113,15 @@ class PathValidator:
             must_exist: Whether the file must exist (for read operations)
             allow_directories: Whether to allow directory paths
             allowed_extensions: List of allowed file extensions (e.g., ['.txt', '.data'])
+            basedir: Optional base directory to restrict resolved paths within.
+                     If provided, the resolved path must be a child of this directory.
 
         Returns:
             Absolute, normalized path as string
 
         Raises:
             CriticalValidationError: If path contains directory traversal attempts
-                                    or points outside allowed directories
+                                     or points outside allowed directories
         """
         if not filename:
             raise CriticalValidationError("Filename cannot be empty", "filename")
@@ -127,10 +129,13 @@ class PathValidator:
         # Convert to Path object for robust handling
         path = pathlib.Path(filename)
 
-        # Check for path traversal attempts in the original string
-        # This catches cases where resolve() might behave unexpectedly
-        path_str = os.path.normpath(str(filename))
-        if '..' in path_str.split(os.sep) or '../' in str(filename) or '..\\' in str(filename):
+        # Check for path traversal attempts in the ORIGINAL (unnormalized) string
+        # BEFORE normalization, since normpath removes '..' components.
+        # Split the original path string by the OS separator to detect bare '..'
+        # even without trailing slashes.
+        path_str = str(filename)
+        parts = path_str.replace('\\', '/').split('/')
+        if '..' in parts:
             raise CriticalValidationError(
                 f"Path traversal detected in filename: {filename}",
                 "filename"
@@ -153,6 +158,19 @@ class PathValidator:
                     f"Invalid path: {filename}",
                     "filename"
                 ) from e
+
+        # If basedir is specified, verify the resolved path is within it.
+        # This prevents symlink-based escapes (e.g., /tmp/link → /etc).
+        if basedir is not None:
+            basedir_resolved = pathlib.Path(basedir).resolve()
+            try:
+                resolved_path.relative_to(basedir_resolved)
+            except ValueError:
+                raise CriticalValidationError(
+                    f"Path {resolved_path} is outside allowed base directory "
+                    f"{basedir_resolved}",
+                    "filename"
+                )
 
         # Check extension if specified
         if allowed_extensions is not None:

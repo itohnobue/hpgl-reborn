@@ -41,6 +41,8 @@ namespace hpgl
 			coords.clear();
 			coords.reserve(m_max_neighbours);
 			const std::vector<sugarbox_vector_t> & vectors = *m_vectors;
+			if (vectors.empty())
+				return;
 			int count = 0;
 			const sugarbox_vector_t * vec = &vectors[0];
 			sugarbox_location_t center = (*m_grid)[node];
@@ -49,7 +51,7 @@ namespace hpgl
 			{
 				sugarbox_location_t point = center + *vec; //vectors[idx];
 				int index = m_grid->get_index(point);
-				//if (index >= 0)
+				if (index >= 0)
 				{		
 					if (pred(index)) 
 					{

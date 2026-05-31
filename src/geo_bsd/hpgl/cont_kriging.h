@@ -73,8 +73,10 @@ namespace hpgl
 		unsigned long points_calculated = 0;
 		unsigned long points_without_neighbours = 0;
 		unsigned long points_processed = 0;
+		static const int LP_BATCH_SIZE = 1000;
 #pragma omp parallel
 {
+		int local_lap_count = 0;
 		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_processed) reduction(+: sum) 
 		for(node_index_t idx = 0; idx < idx_end; ++idx)	
 		{	
@@ -113,12 +115,25 @@ namespace hpgl
 				output_property.set_at(idx, input_property.get_at(idx));
 			}
 
-			// NOTE: next_lap() modifies shared progress state (m_counter increment
-			// and update_progress). This must remain #pragma omp critical since
-			// the function call is not a simple atomic updatable expression.
+			// Batch progress updates to reduce critical section contention.
+			// Each thread accumulates laps locally and flushes in batches,
+			// reducing lock acquisitions from ~10M to ~10M/LP_BATCH_SIZE.
+			local_lap_count++;
+			if (local_lap_count >= LP_BATCH_SIZE)
+			{
+				#pragma omp critical
+				{
+					report.next_lap(local_lap_count);
+				}
+				local_lap_count = 0;
+			}
+		}
+		// Flush remaining laps for this thread
+		if (local_lap_count > 0)
+		{
 			#pragma omp critical
 			{
-				report.next_lap();	
+				report.next_lap(local_lap_count);
 			}
 		}
 }	

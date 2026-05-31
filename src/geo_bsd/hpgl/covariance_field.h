@@ -153,13 +153,16 @@ public:
 	}
 };
 
-double
+	double
 covariance_field_t::value(
 	int x,
 	int y,
 	int z)const
 {
-	return m_data[vr_to_dec(m_ydiameter, m_xdiameter, z + m_zradius, y + m_yradius, x + m_xradius)];
+	return m_data[static_cast<size_t>(vr_to_dec(m_ydiameter, m_xdiameter,
+		static_cast<long long>(z) + m_zradius,
+		static_cast<long long>(y) + m_yradius,
+		static_cast<long long>(x) + m_xradius))];
 	/*int xx = x + m_xradius; 
 	int yy = y + m_yradius;
 	int zz = z + m_zradius;

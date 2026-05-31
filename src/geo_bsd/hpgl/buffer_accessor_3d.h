@@ -21,6 +21,8 @@ namespace hpgl
 		}
 		data_shape_t(int * dv)
 		{
+			if (dv == nullptr)
+				throw hpgl_exception("data_shape_t", "Null pointer passed to data_shape_t constructor");
 			for (int i = 0; i < 3; ++i)
 				m_data[i] = dv[i];
 		}

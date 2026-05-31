@@ -91,8 +91,7 @@
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <MinimalRebuild>true</MinimalRebuild>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;HPGL_USE_MKL;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
@@ -115,7 +114,7 @@
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;HPGL_USE_MKL;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
@@ -138,14 +137,14 @@
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;HPGL_USE_MKL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <OpenMPSupport>true</OpenMPSupport>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <DisableSpecificWarnings>4267;4244;4018;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4003;4267;4244;4018;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
@@ -166,20 +165,20 @@
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;HPGL_USE_MKL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <OpenMPSupport>true</OpenMPSupport>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <DisableSpecificWarnings>4267;4244;4018;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4003;4267;4244;4018;%(DisableSpecificWarnings)</DisableSpecificWarnings>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>mkl_intel_lp64.lib;mkl_core.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>

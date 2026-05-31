@@ -12,12 +12,14 @@ from .sgs import sgs_simulation
 logger = logging.getLogger(__name__)
 
 
-def pseudo_gaussian_transform(prop, pk_prop):
+def pseudo_gaussian_transform(prop, pk_prop, rng=None):
+    if rng is None:
+        rng = np.random.RandomState()
     for i in range(pk_prop.data.size):
         if (prop.data.flat[i] == 0):
-            prop.data.flat[i] = np.random.uniform(0.0, pk_prop.data.flat[i])
+            prop.data.flat[i] = rng.uniform(0.0, pk_prop.data.flat[i])
         if (prop.data.flat[i] == 1):
-            prop.data.flat[i] = np.random.uniform(pk_prop.data.flat[i], 1.0)
+            prop.data.flat[i] = rng.uniform(pk_prop.data.flat[i], 1.0)
     return prop
 
 def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
@@ -112,7 +114,8 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     # del(pk_prop)
 
     logger.info("Pseudo gaussian transforming...")
-    prop = pseudo_gaussian_transform(prop,pk_prop)
+    rng = np.random.RandomState(seed)
+    prop = pseudo_gaussian_transform(prop, pk_prop, rng)
     del(pk_prop)
     logger.info("Done.")
 

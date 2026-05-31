@@ -1,6 +1,8 @@
 #ifndef __SELECT_H__D393AF18_8E49_4668_8C3F_DCE536469498
 #define __SELECT_H__D393AF18_8E49_4668_8C3F_DCE536469498
 
+#include "hpgl_exception.h"
+
 namespace hpgl
 {
 	template<typename source_t, typename indices_t, typename dest_t>
@@ -9,6 +11,8 @@ namespace hpgl
 		dest.resize(indices.size());
 		for (size_t i = 0, end_i = indices.size(); i < end_i; ++i)
 		{
+			if (indices[i] < 0)
+				throw hpgl_exception("select", "Negative index in select");
 			dest[i] = src[indices[i]];
 		}
 	}

@@ -129,13 +129,16 @@ namespace hpgl
 		report.start();
 
 		size_t size = input_property.size();
+		static const int LP_BATCH_SIZE = 1000;
 
 		#pragma omp parallel
 		{
-			#pragma omp for
+			int local_lap_count = 0;
+			std::vector<indicator_probability_t> probs;
+			#pragma omp for schedule(dynamic)
 			for (node_index_t node_idx = 0;	node_idx < size; ++node_idx)
 			{
-				std::vector<indicator_probability_t> probs;
+				probs.clear();
 				for (int idx = 0; idx < params.m_category_count; ++idx)
 				{
 					indicator_probability_t prob;
@@ -153,12 +156,26 @@ namespace hpgl
 				correct_order_relations(probs);
 
 				output_property.set_at(node_idx, most_probable_category(probs));			
-				// NOTE: next_lap() modifies shared progress state (m_counter increment
-				// and update_progress). This must remain #pragma omp critical since
-				// the function call is not a simple atomic updatable expression.
+
+				// Batch progress updates to reduce critical section contention.
+				// Each thread accumulates laps locally and flushes in batches,
+				// reducing lock acquisitions from ~10M to ~10M/LP_BATCH_SIZE.
+				local_lap_count++;
+				if (local_lap_count >= LP_BATCH_SIZE)
+				{
+					#pragma omp critical
+					{
+						report.next_lap(local_lap_count);
+					}
+					local_lap_count = 0;
+				}
+			}
+			// Flush remaining laps for this thread
+			if (local_lap_count > 0)
+			{
 				#pragma omp critical
 				{
-					report.next_lap();
+					report.next_lap(local_lap_count);
 				}
 			}
 		}

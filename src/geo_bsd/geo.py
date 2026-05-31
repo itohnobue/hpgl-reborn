@@ -1,5 +1,6 @@
 import ctypes as C
 import logging
+import threading
 
 import numpy
 
@@ -32,6 +33,7 @@ from .validation import (
 # a failed read_inc_file_byte) would cause all subsequent _check_hpgl_error
 # calls to falsely report failure.
 _last_hpgl_error_snapshot = None
+_error_snapshot_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,8 @@ def _snapshot_hpgl_error():
     to detect only NEW errors, avoiding stale error propagation.
     """
     global _last_hpgl_error_snapshot
-    _last_hpgl_error_snapshot = _hpgl_so.hpgl_get_last_exception_message()
+    with _error_snapshot_lock:
+        _last_hpgl_error_snapshot = _hpgl_so.hpgl_get_last_exception_message()
 
 def _check_hpgl_error(context=""):
     """
@@ -63,8 +66,9 @@ def _check_hpgl_error(context=""):
     """
     err = _hpgl_so.hpgl_get_last_exception_message()
     if err is not None and len(err) > 0:
-        global _last_hpgl_error_snapshot
-        if err == _last_hpgl_error_snapshot:
+        with _error_snapshot_lock:
+            snapshot = _last_hpgl_error_snapshot
+        if err == snapshot:
             # Same error as pre-call snapshot — stale, suppress.
             # NOTE: In the extremely unlikely event that a new C++ operation produces
             # an error message byte-for-byte identical to the pre-call snapshot,
@@ -288,6 +292,7 @@ def _load_prop_cont_slow(filename, undefined_value):
 
     values = []
     mask = []
+    skipped_count = 0
     # Use validated path and explicit encoding
     with open(safe_path, encoding='utf-8') as f:
         for line in f:
@@ -302,7 +307,9 @@ def _load_prop_cont_slow(filename, undefined_value):
                     else:
                         mask.append(1)
                 except (ValueError, TypeError):
-                    pass
+                    skipped_count += 1
+    if skipped_count > 0:
+        logger.warning("_load_prop_cont_slow: skipped %d non-numeric tokens in %s", skipped_count, safe_path)
 
     return ContProperty(numpy.array(values, dtype="float32"), numpy.array(mask, dtype="uint8"))
 
@@ -316,6 +323,8 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
 
     values = []
     mask = []
+    skipped_parse = 0
+    skipped_key = 0
 
     # Use validated path and explicit encoding
     with open(safe_path, encoding='utf-8') as f:
@@ -325,14 +334,24 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
             for part in line.split():
                 try:
                     val = int(part.strip())
+                except (ValueError, TypeError):
+                    skipped_parse += 1
+                    continue
+                try:
                     if (val == undefined_value):
                         values.append(255)
                         mask.append(0)
                     else:
                         values.append(dict_map[val])
                         mask.append(1)
-                except (ValueError, TypeError, KeyError):
-                    pass
+                except KeyError:
+                    skipped_key += 1
+
+    if skipped_parse > 0:
+        logger.warning("_load_prop_ind_slow: skipped %d unparseable tokens in %s", skipped_parse, safe_path)
+    if skipped_key > 0:
+        logger.warning("_load_prop_ind_slow: skipped %d tokens with unknown indicator values (not in %s) in %s",
+                       skipped_key, ind_values, safe_path)
 
     return IndProperty(numpy.array(values, dtype="uint8", order='F'), numpy.array(mask, dtype="uint8", order='F'), len(ind_values))
 
@@ -482,7 +501,9 @@ def load_cont_property(filename, undefined_value, size=None):
     safe_path = PathValidator.validate_filepath(filename, must_exist=True)
 
     if size is None:
-        logger.warning("load_cont_property: Size is not specified. Using slow and inefficient method.")
+        logger.warning("load_cont_property: Size is not specified. Using slow Python-based parser "
+                       "that loads entire file into memory unbounded. For large files (>100MB) "
+                       "specify size to use the fast C++ reader which uses pre-allocated buffers.")
         return _load_prop_cont_slow(safe_path, undefined_value)
     else:
         return read_inc_file_float(safe_path, undefined_value, size)
@@ -541,7 +562,9 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
 
 def load_ind_property(filename, undefined_value, indicator_values, size=None):
     if (size is None):
-        logger.warning("load_ind_property: Size is not specified. Using slow and inefficient method.")
+        logger.warning("load_ind_property: Size is not specified. Using slow Python-based parser "
+                       "that loads entire file into memory unbounded. For large files (>100MB) "
+                       "specify size to use the fast C++ reader which uses pre-allocated buffers.")
         return _load_prop_ind_slow(filename, undefined_value, indicator_values)
     else:
         try:
@@ -551,6 +574,18 @@ def load_ind_property(filename, undefined_value, indicator_values, size=None):
             return _load_prop_ind_slow(filename, undefined_value, indicator_values)
 
 def set_thread_num(num):
+    if not isinstance(num, int):
+        raise TypeError(f"set_thread_num: num must be an integer, got {type(num).__name__}")
+    if num < 1:
+        raise ValueError(f"set_thread_num: num must be at least 1, got {num}")
+    # Sanity-check: warn if num exceeds available CPU count
+    import os
+    cpu_count = os.cpu_count()
+    if cpu_count is not None and num > cpu_count * 4:
+        logger.warning(
+            "set_thread_num: num=%d exceeds 4x CPU count (%d). "
+            "This may cause thread oversubscription and performance degradation.",
+            num, cpu_count)
     _hpgl_so.hpgl_set_thread_num(num)
 
 def get_thread_num():
@@ -558,16 +593,10 @@ def get_thread_num():
 
 @accepts_tuple('prop', 0)
 def calc_mean(prop):
-    prop_len = len(prop.data.flat)
-    sum_val = 0
-    count = 0
-    for i in range(prop_len):
-        if prop.mask.flat[i] == 1:
-            sum_val += prop.data.flat[i]
-            count += 1
-    if count == 0:
+    masked = numpy.ma.masked_where(prop.mask == 0, prop.data)
+    if masked.count() == 0:
         raise ValueError("calc_mean: no informed values (all masked)")
-    return sum_val/count
+    return float(masked.mean())
 
 @accepts_tuple('prop', 0)
 def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
@@ -676,6 +705,11 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
         raise ValueError("lvm_kriging: mean_data must be a numpy array")
     if mean_data.dtype != numpy.float32:
         mean_data = numpy.require(mean_data, dtype='float32')
+    expected_size = grid.x * grid.y * grid.z
+    if mean_data.size != expected_size:
+        raise ValueError(
+            f"lvm_kriging: mean_data size {mean_data.size} does not match "
+            f"grid dimensions {grid.x}x{grid.y}x{grid.z} = {expected_size}")
 
     out_prop = _clone_prop(prop)
 
@@ -932,6 +966,11 @@ def simple_kriging_weights(center_point, n_x, n_y, n_z, ranges = (100000,100000,
         arr_np = numpy.asarray(arr, dtype='float32')
         if numpy.any(numpy.isnan(arr_np)) or numpy.any(numpy.isinf(arr_np)):
             raise ValueError(f"simple_kriging_weights: {name} contains NaN or infinite values")
+
+    # Validate center_point for NaN/inf
+    cp = numpy.asarray(center_point, dtype='float32')
+    if numpy.any(numpy.isnan(cp)) or numpy.any(numpy.isinf(cp)):
+        raise ValueError("simple_kriging_weights: center_point contains NaN or infinite values")
 
     covp = C.byref(__checked_create(
             __hpgl_cov_params_t,

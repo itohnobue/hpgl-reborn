@@ -3,11 +3,23 @@ Tests for all kriging algorithms:
 - Ordinary Kriging (OK)
 - Simple Kriging (SK)
 - Indicator Kriging (IK)
+
+.. deprecated::
+    This module is deprecated and will be removed in a future version.
+    Use ``test_kriging_complete.py`` instead, which provides comprehensive
+    coverage of all kriging algorithms with 40+ test methods.
 """
 import numpy as np
 import pytest
 import sys
+import warnings
 from pathlib import Path
+
+warnings.warn(
+    "test_kriging.py is deprecated; use test_kriging_complete.py for comprehensive kriging tests",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 

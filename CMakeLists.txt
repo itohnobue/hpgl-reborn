@@ -10,11 +10,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Compiler warning flags
-# NOTE: CMake uses /W4 (Level4) here while the MSVC vcxproj uses /W3 (Level3).
-# /W4 catches more potential issues but may produce additional warnings
-# compared to building directly with the Visual Studio project files.
+# NOTE: Both CMake and MSVC vcxproj now use /W3 (Level3) for consistency.
 if(MSVC)
-    add_compile_options(/W4 /wd4100 /wd4127 /wd4514 /wd4710 /wd4820)
+    add_compile_options(/W3 /wd4100 /wd4127 /wd4514 /wd4710 /wd4820)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -43,9 +41,8 @@ if(HPGL_USE_OPENMP)
 endif()
 
 # BLAS/LAPACK
-# NOTE: MKL link order differs between CMake and MSVC vcxproj builds.
-# The vcxproj uses: mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib (Debug|Win32, Debug|x64, Release|Win32)
-#                    mkl_intel_lp64.lib;mkl_core.lib;mkl_sequential.lib (Release|x64 only — inconsistent with other 3 configs)
+# NOTE: MKL link order is now consistent across all vcxproj configurations:
+#   mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib (all 4 configs)
 # CMake delegates link order to FindMKL which resolves MKL::MKL target dependencies automatically.
 if(HPGL_USE_MKL)
     find_package(MKL CONFIG QUIET)
@@ -121,7 +118,7 @@ target_link_libraries(hpgl_core
 
 # MKL compile definition (after target creation)
 if(HPGL_USE_MKL AND MKL_FOUND)
-    target_compile_definitions(hpgl_core PRIVATE HPGL_USE_MKL)
+    target_compile_definitions(hpgl_core PRIVATE HPGL_USE_MKL USE_INTEL_MKL)
 endif()
 
 # Platform-specific settings
@@ -130,6 +127,8 @@ if(WIN32)
         PRIVATE
             HPGL_DLL
             HPGL_EXPORTS
+            BS_EXPORTING_PLUGIN
+            NOMINMAX
             _CRT_SECURE_NO_WARNINGS
     )
     # Windows-specific runtime library

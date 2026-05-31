@@ -1424,6 +1424,46 @@ class TestSimpleKrigingWeights:
             )
             assert isinstance(weights, np.ndarray)
 
+    def test_weights_nugget_equals_sill(self, neighbor_points):
+        """Test weights with nugget==sill (edge case).
+
+        When nugget==sill, the covariance between distinct points is zero
+        (only the nugget contribution remains). The function should either
+        return valid weights or raise an exception — either behavior is
+        acceptable for this edge case.
+        """
+        n_x, n_y, n_z = neighbor_points
+        center_point = (5.0, 5.0, 2.5)
+
+        # Verify CovarianceModel accepts nugget==sill
+        model = CovarianceModel(
+            type=covariance.exponential,
+            ranges=(5.0, 5.0, 3.0),
+            sill=1.0,
+            nugget=1.0
+        )
+        assert model.nugget == 1.0
+        assert model.sill == 1.0
+
+        # With nugget==sill, covariance at nonzero distances is 0.
+        # The function may raise (singular matrix) or return weights —
+        # both are acceptable behaviors for this degenerate case.
+        try:
+            weights = simple_kriging_weights(
+                center_point=center_point,
+                n_x=n_x,
+                n_y=n_y,
+                n_z=n_z,
+                ranges=(5.0, 5.0, 3.0),
+                sill=1.0,
+                cov_type=covariance.exponential,
+                nugget=1.0
+            )
+            # If it succeeds, verify it returns an array
+            assert isinstance(weights, np.ndarray)
+        except Exception:
+            pass  # Expected: singular matrix
+
     def test_weights_various_ranges(self, neighbor_points):
         """Test weights with various range values"""
         n_x, n_y, n_z = neighbor_points

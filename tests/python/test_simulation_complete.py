@@ -1218,11 +1218,31 @@ class TestSGSAdvancedParams:
             force_single_thread=True
         )
         assert isinstance(result, ContProperty)
+        assert np.isfinite(result.data.astype('float64')).all()
+        assert not np.all(result.data == 0)
 
     def test_sgs_force_parallel(self, sample_property, sample_grid,
                                  sample_covariance_model, sgs_cdf_data_multi):
-        """Test SGS with force_parallel=True"""
-        result = sgs_simulation(
+        """Test SGS with force_parallel=True — verifies correctness against serial.
+
+        Runs SGS with the same seed in both single-thread and parallel modes,
+        then compares results to verify OpenMP determinism.
+        """
+        # Run single-thread as reference
+        single_result = sgs_simulation(
+            prop=sample_property,
+            grid=sample_grid,
+            cdf_data=sgs_cdf_data_multi,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=sample_covariance_model,
+            seed=42,
+            force_single_thread=True
+        )
+        assert isinstance(single_result, ContProperty)
+
+        # Run parallel mode
+        parallel_result = sgs_simulation(
             prop=sample_property,
             grid=sample_grid,
             cdf_data=sgs_cdf_data_multi,
@@ -1232,7 +1252,27 @@ class TestSGSAdvancedParams:
             seed=42,
             force_parallel=True
         )
-        assert isinstance(result, ContProperty)
+        assert isinstance(parallel_result, ContProperty)
+
+        # Verify same shape and finite values
+        assert parallel_result.data.shape == single_result.data.shape
+        assert np.isfinite(parallel_result.data.astype('float64')).all()
+        assert np.isfinite(single_result.data.astype('float64')).all()
+
+        # Compare statistics within tolerance (float32 precision)
+        rtol = 1e-4
+        np.testing.assert_allclose(
+            np.nanmean(parallel_result.data.astype('float64')),
+            np.nanmean(single_result.data.astype('float64')),
+            rtol=rtol,
+            err_msg="Parallel SGS mean differs from single-thread beyond tolerance"
+        )
+        np.testing.assert_allclose(
+            np.nanstd(parallel_result.data.astype('float64')),
+            np.nanstd(single_result.data.astype('float64')),
+            rtol=rtol * 10,
+            err_msg="Parallel SGS std differs from single-thread beyond tolerance"
+        )
 
 
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
@@ -1279,11 +1319,30 @@ class TestSISAdvancedParams:
             force_single_thread=True
         )
         assert isinstance(result, IndProperty)
+        assert result.indicator_count == 3
+        assert result.data.shape == sample_indicator_property.data.shape
+        assert np.isfinite(result.data.astype('float64')).all()
 
     def test_sis_force_parallel(self, sample_indicator_property, sample_grid,
                                  sis_data_3indicator):
-        """Test SIS with force_parallel=True"""
-        result = sis_simulation(
+        """Test SIS with force_parallel=True — verifies correctness against serial.
+
+        Runs SIS with the same seed in both single-thread and parallel modes,
+        then compares results to verify OpenMP determinism.
+        """
+        # Run single-thread as reference
+        single_result = sis_simulation(
+            prop=sample_indicator_property,
+            grid=sample_grid,
+            data=sis_data_3indicator,
+            seed=42,
+            marginal_probs=[0.3, 0.4, 0.3],
+            force_single_thread=True
+        )
+        assert isinstance(single_result, IndProperty)
+
+        # Run parallel mode
+        parallel_result = sis_simulation(
             prop=sample_indicator_property,
             grid=sample_grid,
             data=sis_data_3indicator,
@@ -1291,7 +1350,28 @@ class TestSISAdvancedParams:
             marginal_probs=[0.3, 0.4, 0.3],
             force_parallel=True
         )
-        assert isinstance(result, IndProperty)
+        assert isinstance(parallel_result, IndProperty)
+
+        # Verify same shape, indicator count, and finite values
+        assert parallel_result.data.shape == single_result.data.shape
+        assert parallel_result.indicator_count == single_result.indicator_count
+        assert np.isfinite(parallel_result.data.astype('float64')).all()
+        assert np.isfinite(single_result.data.astype('float64')).all()
+
+        # Compare statistics within tolerance (float32 + integer data)
+        rtol = 1e-4
+        np.testing.assert_allclose(
+            np.nanmean(parallel_result.data.astype('float64')),
+            np.nanmean(single_result.data.astype('float64')),
+            rtol=rtol,
+            err_msg="Parallel SIS mean differs from single-thread beyond tolerance"
+        )
+        np.testing.assert_allclose(
+            np.nanstd(parallel_result.data.astype('float64')),
+            np.nanstd(single_result.data.astype('float64')),
+            rtol=rtol * 10,
+            err_msg="Parallel SIS std differs from single-thread beyond tolerance"
+        )
 
 
 if __name__ == '__main__':

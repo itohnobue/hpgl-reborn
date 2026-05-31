@@ -1,8 +1,21 @@
-"""Tests for simulation algorithms"""
+"""Tests for simulation algorithms
+
+.. deprecated::
+    This module is deprecated and will be removed in a future version.
+    Use ``test_simulation_complete.py`` instead, which provides comprehensive
+    coverage of all simulation algorithms with 45+ test methods.
+"""
 import numpy as np
 import pytest
 import sys
+import warnings
 from pathlib import Path
+
+warnings.warn(
+    "test_simulation.py is deprecated; use test_simulation_complete.py for comprehensive simulation tests",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src" / "geo_bsd"))
 

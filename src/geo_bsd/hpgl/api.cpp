@@ -153,6 +153,11 @@ HPGL_API int hpgl_read_inc_file_byte(
 	if (validate_pointer(data, "data (read_inc_file_byte)") != 0) return -1;
 	if (validate_pointer(mask, "mask (read_inc_file_byte)") != 0) return -1;
 	if (validate_pointer(values, "values (read_inc_file_byte)") != 0) return -1;
+	if (values_count <= 0)
+	{
+		hpgl::set_last_exception_message("read_inc_file_byte: values_count must be positive");
+		return -1;
+	}
 	try
 	{
 		hpgl::read_inc_file_byte(
@@ -258,6 +263,7 @@ HPGL_API int hpgl_write_inc_file_byte(
 {
 	if (validate_pointer(filename, "filename (write_inc_file_byte)") != 0) return -1;
 	if (validate_pointer(arr, "arr (write_inc_file_byte)") != 0) return -1;
+	if (validate_pointer(name, "name (write_inc_file_byte)") != 0) return -1;
 	try
 	{
 		using namespace hpgl;
@@ -828,10 +834,16 @@ hpgl_sis_simulation_lvm(
 
 	// Build means array from mean_data structs.
 	// NOTE: The Python caller guarantees indicator_count <= mean_data array size
-	// (contract enforced in hpgl_wrap.py). No bounds check performed here for perf.
+	// (contract enforced in hpgl_wrap.py). Defensive null check on m_data per entry.
 	std::vector<const mean_t *> means;
 	for (int i = 0; i < indicator_count; ++i)
 	{
+		if (mean_data[i].m_data == nullptr)
+		{
+			std::ostringstream oss;
+			oss << "Null mean_data[" << i << "].m_data pointer";
+			throw hpgl_exception("hpgl_sis_simulation_lvm", oss.str());
+		}
 		means.push_back(mean_data[i].m_data);
 	}
 

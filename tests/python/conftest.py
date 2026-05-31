@@ -111,8 +111,8 @@ def sample_property():
         ContProperty: A continuous property with 500 cells.
     """
     import geo_bsd
-    np.random.seed(42)
-    data = np.random.rand(500).astype('float32') * 100  # 10x10x5 = 500
+    rng = np.random.RandomState(42)
+    data = rng.rand(500).astype('float32') * 100  # 10x10x5 = 500
     mask = np.ones(500, dtype='uint8')
     # Add some uninformed values
     mask[::10] = 0
@@ -130,8 +130,8 @@ def sparse_property():
         ContProperty: A property with only 10% informed values (100 out of 1000).
     """
     import geo_bsd
-    np.random.seed(42)
-    data = np.random.rand(1000).astype('float32') * 100
+    rng = np.random.RandomState(42)
+    data = rng.rand(1000).astype('float32') * 100
     mask = np.zeros(1000, dtype='uint8')
     mask[::10] = 1  # Only 10% informed
     return geo_bsd.geo.ContProperty(data, mask)
@@ -148,8 +148,8 @@ def dense_property():
         ContProperty: A fully informed property with 1000 cells.
     """
     import geo_bsd
-    np.random.seed(42)
-    data = np.random.rand(1000).astype('float32') * 100
+    rng = np.random.RandomState(42)
+    data = rng.rand(1000).astype('float32') * 100
     mask = np.ones(1000, dtype='uint8')
     return geo_bsd.geo.ContProperty(data, mask)
 
@@ -196,8 +196,8 @@ def sample_indicator_property():
         IndProperty: An indicator property with 3 categories.
     """
     import geo_bsd
-    np.random.seed(42)
-    data = np.random.randint(0, 3, 500, dtype='uint8')  # 3 indicators
+    rng = np.random.RandomState(42)
+    data = rng.randint(0, 3, 500, dtype='uint8')  # 3 indicators
     mask = np.ones(500, dtype='uint8')
     mask[::10] = 0
     return geo_bsd.geo.IndProperty(data, mask, 3)
@@ -367,8 +367,8 @@ def lvm_mean_data():
     Returns:
         ndarray: Array of 5000 random float32 values scaled to 0-100 range.
     """
-    np.random.seed(42)
-    return np.random.rand(5000).astype('float32') * 100
+    rng = np.random.RandomState(42)
+    return rng.rand(5000).astype('float32') * 100
 
 
 @pytest.fixture
@@ -380,8 +380,8 @@ def lvm_mean_data_grid():
     Returns:
         ndarray: Array of 1000 random float32 values scaled to 0-100 range.
     """
-    np.random.seed(42)
-    return np.random.rand(1000).astype('float32') * 100
+    rng = np.random.RandomState(42)
+    return rng.rand(1000).astype('float32') * 100
 
 
 # =============================================================================
@@ -417,8 +417,8 @@ def random_mask():
     Returns:
         ndarray: A uint8 mask array with random binary values.
     """
-    np.random.seed(42)
-    return np.random.randint(0, 2, 1000, dtype='uint8')
+    rng = np.random.RandomState(42)
+    return rng.randint(0, 2, 1000, dtype='uint8')
 
 
 # =============================================================================

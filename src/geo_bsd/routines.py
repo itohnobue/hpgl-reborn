@@ -19,7 +19,7 @@ from numpy import (
     zeros,
 )
 
-from .validation import PathValidator
+from .validation import PathValidator, ValidationConstants
 
 
 def CalcMean(Cube, Mask):
@@ -112,7 +112,7 @@ def PointSet2Cube(X, Y, Z, Property, Cube):
 def SaveGSLIBPointSet(PointSet, FileName, Caption):
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBPointSet: FileName must be a non-empty string")
-    PathValidator.validate_filepath(FileName)
+    safe_path = PathValidator.validate_filepath(FileName)
 
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
@@ -122,7 +122,7 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
     if sum(lens - lens[0]) != 0:
         raise RuntimeError("SaveGSLIBPointSet: All properties in GSLIB dictionary must have equal size")
 
-    with open(FileName, "w", encoding='utf-8') as f:
+    with open(safe_path, "w", encoding='utf-8') as f:
         # 1. Caption
         f.write(Caption + '\n')
 
@@ -141,7 +141,7 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
 def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBCubes: FileName must be a non-empty string")
-    PathValidator.validate_filepath(FileName)
+    safe_path = PathValidator.validate_filepath(FileName)
 
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
@@ -151,7 +151,7 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
     if sum(lens - lens[0]) != 0:
         raise RuntimeError("SaveGSLIBCubes: All properties in GSLIB dictionary must have equal size")
 
-    with open(FileName, "w", encoding='utf-8') as f:
+    with open(safe_path, "w", encoding='utf-8') as f:
         # 1. Caption
         f.write(Caption + '\n')
 
@@ -244,6 +244,17 @@ def LoadGslibFile(filename, property_size):
     with open(safe_path, encoding='utf-8') as f:
         f.readline()  # Skip caption line
         num_p = int(f.readline())
+
+        # Validate num_p against a reasonable upper bound to prevent
+        # memory exhaustion from malicious GSLIB file headers.
+        if num_p < 1:
+            raise ValueError(f"LoadGslibFile: num_p must be at least 1, got {num_p}")
+        max_props = max(ValidationConstants.MAX_INDICATORS * 4, 1024)
+        if num_p > max_props:
+            raise ValueError(
+                f"LoadGslibFile: num_p {num_p} exceeds maximum allowed "
+                f"properties ({max_props}). File may be corrupted or malicious."
+            )
 
         for _ in range(num_p):
             list_prop.append(str(f.readline().strip()))
