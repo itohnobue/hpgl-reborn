@@ -259,7 +259,6 @@
     <ClInclude Include="..\geo_bsd\hpgl\indicator_kriging.h" />
     <ClInclude Include="..\geo_bsd\hpgl\indicator_param.h" />
     <ClInclude Include="..\geo_bsd\hpgl\is_informed_predicate.h" />
-    <ClInclude Include="..\geo_bsd\hpgl\kriging.h" />
     <ClInclude Include="..\geo_bsd\hpgl\kriging_constraints.h" />
     <ClInclude Include="..\geo_bsd\hpgl\kriging_interpolation.h" />
     <ClInclude Include="..\geo_bsd\hpgl\kriging_stats.h" />

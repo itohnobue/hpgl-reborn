@@ -168,6 +168,11 @@ if(HPGL_BUILD_VARIOGRAM)
     )
 
     if(WIN32)
+        # NOTE: CMake produces _cvariogram.dll for all configurations (Debug and Release).
+        # The MSVC vcxproj (cvariogram.vcxproj) produces _cvariogram_d.dll for Debug
+        # and _cvariogram.dll for Release. This is an intentional difference — the vcxproj
+        # is the primary Windows build system and build.bat handles the Debug suffix naming.
+        # CMake builds on Windows use the suffix-less name for both configurations.
         target_compile_definitions(hpgl_variogram PRIVATE CVAR_DLL CVAR_EXPORTS)
         set_target_properties(hpgl_variogram PROPERTIES
             PREFIX ""

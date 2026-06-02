@@ -1612,6 +1612,58 @@ class TestSimpleKrigingWeights:
         )
         assert len(weights) == 1
 
+    # Error-path tests: exercise all validation branches in simple_kriging_weights
+
+    def test_weights_mismatched_array_sizes(self):
+        """Test weights raises RuntimeError for mismatched n_x, n_y, n_z lengths"""
+        center_point = (5.0, 5.0, 2.5)
+        n_x = np.array([1.0, 2.0, 3.0], dtype='float32')
+        n_y = np.array([1.0, 2.0], dtype='float32')  # shorter
+        n_z = np.array([1.0, 2.0, 3.0], dtype='float32')
+
+        with pytest.raises(RuntimeError, match="Invalid pointset"):
+            simple_kriging_weights(
+                center_point=center_point,
+                n_x=n_x, n_y=n_y, n_z=n_z
+            )
+
+    def test_weights_zero_data_points(self):
+        """Test weights raises RuntimeError for empty neighbor arrays"""
+        center_point = (5.0, 5.0, 2.5)
+        empty = np.array([], dtype='float32')
+
+        with pytest.raises(RuntimeError, match="at least one data point is required"):
+            simple_kriging_weights(
+                center_point=center_point,
+                n_x=empty, n_y=empty, n_z=empty
+            )
+
+    def test_weights_nan_inf_in_neighbors(self):
+        """Test weights raises ValueError when neighbor arrays contain NaN or Inf"""
+        center_point = (5.0, 5.0, 2.5)
+        n_x = np.array([1.0, 2.0, 3.0], dtype='float32')
+        n_y = np.array([1.0, np.nan, 3.0], dtype='float32')  # contains NaN
+        n_z = np.array([1.0, 2.0, 3.0], dtype='float32')
+
+        with pytest.raises(ValueError, match="contains NaN or infinite values"):
+            simple_kriging_weights(
+                center_point=center_point,
+                n_x=n_x, n_y=n_y, n_z=n_z
+            )
+
+    def test_weights_nan_inf_in_center_point(self):
+        """Test weights raises ValueError when center_point contains NaN or Inf"""
+        center_point = (5.0, np.nan, 2.5)  # contains NaN
+        n_x = np.array([1.0, 2.0, 3.0], dtype='float32')
+        n_y = np.array([1.0, 2.0, 3.0], dtype='float32')
+        n_z = np.array([1.0, 2.0, 3.0], dtype='float32')
+
+        with pytest.raises(ValueError, match="center_point contains NaN or infinite values"):
+            simple_kriging_weights(
+                center_point=center_point,
+                n_x=n_x, n_y=n_y, n_z=n_z
+            )
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

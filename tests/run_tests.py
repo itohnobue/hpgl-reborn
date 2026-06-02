@@ -257,7 +257,6 @@ def build_pytest_args(
         "classes": str(tests_dir / "test_classes.py") if (tests_dir / "test_classes.py").exists() else str(tests_dir),
         "edge": str(tests_dir / "test_edge_cases.py") if (tests_dir / "test_edge_cases.py").exists() else str(tests_dir),
         "legacy": str(tests_dir / "test_legacy_migrated.py") if (tests_dir / "test_legacy_migrated.py").exists() else str(tests_dir),
-        "unit": f"-m unit {tests_dir}",
         "slow": f"-m slow {tests_dir}",
     }
 
@@ -419,7 +418,6 @@ For more information, see the documentation in TEST_README.md
             "memory",
             "performance",
             "integration",
-            "unit",
             "slow",
         ],
         help="Test category to run (default: all)",

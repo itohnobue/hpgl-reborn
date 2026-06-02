@@ -490,13 +490,7 @@ def pytest_configure(config):
         "markers", "integration: marks tests as integration tests"
     )
     config.addinivalue_line(
-        "markers", "unit: marks tests as unit tests"
-    )
-    config.addinivalue_line(
         "markers", "legacy: marks tests migrated from legacy test suite"
-    )
-    config.addinivalue_line(
-        "markers", "stress: marks stress tests (deselect with '-m \"not stress\"')"
     )
 
 

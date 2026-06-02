@@ -187,9 +187,7 @@ addopts = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
     "legacy: marks tests migrated from legacy test suite",
-    "stress: marks stress tests (deselect with '-m \"not stress\"')",
 ]
 
 [tool.coverage.run]

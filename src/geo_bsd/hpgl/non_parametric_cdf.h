@@ -145,7 +145,10 @@ namespace hpgl
 			}
 			else if (it == m_cdf.begin())
 			{
-				result = m_cdf.front().second;
+				if (value < m_cdf.front().first)
+					result = 0;
+				else
+					result = m_cdf.front().second;
 			}
 			else
 			{
@@ -233,7 +236,10 @@ namespace hpgl
 			}
 			else if (it == m_values)
 			{
-				result = m_probs[0];
+				if (value < m_values[0])
+					result = 0;
+				else
+					result = m_probs[0];
 			}
 			else
 			{
