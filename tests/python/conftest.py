@@ -19,7 +19,7 @@ try:
     # geo.py syntax errors in unrelated modules
     from geo_bsd.geo import ContProperty as _ContProperty
     HPGL_AVAILABLE = True
-except (ImportError, SyntaxError, IndentationError):
+except (ImportError, SyntaxError, IndentationError, OSError):
     HPGL_AVAILABLE = False
 
 
@@ -492,6 +492,18 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "legacy: marks tests migrated from legacy test suite"
     )
+    config.addinivalue_line(
+        "markers", "hpgl: skip test when HPGL (geo_bsd) is not available"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-skip tests marked with @pytest.mark.hpgl when HPGL is unavailable."""
+    if not HPGL_AVAILABLE:
+        skip_hpgl = pytest.mark.skip(reason="HPGL (geo_bsd) not available")
+        for item in items:
+            if "hpgl" in item.keywords:
+                item.add_marker(skip_hpgl)
 
 
 @pytest.fixture
@@ -508,19 +520,4 @@ def skip_if_hpgl_not_available():
         pytest.skip("HPGL (geo_bsd) not available")
 
 
-@pytest.fixture
-def reproducible_random_state():
-    """Set reproducible random state for a test.
 
-    This fixture ensures that random operations are reproducible across
-    test runs. The random state is reset after each test.
-
-    Usage:
-        def test_my_function(reproducible_random_state):
-            # Random operations will be reproducible
-            value = np.random.rand()
-    """
-    state = np.random.get_state()
-    np.random.seed(42)
-    yield
-    np.random.set_state(state)

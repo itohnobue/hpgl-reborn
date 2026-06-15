@@ -8,7 +8,7 @@ namespace hpgl
 	struct index_3d_t
 	{
 		int m_coords[3];
-		index_3d_t(){};
+		index_3d_t() : m_coords{} {};
 		index_3d_t(int x, int y, int z)
 		{
 			m_coords[0] = x;

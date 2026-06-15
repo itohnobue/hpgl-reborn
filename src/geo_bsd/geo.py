@@ -205,6 +205,27 @@ def _create_hpgl_float_array(array, grid):
     return result
 
 class ContProperty:
+    """Continuous (floating-point) property with informed/uninformed mask.
+
+    The core data container for continuous geostatistical properties.
+    Data and mask are stored as Fortran-order (column-major) arrays
+    for direct passing to the C++ backend.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        Array of property values. Converted to float32, Fortran order.
+    mask : numpy.ndarray
+        Array of mask values. Converted to uint8, Fortran order.
+        Non-zero = informed cell, 0 = uninformed (masked) cell.
+
+    Attributes
+    ----------
+    data : numpy.ndarray
+        Property values (float32, Fortran order).
+    mask : numpy.ndarray
+        Mask array (uint8, Fortran order).
+    """
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray):
         self.data = numpy.require(data, 'float32', 'F')
         self.mask = numpy.require(mask, 'uint8', 'F')
@@ -228,6 +249,36 @@ class ContProperty:
             raise RuntimeError("Index out of range.")
 
 class IndProperty:
+    """Indicator (categorical) property with informed/uninformed mask.
+
+    Similar to ``ContProperty`` but stores unsigned 8-bit indicator
+    values and tracks the number of indicator categories.
+
+    Parameters
+    ----------
+    data : numpy.ndarray
+        Array of indicator values. Converted to uint8, Fortran order.
+        Values should be in ``[0, indicator_count)``.
+    mask : numpy.ndarray
+        Array of mask values. Converted to uint8, Fortran order.
+    indicator_count : int
+        Number of indicator categories.
+
+    Raises
+    ------
+    RuntimeError
+        If any informed cell has an indicator value outside
+        ``[0, indicator_count)``.
+
+    Attributes
+    ----------
+    data : numpy.ndarray
+        Indicator values (uint8, Fortran order).
+    mask : numpy.ndarray
+        Mask array (uint8, Fortran order).
+    indicator_count : int
+        Number of indicator categories.
+    """
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray, indicator_count: int):
         self.data = numpy.require(data, 'uint8', 'F')
         self.mask = numpy.require(mask, 'uint8', 'F')
@@ -268,6 +319,28 @@ class covariance:
     gaussian = 2
 
 class SugarboxGrid:
+    """Regular 3D grid definition used by all kriging and simulation functions.
+
+    Parameters
+    ----------
+    x : int
+        Number of cells along the X (first) dimension.
+    y : int
+        Number of cells along the Y (second) dimension.
+    z : int
+        Number of cells along the Z (third) dimension.
+
+    Raises
+    ------
+    ValueError
+        If any dimension is non-positive or exceeds the maximum allowed
+        grid size.
+
+    Attributes
+    ----------
+    x, y, z : int
+        Grid dimensions.
+    """
     def __init__(self, x: int, y: int, z: int):
         # Validate grid dimensions
         GridValidator.validate_grid_dimensions(x, y, z)
@@ -276,6 +349,38 @@ class SugarboxGrid:
         self.z = z
 
 class CovarianceModel:
+    """Variogram/covariance model parameters for kriging and simulation.
+
+    Parameters
+    ----------
+    type : int, optional
+        Covariance model type. Use ``geo_bsd.covariance`` constants:
+        ``spherical`` (0), ``exponential`` (1), or ``gaussian`` (2).
+        Default is spherical.
+    ranges : tuple of float, optional
+        Anisotropy ranges ``(rx, ry, rz)``. Default ``(0, 0, 0)``.
+    angles : tuple of float, optional
+        Anisotropy angles ``(azimuth, dip, rotation)`` in degrees.
+        Default ``(0.0, 0.0, 0.0)``.
+    sill : float, optional
+        Covariance sill (variance). Default 1.0.
+    nugget : float, optional
+        Nugget effect (variance at zero distance). Default 0.0.
+
+    Raises
+    ------
+    ValueError
+        If sill is not positive, nugget is negative, or ranges
+        contain non-positive values.
+
+    Attributes
+    ----------
+    type : int
+    ranges : tuple of float
+    angles : tuple of float
+    sill : float
+    nugget : float
+    """
     def __init__(self, type = 0, ranges=(0,0,0), angles=(0.0,0.0,0.0), sill=1.0, nugget=0.0):
         self.type = type
         self.ranges = ranges
@@ -421,6 +526,34 @@ def accepts_tuple(arg_name, arg_pos):
 
 @accepts_tuple('prop', 0)
 def write_property(prop, filename, prop_name, undefined_value, indicator_values=None):
+    """Write a property to an INC-format file via the C++ backend.
+
+    Supports both ``ContProperty`` and ``IndProperty``. The file is
+    written in INC format with the specified undefined value marker.
+
+    Parameters
+    ----------
+    prop : ContProperty or IndProperty
+        Property to write.
+    filename : str
+        Output file path (validated for security).
+    prop_name : str
+        Property name written to the file header.
+    undefined_value : float or int
+        Value marking undefined/uninformed cells in the output.
+    indicator_values : list of int, optional
+        Mapping of indicator categories to output values. Only used
+        for ``IndProperty``.
+
+    Raises
+    ------
+    RuntimeError
+        If the C++ write operation fails.
+
+    See Also
+    --------
+    write_gslib_property : Write property in GSLIB format.
+    """
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath(filename, must_exist=False)
 
@@ -497,6 +630,40 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
             raise RuntimeError("write_gslib_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
 
 def load_cont_property(filename, undefined_value, size=None):
+    """Load a continuous property from an INC-format file.
+
+    If ``size`` is provided, uses the fast C++ reader with
+    pre-allocated buffers. If ``size`` is None, falls back to a
+    Python-based parser suitable for smaller files.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the INC file (must exist).
+    undefined_value : float
+        Value in the file that marks undefined/uninformed cells.
+    size : tuple of int or None, optional
+        Grid dimensions ``(nx, ny, nz)``. If None, uses slow parser.
+
+    Returns
+    -------
+    ContProperty
+        Loaded property with data and mask arrays.
+
+    Raises
+    ------
+    RuntimeError
+        If the file read fails.
+
+    Notes
+    -----
+    For files larger than ~100 MB, always specify ``size`` to use
+    the fast C++ reader and avoid unbounded memory usage.
+
+    See Also
+    --------
+    load_ind_property : Load indicator (categorical) property.
+    """
     # Validate filename for security
     safe_path = PathValidator.validate_filepath(filename, must_exist=True)
 
@@ -574,6 +741,29 @@ def load_ind_property(filename, undefined_value, indicator_values, size=None):
             return _load_prop_ind_slow(filename, undefined_value, indicator_values)
 
 def set_thread_num(num):
+    """Set the number of OpenMP threads for parallel computation.
+
+    Parameters
+    ----------
+    num : int
+        Number of threads (must be at least 1).
+
+    Raises
+    ------
+    TypeError
+        If ``num`` is not an integer.
+    ValueError
+        If ``num`` is less than 1.
+
+    Notes
+    -----
+    A warning is logged if ``num`` exceeds 4x the CPU count, as
+    this may cause thread oversubscription.
+
+    See Also
+    --------
+    get_thread_num : Get the current thread count.
+    """
     if not isinstance(num, int):
         raise TypeError(f"set_thread_num: num must be an integer, got {type(num).__name__}")
     if num < 1:
@@ -593,6 +783,23 @@ def get_thread_num():
 
 @accepts_tuple('prop', 0)
 def calc_mean(prop):
+    """Calculate the arithmetic mean of informed (unmasked) values.
+
+    Parameters
+    ----------
+    prop : ContProperty
+        Continuous property with data and mask arrays.
+
+    Returns
+    -------
+    float
+        Mean of values in informed cells.
+
+    Raises
+    ------
+    ValueError
+        If no informed values exist (all cells masked).
+    """
     masked = numpy.ma.masked_where(prop.mask == 0, prop.data)
     if masked.count() == 0:
         raise ValueError("calc_mean: no informed values (all masked)")
@@ -600,6 +807,37 @@ def calc_mean(prop):
 
 @accepts_tuple('prop', 0)
 def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
+    """Perform Ordinary Kriging (OK) interpolation on a 3D grid.
+
+    Ordinary Kriging estimates values at all grid cells using a
+    neighborhood of nearby informed cells, weighted by the covariance
+    model. The kriging weights sum to 1 (unbiasedness constraint).
+
+    Parameters
+    ----------
+    prop : ContProperty
+        Input property with informed (masked) data.
+    grid : SugarboxGrid
+        Grid definition specifying the output resolution.
+    radiuses : tuple of int
+        Search radii ``(rx, ry, rz)`` in grid cells.
+    max_neighbours : int
+        Maximum number of neighboring points to use per cell.
+    cov_model : CovarianceModel
+        Covariance model defining spatial correlation.
+
+    Returns
+    -------
+    ContProperty
+        Output property with kriged values at all grid cells.
+
+    Raises
+    ------
+    ValueError
+        If grid dimensions or covariance parameters are invalid.
+    RuntimeError
+        If the C++ computation produces an error.
+    """
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
@@ -639,6 +877,38 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
 
 @accepts_tuple('prop', 0)
 def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
+    """Perform Simple Kriging (SK) interpolation on a 3D grid.
+
+    Simple Kriging assumes the global mean is known. If ``mean`` is
+    None, it is computed automatically from the informed data.
+
+    Parameters
+    ----------
+    prop : ContProperty
+        Input property with informed (masked) data.
+    grid : SugarboxGrid
+        Grid definition specifying the output resolution.
+    radiuses : tuple of int
+        Search radii ``(rx, ry, rz)`` in grid cells.
+    max_neighbours : int
+        Maximum number of neighboring points to use per cell.
+    cov_model : CovarianceModel
+        Covariance model defining spatial correlation.
+    mean : float or None, optional
+        Known global mean. If None, computed automatically.
+
+    Returns
+    -------
+    ContProperty
+        Output property with kriged values at all grid cells.
+
+    Raises
+    ------
+    ValueError
+        If grid dimensions or covariance parameters are invalid.
+    RuntimeError
+        If the C++ computation produces an error.
+    """
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
@@ -683,6 +953,40 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
 
 @accepts_tuple('prop', 0)
 def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
+    """Perform Kriging with Locally Varying Mean (LVM).
+
+    LVM Kriging uses a locally varying mean field instead of a
+    constant global mean. The local mean is provided as a 3D array.
+
+    Parameters
+    ----------
+    prop : ContProperty
+        Input property with informed (masked) data.
+    grid : SugarboxGrid
+        Grid definition specifying the output resolution.
+    mean_data : numpy.ndarray
+        3D array of local mean values, shape matching ``grid``.
+        Values are used as the locally varying mean at each cell.
+    radiuses : tuple of int
+        Search radii ``(rx, ry, rz)`` in grid cells.
+    max_neighbours : int
+        Maximum number of neighboring points to use per cell.
+    cov_model : CovarianceModel
+        Covariance model defining spatial correlation.
+
+    Returns
+    -------
+    ContProperty
+        Output property with kriged values at all grid cells.
+
+    Raises
+    ------
+    ValueError
+        If ``mean_data`` is not a NumPy array, its size doesn't match
+        the grid, or covariance parameters are invalid.
+    RuntimeError
+        If the C++ computation produces an error.
+    """
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 

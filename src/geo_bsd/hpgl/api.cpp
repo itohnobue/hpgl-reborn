@@ -29,6 +29,25 @@ static void init_cov_param(hpgl::covariance_param_t * cp, hpgl_cov_params_t * pa
 	cp->m_covariance_type = (hpgl::covariance_type_t) params->m_covariance_type;
 }
 
+/// Initializes the common covariance fields shared by ok_params_t, sk_params_t,
+/// median_ik_params, etc. from a C API params struct pointer.
+/// Eliminates copy-pasted 7-line init blocks across 4 C API wrappers.
+template<typename CpT, typename ParamsT>
+static void init_cov_params_base(ParamsT & p, const CpT * params)
+{
+	p.m_covariance_type = (hpgl::covariance_type_t) params->m_covariance_type;
+	p.set_ranges(
+			params->m_ranges[0],
+			params->m_ranges[1],
+			params->m_ranges[2]);
+	p.set_angles(
+			params->m_angles[0],
+			params->m_angles[1],
+			params->m_angles[2]);
+	p.m_sill = params->m_sill;
+	p.m_nugget = params->m_nugget;
+}
+
 static void
 handle_exception(const std::exception & ex)
 {
@@ -375,17 +394,7 @@ HPGL_API void hpgl_ordinary_kriging(
 	init_grid(grid, &input_data->m_shape);
 
 	ok_params_t ok_p;
-	ok_p.m_covariance_type = (covariance_type_t) params->m_covariance_type;
-	ok_p.set_ranges(
-			params->m_ranges[0],
-			params->m_ranges[1],
-			params->m_ranges[2]);
-	ok_p.set_angles(
-			params->m_angles[0],
-			params->m_angles[1],
-			params->m_angles[2]);
-	ok_p.m_sill = params->m_sill;
-	ok_p.m_nugget = params->m_nugget;
+	init_cov_params_base(ok_p, params);
 
 	ok_p.set_radiuses(
 			params->m_radiuses[0],
@@ -506,18 +515,7 @@ hpgl_simple_kriging_weights(
 	double variance;
 
 	sk_params_t sk_p;
-
-	sk_p.m_covariance_type = (covariance_type_t) params->m_covariance_type;
-	sk_p.set_ranges(
-			params->m_ranges[0],
-			params->m_ranges[1],
-			params->m_ranges[2]);
-	sk_p.set_angles(
-			params->m_angles[0],
-			params->m_angles[1],
-			params->m_angles[2]);
-	sk_p.m_sill = params->m_sill;
-	sk_p.m_nugget = params->m_nugget;
+	init_cov_params_base(sk_p, params);
 
 	simple_kriging_weights(
 			&sk_p,
@@ -564,17 +562,7 @@ HPGL_API void hpgl_lvm_kriging(
 	init_grid(grid, input_data_shape);
 
 	ok_params_t ok_p;
-	ok_p.m_covariance_type = (covariance_type_t) params->m_covariance_type;
-	ok_p.set_ranges(
-			params->m_ranges[0],
-			params->m_ranges[1],
-			params->m_ranges[2]);
-	ok_p.set_angles(
-			params->m_angles[0],
-			params->m_angles[1],
-			params->m_angles[2]);
-	ok_p.m_sill = params->m_sill;
-	ok_p.m_nugget = params->m_nugget;
+	init_cov_params_base(ok_p, params);
 
 	ok_p.set_radiuses(
 			params->m_radiuses[0],
@@ -726,17 +714,7 @@ HPGL_API void hpgl_median_ik(
 	init_grid(grid, &(in_data->m_shape));
 
 	median_ik_params mik_p;
-	mik_p.m_covariance_type = (covariance_type_t) params->m_covariance_type;
-	mik_p.set_ranges(
-			params->m_ranges[0],
-			params->m_ranges[1],
-			params->m_ranges[2]);
-	mik_p.set_angles(
-			params->m_angles[0],
-			params->m_angles[1],
-			params->m_angles[2]);
-	mik_p.m_sill = params->m_sill;
-	mik_p.m_nugget = params->m_nugget;
+	init_cov_params_base(mik_p, params);
 
 	mik_p.set_radiuses(
 			params->m_radiuses[0],

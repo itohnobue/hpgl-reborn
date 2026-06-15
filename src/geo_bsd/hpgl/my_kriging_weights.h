@@ -18,6 +18,12 @@
 #include "gauss_solver.h"
 #include "logging.h"
 
+// ====================================================================
+// SECTION 1: LAPACK Integration
+// LAPACK error handling, safe allocation helpers, and Fortran
+// interface (dpotrf_/dpotrs_) used by all weight calculators below.
+// Solver selection: #define LAPACK_SOLVER or HPGL_SOLVER at file top.
+// ====================================================================
 
 namespace hpgl
 {
@@ -56,6 +62,39 @@ namespace hpgl
 			return true;
 		}
 	}
+
+	// -----------------------------------------------------------------------
+	// Reusable workspace for kriging weight calculation functions.
+	// Pre-allocated once per thread in the OpenMP outer loop; reused via
+	// resize() (allocation-free for size ≤ capacity) on each kriging node
+	// iteration.  Eliminates 3-8 heap vector allocations per node.
+	// -----------------------------------------------------------------------
+	struct weight_calc_workspace_t {
+		std::vector<double> A;          // size²: covariance matrix
+		std::vector<double> b;          // size: RHS vector
+		std::vector<double> b2;         // size: original RHS for variance
+		std::vector<double> ones;       // size: OK ones vector
+		std::vector<double> ones_result;// size: OK solve result for ones
+		std::vector<double> sk_weights; // size: OK SK-weights
+		std::vector<double> sigmas;     // size: corellogram sigma values
+#ifdef LAPACK_SOLVER
+		std::vector<double> B;          // 2*size: combined OK RHS buffer
+#endif
+#ifdef HPGL_SOLVER
+		std::vector<double> A_U;        // size²: upper Cholesky factor
+		std::vector<double> A_L;        // size²: lower Cholesky factor
+#endif
+	};
+
+	// ================================================================
+	// SECTION 2: Weight Calculators
+	// sk_kriging_weights_3  — Simple Kriging (solve A*w = b directly).
+	// ok_kriging_weights_3  — Ordinary Kriging (SK solve + Lagrange
+	//                          multiplier correction).
+	// corellogramed_weights_3 — Correlogram kriging (pre-transform
+	//                            covariance by sigma_i * sigma_j).
+	// Each function selects solver via #ifdef HPGL_SOLVER / LAPACK_SOLVER.
+	// ================================================================
 
 	template<typename covariances_t, bool calc_variance, typename coord_t>
 	bool sk_kriging_weights_3(
@@ -189,6 +228,117 @@ namespace hpgl
 					variance -= weights[i] * b2[i];
 				}
 				// Clamp to zero — floating-point subtraction can produce small negatives
+				if (variance < 0) variance = 0;
+			}
+			else
+			{
+				variance = -1;
+			}
+		}
+		return system_solved;
+	}
+
+	// Workspace-aware variant: reuses buffers from weight_calc_workspace_t
+	// instead of allocating local vectors per call.
+	template<typename covariances_t, bool calc_variance, typename coord_t>
+	bool sk_kriging_weights_3_ws(
+			coord_t center_coord,
+			const std::vector<coord_t> & coords,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights,
+			double & variance,
+			weight_calc_workspace_t & ws)
+	{
+		HPGL_LOG_STRING("Sk weights");
+		HPGL_LOG_NEIGHBOURS(center_coord, coords);
+
+		if (coords.size() <= 0)
+		{
+			HPGL_LOG_STRING("No neighbours.");
+			return false;
+		}
+
+		const size_t coord_size = coords.size();
+		size_t matrix_size = 0;
+		if (!detail::safe_multiply_size_t(coord_size, coord_size, matrix_size))
+		{
+			HPGL_LOG_STRING("Security: Matrix size overflow detected.");
+			return false;
+		}
+
+		if (coord_size > static_cast<size_t>(std::numeric_limits<int>::max()))
+		{
+			HPGL_LOG_STRING("Security: Coordinate count exceeds int max.");
+			return false;
+		}
+
+		const int size = static_cast<int>(coord_size);
+
+		// Resize workspace vectors — allocation-free when capacity >= needed
+		ws.A.resize(matrix_size);
+		ws.b.resize(coord_size);
+		ws.b2.resize(coord_size);
+		weights.resize(coord_size);
+
+		//build invariant
+		for (int i = 0, end_i = size; i < end_i; ++i)
+		{
+			for (int j = i, end_j = end_i; j < end_j; ++j)
+			{
+				ws.A[i*size + j] = covariances(coords[i], coords[j]);
+				ws.A[j*size + i] = ws.A[i*size + j];
+			}
+			ws.b[i] = covariances(coords[i], center_coord);
+			ws.b2[i] = ws.b[i];
+		}
+
+		HPGL_LOG_SYSTEM(&ws.A[0], &ws.b[0], size);
+
+#ifdef HPGL_SOLVER
+		ws.A_U.resize(size*size);
+		ws.A_L.resize(size*size);
+		bool system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
+		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &weights[0], size);
+		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+#endif
+
+#ifdef LAPACK_SOLVER
+		bool system_solved = false;
+		integer info_dec = 100;
+		integer info_solve = 100;
+		integer size_lap = size;
+		integer b_size = 1;
+		char matrix_type = 'U';
+
+		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
+		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
+
+		if (info_dec != 0) {
+			system_solved = false;
+			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+			return system_solved;
+		}
+
+		for (size_t i = 0; i < size; i ++)
+			weights[i] = ws.b[i];
+
+		dpotrs_(&matrix_type, &size_lap, &b_size, &ws.A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
+		detail::handle_lapack_error(info_solve, "dpotrs_ (Cholesky solver)", size);
+
+		if (info_solve == 0) system_solved = true;
+		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+#endif
+
+		if (calc_variance)
+		{
+			if (system_solved)
+			{
+				double cr0 = covariances(center_coord, center_coord);
+				variance = cr0;
+				for (int i = 0, end_i = (int) coords.size(); i < end_i; ++i)
+				{
+					variance -= weights[i] * ws.b2[i];
+				}
 				if (variance < 0) variance = 0;
 			}
 			else
@@ -375,6 +525,166 @@ namespace hpgl
 		weights.resize(coords.size());
 		return system_solved;
 	}
+
+	// Workspace-aware variant of ok_kriging_weights_3.
+	// Uses ws vectors (A, b, b2, ones, ones_result, sk_weights, B)
+	// instead of allocating local vectors per call.
+	template<typename covariances_t, bool calc_variance, typename coord_t>
+	bool ok_kriging_weights_3_ws(
+			coord_t center,
+			const std::vector<coord_t> & coords,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights,
+			double & variance,
+			weight_calc_workspace_t & ws)
+	{
+		HPGL_LOG_STRING("Ok weights.");
+
+		if (coords.size() <= 0)
+		{
+			HPGL_LOG_STRING("No neighbours.");
+			return false;
+		}
+
+		const size_t coord_size = coords.size();
+		size_t matrix_size = 0;
+		if (!detail::safe_multiply_size_t(coord_size, coord_size, matrix_size))
+		{
+			HPGL_LOG_STRING("Security: Matrix size overflow detected.");
+			return false;
+		}
+
+		if (coord_size > static_cast<size_t>(std::numeric_limits<int>::max()))
+		{
+			HPGL_LOG_STRING("Security: Coordinate count exceeds int max.");
+			return false;
+		}
+
+		const int size = static_cast<int>(coord_size);
+
+		// Resize workspace vectors — allocation-free when capacity >= needed
+		ws.A.resize(matrix_size);
+		ws.b.resize(coord_size);
+		ws.b2.resize(coord_size);
+		weights.resize(coord_size);
+
+		//build invariant
+		for (int i = 0, end_i = size; i < end_i; ++i)
+		{
+			for (int j = i, end_j = end_i; j < end_j; ++j)
+			{
+				ws.A[i*size + j] = covariances(coords[i], coords[j]);
+				ws.A[j*size + i] = ws.A[i*size + j];
+			}
+			ws.b[i] = covariances(coords[i], center);
+			ws.b2[i] = ws.b[i];
+		}
+
+		HPGL_LOG_SYSTEM(&ws.A[0], &ws.b[0], size);
+
+		ws.ones.resize(size);
+		ws.ones_result.resize(size);
+		ws.sk_weights.resize(size);
+		// Fill ones vector with 1.0
+		for (int i = 0; i < size; ++i)
+			ws.ones[i] = 1.0;
+
+		bool system_solved = false;
+
+#ifdef HPGL_SOLVER
+		ws.A_U.resize(size*size);
+		ws.A_L.resize(size*size);
+
+		system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
+		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &ws.sk_weights[0], size);
+		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.ones[0], &ws.ones_result[0], size);
+#endif
+
+#ifdef LAPACK_SOLVER
+		integer info_dec = 100;
+		integer info_solve = 100;
+		integer size_lap = size;
+		char matrix_type = 'U';
+
+		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
+		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
+		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
+
+		if (info_dec != 0) {
+			system_solved = false;
+			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+			return system_solved;
+		}
+
+		// Solve both RHS vectors in a single dpotrs_ call (nrhs=2).
+		integer two = 2;
+		ws.B.resize(static_cast<size_t>(size) * 2);
+		for (int i = 0; i < size; ++i)
+		{
+			ws.B[i] = ws.b[i];              // Column 0: sk_weights RHS
+			ws.B[i + size] = ws.ones[i];    // Column 1: ones RHS
+		}
+
+		dpotrs_(&matrix_type, &size_lap, &two, &ws.A[0], &size_lap, &ws.B[0], &size_lap, &info_solve);
+
+		for (int i = 0; i < size; ++i)
+		{
+			ws.sk_weights[i] = ws.B[i];
+			ws.ones_result[i] = ws.B[i + size];
+		}
+
+		detail::handle_lapack_error(info_solve, "dpotrs_ (OK Cholesky solver)", size);
+
+		if (info_solve == 0) system_solved = true;
+#endif
+
+		double SumSK = 0;
+		double SumOnes = 0;
+		for(int k = 0; k < size; k++)
+		{
+			SumSK += ws.sk_weights[k];
+			SumOnes += ws.ones_result[k];
+		}
+
+		if (std::abs(SumOnes) < 1e-15)
+		{
+			// Degenerate case: SumOnes is zero, cannot compute OK weights
+			weights.resize(coords.size());
+			if (calc_variance) variance = -1;
+			return false;
+		}
+
+		double mu = (SumSK - 1) / SumOnes;
+		for (int k = 0; k < size; k++)
+		{
+			weights[k] = ws.sk_weights[k] - mu * ws.ones_result[k];
+		}
+
+		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+
+		if (calc_variance)
+		{
+			if (system_solved)
+			{
+				double cr0 = covariances(center, center);
+				variance = cr0;
+				for (int i = 0, end_i = (int) coords.size(); i < end_i; ++i)
+				{
+					variance -= weights[i] * ws.b2[i];
+				}
+				// OK kriging variance: subtract the Lagrange multiplier (mu)
+				variance -= mu;
+				// Clamp to zero — floating-point subtraction can produce small negatives
+				if (variance < 0) variance = 0;
+			}
+			else
+			{
+				variance = -1;
+			}
+		}
+		weights.resize(coords.size());
+		return system_solved;
+	}
 	
 	template<typename covariances_t, typename coord_t>
 	bool corellogramed_weights_3(
@@ -422,7 +732,7 @@ namespace hpgl
 
 
 		double meanc = center_mean;
-		double delta = 0.00001;
+		double delta = CORRELOGRAM_DELTA;
 
 		if(meanc == 0)
 		{
@@ -519,6 +829,129 @@ namespace hpgl
 			weights[i] *= sigmac / sigmas[i];
 		}
 */
+		return system_solved;
+	}
+
+	// Workspace-aware variant of corellogramed_weights_3.
+	// Uses ws vectors (A, b, sigmas) instead of allocating local vectors.
+	template<typename covariances_t, typename coord_t>
+	bool corellogramed_weights_3_ws(
+			coord_t center,
+			mean_t center_mean,
+			const std::vector<coord_t> & coords,
+			const covariances_t & cov,
+			const std::vector<mean_t> & means,
+			std::vector<kriging_weight_t> & weights,
+			weight_calc_workspace_t & ws
+			)
+	{
+		if (coords.size() <= 0)
+			return false;
+
+		const size_t coord_size = coords.size();
+
+		size_t matrix_size = 0;
+		if (!detail::safe_multiply_size_t(coord_size, coord_size, matrix_size))
+		{
+			HPGL_LOG_STRING("Security: Matrix size overflow detected.");
+			return false;
+		}
+
+		if (coord_size > static_cast<size_t>(std::numeric_limits<int>::max()))
+		{
+			HPGL_LOG_STRING("Security: Coordinate count exceeds int max.");
+			return false;
+		}
+
+		const int size = static_cast<int>(coord_size);
+
+		// Resize workspace vectors
+		ws.A.resize(matrix_size);
+		ws.b.resize(coord_size);
+		weights.resize(coord_size);
+
+		if (means.size() != coord_size)
+		{
+			HPGL_LOG_STRING("Security: Means vector size mismatch.");
+			return false;
+		}
+
+		double meanc = center_mean;
+		double delta = 0.00001;
+
+		if(meanc == 0)
+		{
+			meanc += delta;
+		}
+		if(meanc == 1)
+		{
+			meanc -= delta;
+		}
+
+		double sigmac = sqrt(meanc * (1 - meanc));
+
+		ws.sigmas.resize(coord_size);
+
+		for (int i = 0; i < size; ++i)
+		{
+			double meani = means[i];
+
+			if(meani == 0)
+			{
+				meani += delta;
+			}
+			if(meani == 1)
+			{
+				meani -= delta;
+			}
+
+			ws.sigmas[i] = sqrt(meani * (1-meani));
+		}
+
+		//build invariant
+		for (int i = 0; i < size; ++i)
+		{
+			for (int j = 0; j < size; ++j)
+			{
+				ws.A[i * size + j] =
+					cov(coords[i], coords[j]) * (ws.sigmas[i] * ws.sigmas[j]);
+			}
+			ws.b[i] = cov(coords[i], center) * (ws.sigmas[i] * sigmac);
+		}
+
+		bool system_solved = false;
+
+#ifdef HPGL_SOLVER
+		ws.A_U.resize(size*size);
+		ws.A_L.resize(size*size);
+
+		system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
+		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &weights[0], size);
+#endif
+
+#ifdef LAPACK_SOLVER
+		integer info_dec = 100;
+		integer info_solve = 100;
+		integer size_lap = size;
+		integer b_size = 1;
+		char matrix_type = 'U';
+
+		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
+		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
+
+		if (info_dec != 0) {
+			return false;
+		}
+
+		for (size_t i = 0; i < size; i ++)
+			weights[i] = ws.b[i];
+
+		dpotrs_(&matrix_type, &size_lap, &b_size, &ws.A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
+		detail::handle_lapack_error(info_solve, "dpotrs_ (Corellogram Cholesky solver)", size);
+
+		if (info_solve == 0) system_solved = true;
+#endif
+
 		return system_solved;
 	}
 

@@ -6,6 +6,7 @@ import pytest
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
@@ -17,13 +18,11 @@ try:
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
     from geo_bsd.cdf import CdfData
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
-    print(f"Warning: Could not import HPGL: {e}")
+except (ImportError, OSError) as e:
+    pass  # HPGL_AVAILABLE from conftest handles availability
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.integration
 class TestWorkflowIntegration:
     """Test complete geostatistical workflows"""
@@ -109,8 +108,61 @@ class TestWorkflowIntegration:
         for i in range(1, 3):
             assert not np.array_equal(realizations[0].data, realizations[i].data)
 
+    def test_sgs_modifies_input_property_in_place(self):
+        """Test SGS modifies the input property array in-place (side-effect).
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+        Verifies the identity (same object) and content change (data modified)
+        of the input property after SGS simulation.
+        """
+        grid = SugarboxGrid(x=10, y=10, z=5)
+        np.random.seed(42)
+        data = np.random.rand(500).astype('float32') * 100
+        mask = np.ones(500, dtype='uint8')
+        prop = ContProperty(data, mask)
+
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(5.0, 5.0, 3.0),
+            sill=1.0,
+            nugget=0.1
+        )
+
+        cdf_data = CdfData(
+            np.array([0.0, 50.0, 100.0], dtype='float32'),
+            np.array([0.0, 0.5, 1.0], dtype='float32')
+        )
+
+        # Save original data copy and object identity
+        original_data = prop.data.copy()
+        prop_id_before = id(prop)
+
+        result = sgs_simulation(
+            prop=prop,
+            grid=grid,
+            cdf_data=cdf_data,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=cov_model,
+            seed=42
+        )
+
+        # Verify identity: same object reference (in-place modification)
+        prop_id_after = id(prop)
+        assert prop_id_before == prop_id_after, (
+            "SGS should modify the input property in-place (same object identity)"
+        )
+
+        # Verify content: data has been modified
+        assert not np.array_equal(original_data, prop.data), (
+            "SGS should modify the input property data in-place"
+        )
+
+        # Verify the result is a valid ContProperty
+        assert isinstance(result, ContProperty)
+        assert result.data.shape == prop.data.shape
+
+
+@pytest.mark.hpgl
 @pytest.mark.integration
 class TestIOIntegration:
     """Test data I/O workflows"""

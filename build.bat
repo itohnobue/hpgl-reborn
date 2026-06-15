@@ -69,7 +69,7 @@ if not defined MSBUILD_PATH (
 
 if not exist "%MSBUILD_PATH%" (
     echo ERROR: MSBuild not found!
-    pause
+    if not defined CI pause
     endlocal
     exit /b 1
 )
@@ -100,7 +100,7 @@ echo.
 echo Check %LogFile% for details.
 echo.
 type "%LogFile%"
-pause
+if not defined CI pause
 endlocal
 exit /b 1
 
@@ -145,7 +145,7 @@ if exist "%~dp0src\msvc\geo_bsd\_cvariogram%DLL_SUFFIX%.dll" (
 if "!DLL_COPY_FAILED!"=="1" (
 	echo.
 	echo ERROR: DLL copy step failed.
-	pause
+	if not defined CI pause
 	endlocal
 	exit /b 1
 )

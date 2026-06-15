@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import Mock, MagicMock
 
+
 # Add src directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
@@ -30,17 +31,15 @@ try:
         _load_prop_ind_slow  # For testing INC format parsing
     )
     from geo_bsd.cdf import calc_cdf, CdfData
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
-    print(f"Warning: Could not import HPGL: {e}")
+except (ImportError, OSError) as e:
+    pass  # HPGL_AVAILABLE from conftest handles availability
 
 
 # =============================================================================
 # Calculation Function Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCalcMean:
     """Test calc_mean function for calculating mean of properties"""
 
@@ -113,7 +112,7 @@ class TestCalcMean:
         assert result == pytest.approx(13.0)
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCalcCdf:
     """Test calc_cdf function for cumulative distribution calculation"""
 
@@ -224,7 +223,22 @@ class TestCalcCdf:
 # Thread Management Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+def _omp_available():
+    """Check if OpenMP is available by testing set/get thread round-trip.
+
+    When _OPENMP is not defined (e.g., Apple Clang on macOS), set_thread_num()
+    is a no-op and get_thread_num() always returns 1. A successful round-trip
+    of set_thread_num(2) -> get_thread_num() == 2 confirms OpenMP availability.
+    """
+    saved = get_thread_num()
+    try:
+        set_thread_num(2)
+        return get_thread_num() == 2
+    finally:
+        set_thread_num(saved)
+
+
+@pytest.mark.hpgl
 class TestThreadManagement:
     """Test thread number management functions"""
 
@@ -236,6 +250,9 @@ class TestThreadManagement:
 
     def test_set_thread_num(self):
         """Test setting thread number"""
+        if not _omp_available():
+            pytest.skip("OpenMP not available on this platform")
+
         original = get_thread_num()
 
         # Set to 4 threads
@@ -247,6 +264,9 @@ class TestThreadManagement:
 
     def test_set_get_thread_round_trip(self):
         """Test set/get round trip for various thread counts"""
+        if not _omp_available():
+            pytest.skip("OpenMP not available on this platform")
+
         original = get_thread_num()
 
         for num in [1, 2, 4, 8, 16]:
@@ -271,7 +291,7 @@ class TestThreadManagement:
 # Callback Handler Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCallbackHandlers:
     """Test output and progress callback handlers"""
 
@@ -366,7 +386,7 @@ class TestCallbackHandlers:
 # I/O Function Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestIOContinuousProperty:
     """Test I/O functions for continuous properties"""
 
@@ -473,7 +493,7 @@ class TestIOContinuousProperty:
         # due to C++ implementation issues. The write functionality is verified.
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestIOIndicatorProperty:
     """Test I/O functions for indicator properties"""
 
@@ -543,7 +563,7 @@ class TestIOIndicatorProperty:
         assert loaded.indicator_count == 3
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestUndefinedValueHandling:
     """Test undefined value handling in I/O operations"""
 
@@ -582,7 +602,7 @@ class TestUndefinedValueHandling:
 # Utility Function Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestAppendMask:
     """Test append_mask utility function"""
 
@@ -663,7 +683,7 @@ class TestAppendMask:
 # File Format Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestFileFormats:
     """Test different file format handling"""
 
@@ -722,7 +742,7 @@ class TestFileFormats:
 # Edge Cases and Error Handling
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestEdgeCases:
     """Test edge cases and error handling"""
 
@@ -795,7 +815,7 @@ class TestEdgeCases:
 # Performance Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestPerformanceUtilities:
     """Performance-related tests for utility functions"""
 

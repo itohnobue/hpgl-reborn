@@ -6,6 +6,7 @@ import pytest
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 import os
 os.environ['PATH'] = str(Path(__file__).parent.parent.parent / "src" / "geo_bsd") + ';' + os.environ.get('PATH', '')
@@ -17,13 +18,11 @@ try:
         _require_ind_data, _create_hpgl_float_array,
         _create_hpgl_ubyte_array
     )
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
-    print(f"Warning: Could not import HPGL: {e}")
+except (ImportError, OSError) as e:
+    pass  # HPGL_AVAILABLE from conftest handles availability
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestNumPy2Compatibility:
     """Test NumPy 2.0+ compatibility"""
     

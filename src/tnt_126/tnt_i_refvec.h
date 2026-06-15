@@ -66,6 +66,7 @@ class i_refvec
 			 i_refvec();
 	explicit i_refvec(int n);
 	inline	 i_refvec(T* data);
+	inline	 i_refvec(const T* data);
 	inline	 i_refvec(const i_refvec &v);
 	inline   T*		 begin();
 	inline const T* begin() const;
@@ -119,6 +120,9 @@ inline	 i_refvec<T>::i_refvec(const i_refvec<T> &V): data_(V.data_),
 
 template <class T>
 i_refvec<T>::i_refvec(T* data) : data_(data), ref_count_(NULL) {}
+
+template <class T>
+i_refvec<T>::i_refvec(const T* data) : data_(const_cast<T*>(data)), ref_count_(NULL) {}
 
 template <class T>
 inline T* i_refvec<T>::begin()

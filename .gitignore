@@ -84,3 +84,4 @@ tmp/
 *.log
 build_*.log
 test_*.log
+*.dylib

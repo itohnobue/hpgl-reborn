@@ -1,5 +1,7 @@
 #include "stdafx.h"
+#ifdef _OPENMP
 #include <omp.h>
+#endif
 #include <mutex>
 
 namespace hpgl
@@ -26,9 +28,13 @@ namespace hpgl
 			return false;
 		}
 
+#ifdef _OPENMP
 		// OpenMP handles invalid values (e.g., negative values already filtered)
 		// omp_set_num_threads is thread-safe with respect to OpenMP runtime
 		omp_set_num_threads(n_threads);
+#else
+		(void)n_threads; // suppress unused parameter warning
+#endif
 		return true;
 	}
 
@@ -40,8 +46,12 @@ namespace hpgl
 	/// @return Maximum number of threads available for parallel regions
 	int get_thread_num()
 	{
+#ifdef _OPENMP
 		// omp_get_max_threads() is thread-safe
 		return omp_get_max_threads();
+#else
+		return 1;
+#endif
 	}
 
 	/// Gets the number of threads currently in the team executing the parallel region.
@@ -52,8 +62,12 @@ namespace hpgl
 	/// @return Number of threads in the current parallel team
 	int get_current_thread_num()
 	{
+#ifdef _OPENMP
 		// omp_get_num_threads() is thread-safe
 		return omp_get_num_threads();
+#else
+		return 1;
+#endif
 	}
 
 	/// Checks if currently executing within a parallel region.
@@ -63,7 +77,11 @@ namespace hpgl
 	/// @return true if inside a parallel region, false otherwise
 	bool in_parallel_region()
 	{
+#ifdef _OPENMP
 		// omp_in_parallel() is thread-safe
 		return omp_in_parallel() != 0;
+#else
+		return false;
+#endif
 	}
 }

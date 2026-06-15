@@ -22,6 +22,7 @@ import pytest
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src" / "geo_bsd"))
 
 try:
@@ -29,10 +30,14 @@ try:
     from geo_bsd.sis import sis_simulation
     from geo_bsd.geo import ContProperty, IndProperty, CovarianceModel, covariance, SugarboxGrid
     from geo_bsd.cdf import CdfData, calc_cdf
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
-    print(f"Warning: Could not import HPGL: {e}")
+except (ImportError, OSError) as e:
+    # Dummy covariance for module-level parametrize decorators
+    # Tests are skipped by @pytest.mark.hpgl when HPGL is unavailable
+    class _DummyCovarianceTypes:
+        spherical = 0
+        exponential = 1
+        gaussian = 2
+    covariance = _DummyCovarianceTypes()
 
 
 # =============================================================================
@@ -170,7 +175,7 @@ def simulation_mask(sample_grid):
 # SGS - Basic Execution Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialGaussianSimulationBasic:
     """Test basic SGS execution and parameter handling"""
 
@@ -268,7 +273,7 @@ class TestSequentialGaussianSimulationBasic:
 # SGS - Reproducibility Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialGaussianSimulationReproducibility:
     """Test SGS reproducibility"""
 
@@ -333,7 +338,7 @@ class TestSequentialGaussianSimulationReproducibility:
 # SGS - Kriging Type Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialGaussianSimulationKrigingType:
     """Test SGS kriging type parameter (SK vs OK)"""
 
@@ -385,7 +390,7 @@ class TestSequentialGaussianSimulationKrigingType:
 # SGS - LVM (Locally Varying Mean) Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialGaussianSimulationLVM:
     """Test SGS with Locally Varying Mean"""
 
@@ -446,7 +451,7 @@ class TestSequentialGaussianSimulationLVM:
 # SGS - use_harddata Parameter Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialGaussianSimulationUseHarddata:
     """Test SGS use_harddata parameter"""
 
@@ -489,7 +494,7 @@ class TestSequentialGaussianSimulationUseHarddata:
 # SGS - Mask Parameter Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialGaussianSimulationMask:
     """Test SGS mask parameter for selective simulation"""
 
@@ -516,7 +521,7 @@ class TestSequentialGaussianSimulationMask:
 # SGS - min_neighbours Parameter Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialGaussianSimulationMinNeighbours:
     """Test SGS min_neighbours parameter"""
 
@@ -557,7 +562,7 @@ class TestSequentialGaussianSimulationMinNeighbours:
 # SGS - Statistical Validation Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialGaussianSimulationStatistics:
     """Test SGS statistical properties"""
 
@@ -618,7 +623,7 @@ class TestSequentialGaussianSimulationStatistics:
 # SGS - Covariance Model Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialGaussianSimulationCovariance:
     """Test SGS with different covariance models"""
 
@@ -655,7 +660,7 @@ class TestSequentialGaussianSimulationCovariance:
 # SIS - Basic Execution Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialIndicatorSimulationBasic:
     """Test basic SIS execution and parameter handling"""
 
@@ -723,7 +728,7 @@ class TestSequentialIndicatorSimulationBasic:
 # SIS - Reproducibility Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialIndicatorSimulationReproducibility:
     """Test SIS reproducibility"""
 
@@ -776,7 +781,7 @@ class TestSequentialIndicatorSimulationReproducibility:
 # SIS - LVM (Locally Varying Marginal Probabilities) Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialIndicatorSimulationLVM:
     """Test SIS with Locally Varying Marginal Probabilities"""
 
@@ -812,7 +817,7 @@ class TestSequentialIndicatorSimulationLVM:
 # SIS - use_harddata Parameter Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialIndicatorSimulationUseHarddata:
     """Test SIS use_harddata parameter"""
 
@@ -849,7 +854,7 @@ class TestSequentialIndicatorSimulationUseHarddata:
 # SIS - Mask Parameter Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialIndicatorSimulationMask:
     """Test SIS mask parameter for selective simulation"""
 
@@ -873,7 +878,7 @@ class TestSequentialIndicatorSimulationMask:
 # SIS - min_neighbours Parameter Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialIndicatorSimulationMinNeighbours:
     """Test SIS min_neighbours parameter"""
 
@@ -910,7 +915,7 @@ class TestSequentialIndicatorSimulationMinNeighbours:
 # SIS - use_correlogram Parameter Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialIndicatorSimulationUseCorrelogram:
     """Test SIS use_correlogram parameter"""
 
@@ -947,7 +952,7 @@ class TestSequentialIndicatorSimulationUseCorrelogram:
 # SIS - Statistical Validation Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialIndicatorSimulationStatistics:
     """Test SIS statistical properties"""
 
@@ -999,7 +1004,7 @@ class TestSequentialIndicatorSimulationStatistics:
 # SIS - Covariance Model Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSequentialIndicatorSimulationCovariance:
     """Test SIS with different covariance models"""
 
@@ -1039,7 +1044,7 @@ class TestSequentialIndicatorSimulationCovariance:
 # Multi-Realization Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.slow
 class TestMultipleRealizations:
     """Test multiple realizations with different seeds"""
@@ -1093,7 +1098,7 @@ class TestMultipleRealizations:
 # Edge Cases and Error Handling
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSimulationEdgeCases:
     """Test edge cases and error handling"""
 
@@ -1167,7 +1172,7 @@ class TestSimulationEdgeCases:
 # SGS/SIS Advanced Parameter Tests (F097)
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSGSAdvancedParams:
     """Test SGS parameters: use_regions, region_size, force_single_thread, force_parallel"""
 
@@ -1275,7 +1280,7 @@ class TestSGSAdvancedParams:
         )
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSISAdvancedParams:
     """Test SIS parameters: use_regions, region_size, force_single_thread, force_parallel"""
 

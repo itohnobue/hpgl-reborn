@@ -12,7 +12,7 @@ namespace hpgl
 
 	struct data_shape_t
 	{
-		data_shape_t(){};
+		data_shape_t() : m_data{} {};
 		data_shape_t(int dx, int dy, int dz)
 		{
 			m_data[0] = dx;

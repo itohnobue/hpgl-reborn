@@ -23,6 +23,26 @@ from .validation import PathValidator, ValidationConstants
 
 
 def CalcMean(Cube, Mask):
+    """Calculate the arithmetic mean of unmasked (informed) cells.
+
+    Parameters
+    ----------
+    Cube : numpy.ndarray
+        3D array of property values.
+    Mask : numpy.ndarray
+        3D array where non-zero indicates an informed cell, zero
+        indicates an uninformed (masked) cell.
+
+    Returns
+    -------
+    float
+        Mean of values in cells where ``Mask != 0``.
+
+    Notes
+    -----
+    Uses ``numpy.ma.masked_array`` to exclude masked cells from the
+    mean computation.
+    """
     CubeMasked = ma.masked_array(Cube, Mask == 0)
     return CubeMasked.mean()
 
@@ -33,6 +53,26 @@ def CalcMarginalProbsIndicator(Cube, Mask, Indicators):
     return Result
 
 def CalcVPC(Cube, Mask, MarginalMean):
+    """Compute the Vertical Proportion Curve (VPC) for a 3D property.
+
+    For each layer ``k`` along the Z-axis, calculates the mean value
+    of unmasked cells. Layers with no informed cells default to the
+    marginal mean.
+
+    Parameters
+    ----------
+    Cube : numpy.ndarray
+        3D array of property values.
+    Mask : numpy.ndarray
+        3D array where non-zero indicates an informed cell.
+    MarginalMean : float
+        Default value for layers with no informed cells.
+
+    Returns
+    -------
+    numpy.ndarray
+        1D array of length ``Cube.shape[2]`` with per-layer means.
+    """
     NZ = Cube.shape[2]
     MaskSum = Mask.sum(0).sum(0)
     CubeMasked = copy(Cube)
@@ -110,6 +150,32 @@ def PointSet2Cube(X, Y, Z, Property, Cube):
     return Cube, Mask == 1
 
 def SaveGSLIBPointSet(PointSet, FileName, Caption):
+    """Write scattered point data to a file in GSLIB format.
+
+    Produces a text file with a header (caption, property count,
+    property names) followed by data columns.
+
+    Parameters
+    ----------
+    PointSet : dict
+        Dictionary mapping property names to 1D arrays. All arrays
+        must have the same length.
+    FileName : str
+        Output file path (validated for security).
+    Caption : str
+        One-line description written to the file header.
+
+    Raises
+    ------
+    ValueError
+        If ``FileName`` is empty or not a string.
+    RuntimeError
+        If properties in ``PointSet`` have unequal lengths.
+
+    See Also
+    --------
+    SaveGSLIBCubes : Write 3D grid data in GSLIB format.
+    """
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBPointSet: FileName must be a non-empty string")
     safe_path = PathValidator.validate_filepath(FileName)
@@ -139,6 +205,34 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
         savetxt(f, MegaPointSet)
 
 def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
+    """Write 3D grid properties to a file in GSLIB format.
+
+    Same header structure as ``SaveGSLIBPointSet``, but flattens 3D
+    cubes into columns of data lines.
+
+    Parameters
+    ----------
+    CubesDictionary : dict
+        Dictionary mapping property names to 3D numpy arrays. All
+        arrays must have the same shape.
+    FileName : str
+        Output file path (validated for security).
+    Caption : str
+        One-line description written to the file header.
+    Format : str, optional
+        NumPy ``savetxt`` format string (default ``"%d"``).
+
+    Raises
+    ------
+    ValueError
+        If ``FileName`` is empty or not a string.
+    RuntimeError
+        If properties have unequal sizes.
+
+    See Also
+    --------
+    SaveGSLIBPointSet : Write scattered point data in GSLIB format.
+    """
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBCubes: FileName must be a non-empty string")
     safe_path = PathValidator.validate_filepath(FileName)
@@ -231,6 +325,39 @@ def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
     return MACube
 
 def LoadGslibFile(filename, property_size):
+    """Load a GSLIB-format file into a dictionary of 3D property arrays.
+
+    Reads the GSLIB header (caption, property count, property names)
+    and then parses data lines into separately-named arrays reshaped
+    to ``property_size``.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the GSLIB file (must exist).
+    property_size : tuple of int
+        Grid dimensions ``(nx, ny, nz)`` for reshaping loaded data.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping property names to 3D numpy arrays with
+        shape ``property_size``.
+
+    Raises
+    ------
+    ValueError
+        If ``filename`` is empty/not a string, ``num_p`` is invalid,
+        or the property count exceeds the maximum.
+    RuntimeError
+        If the file contains more values than expected for a given
+        property.
+
+    See Also
+    --------
+    SaveGSLIBPointSet : Write point data in GSLIB format.
+    SaveGSLIBCubes : Write grid data in GSLIB format.
+    """
     if not filename or not isinstance(filename, str):
         raise ValueError("LoadGslibFile: filename must be a non-empty string")
 

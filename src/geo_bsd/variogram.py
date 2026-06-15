@@ -23,6 +23,38 @@ from numpy import (
 
 
 class TVEllipsoid:
+    """Three-axis ellipsoid defined by ranges and rotation angles.
+
+    Defines the anisotropy directions for variogram search. The three
+    axes are computed by applying azimuth, dip, and rotation angles
+    to the coordinate system.
+
+    Parameters
+    ----------
+    R1 : float
+        Range along the first (major) axis.
+    R2 : float
+        Range along the second axis.
+    R3 : float
+        Range along the third (minor) axis.
+    Azimut : float, optional
+        Azimuth angle in degrees (default 0).
+    Dip : float, optional
+        Dip angle in degrees (default 0).
+    Rotation : float, optional
+        Rotation angle in degrees (default 0).
+
+    Attributes
+    ----------
+    Direction1 : numpy.ndarray
+        Direction vector of the first axis.
+    Direction2 : numpy.ndarray
+        Direction vector of the second axis.
+    Direction3 : numpy.ndarray
+        Direction vector of the third axis.
+    R1, R2, R3 : float
+        Range values stored as instance attributes.
+    """
     Direction1 = [1, 0, 0]
     Direction2 = [0, 1, 0]
     Direction3 = [0, 0, 1]
@@ -63,6 +95,35 @@ class TVEllipsoid:
         self.R3 = R3
 
 class TVVariogramSearchTemplate:
+    """Parameters controlling experimental variogram computation.
+
+    Defines the lag geometry (width, separation, tolerance) and the
+    ellipsoid search volume for scanning point pairs.
+
+    Parameters
+    ----------
+    LagWidth : float
+        Width of each lag band.
+    LagSeparation : float
+        Distance between consecutive lag centers.
+    TolDistance : float
+        Angular tolerance multiplier for the tunnel filter.
+    NumLags : int
+        Number of lags to compute.
+    Ellipsoid : TVEllipsoid
+        Ellipsoid defining anisotropy directions and ranges.
+    FirstLagDistance : float, optional
+        Distance to the start of the first lag (default 0).
+
+    Attributes
+    ----------
+    LagWidth : float
+    LagSeparation : float
+    TolDistance : float
+    NumLags : int
+    Ellipsoid : TVEllipsoid
+    FirstLagDistance : float
+    """
     LagWith = 0.5
     LagSeparation = 1
     TolDistance = 1
@@ -181,7 +242,87 @@ def _CalcLagsAreas(VariogramSearchTemplate):
     lag_indexes = reshape(lag_indexes[1:], len(lag_indexes[1:])).astype(int)
     return idx_i, idx_j, idx_k, lag_indexes, LagDistance
 
+def _verify_dict_keys(d, required_keys, name="dict"):
+    """Validate that a dictionary contains all required keys.
+
+    Args:
+        d: The dictionary to check.
+        required_keys: List of required key names.
+        name: Name of the dict for error messages.
+
+    Raises:
+        TypeError: If d is not a dict.
+        KeyError: If any required key is missing, with an explicit message
+            listing which keys were not found.
+    """
+    if not isinstance(d, dict):
+        raise TypeError(
+            f"Expected {name} to be a dict, got {type(d).__name__}"
+        )
+    missing = [repr(k) for k in required_keys if k not in d]
+    if missing:
+        raise KeyError(
+            f"{name} is missing required key(s): {', '.join(missing)}"
+        )
+
+
+def _verify_shape(obj, ndim, name="array"):
+    """Validate that an object has a .shape attribute with expected dimensions.
+
+    Args:
+        obj: Object to validate (expects numpy array or compatible).
+        ndim: Expected number of dimensions.
+        name: Name of the object for error messages.
+
+    Raises:
+        AttributeError: If obj has no .shape attribute.
+        ValueError: If obj.shape has wrong number of dimensions.
+    """
+    if not hasattr(obj, 'shape'):
+        raise AttributeError(
+            f"Expected {name} to have a .shape attribute, got {type(obj).__name__}"
+        )
+    shp = obj.shape
+    if len(shp) != ndim:
+        raise ValueError(
+            f"Expected {name}.shape to have {ndim} dimensions, got {len(shp)}: {shp}"
+        )
+
+
 def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
+    """Compute experimental variogram/covariance from scattered point data.
+
+    Scans all point pairs within the search template, accumulating
+    pairwise statistics through the provided Function callback.
+
+    Parameters
+    ----------
+    VariogramSearchTemplate : TVVariogramSearchTemplate
+        Template defining search geometry and lag configuration.
+    PointSet : dict
+        Dictionary with keys 'X', 'Y', 'Z', each mapping to 1D arrays
+        of point coordinates.
+    Function : callable or None
+        Callback ``f(point1_idx, point2_idx, result_accum, params)``
+        that accumulates statistics for each point pair. If None,
+        initializes and returns the result array without populating it.
+    Params : dict or None
+        User-supplied parameters forwarded to Function.
+
+    Returns
+    -------
+    Result : numpy.ndarray
+        Accumulated result array of shape ``(NumLags, NumValues)``.
+    LagDistance : numpy.ndarray
+        Distance values for each lag center.
+
+    Notes
+    -----
+    Uses a spatial indexing approach: for each point, candidate
+    neighbors are filtered first by bounding box, then by distance
+    range, and finally by the ellipsoid tunnel test (``_IsInTunnel``).
+    """
+    _verify_dict_keys(PointSet, ['X', 'Y', 'Z'], 'PointSet')
     PX = PointSet['X']
     PY = PointSet['Y']
     PZ = PointSet['Z']
@@ -236,6 +377,40 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     return Result, LagDistance
 
 def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params):
+    """Compute variogram from grid-aligned point data using lag index lookups.
+
+    Unlike ``PointSetScanContStyle``, this function uses precomputed
+    lag area indices (via ``_CalcLagsAreas``) to match point pairs
+    by exact grid-cell offsets rather than continuous distance.
+
+    Parameters
+    ----------
+    VariogramSearchTemplate : TVVariogramSearchTemplate
+        Template defining search geometry and lag configuration.
+    PointSetXYZ : tuple of numpy.ndarray
+        Tuple ``(X, Y, Z)`` of 1D coordinate arrays.
+    Function : callable or None
+        Callback accumulating pairwise statistics. See
+        ``PointSetScanContStyle`` for signature details.
+    Params : dict or None
+        User-supplied parameters forwarded to Function.
+
+    Returns
+    -------
+    Result : numpy.ndarray
+        Accumulated result array of shape ``(NumLags, NumValues)``.
+    LagDistance : numpy.ndarray
+        Distance values for each lag center.
+    """
+    if isinstance(PointSetXYZ, dict):
+        _verify_dict_keys(PointSetXYZ, [0, 1, 2], 'PointSetXYZ')
+    elif not hasattr(PointSetXYZ, '__len__') or len(PointSetXYZ) < 3:
+        # PointSetXYZ is typically a tuple (X, Y, Z) of coordinate arrays
+        raise KeyError(
+            f"PointSetXYZ must have at least 3 elements (X, Y, Z), "
+            f"got {type(PointSetXYZ).__name__}"
+            f"{' with length ' + str(len(PointSetXYZ)) if hasattr(PointSetXYZ, '__len__') else ''}"
+        )
     LI,  LJ,  LK,  LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
     IMin, IMax = LI.min(), LI.max()
     JMin, JMax = LJ.min(), LJ.max()
@@ -280,6 +455,33 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
     return Result, LagDistance
 
 def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
+    """Compute variogram from a dense 3D grid using precomputed lag offsets.
+
+    Iterates over precomputed lag offset pairs ``(DI, DJ, DK)`` and
+    computes the intersection of the shifted mask to identify valid
+    cell pairs.
+
+    Parameters
+    ----------
+    VariogramSearchTemplate : TVVariogramSearchTemplate
+        Template defining search geometry and lag configuration.
+    Mask : numpy.ndarray
+        3D boolean or integer array where non-zero indicates an
+        informed (valid) cell.
+    Function : callable or None
+        Callback accumulating pairwise statistics. Receives two tuples
+        of (I, J, K) index arrays for matched cells.
+    Params : dict or None
+        User-supplied parameters forwarded to Function.
+
+    Returns
+    -------
+    Result : numpy.ndarray
+        Accumulated result array of shape ``(NumLags, NumValues)``.
+    LagDistance : numpy.ndarray
+        Distance values for each lag center.
+    """
+    _verify_shape(Mask, 3, 'Mask')
     NI, NJ, NK = Mask.shape
 
     LI, LJ, LK, LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
@@ -323,6 +525,7 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
     return Result, LagDistance
 
 def CalcVariogramFunction(Point1, Point2, Result, Params):
+    _verify_dict_keys(Params, ['HardData'], 'Params')
     Values = Params['HardData']
     NumValues = len(Values)
     if Result is None:
@@ -342,6 +545,7 @@ def CalcVariogramFunction(Point1, Point2, Result, Params):
     return Result
 
 def CalcCovarianceFunction(Point1, Point2, Result, Params):
+    _verify_dict_keys(Params, ['HardData', 'SoftData'], 'Params')
     Values = Params['HardData']
     SoftData = Params['SoftData']
     NumValues = len(Values)
@@ -364,6 +568,7 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
     return Result
 
 def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
+    _verify_dict_keys(Params, ['HardData', 'SoftData'], 'Params')
     Values = Params['HardData']
     SoftData = Params['SoftData']
     NumValues = len(Values)

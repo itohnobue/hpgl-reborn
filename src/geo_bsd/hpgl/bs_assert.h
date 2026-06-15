@@ -15,8 +15,18 @@
         // x86: inline asm is supported
         #define BREAK_HERE __asm { int 3 }
     #endif
+#elif defined(__aarch64__) || defined(__arm64__)
+    // ARM64 / Apple Silicon: use brk instruction
+    #define BREAK_HERE __asm__ volatile("brk #0")
+#elif defined(__arm__)
+    // ARM32: use bkpt instruction or builtin trap
+    #define BREAK_HERE __builtin_trap()
+#elif defined(__x86_64__) || defined(__i386__) || defined(__i686__)
+    // x86/x86_64 Linux/macOS: use int3
+    #define BREAK_HERE __asm__ __volatile__ ("int $0x3")
 #else
-#define BREAK_HERE __asm__ __volatile__ ("int $0x3")
+    // Unknown architecture: fallback to builtin trap
+    #define BREAK_HERE __builtin_trap()
 #endif
 
 #include <sstream>

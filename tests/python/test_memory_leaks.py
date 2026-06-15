@@ -19,6 +19,7 @@ import gc
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
@@ -28,13 +29,11 @@ try:
     )
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.cdf import CdfData
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
-    print(f"Warning: Could not import HPGL: {e}")
+except (ImportError, OSError) as e:
+    pass  # HPGL_AVAILABLE from conftest handles availability
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.slow
 class TestMemoryLeaks:
     """Memory leak detection tests"""

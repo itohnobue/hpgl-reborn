@@ -13,7 +13,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 - **Kriging**: Simple Kriging (SK), Ordinary Kriging (OK), LVM Kriging (Locally Varying Mean)
 - **Indicator Kriging**: Indicator Kriging (IK), Median Indicator Kriging
 - **Cokriging**: Simple Cokriging Mark I (Markov Model 1) and Mark II
-- **Simulation**: Sequential Gaussian Simulation (SGS), Sequential Indicator Simulation (SIS)
+- **Simulation**: Sequential Gaussian Simulation (SGS), Sequential Indicator Simulation (SIS), General Truncated Gaussian Simulation (GTSIM)
 - **Variogram Analysis**: Experimental variogram calculation, variogram search templates
 - **Utilities**: CDF computation, property I/O (INC/GSLIB formats), mean calculation, Vertical Proportion Curves (VPC)
 
@@ -28,7 +28,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 ### Common
 
 - **[uv](https://docs.astral.sh/uv/)**: Package and environment manager (installs Python and dependencies automatically)
-- **Python**: 3.9 or higher (tested up to 3.14) — installed by uv
+- **Python**: 3.9 or higher (tested up to 3.13) — installed by uv
 - **NumPy**: 2.0 or higher — installed by uv
 - **SciPy**: (optional, for `routines` module) — installed by uv
 
@@ -126,6 +126,63 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
    sudo cmake --install .
    ```
 
+### macOS Build
+
+HPGL can be built on macOS using Homebrew-installed dependencies and the Clang compiler included with Xcode Command Line Tools.
+
+1. **Install system packages:**
+
+   ```bash
+   # Install Xcode Command Line Tools (includes Apple Clang)
+   xcode-select --install
+
+   # Install dependencies via Homebrew
+   brew install cmake ninja openblas libomp
+   ```
+
+   `llvm` (for OpenMP support) is also bundled with Apple Clang via `libomp`.
+
+2. **Set up the Python environment:**
+
+   ```bash
+   uv sync --extra test
+   ```
+
+3. **Build with CMake (Ninja generator):**
+
+   ```bash
+   mkdir -p build && cd build
+   cmake .. -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DHPGL_BUILD_PYTHON=ON \
+            -DHPGL_USE_OPENMP=ON \
+            -DHPGL_USE_MKL=OFF
+   cmake --build . --parallel $(sysctl -n hw.logicalcpu)
+   ```
+
+   You may also use the `macos-clang` CMake preset:
+
+   ```bash
+   cmake --preset macos-clang
+   cmake --build .
+   ```
+
+4. **Verify the build:**
+
+   ```bash
+   uv run python -c "import sys; sys.path.insert(0, 'src'); from geo_bsd import hpgl_wrap; print('Build OK')"
+   ```
+
+#### Known Issues on macOS
+
+- **Apple Clang and the TNT library**: The bundled TNT (Template Numerical Toolkit) library uses C++98-era template patterns that may produce deprecation warnings or errors with newer Apple Clang versions. If you encounter compilation errors in `src/tnt_126/`, try:
+  - Using GCC installed via Homebrew (`brew install gcc`, then set `-DCMAKE_CXX_COMPILER=g++-14`)
+  - Adding `-Wno-deprecated-copy -Wno-c++11-narrowing` to `CMAKE_CXX_FLAGS`
+
+- **OpenMP threading**: On Apple Silicon (arm64), OpenMP requires `libomp` from Homebrew. Ensure `/opt/homebrew/opt/libomp` is in your library path. CMake should detect this automatically.
+
+- **Alternative approaches**: If native macOS build proves difficult, consider building via Docker (see the Linux instructions above in a container) or using a Linux VM (UTM, Parallels, or VMware Fusion).
+
 ### CMake Options
 
 | Option | Default | Description |
@@ -156,6 +213,8 @@ import geo_bsd
 
 ## Quick Start
 
+This self-contained example generates synthetic data with NumPy and runs Ordinary Kriging — no external data files required:
+
 ```python
 import sys
 sys.path.insert(0, "path/to/hpgl/src")
@@ -163,12 +222,22 @@ sys.path.insert(0, "path/to/hpgl/src")
 import numpy as np
 import geo_bsd
 
-# Create a 3D grid (100 x 100 x 50 cells)
-grid = geo_bsd.SugarboxGrid(100, 100, 50)
+# Generate synthetic data: a 3D grid with a simple trend + noise
+nx, ny, nz = 50, 50, 20
+np.random.seed(42)
+data = np.zeros((nx, ny, nz), dtype=np.float32)
+for i in range(nx):
+    for j in range(ny):
+        for k in range(nz):
+            # Trend surface: value grows with i and j
+            data[i, j, k] = float(i + j) / 10.0 + np.random.normal(0, 0.5)
 
-# Load property data from INC file
-# NOTE: "data.inc" is a placeholder — replace with your actual data file path
-prop = geo_bsd.load_cont_property("data.inc", -99, (100, 100, 50))
+# Mask: mark all cells as "informed" (1 = valid)
+mask = np.ones((nx, ny, nz), dtype=np.uint8)
+
+# Wrap data into a contiguous property
+prop = geo_bsd.ContProperty(data, mask)
+grid = geo_bsd.SugarboxGrid(nx, ny, nz)
 
 # Define a covariance model (spherical variogram)
 cov = geo_bsd.CovarianceModel(
@@ -197,9 +266,8 @@ sim = geo_bsd.sgs_simulation(
     seed=42
 )
 
-# Save results
-geo_bsd.write_property(result, "kriging_result.inc", "KRIGING", -99)
-geo_bsd.write_property(sim, "simulation_result.inc", "SGS_REAL1", -99)
+print(f"Kriging result shape: {result.data.shape}, mean: {result.data.mean():.3f}")
+print(f"SGS result shape:    {sim.data.shape}, mean: {sim.data.mean():.3f}")
 ```
 
 ## API Overview
@@ -347,6 +415,92 @@ Original documentation from earlier HPGL versions, including PDF manuals (Englis
 - **Algorithm bug fixes**: Fixed 7 mathematical bugs — covariance C(0) missing nugget contribution, OK kriging variance sign error, correlogram weight adjustment inverted, Cokriging Mark II cross-covariance ratio inverted, SGS normalization coefficient, and spurious /2 in covariance and indicator correlation functions
 - **Test suite**: 615 automated tests with pytest
 - **Legacy cleanup**: Removed unused libraries, old Boost.Python bindings, obsolete build systems (SCons, old Makefiles), Debian packaging, old VS 2008 project files, and a bundled Win32 installer, etc
+
+## Troubleshooting
+
+### General Diagnostics
+
+Before diving into specific errors, verify your environment:
+
+```bash
+# Check Python and NumPy versions
+uv run python -c "import sys, numpy; print(f'Python {sys.version}'); print(f'NumPy {numpy.__version__}')"
+
+# Check that the native library loads
+uv run python -c "import sys; sys.path.insert(0,'src'); from geo_bsd import hpgl_wrap; print('DLL loaded OK')"
+```
+
+### Build Failures
+
+**Symptom:** `cmake` or `cmake --build` fails with linker errors.
+
+**Cause:** Missing BLAS/LAPACK libraries (OpenBLAS or Intel MKL).
+
+**Fix:**
+1. Verify OpenBLAS is installed: `pkg-config --libs openblas` (Linux/macOS) or check `%MKLROOT%` (Windows)
+2. On Linux: `sudo apt-get install -y libopenblas-dev liblapack-dev`
+3. On macOS: `brew install openblas`
+4. If using MKL: set `-DHPGL_USE_MKL=ON` and ensure `MKL_ROOT` points to the correct path
+
+**Symptom:** `cmake` fails with `CMAKE_CXX_COMPILER not found`.
+
+**Fix:** Install a C++17-capable compiler. On Linux: `sudo apt-get install build-essential`. On macOS: `xcode-select --install`. On Windows: install Visual Studio 2022 Build Tools.
+
+**Symptom:** `fatal error: 'Python.h' file not found` during CMake build.
+
+**Fix:** Install Python development headers. On Ubuntu/Debian: `sudo apt-get install python3-dev`. On Fedora: `sudo dnf install python3-devel`.
+
+### DLL / Shared Library Not Found
+
+**Symptom:** `ImportError: DLL load failed` or `ImportError: cannot open shared object file`.
+
+**Cause:** The compiled native library (`hpgl.dll` on Windows, `hpgl.so` on Linux/macOS) is not in the Python path or is missing required system libraries.
+
+**Fix:**
+1. First re-run the build to ensure the library exists: `build.bat` (Windows) or `cmake --build .` (Linux/macOS)
+2. Copy the built library to the Python package directory: `src/geo_bsd/`
+3. Verify library dependencies are resolved:
+   - **Linux:** `ldd src/geo_bsd/hpgl.so | grep "not found"`
+   - **macOS:** `otool -L src/geo_bsd/hpgl.so`
+   - **Windows:** Use Dependency Walker or `dumpbin /dependents src\geo_bsd\hpgl.dll`
+4. If OpenBLAS is not found, add it to `LD_LIBRARY_PATH` (Linux) or reinstall it
+
+### macOS-Specific Issues
+
+**Symptom:** `error: no template named 'auto_ptr' in namespace 'std'`.
+
+**Cause:** The TNT library uses C++98 features removed in C++17. Apple Clang is strict about this.
+
+**Fix:** Add `-DCMAKE_CXX_FLAGS="-Wno-deprecated-copy"` to your cmake invocation, or use GCC: `brew install gcc && cmake .. -DCMAKE_CXX_COMPILER=g++-14`.
+
+**Symptom:** `clang: error: unsupported option '-fopenmp'`.
+
+**Cause:** Apple Clang does not support `-fopenmp`.
+
+**Fix:** Install `libomp` via Homebrew: `brew install libomp`. CMake should detect it automatically.
+
+**Symptom:** Build succeeds but `import geo_bsd` crashes with `Symbol not found: _omp_get_num_threads`.
+
+**Cause:** OpenMP runtime not linked.
+
+**Fix:** `brew install libomp` and rebuild. Ensure `/opt/homebrew/opt/libomp/lib` is in your library path.
+
+### NumPy Version Mismatches
+
+**Symptom:** `RuntimeError: module compiled against API version 0xf but this version of numpy is 0x10`.
+
+**Cause:** The native library was compiled against a different NumPy version than what is installed.
+
+**Fix:**
+1. Rebuild the native library from clean state:
+   ```bash
+   rm -rf build/
+   mkdir build && cd build
+   cmake .. -DCMAKE_BUILD_TYPE=Release -DHPGL_BUILD_PYTHON=ON
+   cmake --build . --parallel $(nproc)
+   ```
+2. Ensure the NumPy version in your environment matches what CMake detected: `uv run python -c "import numpy; print(numpy.__version__)"`
+3. If you upgraded NumPy after building, always rebuild the native library
 
 ## License
 

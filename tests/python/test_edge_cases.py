@@ -15,6 +15,7 @@ import pytest
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
@@ -26,17 +27,15 @@ try:
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
     from geo_bsd.cdf import CdfData, calc_cdf
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
-    print(f"Warning: Could not import HPGL: {e}")
+except (ImportError, OSError) as e:
+    pass  # HPGL_AVAILABLE from conftest handles availability
 
 
 # =============================================================================
 # 1. GRID EDGE CASES
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestGridEdgeCases:
     """Test edge cases related to grid configurations"""
 
@@ -219,7 +218,7 @@ class TestGridEdgeCases:
 # 2. DATA EDGE CASES
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestDataEdgeCases:
     """Test edge cases related to data values and sparsity"""
 
@@ -601,7 +600,7 @@ class TestDataEdgeCases:
 # 3. PARAMETER VALIDATION
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestParameterValidation:
     """Test parameter validation and edge cases"""
 
@@ -889,7 +888,7 @@ class TestParameterValidation:
 # 4. PROPERTY EDGE CASES
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestPropertyEdgeCases:
     """Test edge cases related to property configurations"""
 
@@ -1020,7 +1019,7 @@ class TestPropertyEdgeCases:
 # 5. SIMULATION EDGE CASES
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSimulationEdgeCases:
     """Test edge cases for SGS and SIS simulations"""
 
@@ -1339,7 +1338,7 @@ class TestSimulationEdgeCases:
 # 6. CDF EDGE CASES
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCDFEdgeCases:
     """Test edge cases for cumulative distribution functions
 
@@ -1499,7 +1498,7 @@ class TestCDFEdgeCases:
 # UTILITY TESTS
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestUtilityEdgeCases:
     """Test edge cases for utility functions"""
 
@@ -1564,7 +1563,7 @@ class TestUtilityEdgeCases:
         assert prop.data[0] == 1.0
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestProductionFixes:
     """Tests for production readiness fixes applied to the codebase."""
 
@@ -1657,7 +1656,7 @@ class TestProductionFixes:
 # Production Fix Tests: Error Handling & Indicator Kriging Correctness
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestErrorHandling:
     """Tests for the _check_hpgl_error error handling (CRITICAL fix)."""
 
@@ -1708,7 +1707,7 @@ class TestErrorHandling:
         assert not np.any(np.isnan(weights)), "Weights should not contain NaN"
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestIndicatorKrigingFix:
     """Tests for the most_probable_category PMF fix (HIGH priority)."""
 

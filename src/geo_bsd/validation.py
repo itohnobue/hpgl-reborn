@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import warnings
 from functools import wraps
 
 import numpy
@@ -379,14 +380,10 @@ class ParameterValidator:
             )
 
         if max_neighbors > ValidationConstants.MAX_NEIGHBORS:
-            raise ValidationWarning(
+            warnings.warn(
                 f"Max neighbors {max_neighbors} exceeds recommended maximum {ValidationConstants.MAX_NEIGHBORS}. "
                 "Performance may be degraded.",
-                "max_neighbors"
-            )
-            validation_logger.warning(
-                f"Max neighbors {max_neighbors} exceeds recommended maximum "
-                f"{ValidationConstants.MAX_NEIGHBORS}"
+                stacklevel=2
             )
 
     @staticmethod

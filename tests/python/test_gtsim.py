@@ -4,14 +4,14 @@ import sys
 import os
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from geo_bsd.geo import ContProperty, SugarboxGrid
     from geo_bsd.gtsim import tk_calculation, pseudo_gaussian_transform
-    HPGL_AVAILABLE = True
-except ImportError:
-    HPGL_AVAILABLE = False
+except (ImportError, OSError):
+    pass  # HPGL_AVAILABLE from conftest handles availability
 
 
 def _make_cont_prop(size, values=None, mask=None):
@@ -27,7 +27,7 @@ def _make_cont_prop(size, values=None, mask=None):
     return ContProperty(values, mask)
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestTkCalculation:
     def test_basic_calculation(self):
         prop = _make_cont_prop(10, values=[0.5] * 10)
@@ -94,7 +94,7 @@ class TestTkCalculation:
         assert result is prop
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestPseudoGaussianTransform:
     def test_binary_zeros_transformed(self):
         np.random.seed(42)
@@ -149,7 +149,7 @@ class TestPseudoGaussianTransform:
             assert 0.0 <= v < 0.1
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestGtsimNoFileWrites:
     def test_no_debug_files_in_cwd(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -175,7 +175,7 @@ try:
     from geo_bsd.gtsim import gtsim_2ind
     from geo_bsd.geo import SugarboxGrid, ContProperty, CovarianceModel, covariance
     _GTSIM_2IND_AVAILABLE = True
-except (ImportError, SyntaxError, IndentationError, RuntimeError):
+except (ImportError, SyntaxError, IndentationError, RuntimeError, OSError):
     _GTSIM_2IND_AVAILABLE = False
 
 

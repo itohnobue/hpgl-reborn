@@ -200,6 +200,46 @@ public:
 	
 };
 
+/// Deduplicated node-processing loop shared by markI and markII.
+/// Previously copy-pasted identically in both functions (only the cov model
+/// type differed — the template parameter absorbs the difference).
+template<typename data_t, typename primary_cov_model_t, typename cross_cov_model_t, typename n_lookup_t>
+static void process_node_loop(
+		const data_t & input_prop,
+		const data_t & secondary_data,
+		mean_t primary_mean,
+		mean_t secondary_mean,
+		double secondary_variance,
+		const primary_cov_model_t & primary_cov,
+		const cross_cov_model_t & cross_cov,
+		const n_lookup_t & n_lookup,
+		data_t & output_prop,
+		progress_reporter_t & report)
+{
+	int data_size = input_prop.size();
+	for (node_index_t i = 0; i < data_size; ++i)
+	{
+		cont_value_t result = -500;
+		if (input_prop.is_informed(i))
+		{
+			result = input_prop[i];
+		}
+		else
+		{
+			cont_value_t secondary_value = secondary_data.is_informed(i)
+				? secondary_data[i] : secondary_mean;
+			if (!calc_value(i, input_prop, secondary_value, primary_mean,
+					secondary_mean, secondary_variance, primary_cov,
+					cross_cov, n_lookup, result))
+			{
+				result = primary_mean + secondary_value - secondary_mean;
+			}
+		}
+		output_prop.set_at(i, result);
+		report.next_lap();
+	}
+}
+
 void simple_cokriging_markI(
 		const sugarbox_grid_t & grid,
 		const cont_property_array_t & input_prop, 
@@ -239,28 +279,9 @@ void simple_cokriging_markI(
 
 	report.start(data_size);
 
-	// for each node
-	for (node_index_t i = 0; i < data_size; ++i)
-	{
-	// 		calc value
-		cont_value_t result = -500;		
-		if (input_prop.is_informed(i))
-		{			
-			result = input_prop[i];
-		}
-		else
-		{
-			cont_value_t secondary_value = secondary_data.is_informed(i) ? secondary_data[i] : secondary_mean;
-			if (!calc_value(i, input_prop, secondary_value, primary_mean, secondary_mean,
-				    secondary_variance, cov, cross_cov, n_lookup, result))
-			{
-				result = primary_mean + secondary_value - secondary_mean;				
-			}			
-		}		
-	// 		set value at node				
-		output_prop.set_at(i, result);
-		report.next_lap();
-	}
+	process_node_loop(input_prop, secondary_data, primary_mean,
+			secondary_mean, secondary_variance, cov, cross_cov,
+			n_lookup, output_prop, report);
 }
 
 void simple_cokriging_markII(
@@ -306,28 +327,9 @@ void simple_cokriging_markII(
 
 	report.start(data_size);
 
-	// for each node
-	for (node_index_t i = 0; i < data_size; ++i)
-	{
-	// 		calc value
-		cont_value_t result = -500;		
-		if (input_prop.is_informed(i))
-		{			
-			result = input_prop[i];
-		}
-		else
-		{
-			cont_value_t secondary_value = secondary_data.is_informed(i) ? secondary_data[i] : secondary_mean;
-			if (!calc_value(i, input_prop, secondary_value, primary_mean, secondary_mean,
-				    secondary_variance, primary_cov, cross_cov, n_lookup, result))
-			{
-				result = primary_mean + secondary_value - secondary_mean;			
-			}			
-		}		
-	// 		set value at node				
-		output_prop.set_at(i, result);
-		report.next_lap();
-	}
+	process_node_loop(input_prop, secondary_data, primary_mean,
+			secondary_mean, secondary_variance, primary_cov, cross_cov,
+			n_lookup, output_prop, report);
 }
 
 }

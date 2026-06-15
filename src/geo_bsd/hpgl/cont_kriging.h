@@ -5,7 +5,9 @@
 #include "covariance_field.h"
 #include "progress_reporter.h"
 #include "kriging_stats.h"
+#ifdef _OPENMP
 #include <omp.h>
+#endif
 #include "typedefs.h"
 #include "select.h"
 #include "precalculated_covariance.h"
@@ -58,6 +60,8 @@ namespace hpgl
 		stats.m_mean = 0;				
 				
 		typedef indexed_neighbour_lookup_t<grid_t, covariances_t> nl_t;
+		typedef typename nl_t::coord_t coord_t;
+		typedef typename data_t::value_type value_t;
 		nl_t neighbour_lookup(&grid, &cov, params);
 
 		for (node_index_t node = 0; node < input_property.size(); ++node)
@@ -76,6 +80,9 @@ namespace hpgl
 		static const int LP_BATCH_SIZE = 1000;
 #pragma omp parallel
 {
+		// Per-thread workspace: pre-allocates vectors once, reused across
+		// all node iterations via resize() (allocation-free after first use).
+		kriging_ws_t<value_t, coord_t> ws;
 		int local_lap_count = 0;
 		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_processed) reduction(+: sum) 
 		for(node_index_t idx = 0; idx < idx_end; ++idx)	
@@ -83,7 +90,7 @@ namespace hpgl
 			if (!input_property.is_informed(idx))
 			{				
 				cont_value_t value;
-				switch(kriging_interpolation(input_property, is_informed_predicate_t<data_t>(input_property), idx, cov, means, neighbour_lookup, wc, value))
+				switch(kriging_interpolation_ws(input_property, is_informed_predicate_t<data_t>(input_property), idx, cov, means, neighbour_lookup, wc, value, ws))
 				{
 				case ki_result_t::KI_SUCCESS:
 					output_property.set_at(idx, value);

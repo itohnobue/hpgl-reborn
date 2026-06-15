@@ -3,14 +3,14 @@ import pytest
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from geo_bsd.geo import ContProperty, SugarboxGrid
     from geo_bsd.cdf import CdfData, calc_cdf
-    HPGL_AVAILABLE = True
-except ImportError:
-    HPGL_AVAILABLE = False
+except (ImportError, OSError):
+    pass  # HPGL_AVAILABLE from conftest handles availability
 
 
 def _make_prop(values, mask=None, grid_shape=None):
@@ -26,7 +26,7 @@ def _make_prop(values, mask=None, grid_shape=None):
     return prop
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCalcCdfDuplicateValues:
     def test_all_duplicate_values(self):
         prop = _make_prop([5.0] * 8, grid_shape=(2, 2, 2))
@@ -52,7 +52,7 @@ class TestCalcCdfDuplicateValues:
         np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCalcCdfSingleValue:
     def test_single_value_one_cell(self):
         prop = _make_prop([42.0], grid_shape=(1, 1, 1))
@@ -69,7 +69,7 @@ class TestCalcCdfSingleValue:
         assert cdf.probs[0] == 1.0
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCalcCdfAllSame:
     def test_all_same_positive(self):
         prop = _make_prop([100.0] * 12, grid_shape=(3, 2, 2))
@@ -90,7 +90,7 @@ class TestCalcCdfAllSame:
         assert abs(cdf.values[0] - 3.14) < 1e-5
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCalcCdfNegativeValues:
     def test_negative_values(self):
         prop = _make_prop([-5.0, -3.0, -1.0, 1.0, 3.0, 5.0, -2.0, 2.0], grid_shape=(2, 2, 2))
@@ -112,7 +112,7 @@ class TestCalcCdfNegativeValues:
         assert np.all(np.diff(cdf.values) >= 0)
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCalcCdfEdgeCases:
     def test_all_masked_raises(self):
         prop = _make_prop([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
@@ -167,7 +167,7 @@ class TestCalcCdfEdgeCases:
         assert np.all(np.diff(cdf.values) >= 0)
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCdfDataCreation:
     def test_basic_creation(self):
         cdf = CdfData([1.0, 2.0, 3.0], [0.33, 0.66, 1.0])

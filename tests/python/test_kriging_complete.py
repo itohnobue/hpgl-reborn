@@ -1,6 +1,9 @@
 """
 Comprehensive tests for ALL kriging algorithms in HPGL.
 
+Note: test_kriging.py (deprecated) was removed in v1.5.0 cleanup (D96).
+Its 4 tests were fully covered here with better fixtures and parameterized variants.
+
 Tests cover:
 1. ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model)
 2. simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None)
@@ -16,6 +19,7 @@ import pytest
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
@@ -27,10 +31,8 @@ try:
         ContProperty, IndProperty, CovarianceModel, covariance,
         SugarboxGrid, calc_mean
     )
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
-    print(f"Warning: Could not import HPGL: {e}")
+except (ImportError, OSError) as e:
+    pass  # HPGL_AVAILABLE from conftest handles availability
 
 
 # =============================================================================
@@ -169,7 +171,7 @@ def neighbor_points():
 # Ordinary Kriging Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestOrdinaryKriging:
     """Comprehensive tests for Ordinary Kriging"""
 
@@ -322,7 +324,7 @@ class TestOrdinaryKriging:
 # Simple Kriging Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSimpleKriging:
     """Comprehensive tests for Simple Kriging"""
 
@@ -463,7 +465,7 @@ class TestSimpleKriging:
 # LVM Kriging Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestLVMKriging:
     """Comprehensive tests for Locally Varying Mean (LVM) Kriging"""
 
@@ -584,7 +586,7 @@ class TestLVMKriging:
 # Indicator Kriging Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestIndicatorKriging:
     """Comprehensive tests for Indicator Kriging"""
 
@@ -772,7 +774,7 @@ class TestIndicatorKriging:
 # Median Indicator Kriging Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestMedianIK:
     """Comprehensive tests for Median Indicator Kriging"""
 
@@ -922,7 +924,7 @@ class TestMedianIK:
 # Simple Cokriging Mark I Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSimpleCokrigingMarkI:
     """Comprehensive tests for Simple Cokriging Mark I"""
 
@@ -1098,7 +1100,7 @@ class TestSimpleCokrigingMarkI:
 # Simple Cokriging Mark II Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSimpleCokrigingMarkII:
     """Comprehensive tests for Simple Cokriging Mark II"""
 
@@ -1355,7 +1357,7 @@ class TestSimpleCokrigingMarkII:
 # Simple Kriging Weights Tests
 # =============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSimpleKrigingWeights:
     """Comprehensive tests for Simple Kriging Weights calculation"""
 

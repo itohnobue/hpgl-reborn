@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import sys
 import os
+from builtins import UserWarning
 import tempfile
 from pathlib import Path
 
@@ -279,7 +280,7 @@ class TestParameterValidator:
     def test_max_neighbors_exceeds_limit_raises_warning(self):
         """max_neighbors exceeding recommended limit raises ValidationWarning."""
         too_big = ValidationConstants.MAX_NEIGHBORS + 1
-        with pytest.raises(ValidationWarning):
+        with pytest.warns(UserWarning):
             ParameterValidator.validate_max_neighbors(too_big)
 
     # ---- Min Neighbors ----

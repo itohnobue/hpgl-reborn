@@ -37,7 +37,9 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: BSD License",
-    "Operating System :: OS Independent",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -92,7 +94,7 @@ Homepage = "http://hpgl.github.io/hpgl/"
 Documentation = "http://hpgl.github.io/hpgl/"
 Repository = "https://github.com/hpgl/hpgl"
 Issues = "https://github.com/hpgl/hpgl/issues"
-Changelog = "https://github.com/hpgl/hpgl/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/hpgl/hpgl"
 
 [tool.uv]
 # Don't build/install the project itself (C++ is built separately via build.bat/CMake)
@@ -167,9 +169,20 @@ before-all = "yum install -y openblas-devel || apt-get update && apt-get install
 # Build for both x86_64 and arm64 (Apple Silicon)
 archs = ["x86_64", "arm64"]
 environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
+before-all = [
+    "brew install openblas libomp cmake",
+    'export LDFLAGS="-L$(brew --prefix openblas)/lib -L$(brew --prefix libomp)/lib"',
+    'export CPPFLAGS="-I$(brew --prefix openblas)/include -I$(brew --prefix libomp)/include"',
+]
 
 [tool.cibuildwheel.windows]
 # Build for x64 only
+# NOTE: Windows CI requires BLAS/LAPACK pre-installed (MKL or alternative).
+# cibuildwheel itself does not install MKL. On GitHub Actions, set up MKL via:
+#   - choco install intel-mkl (or)
+#   - OneAPI installer with MKL component
+# Without a BLAS library, CMake configuration will fail during wheel build.
+# If using a self-hosted runner, ensure MKL_ROOT is set before cibuildwheel runs.
 archs = ["AMD64"]
 
 [tool.pytest.ini_options]

@@ -14,6 +14,7 @@ import pytest
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 TEST_DATA_DIR = Path(__file__).parent / "test_data"
@@ -29,9 +30,14 @@ try:
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
     from geo_bsd.cdf import CdfData, calc_cdf
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
+except (ImportError, OSError) as e:
+    # Dummy covariance for module-level parametrize decorators
+    # Tests are skipped by @pytest.mark.hpgl when HPGL is unavailable
+    class _DummyCovarianceTypes:
+        spherical = 0
+        exponential = 1
+        gaussian = 2
+    covariance = _DummyCovarianceTypes()
 
 # Grid dimensions used by the "big" test dataset (166x141x20)
 BIG_GRID = (166, 141, 20)
@@ -56,7 +62,7 @@ def _load_ind(name, indicators):
 # Tests Using Restored Data Files (from git history)
 # ============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
@@ -94,7 +100,7 @@ def test_big_ok_kriging_legacy():
     assert np.sum(result.mask) > np.sum(prop_cont.mask)
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
@@ -130,7 +136,7 @@ def test_big_sk_kriging_legacy():
     assert not np.any(np.isnan(result.data.astype('float64')))
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
@@ -173,7 +179,7 @@ def test_big_lvm_kriging_legacy():
     assert not np.any(np.isnan(result.data.astype('float64')))
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_160_141_20.INC"),
@@ -220,7 +226,7 @@ def test_big_ik_legacy():
     assert result.data.size == BIG_SIZE
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 def test_big_multi_ik_legacy():
     """
@@ -283,7 +289,7 @@ def test_big_multi_ik_legacy():
     assert result.indicator_count == 4
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
@@ -324,7 +330,7 @@ def test_big_sgs_sk_legacy():
     assert not np.any(np.isnan(result.data.astype('float64')))
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_160_141_20.INC"),
@@ -373,7 +379,7 @@ def test_big_sis_legacy():
     assert result.indicator_count == 2
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
@@ -426,7 +432,7 @@ def test_simple_cokriging_mark1_legacy():
     assert not np.any(np.isnan(result.data.astype('float64')))
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
@@ -483,7 +489,7 @@ def test_simple_cokriging_mark2_legacy():
     assert not np.any(np.isnan(result.data.astype('float64')))
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("NEW_TEST_PROP_01.INC"),
@@ -515,7 +521,7 @@ def test_vpc_small_legacy():
     assert len(vpcs[1]) == grid_dims[2]
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 def test_sis_on_empty_data_legacy():
     """
@@ -568,7 +574,7 @@ def test_sis_on_empty_data_legacy():
     assert result.indicator_count == 2
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 def test_sgs_on_empty_data_legacy():
     """
@@ -620,7 +626,7 @@ def test_sgs_on_empty_data_legacy():
 # Tests Implemented with Synthetic Data
 # ============================================================================
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 class TestAnisotropicCovariance:
     """Tests for anisotropic covariance models - migrated from test_big_aniz.py"""
@@ -666,7 +672,7 @@ class TestAnisotropicCovariance:
         assert not np.any(np.isnan(result.data.astype('float64')))
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 class TestDifferentCovarianceTypes:
     """Tests for different covariance types - migrated from test_compare.py"""
@@ -745,7 +751,7 @@ class TestDifferentCovarianceTypes:
         assert not np.any(np.isnan(result.data.astype('float64')))
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 class TestMaskedSimulation:
     """Tests for masked simulation - migrated from masked_sgs.py"""
@@ -799,7 +805,7 @@ class TestMaskedSimulation:
         assert result.data.shape == prop.data.shape
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 class TestMultiCategoryIndicator:
     """Tests for multi-category indicator simulation - migrated from test_compare.py"""
@@ -877,7 +883,7 @@ class TestMultiCategoryIndicator:
         assert result.indicator_count == 4
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 class TestSGSReproducibility:
     """Tests for SGS reproducibility across different parameters - migrated from test_sgs.py"""
@@ -980,7 +986,7 @@ class TestSGSReproducibility:
         assert not np.array_equal(result1.data, result2.data)
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 class TestEdgeCases:
     """Tests for edge cases - migrated from test_ik_on_empty.py and test_sgs_on_empty.py"""
@@ -1061,7 +1067,7 @@ class TestEdgeCases:
         assert not np.any(np.isnan(result.data.astype('float64')))
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.legacy
 class TestSGSSeedVariations:
     """

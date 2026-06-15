@@ -8,27 +8,32 @@ namespace hpgl
 		void read_prop_name(FILE * file, std::string & prop_name)
 		{
 			char line[1024];
-			int result = -1;
 start:
-			line[0] = 0;
-			result = fscanf(file, "%1023[^\n]\n", line);
-			size_t line_size = strlen(line);	
-			if (result == 0 || line_size == 0)
+			// Use fgets instead of fscanf("%[^\n]") — fscanf returns 0 on blank
+			// lines without consuming '\n', causing an infinite goto-start loop.
+			// fgets handles blank lines correctly: reads the '\n' and returns a
+			// non-null pointer with line_size=0 after stripping.
+			if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
 			{
-				if (feof(file))
-				{
-					prop_name = "";
-					throw hpgl_exception("read_prop_name", "Property name not found.");
-				}
-				else
-					goto start;
+				prop_name = "";
+				throw hpgl_exception("read_prop_name", "Property name not found.");
 			}
+			size_t line_size = strlen(line);
+			// Strip trailing newline(s)
+			if (line_size > 0 && line[line_size - 1] == '\n')
+			{
+				line[--line_size] = '\0';
+				if (line_size > 0 && line[line_size - 1] == '\r')
+					line[--line_size] = '\0';
+			}
+			if (line_size == 0)
+				goto start;
 			if (!isalpha(static_cast<unsigned char>(line[0])))
 			{
-				//skipping line
-				while (line_size == 1023)
+				// Skiping line — consume any continuation of a long non-alpha line
+				while (line_size == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n')
 				{
-					if (fscanf(file, "%1023[^\n]\n", line) == 0)
+					if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
 						break;
 					line_size = strlen(line);
 				}
@@ -36,13 +41,16 @@ start:
 			}
 			else
 			{
-				// finally line starting with letter
+				// Finally line starting with letter
 				prop_name = line;
-				while (line_size == 1023)
+				// Handle continuation for excessively long property names
+				while (line_size == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n')
 				{
-					if (fscanf(file, "%1023[^\n]\n", line) == 0)
+					if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
 						break;
 					line_size = strlen(line);
+					if (line_size > 0 && line[line_size - 1] == '\n')
+						line[--line_size] = '\0';
 					prop_name += line;
 				}
 			}

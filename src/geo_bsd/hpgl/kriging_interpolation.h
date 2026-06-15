@@ -55,6 +55,32 @@ namespace hpgl
 			return sk_kriging_weights_3<covariances_t, true, coord_t>(center, coords, covariances, weights, variance);
 		}	
 
+		// Workspace-aware overloads — pass ws to sk_kriging_weights_3_ws
+		template<typename covariances_t, typename means_t, typename coord_t>
+		bool operator()(const coord_t & center,
+			mean_t center_mean,
+			const std::vector<coord_t> & coords,
+			const means_t &,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights,
+			weight_calc_workspace_t & ws)const
+		{
+			double variance;
+			return sk_kriging_weights_3_ws<covariances_t, false, coord_t>(center, coords, covariances, weights, variance, ws);
+		}
+
+		template<typename covariances_t, typename means_t, typename coord_t>
+		bool operator()(const coord_t & center,
+			mean_t center_mean,
+			const std::vector<coord_t> & coords,
+			const means_t &,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights, double & variance,
+			weight_calc_workspace_t & ws)const
+		{
+			return sk_kriging_weights_3_ws<covariances_t, true, coord_t>(center, coords, covariances, weights, variance, ws);
+		}
+
 		template<typename covariances_t, typename coord_t>
 		inline bool first_stage(
 						 const coord_t & center, 
@@ -122,8 +148,36 @@ namespace hpgl
 		{
 			return ok_kriging_weights_3<covariances_t, true, coord_t>(center, coords, covariances, weights, variance);
 		}			
+
+		// Workspace-aware overloads — pass ws to ok_kriging_weights_3_ws
+		template<typename covariances_t, typename means_t, typename coord_t>
+		bool operator()(const coord_t & center,
+			mean_t center_mean,
+			const std::vector<coord_t> & coords,
+			const means_t &,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights,
+			weight_calc_workspace_t & ws)const
+		{
+			double variance;
+			return ok_kriging_weights_3_ws<covariances_t, false, coord_t>(center, coords, covariances, weights, variance, ws);
+		}
+
+		template<typename covariances_t, typename means_t, typename coord_t>
+		bool operator()(const coord_t & center,
+			mean_t center_mean,
+			const std::vector<coord_t> & coords,
+			const means_t &,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights, double & variance,
+			weight_calc_workspace_t & ws)const
+		{
+			return ok_kriging_weights_3_ws<covariances_t, true, coord_t>(center, coords, covariances, weights, variance, ws);
+		}
 	};
-
+
+
+
 	
 	class corellogram_weight_calculator_t
 	{		
@@ -137,6 +191,19 @@ namespace hpgl
 			std::vector<kriging_weight_t> & weights)const
 		{
 			return corellogramed_weights_3(center, center_mean, coords, covariances, means, weights);
+		}
+
+		// Workspace-aware overload
+		template<typename covariances_t, typename means_t, typename coord_t>
+		bool operator()(const coord_t & center,
+			mean_t center_mean,
+			const std::vector<coord_t> & coords,
+			const means_t & means,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights,
+			weight_calc_workspace_t & ws)const
+		{
+			return corellogramed_weights_3_ws(center, center_mean, coords, covariances, means, weights, ws);
 		}
 
 		template<typename covariances_t, typename coord_t>
@@ -159,7 +226,7 @@ namespace hpgl
 			// Type safety: Use size_t for size variable, validate it fits in int
 			const size_t size = weights.size();
 
-			double delta = 0.00001;
+			double delta = CORRELOGRAM_DELTA;
 			double meanc = center_mean;
 
 			if(meanc == 0)
@@ -193,6 +260,23 @@ namespace hpgl
 			}
 			return true;
 		}
+	};
+
+	// -----------------------------------------------------------------------
+	// Kriging workspace: reusable vectors for the interpolation hot path.
+	// Allocated once per thread (OpenMP parallel region), reused across all
+	// node iterations via resize() which is allocation-free when capacity is
+	// sufficient. Eliminates 5-10 heap allocations per node in the inner loop.
+	// -----------------------------------------------------------------------
+	template<typename value_t, typename coord_t>
+	struct kriging_ws_t {
+		std::vector<node_index_t> indices;
+		std::vector<kriging_weight_t> weights;
+		std::vector<mean_t> means;
+		std::vector<value_t> values;
+		std::vector<coord_t> coords;
+		coord_t node_coord;
+		weight_calc_workspace_t wcalc;
 	};
 
 
@@ -310,6 +394,116 @@ namespace hpgl
 		{			
 			select(input_values, indices, values);					
 			result = combine<value_t, result_t>(values, weights, means, mp[index]);
+			return ki_result_t::KI_SUCCESS;
+		}
+		else
+		{			
+			return ki_result_t::KI_SINGULARITY;
+		}		
+	}
+
+	// -----------------------------------------------------------------------
+	// Workspace-aware kriging_interpolation overloads.
+	// Takes a kriging_ws_t<value_t, coord_t> by reference — all internal
+	// vectors reused across calls, eliminating 5 heap allocations per node.
+	// -----------------------------------------------------------------------
+
+	// Params-wrapper overload (delegates to params members)
+	template<typename params_t, typename result_t, typename ws_t>
+	ki_result_t kriging_interpolation_ws(
+		const params_t & params,
+		node_index_t index,
+		result_t & result,
+		ws_t & ws)
+	{
+		return kriging_interpolation_ws(
+			*params.input_values,
+			*params.defineds,
+			index,
+			*params.covariances,
+			*params.means,
+			*params.neighbour_lookup,
+			*params.weight_calculator,
+			result, ws);
+	}
+
+	// Non-variance overload
+	template<		
+		typename values_t,
+		typename defineds_t,
+		typename means_t,
+		typename covariances_t,
+		typename neighbourhood_lookup_t,
+		typename weight_calculator_t,
+		typename result_t>
+	ki_result_t kriging_interpolation_ws(
+			const values_t & input_values,
+			const defineds_t & defineds,
+			node_index_t index,			
+			const covariances_t & cov,
+			const means_t & mp,
+			const neighbourhood_lookup_t & nl,
+			const weight_calculator_t & wc,
+			result_t & result,
+			kriging_ws_t<typename values_t::value_type, typename neighbourhood_lookup_t::coord_t> & ws
+		)
+	{
+		typedef typename values_t::value_type value_t;
+		typedef typename neighbourhood_lookup_t::coord_t coord_t;
+
+		nl.find(index, defineds, ws.node_coord, ws.indices, ws.coords);
+		if (ws.indices.size() <= 0)
+			return ki_result_t::KI_NO_NEIGHBOURS;
+
+		select(mp, ws.indices, ws.means);
+		bool success = wc(ws.node_coord, mp[index], ws.coords, ws.means, cov, ws.weights, ws.wcalc);		
+		if (success)
+		{			
+			select(input_values, ws.indices, ws.values);					
+			result = combine<value_t, result_t>(ws.values, ws.weights, ws.means, mp[index]);
+			return ki_result_t::KI_SUCCESS;
+		}
+		else
+		{			
+			return ki_result_t::KI_SINGULARITY;
+		}		
+	}
+
+	// Variance-enabled workspace-aware overload
+	template<		
+		typename values_t,
+		typename defineds_t,
+		typename means_t,
+		typename covariances_t,
+		typename neighbourhood_lookup_t,
+		typename weight_calculator_t,
+		typename result_t>
+	ki_result_t kriging_interpolation_ws(
+			const values_t & input_values,
+			const defineds_t & defineds,
+			node_index_t index,			
+			const covariances_t & cov,
+			const means_t & mp,
+			const neighbourhood_lookup_t & nl,
+			const weight_calculator_t & wc,
+			result_t & result,
+			double & variance,
+			kriging_ws_t<typename values_t::value_type, typename neighbourhood_lookup_t::coord_t> & ws
+		)
+	{
+		typedef typename values_t::value_type value_t;
+		typedef typename neighbourhood_lookup_t::coord_t coord_t;
+
+		nl.find(index, defineds, ws.node_coord, ws.indices, ws.coords);
+		if (ws.indices.size() <= 0)
+			return ki_result_t::KI_NO_NEIGHBOURS;
+
+		select(mp, ws.indices, ws.means);
+		bool success = wc(ws.node_coord, mp[index], ws.coords, ws.means, cov, ws.weights, variance, ws.wcalc);		
+		if (success)
+		{			
+			select(input_values, ws.indices, ws.values);					
+			result = combine<value_t, result_t>(ws.values, ws.weights, ws.means, mp[index]);
 			return ki_result_t::KI_SUCCESS;
 		}
 		else

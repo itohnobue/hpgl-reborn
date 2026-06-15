@@ -129,7 +129,6 @@ if(WIN32)
             HPGL_EXPORTS
             BS_EXPORTING_PLUGIN
             NOMINMAX
-            _CRT_SECURE_NO_WARNINGS
     )
     # Windows-specific runtime library
     # NOTE: hpgl_core is built as SHARED; when linking dynamically this default is appropriate.
@@ -137,6 +136,24 @@ if(WIN32)
     #   set_property(TARGET hpgl_core PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else()
     target_compile_definitions(hpgl_core PUBLIC HPGL_SO)
+endif()
+
+# Security hardening flags (non-Debug builds only)
+# Debug builds skip these to avoid interfering with debugging/sanitizers.
+if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
+    if(MSVC)
+        # /sdl: Additional security checks (buffer overrun, strict const, etc.)
+        # /guard:cf: Control Flow Guard (compile + link)
+        target_compile_options(hpgl_core PRIVATE /sdl /guard:cf)
+        target_link_options(hpgl_core PRIVATE /guard:cf)
+    else()
+        # -fstack-protector-strong: Stack canary protection
+        # _FORTIFY_SOURCE=2: Compile-time buffer overflow detection
+        # -Wl,-z,relro,-z,now: Full RELRO (read-only GOT, immediate binding)
+        target_compile_options(hpgl_core PRIVATE -fstack-protector-strong)
+        target_compile_definitions(hpgl_core PRIVATE _FORTIFY_SOURCE=2)
+        target_link_options(hpgl_core PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,-z,relro,-z,now>)
+    endif()
 endif()
 
 # OpenMP support

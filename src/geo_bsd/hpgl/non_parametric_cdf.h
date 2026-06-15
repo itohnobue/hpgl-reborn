@@ -27,8 +27,7 @@ namespace hpgl
 		template <typename T>
 		non_parametric_cdf_t(const T & data)
 		{
-			using namespace std;
-			typedef map<value_t, int> occ_map_t;
+			typedef std::map<value_t, int> occ_map_t;
 			typedef typename occ_map_t::iterator occ_iterator_t;
 
 			occ_map_t occ;
@@ -40,7 +39,7 @@ namespace hpgl
 			{
 				if (data.is_informed(i))
 				{
-					pair<occ_iterator_t, bool> result = occ.insert(make_pair(data[i], 1));
+					std::pair<occ_iterator_t, bool> result = occ.insert(std::make_pair(data[i], 1));
 					if (!result.second)
 					{
 						result.first->second += 1;
@@ -54,12 +53,12 @@ namespace hpgl
 
 			if (occ.empty()) { fprintf(stderr, "HPGL FATAL: non_parametric_cdf: occ is empty but count > 0\n"); abort(); }
 
-			vector<pair<value_t, prob_t> > pdf;
+			std::vector<std::pair<value_t, prob_t> > pdf;
 			pdf.reserve(occ.size());
 
 			for (occ_iterator_t it = occ.begin(), it_end = occ.end(); it != it_end; ++it)
 			{
-				pdf.push_back(make_pair(it->first, double(it->second) / double(count)));
+				pdf.push_back(std::make_pair(it->first, double(it->second) / double(count)));
 			}
 			std::sort(pdf.begin(), pdf.end());
 
@@ -67,15 +66,14 @@ namespace hpgl
 			m_cdf.push_back(pdf[0]);
 			for (size_t i = 1; i < pdf.size(); ++i)
 			{				
-				m_cdf.push_back(make_pair(pdf[i].first, pdf[i].second + m_cdf[i-1].second));
+				m_cdf.push_back(std::make_pair(pdf[i].first, pdf[i].second + m_cdf[i-1].second));
 			}			
 		}
 
 		template <typename T>
 		non_parametric_cdf_t(std::vector<T> & data)
 		{
-			using namespace std;
-			typedef map<value_t, int> occ_map_t;
+			typedef std::map<value_t, int> occ_map_t;
 			typedef typename occ_map_t::iterator occ_iterator_t;
 
 			occ_map_t occ;
@@ -85,7 +83,7 @@ namespace hpgl
 			size_t count = 0;
 			for (size_t i = 0; i < size; ++i)
 			{
-					pair<occ_iterator_t, bool> result = occ.insert(make_pair(data[i], 1));
+					std::pair<occ_iterator_t, bool> result = occ.insert(std::make_pair(data[i], 1));
 					if (!result.second)
 					{
 						result.first->second += 1;
@@ -99,12 +97,12 @@ namespace hpgl
 
 			if (occ.empty()) { fprintf(stderr, "HPGL FATAL: non_parametric_cdf: occ is empty but count > 0\n"); abort(); }
 
-			vector<pair<value_t, prob_t> > pdf;
+			std::vector<std::pair<value_t, prob_t> > pdf;
 			pdf.reserve(occ.size());
 
 			for (occ_iterator_t it = occ.begin(), it_end = occ.end(); it != it_end; ++it)
 			{
-				pdf.push_back(make_pair(it->first, double(it->second) / double(count)));
+				pdf.push_back(std::make_pair(it->first, double(it->second) / double(count)));
 			}
 			std::sort(pdf.begin(), pdf.end());
 
@@ -112,7 +110,7 @@ namespace hpgl
 			m_cdf.push_back(pdf[0]);
 			for (size_t i = 1; i < pdf.size(); ++i)
 			{				
-				m_cdf.push_back(make_pair(pdf[i].first, pdf[i].second + m_cdf[i-1].second));
+				m_cdf.push_back(std::make_pair(pdf[i].first, pdf[i].second + m_cdf[i-1].second));
 			}			
 		}
 
@@ -136,9 +134,8 @@ namespace hpgl
 		
 		prob_t operator()(value_t value)
 		{
-			using namespace std;
 			prob_t result;
-			typename cdf_t::iterator it = lower_bound(m_cdf.begin(), m_cdf.end(), make_pair(value, 1.0));
+			typename cdf_t::iterator it = std::lower_bound(m_cdf.begin(), m_cdf.end(), std::make_pair(value, 1.0));
 			if (it == m_cdf.end())
 			{
 				result = m_cdf.back().second;
@@ -167,14 +164,13 @@ namespace hpgl
 
 		value_t inverse(prob_t prob)
 		{
-			using namespace std;
 
 			if (m_cdf.size() <= 0)
 				return 0;
 
 			value_t result;
 
-			typename cdf_t::iterator it = lower_bound(m_cdf.begin(), m_cdf.end(), make_pair(m_cdf.back().first, prob), inverse_less());
+			typename cdf_t::iterator it = std::lower_bound(m_cdf.begin(), m_cdf.end(), std::make_pair(m_cdf.back().first, prob), inverse_less());
 			if (it == m_cdf.end())
 				result = m_cdf.back().first;
 			else if (it == m_cdf.begin())

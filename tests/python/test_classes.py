@@ -11,6 +11,7 @@ import pytest
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
@@ -19,13 +20,17 @@ try:
         covariance, checkFWA
     )
     from geo_bsd.cdf import CdfData
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
-    IMPORT_ERROR = str(e)
+except (ImportError, OSError) as e:
+    # Dummy covariance for module-level parametrize decorators
+    # Tests are skipped by @pytest.mark.hpgl when HPGL is unavailable
+    class _DummyCovarianceTypes:
+        spherical = 0
+        exponential = 1
+        gaussian = 2
+    covariance = _DummyCovarianceTypes()
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestSugarboxGrid:
     """Test SugarboxGrid class - represents 3D grid dimensions"""
 
@@ -65,7 +70,7 @@ class TestSugarboxGrid:
         assert total_size == 1000
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCovarianceModel:
     """Test CovarianceModel class - variogram parameters"""
 
@@ -174,7 +179,7 @@ class TestCovarianceModel:
         assert cov.type == cov_type
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestContProperty:
     """Test ContProperty class - continuous property with mask"""
 
@@ -327,7 +332,7 @@ class TestContProperty:
         assert prop.mask.size == size
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestIndProperty:
     """Test IndProperty class - indicator property with mask"""
 
@@ -465,7 +470,7 @@ class TestIndProperty:
         assert np.all(prop.data == 0)
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCdfData:
     """Test CdfData class - cumulative distribution function data"""
 
@@ -540,7 +545,7 @@ class TestCdfData:
         assert cdf.probs.size == size
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCovarianceClass:
     """Test covariance class for type constants"""
 
@@ -566,7 +571,7 @@ class TestCovarianceClass:
         assert len(set(types)) == len(types)
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 class TestCheckFWA:
     """Test checkFWA helper function"""
 

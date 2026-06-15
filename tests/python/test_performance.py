@@ -15,6 +15,7 @@ import json
 import sys
 from pathlib import Path
 
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 # Baseline storage directory
@@ -80,13 +81,11 @@ try:
     )
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.cdf import CdfData
-    HPGL_AVAILABLE = True
-except ImportError as e:
-    HPGL_AVAILABLE = False
-    print(f"Warning: Could not import HPGL: {e}")
+except (ImportError, OSError) as e:
+    pass  # HPGL_AVAILABLE from conftest handles availability
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 @pytest.mark.slow
 class TestPerformance:
     """Performance benchmarking tests"""
@@ -272,7 +271,7 @@ class TestPerformance:
             assert elapsed < 30.0, f"{cov_name} took too long: {elapsed:.3f}s"
 
 
-@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL not available")
+@pytest.mark.hpgl
 def test_mean_calculation_performance():
     """Test mean calculation performance with baseline comparison"""
     from geo_bsd.geo import ContProperty

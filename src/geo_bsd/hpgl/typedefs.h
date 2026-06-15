@@ -130,6 +130,11 @@ namespace hpgl
 	typedef double angle_t;
 	typedef double range_t;
 
+	/// Shared epsilon constant used to avoid division-by-zero and
+	/// extremal-probability (0 or 1) edge cases in correlogram weight
+	/// calculations. Originally duplicated at 0.00001 in two files.
+	constexpr double CORRELOGRAM_DELTA = 1e-5;
+
 	template<typename T>
 	struct xyz_tuple_t
 	{
@@ -137,7 +142,7 @@ namespace hpgl
 	private:
 		T m_data[size];
 	public:		
-		xyz_tuple_t(){}		
+		xyz_tuple_t() : m_data{} {}		
 
 		xyz_tuple_t(T t1, T t2, T t3)
 		{
