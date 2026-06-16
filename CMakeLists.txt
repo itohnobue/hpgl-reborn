@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
-project(HPGL VERSION 1.5.0 LANGUAGES CXX)
+
+# Read version from pyproject.toml (single source of truth).
+# When built via scikit-build-core, SKBUILD_PROJECT_VERSION is set automatically.
+# Fallback for standalone CMake builds reads pyproject.toml directly.
+if(DEFINED SKBUILD_PROJECT_VERSION)
+    set(_hpgl_version ${SKBUILD_PROJECT_VERSION})
+else()
+    file(STRINGS "${CMAKE_SOURCE_DIR}/pyproject.toml" _hpgl_ver_line REGEX "^version = ")
+    string(REGEX REPLACE ".*\"(.*)\".*" "\\1" _hpgl_version "${_hpgl_ver_line}")
+endif()
+project(HPGL VERSION ${_hpgl_version} LANGUAGES CXX)
 
 # ============================================================================
 # Project Configuration

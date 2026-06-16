@@ -1,4 +1,35 @@
-# HPGL Reborn - High Performance Geostatistics Library (v1.5.0)
+# HPGL Reborn - High Performance Geostatistics Library (v1.6.0)
+
+## Table of Contents
+
+- [Description](#description)
+- [Algorithms](#algorithms)
+- [Covariance Models](#covariance-models)
+- [Requirements](#requirements)
+- [Build Instructions](#build-instructions)
+  - [Windows (MSBuild)](#windows-msbuild---recommended)
+  - [Linux (CMake)](#linux-cmake)
+  - [macOS Build](#macos-build)
+  - [CMake Options](#cmake-options)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [API Overview](#api-overview)
+  - [Core Classes](#core-classes)
+  - [Kriging Functions](#kriging-functions)
+  - [Simulation Functions](#simulation-functions)
+  - [I/O Functions](#io-functions)
+  - [Utility Functions](#utility-functions)
+  - [Submodules](#submodules)
+- [Dataclass Property Reference](#dataclass-property-reference)
+- [Common Use Cases](#common-use-cases)
+- [Error Handling](#error-handling)
+- [Validation Limits](#validation-limits)
+- [Testing](#testing)
+- [Project Structure](#project-structure)
+- [Migration Guide](#migration-guide)
+- [Changes from v0.9.9](#changes-from-v099)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 ## Description
 
@@ -281,6 +312,7 @@ print(f"SGS result shape:    {sim.data.shape}, mean: {sim.data.mean():.3f}")
 | `IndProperty(data, mask, indicator_count)` | Indicator (categorical) property |
 | `CovarianceModel(type, ranges, angles, sill, nugget)` | Variogram/covariance model parameters |
 | `CdfData(values, probs)` | Cumulative distribution function data |
+| `covariance` | Namespace with model type constants: `spherical` (0), `exponential` (1), `gaussian` (2) |
 
 ### Kriging Functions
 
@@ -307,8 +339,11 @@ print(f"SGS result shape:    {sim.data.shape}, mean: {sim.data.mean():.3f}")
 |----------|-------------|
 | `load_cont_property(filename, undefined_value, size)` | Load continuous property from INC file |
 | `load_ind_property(filename, undefined_value, indicator_values, size)` | Load indicator property from INC file |
+| `read_inc_file_float(filename, undefined_value, size)` | Fast C++ reader for continuous INC data (specify grid size) |
+| `read_inc_file_byte(filename, undefined_value, size, indicator_values)` | Fast C++ reader for indicator INC data |
 | `write_property(prop, filename, prop_name, undefined_value)` | Write property to INC file |
 | `write_gslib_property(prop, filename, prop_name, undefined_value)` | Write property in GSLIB format |
+| `get_gslib_property(filename, name, undefined_value, size)` | Read a named property from a GSLIB-format file |
 
 ### Utility Functions
 
@@ -319,7 +354,238 @@ print(f"SGS result shape:    {sim.data.shape}, mean: {sim.data.mean():.3f}")
 | `set_thread_num(n)` | Set number of OpenMP threads |
 | `get_thread_num()` | Get current OpenMP thread count |
 | `simple_kriging_weights(center_point, n_x, n_y, n_z, ...)` | Compute kriging weights for a set of neighbor points |
+| `set_output_handler(handler, param)` | Register a callback for C++ stdout/stderr output |
+| `set_progress_handler(handler, param)` | Register a callback for C++ progress reporting |
 | `get_gslib_property(filename, name, undefined_value, size)` | Read a named property from a GSLIB-format file |
+
+### Submodules
+
+Each submodule is imported under `geo_bsd` and exposes its own public API.
+
+| Module | Description |
+|--------|-------------|
+| `geo_bsd.variogram` | Pure-Python variogram analysis: `TVEllipsoid`, `TVVariogramSearchTemplate`, `PointSetScanContStyle`, `PointSetScanGridStyle`, `CubeScan`, variogram/covariance/correlogram functions |
+| `geo_bsd.cvariogram` | C-extension variogram (faster): `Ellipsoid`, `VariogramSearchTemplate`, `CalcVariograms`, `CalcVariogramsFromPointSet`, `CStackLayers` |
+| `geo_bsd.routines` | High-level utilities: `CalcVPC`, `CalcMean`, `Cube2PointSet`, `PointSet2Cube`, `SaveGSLIBPointSet`, `SaveGSLIBCubes`, `LoadGslibFile`, `MovingAverage3D`, `GetCubicalMask`, `GetEllipseMask` |
+| `geo_bsd.validation` | Input validation framework: `GridValidator`, `ParameterValidator`, `PathValidator`, `ValidationContext`, `ValidationConstants` |
+
+## Dataclass Property Reference
+
+### ContProperty
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `data` | `numpy.ndarray` (float32, F-order) | Property values. May be 1D, 2D, or 3D. |
+| `mask` | `numpy.ndarray` (uint8, F-order) | Informed/masked indicator. Non-zero = informed, 0 = masked. |
+
+```python
+prop = geo_bsd.ContProperty(data, mask)
+# Access: prop.data, prop.mask
+# Validate: prop.validate()
+# Reshape to 3D: prop.fix_shape(grid)
+```
+
+### IndProperty
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `data` | `numpy.ndarray` (uint8, F-order) | Indicator values in `[0, indicator_count)`. |
+| `mask` | `numpy.ndarray` (uint8, F-order) | Informed/masked indicator. Non-zero = informed. |
+| `indicator_count` | `int` | Number of indicator categories. |
+
+### SugarboxGrid
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `x` | `int` | Cells along X axis (1 to 10 million). |
+| `y` | `int` | Cells along Y axis. |
+| `z` | `int` | Cells along Z axis. |
+
+### CovarianceModel
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | `int` | `0` (spherical) | Use `geo_bsd.covariance.spherical` (0), `.exponential` (1), or `.gaussian` (2). |
+| `ranges` | `tuple[float]` | `(0, 0, 0)` | Anisotropy ranges `(rx, ry, rz)`. |
+| `angles` | `tuple[float]` | `(0.0, 0.0, 0.0)` | Anisotropy angles `(azimuth, dip, rotation)` in degrees. |
+| `sill` | `float` | `1.0` | Covariance sill (must be positive). |
+| `nugget` | `float` | `0.0` | Nugget effect (must be ≤ sill). |
+
+### CdfData
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `values` | `numpy.ndarray` (float32) | Sorted unique property values from informed cells. |
+| `probs` | `numpy.ndarray` (float32) | Cumulative probabilities corresponding to each value (monotonically non-decreasing). |
+
+## Common Use Cases
+
+### Load Data from File, Run Kriging, Save Result
+
+```python
+import sys
+sys.path.insert(0, "path/to/hpgl/src")
+import geo_bsd
+
+# Load a continuous property from an INC file
+prop = geo_bsd.load_cont_property("porosity.inc", undefined_value=-999.0, size=(50, 50, 20))
+
+grid = geo_bsd.SugarboxGrid(50, 50, 20)
+
+cov = geo_bsd.CovarianceModel(
+    type=geo_bsd.covariance.spherical,
+    ranges=(15.0, 15.0, 5.0),
+    sill=1.0,
+    nugget=0.1,
+)
+
+result = geo_bsd.ordinary_kriging(prop, grid, radiuses=(10, 10, 5), max_neighbours=12, cov_model=cov)
+
+geo_bsd.write_property(result, "kriged_output.inc", "OK_Porosity", undefined_value=-999.0)
+```
+
+### Run Sequential Gaussian Simulation with a Seed
+
+```python
+from geo_bsd.cdf import calc_cdf
+
+cdf = calc_cdf(prop)
+sim = geo_bsd.sgs_simulation(
+    prop, grid, cdf,
+    radiuses=(10, 10, 5),
+    max_neighbours=12,
+    cov_model=cov,
+    seed=12345,
+)
+```
+
+### Run Indicator Kriging for Categorical Data
+
+```python
+# 3-category indicator property
+ind_prop = geo_bsd.IndProperty(ind_data, ind_mask, indicator_count=3)
+
+ik_data = [
+    {"cov_model": cov1, "radiuses": (8, 8, 4), "max_neighbours": 12},
+    {"cov_model": cov2, "radiuses": (8, 8, 4), "max_neighbours": 12},
+    {"cov_model": cov3, "radiuses": (8, 8, 4), "max_neighbours": 12},
+]
+
+result = geo_bsd.indicator_kriging(
+    ind_prop, grid, ik_data,
+    marginal_probs=[0.4, 0.35, 0.25],
+)
+```
+
+### Control Parallel Threads
+
+```python
+geo_bsd.set_thread_num(4)
+print(f"Using {geo_bsd.get_thread_num()} threads")
+```
+
+### Compute Variogram (C Extension, Faster)
+
+```python
+from geo_bsd.cvariogram import Ellipsoid, VariogramSearchTemplate, CalcVariograms
+
+ell = Ellipsoid(R1=20.0, R2=20.0, R3=10.0, azimuth=0, dip=0, rotation=0)
+templ = VariogramSearchTemplate(
+    lag_width=0.5, lag_separation=1.0, tol_distance=1.0,
+    num_lags=15, first_lag_distance=0, ellipsoid=ell,
+)
+lags, variogram = CalcVariograms(templ, (data_array, mask_array), percent=100)
+```
+
+## Error Handling
+
+HPGL functions raise Python exceptions for invalid input and runtime failures.
+Always wrap calls in ``try``/``except`` to catch and diagnose errors.
+
+### Input Validation Errors
+
+```python
+try:
+    grid = geo_bsd.SugarboxGrid(-1, 10, 5)  # negative X dimension
+except geo_bsd.validation.CriticalValidationError as e:
+    print(f"Validation failed: {e}")
+    print(f"  Parameter: {e.parameter_name}")
+```
+
+Common validation exceptions:
+
+| Exception | When |
+|-----------|------|
+| `validation.CriticalValidationError` | Invalid parameter — prevents operation (e.g. negative grid dim, path traversal, `nugget > sill`) |
+| `validation.ValidationWarning` | Suspicious but non-fatal parameter value |
+| `TypeError` | Wrong argument type |
+| `ValueError` | Out-of-range value, empty input, or invalid configuration |
+
+### Runtime Errors from C++ Backend
+
+```python
+try:
+    result = geo_bsd.ordinary_kriging(prop, grid, radiuses=(10, 10, 5),
+                                       max_neighbours=12, cov_model=cov)
+except RuntimeError as e:
+    print(f"C++ computation failed: {e}")
+    # May indicate: singular matrix, memory exhaustion, incompatible data
+except ValueError as e:
+    print(f"Invalid parameter: {e}")
+```
+
+### File Operation Errors
+
+```python
+try:
+    prop = geo_bsd.load_cont_property("nonexistent.inc", undefined_value=-999.0,
+                                       size=(50, 50, 20))
+except validation.CriticalValidationError as e:
+    print(f"Path validation failed: {e}")
+except RuntimeError as e:
+    print(f"File read failed: {e}")
+```
+
+### Progress Monitoring
+
+```python
+def my_progress(message, percent, param):
+    print(f"[{percent}%] {message.decode()}")
+    return 0  # return 0 to continue, non-zero to cancel
+
+geo_bsd.set_progress_handler(my_progress, None)
+result = geo_bsd.sgs_simulation(prop, grid, cdf, ...)
+geo_bsd.set_progress_handler(None, None)  # unregister
+```
+
+## Validation Limits
+
+HPGL enforces the following limits via `geo_bsd.validation.ValidationConstants`.
+Values outside these ranges raise `CriticalValidationError`.
+
+| Constant | Value | Applies To |
+|----------|-------|------------|
+| `MIN_GRID_DIMENSION` | 1 | Minimum grid axis size |
+| `MAX_GRID_DIMENSION` | 10,000,000 | Maximum single-axis grid size |
+| `MAX_GRID_SIZE` | 1,000,000,000 | Maximum total grid cells (1 billion) |
+| `MIN_NEIGHBORS` | 1 | Minimum neighbor count |
+| `MAX_NEIGHBORS` | 1,000 | Maximum neighbors (warning above this) |
+| `MAX_INDICATORS` | 256 | Maximum indicator categories |
+| `MIN_SILL` / `MAX_SILL` | 0.0 / 1e10 | Covariance sill range |
+| `MIN_NUGGET` / `MAX_NUGGET` | 0.0 / 1e10 | Nugget effect range |
+| `MIN_RANGE` / `MAX_RANGE` | 0.0 / 1e10 | Covariance range limits (per axis) |
+| `MIN_RADIUS` / `MAX_RADIUS` | 0.0 / 1,000,000.0 | Search radius limits (per axis) |
+| `MIN_ANGLE` / `MAX_ANGLE` | 0.0 / 360.0 | Anisotropy angle range (warn outside) |
+| `PROBABILITY_SUM_TOLERANCE` | 0.01 | Allowed deviation when probabilities sum to 1.0 |
+| `c_int` maximum | 2,147,483,647 | Maximum grid elements for fast C++ I/O readers |
+
+You can inspect these at runtime:
+
+```python
+from geo_bsd.validation import ValidationConstants
+print(f"Max grid size: {ValidationConstants.MAX_GRID_SIZE}")
+print(f"Max neighbor count: {ValidationConstants.MAX_NEIGHBORS}")
+```
 
 ## Testing
 
@@ -400,6 +666,106 @@ The `shared/` subdirectory contains utility modules (statistics, GSLIB file I/O,
 ### Legacy Documentation (`legacy_documentation/`)
 
 Original documentation from earlier HPGL versions, including PDF manuals (English and Russian), Word source documents, and the archived sample scripts documentation.
+
+## Migration Guide
+
+### Upgrading from HPGL 0.9.x (Legacy / Python 2)
+
+HPGL Reborn (v1.6.0) changed several key APIs. Follow these steps to migrate.
+
+#### 1. Python Version
+
+HPGL 1.6.0 requires **Python 3.9+**. Python 2 is no longer supported.
+
+#### 2. Import Path
+
+```python
+# Old (0.9.x, Boost.Python bindings):
+import hpgl
+
+# New (1.6.0, ctypes bindings):
+import sys
+sys.path.insert(0, "path/to/hpgl/src")
+import geo_bsd
+```
+
+#### 3. Package Manager
+
+The project now uses `uv` instead of `pip` directly. Set up with:
+
+```bash
+uv sync --extra test
+uv run python my_script.py
+```
+
+#### 4. Property Classes
+
+```python
+# Old: property classes accepted separate positional args
+# New: use named classes
+prop = geo_bsd.ContProperty(data_array, mask_array)
+ind_prop = geo_bsd.IndProperty(data_array, mask_array, indicator_count=3)
+```
+
+#### 5. Required `cov_model` Parameter
+
+All kriging functions now **require** the `cov_model` parameter. The old signature that accepted individual `sill`, `ranges`, `nugget`, etc. parameters has been removed.
+
+```python
+# Old (positional sill, ranges, nugget, etc.):
+geo_bsd.ordinary_kriging(prop, grid, radiuses, max_n, sill, ranges, ...)  # REMOVED
+
+# New (CovarianceModel object):
+cov = geo_bsd.CovarianceModel(type=geo_bsd.covariance.spherical, ranges=(10,10,5), sill=1.0, nugget=0.1)
+geo_bsd.ordinary_kriging(prop, grid, radiuses, max_n, cov_model=cov)
+```
+
+#### 6. SGS Simulation Signature
+
+`sgs_simulation` gained new parameters. The old positional-only call style still works but the new `kriging_type`, `use_harddata`, `mask`, `min_neighbours` parameters are recommended.
+
+```python
+# New (all optional params shown):
+geo_bsd.sgs_simulation(
+    prop, grid, cdf,
+    radiuses=(10, 10, 5),
+    max_neighbours=12,
+    cov_model=cov,
+    seed=42,
+    kriging_type="sk",       # "sk" or "ok"
+    mean=None,                # float for stationary, ndarray for LVM
+    use_harddata=True,
+    mask=None,                # ndarray: 1=simulate, 0=skip
+    min_neighbours=0,
+)
+```
+
+#### 7. Input Validation
+
+HPGL 1.6.0 validates all parameters before passing them to C++. Invalid input raises `geo_bsd.validation.CriticalValidationError` instead of crashing or silently producing wrong results.
+
+```python
+try:
+    grid = geo_bsd.SugarboxGrid(x, y, z)
+except geo_bsd.validation.CriticalValidationError as e:
+    print(f"Invalid grid: {e}")
+```
+
+#### 8. Thread Management
+
+```python
+# Old:
+hpgl.set_num_threads(4)
+
+# New:
+geo_bsd.set_thread_num(4)
+```
+
+#### 9. Build System
+
+- **Windows**: Use `build.bat` (MSBuild 2022) instead of old VS 2008 project files.
+- **Linux/macOS**: Use CMake (`cmake .. && cmake --build .`) instead of SCons.
+- MKL is now the default BLAS backend on Windows; OpenBLAS on Linux/macOS.
 
 ## Changes from v0.9.9
 

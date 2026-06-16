@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "hpgl"
-version = "1.5.0"
+version = "1.6.0"
 description = "High Performance Geostatistics Library - Modern C++ with Python bindings"
 readme = "readme.md"
 requires-python = ">=3.9"
@@ -67,6 +67,7 @@ dev = [
     "sphinx-rtd-theme>=1.3",
     "mypy>=1.5",
     "ruff>=0.1.0",
+    "bandit>=1.7",
 ]
 
 # Testing dependencies
@@ -274,3 +275,7 @@ include = '\.pyi?$'
 profile = "black"
 line_length = 100
 known_first_party = ["hpgl", "geo"]
+
+[tool.bandit]
+exclude_dirs = ["build", "dist", ".git", ".venv", "__pycache__", "legacy_documentation"]
+skips = ["B101"]  # skip assert detection — hpgl uses bare assert intentionally for debug (see PY-003)
