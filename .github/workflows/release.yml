@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  check-ci:
+    name: Verify CI Passed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify CI workflow passed for tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMIT_SHA="$(git rev-parse HEAD)"
+          echo "Checking CI workflow runs for commit: ${COMMIT_SHA}"
+
+          # Poll for CI completion (max 10 minutes, 20s intervals)
+          for i in $(seq 1 30); do
+            RUN_DATA=$(gh run list --workflow ci.yml --commit "${COMMIT_SHA}" \
+              --json status,conclusion --jq '.[0] | "\(.status)|\(.conclusion)"' 2>/dev/null || echo "NOT_FOUND|")
+
+            STATUS="${RUN_DATA%%|*}"
+            CONCLUSION="${RUN_DATA##*|}"
+
+            if [ "$STATUS" = "completed" ]; then
+              if [ "$CONCLUSION" = "success" ]; then
+                echo "CI workflow passed. Release gate: OK"
+                exit 0
+              else
+                echo "ERROR: CI workflow completed with conclusion '${CONCLUSION}'."
+                echo "CI must pass before release. Push to main/master, wait for CI to pass, then tag."
+                exit 1
+              fi
+            fi
+
+            if [ "$STATUS" = "NOT_FOUND" ]; then
+              echo "ERROR: No CI workflow run found for commit ${COMMIT_SHA}."
+              echo "Push to main/master first to trigger CI, then tag after CI passes."
+              exit 1
+            fi
+
+            echo "CI workflow status: ${STATUS} — waiting... ($i/30)"
+            sleep 20
+          done
+
+          echo "ERROR: Timed out (10 minutes) waiting for CI workflow to complete."
+          exit 1
+
+  build:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: check-ci
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Build package
+        run: uv build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

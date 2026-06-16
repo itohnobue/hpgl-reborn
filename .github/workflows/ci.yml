@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dev dependencies
+        run: uv sync --all-extras
+
+      - name: Ruff lint
+        run: uv run ruff check src/ tests/
+
+      - name: Ruff format check
+        run: uv run ruff format --check src/ tests/
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dev dependencies
+        run: uv sync --all-extras
+
+      - name: Bandit security scan
+        run: uv run bandit -r src/ -c pyproject.toml
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [lint, security]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            ninja-build \
+            libopenblas-dev \
+            liblapack-dev \
+            libomp-dev
+
+      - name: Install Python dependencies
+        run: uv sync --all-extras
+
+      - name: Configure CMake
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DHPGL_BUILD_PYTHON=ON
+          -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install"
+
+      - name: Build C++ extension
+        run: cmake --build build --parallel $(nproc)
+
+      - name: Install C++ extension
+        run: cmake --install build
+
+      - name: Link shared libraries into Python package
+        run: |
+          # hpgl_wrap.py loads libhpgl.so from same directory as __file__
+          # cmake install puts libhpgl.so in lib/ but Python files in lib/hpgl/
+          # Create a symlink so Python finds the .so in its own directory
+          ln -sf "${{ github.workspace }}/install/lib/libhpgl.so" \
+                 "${{ github.workspace }}/install/lib/hpgl/"
+
+      - name: Run tests
+        env:
+          PYTHONPATH: "${{ github.workspace }}/install/lib:${{ github.workspace }}/src"
+        run: uv run pytest tests/python/ -v
