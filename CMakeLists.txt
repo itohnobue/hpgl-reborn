@@ -150,9 +150,13 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
         # -fstack-protector-strong: Stack canary protection
         # _FORTIFY_SOURCE=2: Compile-time buffer overflow detection
         # -Wl,-z,relro,-z,now: Full RELRO (read-only GOT, immediate binding)
+        # -Wl,-z,noexecstack: Non-executable stack
+        # -D_GLIBCXX_ASSERTIONS: libstdc++ runtime assertions (C++ only)
         target_compile_options(hpgl_core PRIVATE -fstack-protector-strong)
         target_compile_definitions(hpgl_core PRIVATE _FORTIFY_SOURCE=2)
         target_link_options(hpgl_core PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,-z,relro,-z,now>)
+        target_link_options(hpgl_core PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,-z,noexecstack>)
+        target_compile_definitions(hpgl_core PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:_GLIBCXX_ASSERTIONS>)
     endif()
 endif()
 
@@ -201,6 +205,20 @@ if(HPGL_BUILD_VARIOGRAM)
             PREFIX "_"
             OUTPUT_NAME "cvariogram"
         )
+    endif()
+
+    # Security hardening flags for variogram module (non-Debug builds only)
+    if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
+        if(MSVC)
+            target_compile_options(hpgl_variogram PRIVATE /sdl /guard:cf)
+            target_link_options(hpgl_variogram PRIVATE /guard:cf)
+        else()
+            target_compile_options(hpgl_variogram PRIVATE -fstack-protector-strong)
+            target_compile_definitions(hpgl_variogram PRIVATE _FORTIFY_SOURCE=2)
+            target_link_options(hpgl_variogram PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,-z,relro,-z,now>)
+            target_link_options(hpgl_variogram PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,-z,noexecstack>)
+            target_compile_definitions(hpgl_variogram PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:_GLIBCXX_ASSERTIONS>)
+        endif()
     endif()
 endif()
 
