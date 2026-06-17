@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
 import ctypes as C
 
 import numpy
@@ -59,7 +61,7 @@ def normed_cov_model(cov_model):
         cov_model.nugget / coef)
 
 @accepts_tuple('prop', 0)
-def sgs_simulation(prop, grid, cdf_data, radiuses, max_neighbours, cov_model, seed, kriging_type="sk", mean=None, use_harddata = True, use_regions=False, region_size = None, mask=None, force_single_thread=False, force_parallel=False, min_neighbours = 0, **params):
+def sgs_simulation(prop, grid, cdf_data, radiuses, max_neighbours, cov_model, seed, kriging_type="sk", mean=None, use_harddata=True, mask=None, min_neighbours=0, **params):
     """Performs Sequential Gaussian Simulation (SGS).
 
 Parameters:
@@ -90,17 +92,9 @@ mean : None, float, or numpy.ndarray, optional
 use_harddata : bool, optional
     If ``True``, use source data values for simulation. If ``False``,
     ignore source data values. Default: ``True``.
-use_regions : bool, optional
-    If ``True``, use region-based simulation partitioning. Default: ``False``.
-region_size : tuple of int or None, optional
-    Size of each simulation region when `use_regions=True`. Default: ``None``.
 mask : numpy.ndarray or None, optional
     3D array where ``1`` marks cells to simulate and ``0`` marks cells to skip.
     If ``None``, all cells are simulated. Default: ``None``.
-force_single_thread : bool, optional
-    Force single-threaded execution. Default: ``False``.
-force_parallel : bool, optional
-    Force parallel execution. Default: ``False``.
 min_neighbours : int, optional
     Minimum number of neighbours required for kriging. Default: ``0``.
 
@@ -169,29 +163,38 @@ CriticalValidationError
     if cdf_data is None:
         hpgl_cdf = None
     else:
-        hpgl_cdf = C.byref(_create_hpgl_nonparam_cdf(cdf_data))
+        _cdf_struct = _create_hpgl_nonparam_cdf(cdf_data)
+        hpgl_cdf = C.byref(_cdf_struct)
 
-    hpgl_mask = C.byref(_create_hpgl_ubyte_array(mask, grid)) if mask is not None else None
+    if mask is not None:
+        _mask_struct = _create_hpgl_ubyte_array(mask, grid)
+        hpgl_mask = C.byref(_mask_struct)
+    else:
+        hpgl_mask = None
 
     if mean is None or numpy.isscalar(mean):
+        _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
+        _c_mean = C.c_double(mean) if mean is not None else None
         _snapshot_hpgl_error()
         _hpgl_so.hpgl_sgs_simulation(
-            C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
+            C.byref(_cont_marr),
             C.byref(sgsp),
             hpgl_cdf,
-            C.byref(C.c_double(mean)) if mean is not None else None,
+            C.byref(_c_mean) if _c_mean is not None else None,
             hpgl_mask
             )
         _check_hpgl_error("sgs_simulation")
 
 
     else:
+        _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
+        _float_arr = _create_hpgl_float_array(mean, grid)
         _snapshot_hpgl_error()
         _hpgl_so.hpgl_sgs_lvm_simulation(
-            C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
+            C.byref(_cont_marr),
             C.byref(sgsp),
             hpgl_cdf,
-            C.byref(_create_hpgl_float_array(mean, grid)),
+            C.byref(_float_arr),
             hpgl_mask)
         _check_hpgl_error("sgs_lvm_simulation")
 

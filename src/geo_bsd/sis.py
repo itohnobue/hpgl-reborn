@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
 import ctypes as C
 
 import numpy
@@ -52,14 +54,14 @@ def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
             angles = (C.c_double * 3)(*ikd["cov_model"].angles),
             sill = ikd["cov_model"].sill,
             nugget = ikd["cov_model"].nugget,
-            radiuses = (C.c_int * 3)(*ikd["radiuses"]),
+            radiuses = (C.c_int * 3)(*(int(r) for r in ikd["radiuses"])),
             max_neighbours = ikd["max_neighbours"],
             marginal_prob = 0 if is_lvm else marginal_probs[i])
         ikps.append(ikp)
     return _c_array(_HPGL_IK_PARAMS, indicator_count, ikps)
 
 @accepts_tuple('prop', 0)
-def sis_simulation(prop, grid, data, seed, marginal_probs, use_correlogram=True, mask=None, force_single_thread=False, force_parallel=False, use_harddata=True, use_regions=False, region_size = (), min_neighbours = 0):
+def sis_simulation(prop, grid, data, seed, marginal_probs, use_correlogram=True, mask=None, use_harddata=True, min_neighbours=0, **params):
     """Performs Sequential Indicator Simulation (SIS).
 
 Parameters:
@@ -83,17 +85,9 @@ use_correlogram : bool, optional
 mask : numpy.ndarray or None, optional
     3D uint8 array where ``1`` marks cells to simulate and ``0`` marks cells
     to skip. If ``None``, all cells are simulated. Default: ``None``.
-force_single_thread : bool, optional
-    Force single-threaded execution. Default: ``False``.
-force_parallel : bool, optional
-    Force parallel execution. Default: ``False``.
 use_harddata : bool, optional
     If ``True``, use source data values for simulation. If ``False``,
     ignore source data values. Default: ``True``.
-use_regions : bool, optional
-    If ``True``, use region-based simulation partitioning. Default: ``False``.
-region_size : tuple, optional
-    Size of each simulation region when `use_regions=True`. Default: ``()``.
 min_neighbours : int, optional
     Minimum number of neighbours required for kriging. Default: ``0``.
 

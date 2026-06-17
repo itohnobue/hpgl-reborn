@@ -1,4 +1,8 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
 import ctypes as C
+import hashlib
+import logging
 import os
 import pathlib
 import sys
@@ -84,7 +88,7 @@ class _HPGL_SGS_PARAMS(C.Structure):
         ("radiuses", C.c_int * 3),
         ("max_neighbours", C.c_int),
         ("kriging_kind", C.c_int),
-        ("seed", C.c_long),
+        ("seed", C.c_int64),
         ("min_neighbours", C.c_int),
         ]
 
@@ -153,6 +157,13 @@ class hpgl_non_parametric_cdf_t(C.Structure):
 
 _hpgl_so = None
 
+# Expected SHA-256 hashes of known-good library builds.
+# Populated from current builds at development time. Mismatch triggers
+# a warning (not a hard error) to support development rebuilds.
+_EXPECTED_LIBRARY_HASHES: dict[str, str] = {}
+
+logger = logging.getLogger(__name__)
+
 # Security: Validate and safely load the native library
 def _safe_load_library(lib_name: str, ref_file: str):
     """
@@ -214,7 +225,9 @@ def _safe_load_library(lib_name: str, ref_file: str):
             try:
                 # Verify the library is in a subdirectory of ref_path.parent
                 resolved_lib.relative_to(lib_dir)
-                return _load_lib_func(str(resolved_lib))
+                lib = _load_lib_func(str(resolved_lib))
+                _verify_library_hash(lib_name, resolved_lib)
+                return lib
             except ValueError:
                 # Library path escapes allowed directory
                 raise ValueError(
@@ -228,6 +241,9 @@ def _safe_load_library(lib_name: str, ref_file: str):
         # Verify the loaded library path is safe
         if hasattr(lib, '_name'):
             loaded_path = pathlib.Path(lib._name)
+            # If the library name is relative, resolve relative to lib_dir
+            if not loaded_path.is_absolute():
+                loaded_path = lib_dir / loaded_path
             if loaded_path.exists():
                 resolved = loaded_path.resolve()
                 try:
@@ -236,6 +252,7 @@ def _safe_load_library(lib_name: str, ref_file: str):
                     raise ValueError(
                         f"Loaded library {resolved} is outside allowed directory {lib_dir}"
                     )
+        _verify_library_hash(lib_name, pathlib.Path(os.path.join(str(ref_path.parent), lib_name)))
         return lib
     except OSError as e:
         # Library not found or cannot be loaded
@@ -244,6 +261,41 @@ def _safe_load_library(lib_name: str, ref_file: str):
             f"Cannot load library '{lib_name}'. Searched in: {lib_dirs_str}. "
             f"Original error: {e}"
         ) from e
+
+def _verify_library_hash(lib_name: str, lib_path: pathlib.Path) -> None:
+    """Verify the SHA-256 hash of a loaded library against expected values.
+
+    Logs a warning if the hash doesn't match any known-good hash.
+    Does NOT raise — development rebuilds need to work without
+    pre-registered hashes.
+
+    Args:
+        lib_name: Logical name of the library (e.g. 'hpgl')
+        lib_path: Resolved path to the library file
+    """
+    if not _EXPECTED_LIBRARY_HASHES:
+        return  # No expected hashes registered — skip wasted I/O + CPU
+
+    try:
+        with open(lib_path, 'rb') as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+    except OSError as e:
+        logger.debug("_verify_library_hash: cannot read %s: %s", lib_path, e)
+        return
+
+    # Look for a matching expected hash
+    for expected_name, expected_hash in _EXPECTED_LIBRARY_HASHES.items():
+        if file_hash == expected_hash:
+            logger.debug("_verify_library_hash: %s hash matches expected (%s)", lib_name, expected_name)
+            return
+
+    # No match found — warn but don't fail
+    if _EXPECTED_LIBRARY_HASHES:
+        logger.warning(
+            "_verify_library_hash: %s (%s) hash %s does not match any expected hash. "
+            "Library may have been modified.",
+            lib_name, lib_path, file_hash
+        )
 
 if 'HPGL_DEBUG' in os.environ:
     _hpgl_so = _safe_load_library('hpgl_d', __file__)

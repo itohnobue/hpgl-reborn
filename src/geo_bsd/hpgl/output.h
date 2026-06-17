@@ -11,7 +11,12 @@ namespace hpgl
 	void update_progress(const char * stage, int percentage);
 }
 
-// Simplified logging macro - uses string concatenation instead of boost::format
+// Simplified logging macro - uses string concatenation instead of boost::format.
+// In Release builds, __FILE__ and __LINE__ are omitted to avoid leaking source paths.
+#ifndef NDEBUG
 #define LOGWARNING(msg) hpgl::write(std::string(__FILE__) + ":" + std::to_string(__LINE__) + " " + __FUNCTION__ + " Warning: " + msg)
+#else
+#define LOGWARNING(msg) hpgl::write(std::string(__FUNCTION__) + " Warning: " + msg)
+#endif
 
 #endif //__OUTPUT_H__AA0B5121_31E3_4DFA_9EEB_C1EACF2AC47B

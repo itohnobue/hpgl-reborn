@@ -1,7 +1,7 @@
 import sys
 import os
 import numpy as np
-from pylab import plot, ylabel, xlabel, show
+from matplotlib import pyplot as plt
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from geo_bsd import (
@@ -54,7 +54,7 @@ def sk_calc(x, y, z, prop1):
     for f in range(i):
         n = n + 1
         mas[f] = mas[f] + n
-    plot(mas, razn)
-    ylabel("D")
-    xlabel("max neighbours")
-    show()
+    plt.plot(mas, razn)
+    plt.ylabel("D")
+    plt.xlabel("max neighbours")
+    plt.show()

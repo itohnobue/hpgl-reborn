@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
 import numpy
 
 __all__ = ["CdfData", "calc_cdf"]
@@ -74,16 +76,11 @@ def calc_cdf(prop):
     if full_count == 0:
         raise ValueError("calc_cdf: no informed values (all cells are masked)")
     values = numpy.sort(list(counts.keys()))
-    if values.size == 0:
-        size = 0
-    elif values.size == 1:
-        size = 1
-    else:
-        size = values.size - 1
-    values = numpy.resize(values, size)
+    size = values.size
     probs = numpy.zeros(values.shape)
     last_prob = 0.0
     for i in range(size):
         probs[i] = last_prob + counts[values[i]] / full_count
         last_prob = probs[i]
-    return CdfData(values = values, probs = probs)
+    values = numpy.array(values)  # ensure full-size values array
+    return CdfData(values=values, probs=probs)

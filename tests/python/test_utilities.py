@@ -126,10 +126,12 @@ class TestCalcCdf:
         result = calc_cdf(prop)
 
         assert isinstance(result, CdfData)
-        assert len(result.values) == 4  # n-1 for non-empty
-        assert len(result.probs) == 4
+        assert len(result.values) == 5  # n values for n unique (returns all)
+        assert len(result.probs) == 5
         # Check probabilities are monotonically increasing
         assert np.all(np.diff(result.probs) >= 0)
+        # Final cumulative probability reaches 1.0
+        assert result.probs[-1] == pytest.approx(1.0)
 
     def test_calc_cdf_with_duplicates(self):
         """Test CDF with duplicate values"""
@@ -140,11 +142,10 @@ class TestCalcCdf:
 
         result = calc_cdf(prop)
 
-        # HPGL: 3 unique values (1, 2, 3) -> 2 intervals (n-1)
-        assert len(result.values) == 2
-        # HPGL's CDF implementation uses a specific formula for probabilities
-        # For data [1, 2, 2, 3, 3, 3], the last probability is 0.5
-        assert result.probs[-1] == pytest.approx(0.5, rel=1e-5)
+        # 3 unique values (1, 2, 3) -> 3 values (returns all N)
+        assert len(result.values) == 3
+        # Final cumulative probability reaches 1.0
+        assert result.probs[-1] == pytest.approx(1.0, rel=1e-5)
 
     def test_calc_cdf_with_masked_values(self):
         """Test CDF calculation ignores masked values"""
@@ -155,10 +156,10 @@ class TestCalcCdf:
 
         result = calc_cdf(prop)
 
-        # Only 1, 3, 5 are informed (3 unique values) -> HPGL returns 2 intervals
-        assert len(result.values) == 2
-        # HPGL: last prob for 3 values is 2/3, not 1.0
-        assert result.probs[-1] == pytest.approx(2/3, rel=1e-5)
+        # Only 1, 3, 5 are informed (3 unique values) -> returns all 3 values
+        assert len(result.values) == 3
+        # Final cumulative probability reaches 1.0
+        assert result.probs[-1] == pytest.approx(1.0, rel=1e-5)
 
     def test_calc_cdf_uniform_distribution(self):
         """Test CDF with uniform distribution"""
@@ -197,7 +198,7 @@ class TestCalcCdf:
         assert np.all(diffs >= -1e-10)  # Allow small floating point errors
 
     def test_calc_cdf_final_probability(self):
-        """Test that final CDF probability behavior"""
+        """Test that final CDF probability is 1.0"""
         np.random.seed(42)
         data = np.random.rand(50).astype('float32') * 100
         mask = np.ones(50, dtype='uint8')
@@ -206,17 +207,9 @@ class TestCalcCdf:
 
         result = calc_cdf(prop)
 
-        if len(result.probs) > 0:
-            # HPGL calc_cdf: For n unique values, returns n-1 intervals
-            # The final probability is (n-1)/n, which approaches 1.0 for large n
-            # but is never exactly 1.0 for multiple values
-            if len(result.values) == 1:
-                # Single value case - probability is 1.0
-                assert result.probs[-1] == pytest.approx(1.0)
-            else:
-                # Multiple values - final probability < 1.0
-                assert result.probs[-1] < 1.0
-                assert result.probs[-1] > 0
+        # Final cumulative probability reaches 1.0
+        assert result.probs[-1] == pytest.approx(1.0)
+        assert result.probs[-1] > 0
 
 
 # =============================================================================
@@ -846,15 +839,9 @@ class TestPerformanceUtilities:
 
         assert isinstance(result, CdfData)
         assert len(result.values) > 0
-        # HPGL calc_cdf: For 1000 random values, final prob is 999/1000 = 0.999
-        # The probability approaches but doesn't reach 1.0 for multiple values
-        if len(result.values) == 1:
-            # All same value - probability is 1.0
-            assert result.probs[-1] == pytest.approx(1.0)
-        else:
-            # Multiple values - probability is < 1.0
-            assert result.probs[-1] < 1.0
-            assert result.probs[-1] > 0.9  # Should be close to 1 for large n
+        # Final cumulative probability reaches 1.0
+        assert result.probs[-1] == pytest.approx(1.0)
+        assert result.probs[-1] > 0.9  # Should be close to 1 for large n
 
 
 if __name__ == '__main__':

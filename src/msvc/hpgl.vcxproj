@@ -24,6 +24,10 @@
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
+  <!-- MKL is optional; default disabled. Enable with /p:UseMKL=true -->
+  <PropertyGroup>
+    <UseMKL Condition="'$(UseMKL)' == ''">false</UseMKL>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
@@ -90,8 +94,8 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;HPGL_USE_MKL;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
@@ -103,8 +107,6 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <TargetMachine>MachineX86</TargetMachine>
@@ -113,8 +115,8 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;HPGL_USE_MKL;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
@@ -126,8 +128,6 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
     </Link>
@@ -136,8 +136,8 @@
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;HPGL_USE_MKL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <OpenMPSupport>true</OpenMPSupport>
@@ -148,24 +148,25 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
+      <SDLCheck>true</SDLCheck>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <EnableCOMATFolding>true</EnableCOMATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <TargetMachine>MachineX86</TargetMachine>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;USE_INTEL_MKL;HPGL_USE_MKL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <OpenMPSupport>true</OpenMPSupport>
@@ -176,15 +177,27 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WholeProgramOptimization>true</WholeProgramOptimization>
+      <SDLCheck>true</SDLCheck>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
       <EnableCOMATFolding>true</EnableCOMATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+    </Link>
+  </ItemDefinitionGroup>
+  <!-- Conditional MKL support. Enable with /p:UseMKL=true -->
+  <ItemDefinitionGroup Condition="'$(UseMKL)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions>USE_INTEL_MKL;HPGL_USE_MKL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(MKL_ROOT)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>mkl_core.lib;mkl_intel_lp64.lib;mkl_sequential.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

@@ -12,6 +12,7 @@
 #include "progress_reporter.h"
 #include "cov_model.h"
 #include "gauss_solver.h"
+#include "my_kriging_weights.h"
 
 namespace hpgl
 {
@@ -26,11 +27,24 @@ void build_system(
 	std::vector<double> & A,
 	std::vector<double> & b)
 {
+	// Int-range validation: coords.size() must fit in int
+	if (coords.size() > static_cast<size_t>(std::numeric_limits<int>::max() - 1))
+	{
+		HPGL_LOG_STRING("Security: Coordinate count exceeds int max in build_system.");
+		return;
+	}
+
 	int neighbour_count = static_cast<int>(coords.size());
 	int matrix_size = neighbour_count + 1;
 
 	size_t ms = static_cast<size_t>(matrix_size);
-	A.resize(ms * ms);
+	size_t matrix_elements = 0;
+	if (!detail::safe_multiply_size_t(ms, ms, matrix_elements))
+	{
+		HPGL_LOG_STRING("Security: Matrix size overflow in build_system.");
+		return;
+	}
+	A.resize(matrix_elements);
 
 	b.resize(matrix_size);
 
@@ -58,7 +72,8 @@ void build_system(
 bool solve_system(std::vector<double> & A, std::vector<double> & b, std::vector<kriging_weight_t> & weights)
 {
 	weights.resize(b.size());
-	return gauss_solve(&A[0], &b[0], &weights[0], static_cast<int>(b.size()));
+	// Cholesky decomposition (replaces Gaussian elimination for numerical stability)
+	return cholesky_old(&A[0], &b[0], &weights[0], static_cast<int>(b.size()));
 }
 
 template<typename coord_t, typename primary_cov_model_t, typename cross_cov_model_t>
@@ -163,6 +178,11 @@ public:
 		}
 	}
 
+	cross_cov_model_mark_i_t(const cross_cov_model_mark_i_t&) = delete;
+	cross_cov_model_mark_i_t& operator=(const cross_cov_model_mark_i_t&) = delete;
+	cross_cov_model_mark_i_t(cross_cov_model_mark_i_t&&) = delete;
+	cross_cov_model_mark_i_t& operator=(cross_cov_model_mark_i_t&&) = delete;
+
 	template<typename coord1_t, typename coord2_t>
 	covariance_t operator()(const coord1_t & p1, const coord2_t & p2)const
 	{
@@ -191,6 +211,11 @@ public:
 			m_coef = p12 * sqrt( primary_variance / secondary_variance );
 		}
 	}
+
+	cross_cov_model_mark_ii_t(const cross_cov_model_mark_ii_t&) = delete;
+	cross_cov_model_mark_ii_t& operator=(const cross_cov_model_mark_ii_t&) = delete;
+	cross_cov_model_mark_ii_t(cross_cov_model_mark_ii_t&&) = delete;
+	cross_cov_model_mark_ii_t& operator=(cross_cov_model_mark_ii_t&&) = delete;
 
 	template<typename coord1_t, typename coord2_t>
 	covariance_t operator()(const coord1_t & p1, const coord2_t & p2)const

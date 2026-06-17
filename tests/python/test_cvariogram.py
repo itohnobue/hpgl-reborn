@@ -84,7 +84,7 @@ class TestCheckedCreate:
         assert isinstance(v, vector_t)
 
     def test_missing_field_raises(self):
-        with pytest.raises(AssertionError, match="No values for parameters"):
+        with pytest.raises(RuntimeError, match="No values for parameters"):
             checked_create(vector_t)
 
     def test_extra_field_ignored(self):

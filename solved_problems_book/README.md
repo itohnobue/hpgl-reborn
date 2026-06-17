@@ -7,11 +7,11 @@ by Oy Leuangthong, K. Daniel Khan, and Clayton V. Deutsch (Wiley, 2008, ISBN 978
 
 | Chapter | Problem | Directory | Description |
 |---------|---------|-----------|-------------|
-| 2.3 | Standardization and Probability Intervals | `2.3.Standartization and Probability Intervals/` | Normal score transform and probability interval computation |
+| 2.3 | Standardization and Probability Intervals | `2.3. Standardization and Probability Intervals/` | Normal score transform and probability interval computation |
 | 3.1 | Basic Declustering | `3.1. Basic Declustering/` | Cell declustering for irregular sampling |
 | 3.3 | Comparison of Declustering Methods | `3.3.Comparison of Declustering Methods/` | Cell vs polygonal declustering comparison |
 | 4.1 | Central Limit Theorem | `4.1. Central limit theorem/` | CLT demonstration with spatial data |
-| 4.2 | Bootstrap and Spatial Bootstrap | `4.2.Bootstrap and Spatial Bootstrap/` | Bootstrap confidence intervals, spatial bootstrap |
+| 4.2 | Bootstrap and Spatial Bootstrap | `4.2. Bootstrap and Spatial Bootstrap/` | Bootstrap confidence intervals, spatial bootstrap |
 | 4.3 | Transfer of Uncertainty (NPV) | `4.3. Transfer of Uncertainty/` | Uncertainty propagation through NPV calculation |
 | 5.2 | Variogram Calculation | `5.2. Variogram Calculation/` | 2D and 3D experimental variogram computation |
 | 5.3 | Variogram Modeling and Volume Variance | `5.3. Variogram Modeling and Volume Variance/` | Variogram model fitting and volume-variance relations |

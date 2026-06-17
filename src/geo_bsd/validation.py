@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
 """
 Input Validation Framework for HPGL Python Interface
 Addresses vulnerability IV-001 (CVSS 7.5) - Insufficient Input Validation
@@ -154,11 +156,11 @@ class PathValidator:
             # For non-existent files, resolve without strict check
             try:
                 resolved_path = path.resolve()
-            except Exception:
+            except (OSError, RuntimeError, ValueError) as e2:
                 raise CriticalValidationError(
                     f"Invalid path: {filename}",
                     "filename"
-                ) from e
+                ) from e2
 
         # If basedir is specified, verify the resolved path is within it.
         # This prevents symlink-based escapes (e.g., /tmp/link → /etc).
@@ -202,6 +204,40 @@ class PathValidator:
             filename,
             must_exist=False,
             allow_directories=False
+        )
+
+    @staticmethod
+    def validate_filepath_in_basedir(
+        filename: str | pathlib.Path,
+        basedir: str | pathlib.Path,
+        must_exist: bool = False,
+        allowed_extensions: list[str] | None = None
+    ) -> str:
+        """
+        Validates filepath with a REQUIRED basedir containment check.
+
+        Wraps ``validate_filepath`` with the ``basedir`` parameter for callers
+        that know the expected parent directory. The ``basedir`` MUST be provided;
+        this is not optional like the base method.
+
+        Args:
+            filename: The file path to validate
+            basedir: Base directory that the resolved path must be within
+            must_exist: Whether the file must exist (for read operations)
+            allowed_extensions: List of allowed file extensions
+
+        Returns:
+            Absolute, normalized path as string
+
+        Raises:
+            CriticalValidationError: If path is invalid or outside basedir
+        """
+        return PathValidator.validate_filepath(
+            filename,
+            must_exist=must_exist,
+            allow_directories=False,
+            allowed_extensions=allowed_extensions,
+            basedir=basedir
         )
 
 
@@ -763,7 +799,7 @@ class ValidationContext:
             strict: If True, raise exception on first error. If False, collect all errors.
         """
         self.strict = strict
-        self.errors: list[str] = []
+        self.errors: list[ValidationError] = []
         self.warnings: list[str] = []
 
     def validate_grid_dimensions(self, x: int, y: int, z: int) -> None:

@@ -1,7 +1,7 @@
 import sys
 import os
 import numpy as np
-from pylab import hist, show
+from matplotlib import pyplot as plt
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from geo_bsd import (
@@ -63,5 +63,5 @@ def ntg_calc_hist(x, y, z, n, sis_prop):
         ntg[c] = ones / (ones + zeros_count)
         print(ntg[c])
         del sis_result
-    hist(ntg, histtype='bar', orientation='vertical')
-    show()
+    plt.hist(ntg, histtype='bar', orientation='vertical')
+    plt.show()

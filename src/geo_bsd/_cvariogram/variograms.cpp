@@ -6,6 +6,10 @@
 
 #include "api.h"
 
+namespace {
+    constexpr int MAX_POINT_SET_SIZE = 1000000;
+}
+
 double dot_product(vector_t * vec1, vector_t * vec2)
 {
 	double result = 0.0;
@@ -188,7 +192,7 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
                     vec.m_data[0] = i;
                     vec.m_data[1] = j;
                     vec.m_data[2] = k;
-                    double dist = sqrt( (double)(i*i+j*j+k*k) );
+                    double dist = sqrt( (double)i*i + (double)j*j + (double)k*k );
                     if (is_in_tunnel(templ, &vec) 
                             && lag->m_start <= dist
                             && dist < lag->m_end)
@@ -199,7 +203,7 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
     }
 
     lag_point_t * result = (lag_point_t *) calloc(*points_count, sizeof(lag_point_t));
-    if (!result) { fprintf(stderr, "HPGL FATAL: calc_lag_areas: calloc(result) failed\n"); abort(); }
+    if (!result) { free(lags); fprintf(stderr, "HPGL FATAL: calc_lag_areas: calloc(result) failed\n"); abort(); }
 
     int current_point = 0;
 
@@ -215,12 +219,12 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
                     vec.m_data[0] = i;
                     vec.m_data[1] = j;
                     vec.m_data[2] = k;
-                    double dist = sqrt( (double)(i*i+j*j+k*k) );
+                    double dist = sqrt( (double)i*i + (double)j*j + (double)k*k );
                     if (is_in_tunnel(templ, &vec)
                             && lag->m_start <= dist
                             && dist < lag->m_end)
                     {
-                        if (current_point >= *points_count) { fprintf(stderr, "HPGL FATAL: calc_lag_areas: buffer overflow\n"); abort(); }
+                        if (current_point >= *points_count) { free(lags); free(result); fprintf(stderr, "HPGL FATAL: calc_lag_areas: buffer overflow\n"); abort(); }
                         lag_point_t * lp = &result[current_point++];
                         lp->m_coords[0] = i;
                         lp->m_coords[1] = j;
@@ -391,9 +395,9 @@ void calc_variograms(
 	search_template_window_t window;
 	calc_search_template_window(templ, &window);	
 
-	for (int i2 = window.m_min_i; i2 <= window.m_max_i; ++i2)
-		for (int j2 = window.m_min_j; j2 <= window.m_max_j; ++j2)
-			for (int k2 = window.m_min_k; k2 <= window.m_max_k; ++k2)
+	for (int i2 = (int)floor(window.m_min_i); i2 <= (int)ceil(window.m_max_i); ++i2)
+		for (int j2 = (int)floor(window.m_min_j); j2 <= (int)ceil(window.m_max_j); ++j2)
+			for (int k2 = (int)floor(window.m_min_k); k2 <= (int)ceil(window.m_max_k); ++k2)
 			{
 				vector_t vec;
 				vec.m_data[0] = i2;
@@ -462,6 +466,15 @@ void calc_variograms_from_point_set(
 		float * result_covariations,
 		int result_length)
 {
+	if (point_set == nullptr || point_set->size > MAX_POINT_SET_SIZE)
+	{
+		fprintf(stderr,
+			"[HPGL ERROR] calc_variograms_from_point_set: point_set size %d exceeds maximum %d\n",
+			point_set ? point_set->size : 0, MAX_POINT_SET_SIZE);
+		fflush(stderr);
+		return;
+	}
+
 	int lag_count = templ->m_num_lags <= result_length 
 		? templ->m_num_lags
 		: result_length;

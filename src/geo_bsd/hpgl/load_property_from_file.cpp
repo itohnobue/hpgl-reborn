@@ -59,52 +59,35 @@ start:
 	}
 }
 
-bool is_dot(int c)
-{
-	return c == '.' || c == ',';
-}
-
-bool is_ws(int c)
-{
-	return c == ' ' || c == '\t' || c == '\n' || c == '\t';
-}
-
-bool is_eol(int c)
-{
-	return c == '\n';
-}
-
-bool is_digit(int c)
-{
-	return 
-		c == '0' || 
-		c == '1' || 
-		c == '2' ||
-		c == '3' ||
-		c == '4' ||
-		c == '5' ||
-		c == '6' ||
-		c == '7' ||
-		c == '8' ||
-		c == '9'; 
-}
-
-bool is_exp(int c)
-{
-	return c == 'e' || c == 'E';
-}
-
 template <typename T>
 void load_doubles_into_vector(FILE * file, std::vector<T> & data)
 {
 	char buffer[256];
-	float value;	
-	while (fscanf(file, "%255s", buffer) == 1)	
+	float value;
+	int skipped_count = 0;
+	const size_t MAX_ELEMENTS = 100ULL * 1024ULL * 1024ULL; // 100M elements
+	while (fscanf(file, "%255s", buffer) == 1)
 	{
+		// Check for file read errors between reads (M14b safety check)
+		if (ferror(file))
+			throw hpgl_exception("load_doubles_into_vector", "Error reading file.");
+
 		size_t len = strlen(buffer);
 		if (len >= 2 && buffer[0] == '-' && buffer[1] == '-')
 		{
-			fscanf(file, "%*[^\n]");
+			// Bounded comment-line skip (cap at 100KB, M15 fix)
+			char skip_buf[256];
+			size_t total_skipped = 0;
+			const size_t MAX_COMMENT_LINE = 100ULL * 1024ULL;
+			while (fgets(skip_buf, static_cast<int>(sizeof(skip_buf)), file))
+			{
+				size_t slen = strlen(skip_buf);
+				total_skipped += slen;
+				if (total_skipped > MAX_COMMENT_LINE)
+					throw hpgl_exception("load_doubles_into_vector", "Comment line exceeds 100KB limit.");
+				if (slen > 0 && skip_buf[slen - 1] == '\n')
+					break;
+			}
 			continue;
 		}
 		if (len >= 1 && buffer[0] == '/')
@@ -113,10 +96,27 @@ void load_doubles_into_vector(FILE * file, std::vector<T> & data)
 		}
 		else
 		{
-			if(sscanf(buffer, "%f", &value))
-				data.push_back(value);
-		}		
-	};
+			// Element-count bound (M18 fix)
+			if (data.size() >= MAX_ELEMENTS)
+				throw hpgl_exception("load_doubles_into_vector",
+					"Element count exceeds maximum allowed (100M).");
+
+			// M17: count skipped (unparseable) tokens
+			if (sscanf(buffer, "%f", &value) != 1)
+			{
+				++skipped_count;
+				continue;
+			}
+			data.push_back(value);
+		}
+	}
+
+	if (skipped_count > 0)
+	{
+		std::ostringstream oss;
+		oss << "Warning: " << skipped_count << " unparseable token(s) skipped during file load.";
+		throw hpgl_exception("load_doubles_into_vector", oss.str());
+	}
 }
 
 void load_variable_mean_from_file(

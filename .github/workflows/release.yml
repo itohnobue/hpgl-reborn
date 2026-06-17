@@ -9,23 +9,25 @@ jobs:
   check-ci:
     name: Verify CI Passed
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901abe5b7e43541d1efc0e572747c72a8b  # v4.2.3
 
       - name: Verify CI workflow passed for tagged commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           COMMIT_SHA="$(git rev-parse HEAD)"
           echo "Checking CI workflow runs for commit: ${COMMIT_SHA}"
 
-          # Poll for CI completion (max 10 minutes, 20s intervals)
+          # Poll for CI completion (max 20 minutes, 40s intervals)
+          NOT_FOUND_COUNT=0
           for i in $(seq 1 30); do
             RUN_DATA=$(gh run list --workflow ci.yml --commit "${COMMIT_SHA}" \
-              --json status,conclusion --jq '.[0] | "\(.status)|\(.conclusion)"' 2>/dev/null || echo "NOT_FOUND|")
+              --json status,conclusion --jq '.[0] | "\(.status)|\(.conclusion)"' 2>gh_stderr.txt || echo "NOT_FOUND|")
 
             STATUS="${RUN_DATA%%|*}"
             CONCLUSION="${RUN_DATA##*|}"
@@ -42,41 +44,116 @@ jobs:
             fi
 
             if [ "$STATUS" = "NOT_FOUND" ]; then
-              echo "ERROR: No CI workflow run found for commit ${COMMIT_SHA}."
-              echo "Push to main/master first to trigger CI, then tag after CI passes."
-              exit 1
+              NOT_FOUND_COUNT=$((NOT_FOUND_COUNT + 1))
+              echo "CI workflow not found yet — attempt ${i}/30 (consecutive not found: ${NOT_FOUND_COUNT})"
+            else
+              NOT_FOUND_COUNT=0
+              echo "CI workflow status: ${STATUS} — waiting... ($i/30)"
             fi
 
-            echo "CI workflow status: ${STATUS} — waiting... ($i/30)"
-            sleep 20
+            sleep 40
           done
 
-          echo "ERROR: Timed out (10 minutes) waiting for CI workflow to complete."
+          echo "ERROR: CI workflow not found after ${NOT_FOUND_COUNT} consecutive attempts (30 retries)."
+          echo "Push to main/master first to trigger CI, then tag after CI passes."
+          if [ -s gh_stderr.txt ]; then
+            echo "gh CLI stderr output:"
+            cat gh_stderr.txt
+          fi
           exit 1
 
-  build:
-    name: Build & Publish
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  build-wheels:
+    name: Build wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     needs: check-ci
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901abe5b7e43541d1efc0e572747c72a8b  # v4.2.3
+
+      - name: Install OpenBLAS (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $openblasVersion = "0.3.29"
+          $openblasUrl = "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${openblasVersion}/OpenBLAS-${openblasVersion}-x64.zip"
+          $openblasZip = Join-Path $env:RUNNER_TEMP "openblas.zip"
+          Invoke-WebRequest -Uri $openblasUrl -OutFile $openblasZip
+          Expand-Archive -Path $openblasZip -DestinationPath "C:\openblas" -Force
+          "OpenBLAS_HOME=C:\openblas" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BLAS_LIBRARIES=C:\openblas\lib\openblas.lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "LAPACK_LIBRARIES=C:\openblas\lib\openblas.lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@8d346a23c6a3522e5f282e1ca07acf7b04f5e6a4  # v2.23.3
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92bf6a43e9ab9b3c6  # v4.7.1
+        with:
+          name: wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  build-sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: check-ci
+    steps:
+      - uses: actions/checkout@11bd71901abe5b7e43541d1efc0e572747c72a8b  # v4.2.3
+
+      - name: Build sdist
+        run: |
+          set -euo pipefail
+          pipx run build --sdist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92bf6a43e9ab9b3c6  # v4.7.1
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    name: Create Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build-wheels, build-sdist]
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v3
+      - name: Download wheels
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e  # v4
         with:
-          enable-cache: true
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
 
-      - name: Build package
-        run: uv build
+      - name: Download sdist
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e  # v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: Generate SHA256 checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * 2>/dev/null > sha256sums.txt || shasum -a 256 -- * > sha256sums.txt
+          echo "=== SHA256 checksums ==="
+          cat sha256sums.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c062e08be53281541eafacffafaba86ef16e7c2a  # v2.2.1
         with:
-          files: dist/*
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/sha256sums.txt
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

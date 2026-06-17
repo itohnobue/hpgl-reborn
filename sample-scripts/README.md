@@ -7,7 +7,7 @@ Example Python scripts demonstrating HPGL library usage for geostatistical tasks
 | `calc_mean.py` | Standalone mean calculation from an INC file (no HPGL dependency) |
 | `gaussian_cdf.py` | Gaussian CDF computation |
 | `getconcub.py` | Concurrency benchmark / stress test |
-| `gsr_calc.py` | GSR (something-something-ratio) calculation |
+| `gsr_calc.py` | GSR (Gaussian Simulation Ratio) calculation |
 | `gtsim.py` | Geostatistical simulation testing |
 | `gtsim_test.py` | GTSIM test runner |
 | `gtsimk.py` | GTSIM with kriging |
@@ -23,7 +23,8 @@ Example Python scripts demonstrating HPGL library usage for geostatistical tasks
 | `stat.py` | Statistical analysis utilities |
 | `test_gtsimk.py` | GTSIM-k test harness |
 | `test_gtsimk1.py` | GTSIM-k test variant |
-| `test_gtsim.py` | GTSIM test harness |
+| `test_gtsimk.py` | GTSIM-k test harness |
+| `test_gtsimk1.py` | GTSIM-k test variant |
 | `test_prop2array.py` | Property-to-array conversion test |
 
 **Note:** These scripts are designed to work with external data files (INC/GSLIB format)

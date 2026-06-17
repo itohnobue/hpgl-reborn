@@ -96,23 +96,23 @@ fill_ellipsoid_directions(
     double dip, 
     double rotation);
 
-bool 
+CVAR_API bool 
 is_in_tunnel(
     variogram_search_template_t * templ,
     vector_t * vec);
 
-bool 
+CVAR_API bool 
 is_in_tunnel_v(
     variogram_search_template_t * templ,
     vector_t * vec, bool * results, int count);
 
 
-void 
+CVAR_API void 
 calc_search_template_window(
 		variogram_search_template_t * templ,
 		search_template_window_t * window);
 
-lag_point_t * 
+CVAR_API lag_point_t * 
 calc_lag_areas(variogram_search_template_t * templ, int * points_count);
 
 CVAR_API void 

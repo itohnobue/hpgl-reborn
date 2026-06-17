@@ -1,6 +1,8 @@
 #ifndef _API_H_ASDJLKJ123123L192301923LKAJSldsDFSDFsd123123
 #define _API_H_ASDJLKJ123123L192301923LKAJSldsDFSDFsd123123
 
+#include <stdint.h>
+
 #ifdef _MSC_VER
 #ifdef HPGL_DLL
 #ifdef HPGL_EXPORTS
@@ -91,7 +93,7 @@ struct hpgl_sgs_params_t
   int m_radiuses[3];
   int m_max_neighbours;
   int m_kriging_kind;
-  long int m_seed;
+  int64_t m_seed;
   int m_min_neighbours;
 };
 
@@ -224,9 +226,9 @@ HPGL_API void hpgl_ordinary_kriging(
     hpgl_cont_masked_array_t * output_data); 
 
 HPGL_API void hpgl_simple_kriging(   
-	// NOTE: simple_kriging and lvm_kriging use raw float*/unsigned char* parameters
-	// with separate hpgl_shape_t*, unlike most other functions that use array struct
-	// pointers. This is a historical API design choice maintained for compatibility.
+	// NOTE: input_mask and output_mask may be nullptr. When null, all cells
+	// are treated as informed (mask[i]==1). This is valid per cont_property_array_t
+	// design which treats null mask as "all cells active".
     float * input_data,
     unsigned char * input_mask,
     hpgl_shape_t * input_data_shape,
@@ -244,6 +246,9 @@ hpgl_simple_kriging_weights(
 		int neighbours_count,
 		hpgl_cov_params_t * params,
 		float * weights);
+// NOTE: neighbours_count must be >= 0. The caller (Python ctypes wrapper)
+// guarantees that neighbours_x, neighbours_y, neighbours_z, and weights all
+// have at least neighbours_count valid elements. No bounds check is performed.
 
 HPGL_API void hpgl_lvm_kriging(
     float * input_data,

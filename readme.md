@@ -3,15 +3,17 @@
 ## Table of Contents
 
 - [Description](#description)
-- [Algorithms](#algorithms)
-- [Covariance Models](#covariance-models)
+  - [Algorithms](#algorithms)
+  - [Geostatistics Glossary](#geostatistics-glossary)
+  - [Covariance Models](#covariance-models)
+  - [How to Use This Guide](#how-to-use-this-guide)
 - [Requirements](#requirements)
 - [Build Instructions](#build-instructions)
   - [Windows (MSBuild)](#windows-msbuild---recommended)
   - [Linux (CMake)](#linux-cmake)
   - [macOS Build](#macos-build)
   - [CMake Options](#cmake-options)
-- [Installation](#installation)
+- [Usage](#usage)
 - [Quick Start](#quick-start)
 - [API Overview](#api-overview)
   - [Core Classes](#core-classes)
@@ -29,6 +31,8 @@
 - [Migration Guide](#migration-guide)
 - [Changes from v0.9.9](#changes-from-v099)
 - [Troubleshooting](#troubleshooting)
+- [Frequently Asked Questions](#frequently-asked-questions)
+- [Getting Help](#getting-help)
 - [License](#license)
 
 ## Description
@@ -48,11 +52,44 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 - **Variogram Analysis**: Experimental variogram calculation, variogram search templates
 - **Utilities**: CDF computation, property I/O (INC/GSLIB formats), mean calculation, Vertical Proportion Curves (VPC)
 
+### Geostatistics Glossary
+
+Key geostatistical terms used throughout this documentation:
+
+| Term | Definition |
+|------|-----------|
+| **Kriging** | A family of geostatistical interpolation methods that predict values at unmeasured locations using weighted averages of nearby known samples, with weights derived from a spatial covariance model. Named after Danie Krige. |
+| **Simple Kriging (SK)** | Kriging variant where the global mean is assumed known and constant over the entire domain. |
+| **Ordinary Kriging (OK)** | Kriging variant that estimates a local mean from neighboring data; the most commonly used form. |
+| **LVM Kriging** | Locally Varying Mean kriging — uses an auxiliary variable as a locally varying trend. |
+| **Indicator Kriging (IK)** | Kriging applied to binary (0/1) indicator variables, used for categorical data or probability estimation. |
+| **Cokriging** | Extension of kriging that uses a secondary (auxiliary) variable correlated with the primary variable to improve estimation. |
+| **Sequential Gaussian Simulation (SGS)** | Simulation method that generates multiple equiprobable realizations by sequentially drawing from local Gaussian (normal) distributions conditioned on previously simulated values. |
+| **Sequential Indicator Simulation (SIS)** | Simulation method for categorical variables using indicator transforms and sequential drawing from local probability distributions. |
+| **GTSIM** | General Truncated Gaussian Simulation — simulation method using truncated Gaussian fields with threshold-based facies assignment. |
+| **Variogram** | A function describing the spatial correlation structure of a variable: how dissimilarity increases with distance. Key tool for kriging and simulation. |
+| **CDF** | Cumulative Distribution Function — maps each possible value to the probability of observing a value less than or equal to it. |
+| **VPC** | Vertical Proportion Curve — the proportion of each facies (category) as a function of vertical position (depth), used in reservoir modeling. |
+| **Covariance Model** | Mathematical function describing spatial continuity. HPGL supports: **Spherical** (linear behavior near origin, reaches sill at range), **Exponential** (steeper near-origin rise, asymptotically approaches sill), **Gaussian** (parabolic near origin, smooth continuity). |
+| **Sill** | The value at which the variogram/covariance levels off (maximum variance). Must be positive. |
+| **Nugget** | The discontinuity at zero distance (measurement error or microscale variation). Must be ≤ sill. |
+| **Anisotropy** | Direction-dependent spatial continuity. The same variogram model may have different ranges in X, Y, and Z directions, controlled by `ranges` and `angles` parameters in `CovarianceModel`. |
+
 ### Covariance Models
 
 - Spherical
 - Exponential
 - Gaussian
+
+### How to Use This Guide
+
+| You are... | Start here |
+|------------|-----------|
+| New to HPGL, want to try it out | [Quick Start](#quick-start) — runnable example with no external data |
+| Need to build from source | [Build Instructions](#build-instructions) — Windows, Linux, macOS |
+| Already using HPGL, need API details | [API Overview](#api-overview) — function signatures and usage |
+| Upgrading from legacy HPGL (0.9.x) | [Migration Guide](#migration-guide) — breaking changes and new APIs |
+| Running into problems | [Troubleshooting](#troubleshooting) — common errors and fixes |
 
 ## Requirements
 
@@ -60,7 +97,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 
 - **[uv](https://docs.astral.sh/uv/)**: Package and environment manager (installs Python and dependencies automatically)
 - **Python**: 3.9 or higher (tested up to 3.13) — installed by uv
-- **NumPy**: 2.0 or higher — installed by uv
+- **NumPy**: 2.0 or higher, < 3.0 — installed by uv
 - **SciPy**: (optional, for `routines` module) — installed by uv
 
 ### Windows Build
@@ -87,7 +124,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 
 2. **Set up the Python environment:**
 
-   ```cmd
+   ```powershell
    uv sync --extra test
    ```
 
@@ -95,7 +132,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 
 3. **Build the native library:**
 
-   ```cmd
+   ```powershell
    build.bat
    ```
 
@@ -105,7 +142,7 @@ Originally developed at the Ufa Petroleum Institute, HPGL provides production-gr
 
 4. **Verify the build:**
 
-   ```cmd
+   ```powershell
    uv run python -c "import sys; sys.path.insert(0, 'src'); from geo_bsd import hpgl_wrap; print('Build OK')"
    ```
 
@@ -224,7 +261,7 @@ HPGL can be built on macOS using Homebrew-installed dependencies and the Clang c
 | `HPGL_USE_MKL` | OFF | Use Intel MKL (instead of OpenBLAS) |
 | `HPGL_BUILD_VARIOGRAM` | ON | Build cvariogram extension module |
 
-## Installation
+## Usage
 
 ### From Source (Development Mode)
 
@@ -301,6 +338,12 @@ print(f"Kriging result shape: {result.data.shape}, mean: {result.data.mean():.3f
 print(f"SGS result shape:    {sim.data.shape}, mean: {sim.data.mean():.3f}")
 ```
 
+Expected output (approximate values):
+```
+Kriging result shape: (50, 50, 20), mean: 4.950
+SGS result shape:    (50, 50, 20), mean: 4.947
+```
+
 ## API Overview
 
 ### Core Classes
@@ -312,7 +355,7 @@ print(f"SGS result shape:    {sim.data.shape}, mean: {sim.data.mean():.3f}")
 | `IndProperty(data, mask, indicator_count)` | Indicator (categorical) property |
 | `CovarianceModel(type, ranges, angles, sill, nugget)` | Variogram/covariance model parameters |
 | `CdfData(values, probs)` | Cumulative distribution function data |
-| `covariance` | Namespace with model type constants: `spherical` (0), `exponential` (1), `gaussian` (2) |
+| `covariance` | Class with model type constants: `spherical` (0), `exponential` (1), `gaussian` (2) |
 
 ### Kriging Functions
 
@@ -323,7 +366,7 @@ print(f"SGS result shape:    {sim.data.shape}, mean: {sim.data.mean():.3f}")
 | `lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model)` | Kriging with Locally Varying Mean |
 | `indicator_kriging(prop, grid, data, marginal_probs)` | Indicator Kriging for categorical data |
 | `median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model)` | Median Indicator Kriging (2 categories) |
-| `simple_cokriging_markI(prop, grid, secondary_data, primary_mean, secondary_mean, secondary_variance, correlation_coef, radiuses, max_neighbours, cov_model)` | Cokriging using Markov Model I |
+| `simple_cokriging_markI(prop, grid, radiuses, max_neighbours, cov_model, secondary_data, primary_mean, secondary_mean, secondary_variance, correlation_coef)` | Cokriging using Markov Model I |
 | `simple_cokriging_markII(grid, primary_data, secondary_data, correlation_coef, radiuses, max_neighbours)` | Cokriging using Markov Model II |
 
 ### Simulation Functions
@@ -341,9 +384,9 @@ print(f"SGS result shape:    {sim.data.shape}, mean: {sim.data.mean():.3f}")
 | `load_ind_property(filename, undefined_value, indicator_values, size)` | Load indicator property from INC file |
 | `read_inc_file_float(filename, undefined_value, size)` | Fast C++ reader for continuous INC data (specify grid size) |
 | `read_inc_file_byte(filename, undefined_value, size, indicator_values)` | Fast C++ reader for indicator INC data |
-| `write_property(prop, filename, prop_name, undefined_value)` | Write property to INC file |
-| `write_gslib_property(prop, filename, prop_name, undefined_value)` | Write property in GSLIB format |
-| `get_gslib_property(filename, name, undefined_value, size)` | Read a named property from a GSLIB-format file |
+| `write_property(prop, filename, prop_name, undefined_value, indicator_values=None)` | Write property to INC file (indicator_values for IndProperty) |
+| `write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=None)` | Write property in GSLIB format (indicator_values for IndProperty) |
+| `get_gslib_property(prop_dict, prop_name, undefined_value)` | Read a named property from a GSLIB-format property dictionary |
 
 ### Utility Functions
 
@@ -353,10 +396,9 @@ print(f"SGS result shape:    {sim.data.shape}, mean: {sim.data.mean():.3f}")
 | `calc_cdf(prop)` | Calculate empirical CDF from property data |
 | `set_thread_num(n)` | Set number of OpenMP threads |
 | `get_thread_num()` | Get current OpenMP thread count |
-| `simple_kriging_weights(center_point, n_x, n_y, n_z, ...)` | Compute kriging weights for a set of neighbor points |
+| `simple_kriging_weights(center_point, n_x, n_y, n_z, ranges=(100000,100000,100000), sill=1, cov_type=covariance.exponential, nugget=None, angles=None)` | Compute kriging weights for a set of neighbor points |
 | `set_output_handler(handler, param)` | Register a callback for C++ stdout/stderr output |
 | `set_progress_handler(handler, param)` | Register a callback for C++ progress reporting |
-| `get_gslib_property(filename, name, undefined_value, size)` | Read a named property from a GSLIB-format file |
 
 ### Submodules
 
@@ -366,7 +408,7 @@ Each submodule is imported under `geo_bsd` and exposes its own public API.
 |--------|-------------|
 | `geo_bsd.variogram` | Pure-Python variogram analysis: `TVEllipsoid`, `TVVariogramSearchTemplate`, `PointSetScanContStyle`, `PointSetScanGridStyle`, `CubeScan`, variogram/covariance/correlogram functions |
 | `geo_bsd.cvariogram` | C-extension variogram (faster): `Ellipsoid`, `VariogramSearchTemplate`, `CalcVariograms`, `CalcVariogramsFromPointSet`, `CStackLayers` |
-| `geo_bsd.routines` | High-level utilities: `CalcVPC`, `CalcMean`, `Cube2PointSet`, `PointSet2Cube`, `SaveGSLIBPointSet`, `SaveGSLIBCubes`, `LoadGslibFile`, `MovingAverage3D`, `GetCubicalMask`, `GetEllipseMask` |
+| `geo_bsd.routines` | High-level utilities: `CalcVPC`, `CalcVPCsIndicator`, `CalcMarginalProbsIndicator`, `CubeFromVPC`, `CubesFromVPCs`, `Cubes2PointSet`, `Cube2PointSet`, `PointSet2Cube`, `MeanCalc`, `CalcMean`, `SaveGSLIBPointSet`, `SaveGSLIBCubes`, `LoadGslibFile`, `MovingAverage3D`, `GetCubicalMask`, `GetEllipseMask` |
 | `geo_bsd.validation` | Input validation framework: `GridValidator`, `ParameterValidator`, `PathValidator`, `ValidationContext`, `ValidationConstants` |
 
 ## Dataclass Property Reference
@@ -462,8 +504,27 @@ sim = geo_bsd.sgs_simulation(
 ### Run Indicator Kriging for Categorical Data
 
 ```python
-# 3-category indicator property
+import numpy as np
+# 3-category indicator property (50x50x20 grid)
+nx, ny, nz = 50, 50, 20
+grid = geo_bsd.SugarboxGrid(nx, ny, nz)
+
+# Create synthetic categorical data: random ints 0, 1, or 2
+np.random.seed(42)
+ind_data = np.random.randint(0, 3, size=(nx, ny, nz)).astype(np.uint8)
+ind_mask = np.ones((nx, ny, nz), dtype=np.uint8)
 ind_prop = geo_bsd.IndProperty(ind_data, ind_mask, indicator_count=3)
+
+# Define covariance models (one per category)
+cov1 = geo_bsd.CovarianceModel(
+    type=geo_bsd.covariance.spherical, ranges=(8, 8, 4), sill=1.0, nugget=0.1,
+)
+cov2 = geo_bsd.CovarianceModel(
+    type=geo_bsd.covariance.exponential, ranges=(8, 8, 4), sill=1.0, nugget=0.1,
+)
+cov3 = geo_bsd.CovarianceModel(
+    type=geo_bsd.covariance.gaussian, ranges=(8, 8, 4), sill=1.0, nugget=0.1,
+)
 
 ik_data = [
     {"cov_model": cov1, "radiuses": (8, 8, 4), "max_neighbours": 12},
@@ -514,12 +575,16 @@ except geo_bsd.validation.CriticalValidationError as e:
 
 Common validation exceptions:
 
-| Exception | When |
-|-----------|------|
-| `validation.CriticalValidationError` | Invalid parameter — prevents operation (e.g. negative grid dim, path traversal, `nugget > sill`) |
-| `validation.ValidationWarning` | Suspicious but non-fatal parameter value |
-| `TypeError` | Wrong argument type |
-| `ValueError` | Out-of-range value, empty input, or invalid configuration |
+| Exception | When | Example Message |
+|-----------|------|-----------------|
+| `validation.CriticalValidationError` | Invalid parameter — prevents operation (e.g. negative grid dim, path traversal, `nugget > sill`) | `"Sill must be positive, got -1.0"`, `"Grid dimension must be >= 1, got -1"` |
+| `validation.ValidationWarning` | Suspicious but non-fatal parameter value | `"Angle outside [0, 360] range"` |
+| `TypeError` | Wrong argument type | `"expected ContProperty, IndProperty, or tuple, got str"` |
+| `ValueError` | Out-of-range value, empty input, or invalid configuration | `"calc_cdf: no informed values (all cells are masked)"`, `"sill cannot be zero"` |
+| `RuntimeError` | C++ computation failure (singular matrix, memory exhaustion, incompatible data) | `"ordinary_kriging failed: singular matrix"`, `"HPGL error: ..."` |
+| `KeyError` | Missing property name in GSLIB property dictionary (`get_gslib_property`) | (standard Python KeyError) |
+| `AttributeError` | Accessing nonexistent attribute on property or model objects | (standard Python AttributeError) |
+| `OSError` / `FileNotFoundError` | File missing, permission denied, or disk I/O failure during load/write operations | `"Library directory not found"`, `"Cannot open file"` |
 
 ### Runtime Errors from C++ Backend
 
@@ -595,7 +660,7 @@ Run the full test suite:
 uv run pytest tests/python/ -v
 ```
 
-The test suite includes 615 tests covering:
+The test suite includes 622 tests covering:
 - All kriging algorithms (OK, SK, LVM, IK, Median IK, Cokriging)
 - All simulation algorithms (SGS, SIS)
 - Edge cases and parameter validation
@@ -606,7 +671,7 @@ The test suite includes 615 tests covering:
 
 ## Project Structure
 
-```
+```text
 hpgl/
   build.bat              # Windows build script (MSBuild)
   CMakeLists.txt         # Cross-platform CMake build
@@ -620,6 +685,7 @@ hpgl/
       geo.py             # Core classes and kriging functions
       sgs.py             # Sequential Gaussian Simulation
       sis.py             # Sequential Indicator Simulation
+      gtsim.py           # General Truncated Gaussian Simulation (GTSIM)
       cdf.py             # CDF computation
       variogram.py       # Variogram analysis (Python)
       cvariogram.py      # Variogram analysis (C extension)
@@ -722,7 +788,7 @@ geo_bsd.ordinary_kriging(prop, grid, radiuses, max_n, cov_model=cov)
 
 #### 6. SGS Simulation Signature
 
-`sgs_simulation` gained new parameters. The old positional-only call style still works but the new `kriging_type`, `use_harddata`, `mask`, `min_neighbours` parameters are recommended.
+`sgs_simulation` gained new parameters. The old positional-only call style still works but the new `kriging_type`, `use_harddata`, `use_regions`, `region_size`, `mask`, `force_single_thread`, `force_parallel`, and `min_neighbours` parameters are recommended.
 
 ```python
 # New (all optional params shown):
@@ -736,6 +802,10 @@ geo_bsd.sgs_simulation(
     mean=None,                # float for stationary, ndarray for LVM
     use_harddata=True,
     mask=None,                # ndarray: 1=simulate, 0=skip
+    use_regions=False,        # enable region-wise simulation
+    region_size=None,         # tuple (rx, ry, rz) for region dimensions
+    force_single_thread=False,# force single-threaded execution
+    force_parallel=False,     # force multi-threaded execution
     min_neighbours=0,
 )
 ```
@@ -778,8 +848,8 @@ geo_bsd.set_thread_num(4)
 - **Input validation**: Comprehensive parameter validation framework
 - **Security**: Path validation, array reference management, safe library loading
 - **Modern build**: MSBuild-based build.bat, pyproject.toml, CMakeLists.txt
-- **Algorithm bug fixes**: Fixed 7 mathematical bugs — covariance C(0) missing nugget contribution, OK kriging variance sign error, correlogram weight adjustment inverted, Cokriging Mark II cross-covariance ratio inverted, SGS normalization coefficient, and spurious /2 in covariance and indicator correlation functions
-- **Test suite**: 615 automated tests with pytest
+- **Algorithm bug fixes**: Fixed 6 mathematical bugs — covariance C(0) missing nugget contribution, OK kriging variance sign error, correlogram weight adjustment inverted, Cokriging Mark II cross-covariance ratio inverted, SGS normalization coefficient, and spurious /2 in covariance and indicator correlation functions
+- **Test suite**: 622 automated tests with pytest
 - **Legacy cleanup**: Removed unused libraries, old Boost.Python bindings, obsolete build systems (SCons, old Makefiles), Debian packaging, old VS 2008 project files, and a bundled Win32 installer, etc
 
 ## Troubleshooting
@@ -868,6 +938,30 @@ uv run python -c "import sys; sys.path.insert(0,'src'); from geo_bsd import hpgl
 2. Ensure the NumPy version in your environment matches what CMake detected: `uv run python -c "import numpy; print(numpy.__version__)"`
 3. If you upgraded NumPy after building, always rebuild the native library
 
+## Frequently Asked Questions
+
+### Do I need Intel MKL?
+No. HPGL works with OpenBLAS (default on Linux/macOS) or Intel MKL (default on Windows). Use `-DHPGL_USE_MKL=OFF` for OpenBLAS, `-DHPGL_USE_MKL=ON` for MKL.
+
+### Why do I get `ImportError` after building?
+The native library (`hpgl.dll` / `hpgl.so`) must be built and available in `src/geo_bsd/`. Use `uv run python` to ensure the virtual environment is active.
+
+### Can I use pip instead of uv?
+The project uses `uv` for environment and dependency management. `uv sync` replaces `pip install`. Use `uv run` to execute scripts in the managed environment.
+
+### How do I contribute?
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and PR guidelines.
+
+### Is HPGL production-ready?
+HPGL is used at Ufa Petroleum Institute for reservoir modeling research. The v1.6.0 release includes extensive validation and a comprehensive test suite. As with any scientific computing library, validate results against known benchmarks for your specific use case.
+
+## Getting Help
+
+- **Bug reports and feature requests**: [GitHub Issues](https://github.com/hpgl/hpgl/issues)
+- **Questions and discussions**: [GitHub Discussions](https://github.com/hpgl/hpgl/discussions)
+- **Before opening an issue**, run the [General Diagnostics](#general-diagnostics) commands and include the output
+
 ## License
 
-For non-commercial use (research, education, etc.) HPGL is distributed under the BSD license.
+HPGL Reborn is distributed under the **BSD 3-Clause License** (SPDX: `BSD-3-Clause`).
+See [`license.txt`](license.txt) for the full license text.

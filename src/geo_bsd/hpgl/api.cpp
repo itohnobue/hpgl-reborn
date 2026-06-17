@@ -221,8 +221,7 @@ HPGL_API int hpgl_write_inc_file_float(
 	try
 	{
 		using namespace hpgl;
-		int vol = get_shape_volume(&(arr->m_shape));
-		if (vol < 0) return -1;
+		int vol = validate_shape_volume(get_shape_volume(&(arr->m_shape)), "write_inc_file_float");
 		property_writer_t writer;
 		writer.init(filename, name);
 		cont_property_array_t prop(
@@ -286,8 +285,7 @@ HPGL_API int hpgl_write_inc_file_byte(
 	try
 	{
 		using namespace hpgl;
-		int vol = get_shape_volume(&(arr->m_shape));
-		if (vol < 0) return -1;
+		int vol = validate_shape_volume(get_shape_volume(&(arr->m_shape)), "write_inc_file_byte");
 		std::vector<unsigned char> remap_table;
 		init_remap_table(values, values_count, arr->m_indicator_count, remap_table);
 
@@ -321,8 +319,7 @@ hpgl_write_gslib_cont_property(
 	try
 	{
 		using namespace hpgl;
-		int size = get_shape_volume(&data->m_shape);
-		if (size < 0) return -1;
+		int size = validate_shape_volume(get_shape_volume(&data->m_shape), "write_gslib_cont_property");
 		sp_double_property_array_t prop = std::make_shared<cont_property_array_t>(data->m_data, data->m_mask, size);
 		hpgl::property_writer_t writer;
 		writer.init(filename, name);
@@ -352,8 +349,7 @@ hpgl_write_gslib_byte_property(
 	try
 	{
 		using namespace hpgl;
-		int size = get_shape_volume(&data->m_shape);
-		if (size < 0) return -1;
+		int size = validate_shape_volume(get_shape_volume(&data->m_shape), "write_gslib_byte_property");
 		sp_byte_property_array_t prop = std::make_shared<indicator_property_array_t>(data->m_data, data->m_mask, size, data->m_indicator_count);
 		std::vector<unsigned char> remap_table;
 		init_remap_table(values, values_count, data->m_indicator_count, remap_table);
@@ -597,8 +593,9 @@ hpgl_indicator_kriging(
 	int size = get_shape_volume(&in_data->m_shape);
 	validate_shape_volume_or_throw(size, "indicator_kriging input");
 	int size2 = get_shape_volume(&out_data->m_shape);
-	validate_shape_volume_or_throw(size2, "indicator_kriging output");
-	HPGL_CHECK(size == size2, "hpgl_indicator_kriging: input and output size mismatch");
+		validate_shape_volume_or_throw(size2, "indicator_kriging output");
+		if (size != size2)
+			throw hpgl_exception("hpgl_indicator_kriging", "input and output size mismatch");
 	indicator_property_array_t in_prop(in_data->m_data, in_data->m_mask, size, in_data->m_indicator_count);
 	indicator_property_array_t out_prop(out_data->m_data, out_data->m_mask, size2, out_data->m_indicator_count);
 
@@ -814,6 +811,13 @@ hpgl_sis_simulation_lvm(
 	// NOTE: The Python caller guarantees indicator_count <= mean_data array size
 	// (contract enforced in hpgl_wrap.py). Defensive null check on m_data per entry.
 	std::vector<const mean_t *> means;
+#ifndef NDEBUG
+	// Debug-mode sanity: reject unreasonably large indicator counts to catch
+	// mismatched-contract bugs early.
+	if (indicator_count < 0 || indicator_count > 1000000)
+		throw hpgl_exception("hpgl_sis_simulation_lvm",
+			"indicator_count out of reasonable range [0, 1000000]");
+#endif
 	for (int i = 0; i < indicator_count; ++i)
 	{
 		if (mean_data[i].m_data == nullptr)

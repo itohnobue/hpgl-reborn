@@ -1,149 +1,111 @@
 #include "stdafx.h"
 #include "locale_keeper.h"
 #include "hpgl_exception.h"
+#include "load_property_from_file.h"
+#include <cmath>
+#include <climits>
+#include <cerrno>
+#include <cstring>
 
 namespace hpgl
 {
 	namespace {
-		void read_prop_name(FILE * file, std::string & prop_name)
+		/// Reads the next non-comment token from the file into buffer.
+		/// Skips "--" comment lines (bounded to 100KB per line to prevent
+		/// unbounded memory consumption from malicious input).
+		/// Returns true on success, false on EOF, throws on file error.
+		static bool read_next_token(FILE * file, char * buffer, int buffer_size, const char * func_name)
 		{
-			char line[1024];
-start:
-			// Use fgets instead of fscanf("%[^\n]") — fscanf returns 0 on blank
-			// lines without consuming '\n', causing an infinite goto-start loop.
-			// fgets handles blank lines correctly: reads the '\n' and returns a
-			// non-null pointer with line_size=0 after stripping.
-			if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
+		start:
+			char fmt[16];
+			snprintf(fmt, sizeof(fmt), "%%%ds", buffer_size - 1);
+			if (fscanf(file, fmt, buffer) == EOF)
+				return false;
+			if (ferror(file))
+				throw hpgl_exception(func_name, "Error reading file.");
+
+			size_t len = strlen(buffer);
+			if (len >= 2 && buffer[0] == '-' && buffer[1] == '-')
 			{
-				prop_name = "";
-				throw hpgl_exception("read_prop_name", "Property name not found.");
-			}
-			size_t line_size = strlen(line);
-			// Strip trailing newline(s)
-			if (line_size > 0 && line[line_size - 1] == '\n')
-			{
-				line[--line_size] = '\0';
-				if (line_size > 0 && line[line_size - 1] == '\r')
-					line[--line_size] = '\0';
-			}
-			if (line_size == 0)
-				goto start;
-			if (!isalpha(static_cast<unsigned char>(line[0])))
-			{
-				// Skiping line — consume any continuation of a long non-alpha line
-				while (line_size == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n')
+				// Bounded comment-line skip (cap at 100KB, matching M15 pattern)
+				char skip_buf[256];
+				size_t total_skipped = 0;
+				const size_t MAX_COMMENT_LINE = 100ULL * 1024ULL;
+				while (fgets(skip_buf, static_cast<int>(sizeof(skip_buf)), file))
 				{
-					if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
+					size_t slen = strlen(skip_buf);
+					total_skipped += slen;
+					if (total_skipped > MAX_COMMENT_LINE)
+						throw hpgl_exception(func_name, "Comment line exceeds 100KB limit.");
+					if (slen > 0 && skip_buf[slen - 1] == '\n')
 						break;
-					line_size = strlen(line);
 				}
 				goto start;
 			}
-			else
-			{
-				// Finally line starting with letter
-				prop_name = line;
-				// Handle continuation for excessively long property names
-				while (line_size == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n')
-				{
-					if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
-						break;
-					line_size = strlen(line);
-					if (line_size > 0 && line[line_size - 1] == '\n')
-						line[--line_size] = '\0';
-					prop_name += line;
-				}
-			}
+			return true;
 		}
 
-		void load_floats_into_vector(FILE * file, float * data, int size)
+		static void load_floats_into_vector(FILE * file, float * data, int size)
 		{
 			char buffer[256];
 			for (int i = 0; i < size; ++i)
-			{		
-start:
-				if (fscanf(file, "%255s", buffer) == EOF)
-					throw hpgl_exception("load_floats_into_vector",
-						"Unexpected end of file.");
-				if (ferror(file))
-					throw hpgl_exception("load_floats_into_vector",
-						"Error reading file.");
-			
-				size_t len = strlen(buffer);
-				if (len >= 2 && buffer[0] == '-' && buffer[1] == '-')
-				{
-					//comment - skipping rest of line
-					fscanf(file, "%*[^\n]");
-					goto start;
-				}
-				if (len >= 1 && buffer[0] == '/')
-				{
-					throw hpgl_exception("load_floats_into_vector",
-						"Unexpected end of data.");					
-				}
-				else
-				{
-					float value;
-					if (sscanf(buffer, "%f", &value) != 1)
-					{
-						std::ostringstream oss;
-						oss << "Error parsing '" << buffer << "' string.";
-						throw hpgl_exception("load_floats_into_vector", oss.str());
-					}					
-					data[i] = value;											
-				}		
-			};
-		}		
+			{
+				if (!read_next_token(file, buffer, static_cast<int>(sizeof(buffer)), "load_floats_into_vector"))
+					throw hpgl_exception("load_floats_into_vector", "Unexpected end of file.");
 
-		void read_bytes(FILE * file, 
+				if (strlen(buffer) >= 1 && buffer[0] == '/')
+					throw hpgl_exception("load_floats_into_vector", "Unexpected end of data.");
+
+				float value;
+				if (sscanf(buffer, "%f", &value) != 1)
+				{
+					std::ostringstream oss;
+					oss << "Error parsing '" << buffer << "' string.";
+					throw hpgl_exception("load_floats_into_vector", oss.str());
+				}
+				if (!std::isfinite(value))
+				{
+					std::ostringstream oss;
+					oss << "Non-finite float value (NaN or Inf) in '"
+					    << buffer << "' at position " << i;
+					throw hpgl_exception("load_floats_into_vector", oss.str());
+				}
+				data[i] = value;
+			}
+		}
+
+		static void read_bytes(FILE * file,
 			int undefined_value,
-			unsigned char * data, 
-			unsigned char * mask,			
+			unsigned char * data,
+			unsigned char * mask,
 			int size)
 		{
 			char buffer[256];
 			for (int i = 0; i < size; ++i)
-			{		
-start:
-				if (fscanf(file, "%255s", buffer) == EOF)
-					throw hpgl_exception("read_bytes",
-						"Unexpected end of file.");
-				if (ferror(file))
-					throw hpgl_exception("read_bytes",
-						"Error reading file.");
-			
-				size_t len = strlen(buffer);
-				if (len >= 2 && buffer[0] == '-' && buffer[1] == '-')
+			{
+				if (!read_next_token(file, buffer, static_cast<int>(sizeof(buffer)), "read_bytes"))
+					throw hpgl_exception("read_bytes", "Unexpected end of file.");
+
+				if (strlen(buffer) >= 1 && buffer[0] == '/')
+					throw hpgl_exception("read_bytes", "Unexpected end of data.");
+
+				int value;
+				if (sscanf(buffer, "%d", &value) != 1)
 				{
-					//comment - skipping rest of line
-					fscanf(file, "%*[^\n]");
-					goto start;
+					std::ostringstream oss;
+					oss << "Error parsing '" << buffer << "' string.";
+					throw hpgl_exception("read_bytes", oss.str());
 				}
-				if (len >= 1 && buffer[0] == '/')
+				if (value < 0 || value > 255)
 				{
-					throw hpgl_exception("read_bytes",
-						"Unexpected end of data.");					
+					std::ostringstream oss;
+					oss << "Byte value " << value << " out of range [0, 255] at position " << i;
+					throw hpgl_exception("read_bytes", oss.str());
 				}
-				else
-				{
-					int value;
-					if (sscanf(buffer, "%d", &value) != 1)
-					{
-						std::ostringstream oss;
-						oss << "Error parsing '" << buffer << "' string.";
-						throw hpgl_exception("load_floats_into_vector", oss.str());
-					}
-					if (value < 0 || value > 255)
-					{
-						std::ostringstream oss;
-						oss << "Byte value " << value << " out of range [0, 255] at position " << i;
-						throw hpgl_exception("read_bytes", oss.str());
-					}
-					data[i] = static_cast<unsigned char>(value);											
-					mask[i] = value == undefined_value ? 0 : 1;
-				}		
-			};
-		}	
+				data[i] = static_cast<unsigned char>(value);
+				mask[i] = value == undefined_value ? 0 : 1;
+			}
+		}
 	}
 
 	void read_inc_file_float(
@@ -157,7 +119,15 @@ start:
 		FILE * file = fopen(file_name, "r");
 		if (file == 0)
 		{
-			throw hpgl_exception("read_inc_file_float", std::string("Error opening file:") + file_name + ".");
+			// Use basename to avoid leaking full filesystem path in error messages.
+			// Also capture the errno before any other call may modify it.
+			int open_errno = errno;
+			const char * basename = strrchr(file_name, '/');
+			if (basename == nullptr) basename = file_name;
+			else ++basename; // skip '/'
+			std::ostringstream oss;
+			oss << "Error opening file '" << basename << "': " << strerror(open_errno);
+			throw hpgl_exception("read_inc_file_float", oss.str());
 		}
 		try
 		{
@@ -193,7 +163,13 @@ start:
 		FILE * file = fopen(file_name, "r");
 		if (file == 0)
 		{
-			throw hpgl_exception("read_inc_file_byte", std::string("Error opening file:") + file_name + ".");
+			int open_errno = errno;
+			const char * basename = strrchr(file_name, '/');
+			if (basename == nullptr) basename = file_name;
+			else ++basename;
+			std::ostringstream oss;
+			oss << "Error opening file '" << basename << "': " << strerror(open_errno);
+			throw hpgl_exception("read_inc_file_byte", oss.str());
 		}
 		try
 		{

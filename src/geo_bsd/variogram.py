@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
 from numpy import (
     array,
     bitwise_and,
@@ -20,6 +22,8 @@ from numpy import (
     vstack,
     zeros,
 )
+
+MAX_NUM_LAGS = 10000
 
 
 class TVEllipsoid:
@@ -124,13 +128,15 @@ class TVVariogramSearchTemplate:
     Ellipsoid : TVEllipsoid
     FirstLagDistance : float
     """
-    LagWith = 0.5
     LagSeparation = 1
     TolDistance = 1
     NumLags = 10
-    FirstLag = 0
     Ellipsoid = TVEllipsoid(1,  1,  1)
     def __init__(self, LagWidth, LagSeparation, TolDistance, NumLags, Ellipsoid,  FirstLagDistance = 0):
+        if NumLags > MAX_NUM_LAGS:
+            raise ValueError(
+                f"TVVariogramSearchTemplate: NumLags {NumLags} exceeds maximum {MAX_NUM_LAGS}"
+            )
         self.LagWidth  = LagWidth
         self.LagSeparation = LagSeparation
         self.TolDistance = TolDistance

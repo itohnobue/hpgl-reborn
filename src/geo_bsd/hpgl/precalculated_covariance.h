@@ -44,7 +44,29 @@ namespace hpgl
 			sx = rx * 2 + 1;
 			sy = ry * 2 + 1;
 			sz = rz * 2 + 1;
-			size_t size = (size_t)sx * sy * sz;	
+			// Overflow-safe multiplication: avoid silent overflow in (size_t)sx * sy * sz
+			size_t size = 0;
+			{
+				size_t sx_s = static_cast<size_t>(sx);
+				size_t sy_s = static_cast<size_t>(sy);
+				size_t sz_s = static_cast<size_t>(sz);
+				if (sx_s > 0 && sy_s > 0 && sz_s > 0)
+				{
+					if (sx_s > SIZE_MAX / sy_s)
+					{
+						fprintf(stderr, "HPGL FATAL: precalculated_covariance: overflow in sxsy multiplication\n");
+						abort();
+					}
+					size_t tmp = sx_s * sy_s;
+					if (tmp > SIZE_MAX / sz_s)
+					{
+						fprintf(stderr, "HPGL FATAL: precalculated_covariance: overflow in tmp*sz multiplication\n");
+						abort();
+					}
+					size = tmp * sz_s;
+				}
+			}
+			m_covariances.resize(size);	
 			m_covariances.resize(size);
 			for (int z = 0; z < sz; ++z)
 				for (int y = 0; y < sy; ++y)

@@ -26,14 +26,14 @@ uv sync --extra dev
 ### Building
 
 **Windows:**
-```cmd
+```powershell
 build.bat
 ```
 
 **Linux/macOS:**
 ```bash
 mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DHPGL_BUILD_PYTHON=ON -DHPGL_USE_OPENMP=ON
+cmake .. -DCMAKE_BUILD_TYPE=Release -DHPGL_BUILD_PYTHON=ON -DHPGL_USE_OPENMP=ON -DHPGL_USE_MKL=OFF -G Ninja
 cmake --build . --parallel $(nproc)
 ```
 
@@ -43,7 +43,7 @@ cmake --build . --parallel $(nproc)
 uv run pytest tests/python/ -v
 ```
 
-The test suite contains 615 tests covering kriging, simulation, I/O, validation, and edge cases. To run a subset:
+The test suite contains 622 tests covering kriging, simulation, I/O, validation, and edge cases. To run a subset:
 
 ```bash
 uv run pytest tests/python/test_kriging_complete.py -v
@@ -63,7 +63,7 @@ Lint configuration lives in `pyproject.toml` under `[tool.ruff]`.
 
 ## Project Structure
 
-```
+```text
 src/
   geo_bsd/           # Python package
     __init__.py       # Package entry point, re-exports all public API

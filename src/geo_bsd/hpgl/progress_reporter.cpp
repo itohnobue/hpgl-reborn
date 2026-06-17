@@ -25,6 +25,15 @@ namespace hpgl
 {
 	void progress_reporter_t::set_iteration_count(long iteration_count)
 	{
+		// Guard against non-positive values which cause division-by-zero and
+		// negative progress percentages in next_lap().
+		if (iteration_count <= 0)
+		{
+			m_iterations = 1;
+			m_counter = 0;
+			m_delta = 1;
+			return;
+		}
 		m_iterations = iteration_count;
 		m_counter = 0;
 		m_delta = m_iterations / 10;

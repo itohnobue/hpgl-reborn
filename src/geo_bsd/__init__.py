@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
 """
 HPGL Reborn — High Performance Geostatistics Library (Python bindings).
 
@@ -33,6 +35,12 @@ from .cdf import *
 from .geo import *
 from .sgs import sgs_simulation
 from .sis import sis_simulation
+
+try:
+    from importlib.metadata import version as _get_version  # noqa: E402
+    __version__ = _get_version("hpgl")
+except Exception:
+    __version__ = "1.6.0"
 
 __all__ = [
     # Kriging algorithms

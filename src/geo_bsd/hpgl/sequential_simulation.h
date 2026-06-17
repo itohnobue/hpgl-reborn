@@ -61,9 +61,10 @@ namespace hpgl
 		
 		progress_reporter_t report(property.size());	
 		report.start();
-		node_index_t node = path_gen.next();		
-		for (node_index_t counter = 0, counter_end = property.size(); counter < counter_end; ++counter, node = path_gen.next(), report.next_lap())		
+		node_index_t node;
+		for (node_index_t counter = 0, counter_end = property.size(); counter < counter_end; ++counter, report.next_lap())		
 		{
+			node = path_gen.next();
 			if(property.is_informed(node)) 
 				continue;
 
@@ -128,11 +129,10 @@ namespace hpgl
 		
 		progress_reporter_t report(points_indexes.size());	
 		report.start();
-		node_index_t node = points_indexes[path_gen.next()];
-		//node_index_t node = path_gen.next();		
-		for (node_index_t counter = 0, counter_end = points_indexes.size(); counter < counter_end; ++counter, node = points_indexes[path_gen.next()])		
-		//for (node_index_t counter = 0, counter_end = points_indexes.size(); counter < counter_end; ++counter, node = path_gen.next())		
+		node_index_t node;
+		for (node_index_t counter = 0, counter_end = points_indexes.size(); counter < counter_end; ++counter)		
 		{
+			node = points_indexes[path_gen.next()];
 			if(property.is_informed(node)) 
 				continue;
 

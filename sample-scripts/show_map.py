@@ -2,7 +2,7 @@
 
 import sys
 import os
-from pylab import imshow, show
+from matplotlib import pyplot as plt
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from geo_bsd import load_cont_property, SugarboxGrid
@@ -20,5 +20,5 @@ grid = SugarboxGrid(x, y, z)
 prop = load_cont_property(filename, -99, (x, y, z))
 prop.fix_shape(grid)
 
-imshow(prop[0][:, :, 0])
-show()
+plt.imshow(prop[0][:, :, 0])
+plt.show()

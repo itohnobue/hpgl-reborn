@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
 import ctypes as C
 
 import numpy
@@ -5,16 +7,12 @@ import numpy
 # NumPy 2.0+ compatibility
 from numpy import ctypeslib as NC
 
-# Since numpy>=2.0 is required, always use direct ctypes.CDLL
-_load_lib_func = lambda libpath: C.CDLL(str(libpath))
-
-ndpointer = NC.ndpointer
-
-#from _cvariogram import CStackLayers
-
 from .hpgl_wrap import _safe_load_library
 
 cvar = _safe_load_library('_cvariogram', __file__)
+
+MAX_NUM_LAGS = 10000
+MAX_POINT_SET_SIZE = 1_000_000
 
 class vector_t(C.Structure):
     _fields_ = [("data", C.c_double * 3)]
@@ -98,7 +96,8 @@ def checked_create(T, **kargs):
     for k in kargs.keys():
         if k in fields:
             fields.remove(k)
-    assert len(fields) == 0, "No values for parameters: %s" % fields
+    if fields:
+        raise RuntimeError(f"No values for parameters: {fields}")
     result = T(**kargs)
     # Preserve references to input values to prevent garbage collection
     # while C code holds pointers to the underlying data
@@ -117,6 +116,10 @@ def __strides(array):
         raise ValueError(f"__strides: array must have at least 1 dimension, got ndim={ndim}")
 
 def _c_array(t, size, values):
+    if len(values) != size:
+        raise ValueError(
+            f"_c_array: size {size} does not match len(values) {len(values)}"
+        )
     arr = (t * size)(*values)
     arr._array_refs = tuple(values)
     return arr
@@ -137,6 +140,10 @@ class Ellipsoid:
 
 class VariogramSearchTemplate:
     def __init__(self, lag_width, lag_separation, tol_distance, num_lags, first_lag_distance, ellipsoid):
+        if num_lags > MAX_NUM_LAGS:
+            raise ValueError(
+                f"VariogramSearchTemplate: num_lags {num_lags} exceeds maximum {MAX_NUM_LAGS}"
+            )
         self.templ = checked_create(
             variogram_search_template_t,
             lag_width = lag_width,
@@ -177,6 +184,13 @@ def CalcVariograms(templ, hard_data, percent=100):
         variogram.size,
         percent)
 
+    # Post-call validation: check for NaN/Inf in output
+    if numpy.any(numpy.isnan(variogram)) or numpy.any(numpy.isinf(variogram)):
+        raise RuntimeError(
+            f"CalcVariograms: C function returned NaN or Inf in variogram array "
+            f"(num_lags={templ.num_lags})"
+        )
+
     lags_borders = numpy.zeros(templ.num_lags)
 
     for k in range(templ.num_lags):
@@ -190,6 +204,13 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
     for key in ("X", "Y", "Z", "Property"):
         if key not in point_set:
             raise ValueError(f"CalcVariogramsFromPointSet: point_set missing required key '{key}'")
+    # Pre-call size validation: prevent silent C++ failure
+    pts = point_set["Property"]
+    if len(pts) > MAX_POINT_SET_SIZE:
+        raise ValueError(
+            f"CalcVariogramsFromPointSet: point_set size {len(pts)} exceeds "
+            f"MAX_POINT_SET_SIZE ({MAX_POINT_SET_SIZE})"
+        )
     if variogram is None:
         variogram = numpy.array([0] * templ.num_lags, dtype='float32')
 
@@ -206,6 +227,13 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
         C.byref(ps),
         variogram,
         variogram.size)
+
+    # Post-call validation: check for NaN/Inf in output
+    if numpy.any(numpy.isnan(variogram)) or numpy.any(numpy.isinf(variogram)):
+        raise RuntimeError(
+            f"CalcVariogramsFromPointSet: C function returned NaN or Inf in variogram array "
+            f"(num_lags={templ.num_lags})"
+        )
 
     lags_borders = numpy.zeros(templ.num_lags)
 
@@ -239,4 +267,11 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
         scalez,
         blank_value,
         C.byref(result2))
+
+    # Post-call validation: check for NaN/Inf in the result array
+    if numpy.any(numpy.isnan(result)) or numpy.any(numpy.isinf(result)):
+        raise RuntimeError(
+            f"CStackLayers: C function produced NaN or Inf in result array "
+            f"(nz={nz}, nlayers={len(layers2)})"
+        )
 

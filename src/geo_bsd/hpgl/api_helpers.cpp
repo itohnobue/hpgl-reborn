@@ -17,11 +17,11 @@ namespace hpgl
 static std::string last_exception_message;
 static std::mutex last_exception_mutex;
 
-const std::string & 
+std::string
 get_last_exception_message()
 {
 	std::lock_guard<std::mutex> lock(last_exception_mutex);
-	return last_exception_message;
+	return last_exception_message; // value copy constructed while lock is held
 }
 
 void

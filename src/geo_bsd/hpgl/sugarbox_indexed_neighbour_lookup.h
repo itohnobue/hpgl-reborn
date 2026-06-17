@@ -17,23 +17,32 @@ namespace hpgl
 			double cov_value;
 			bool operator<(const entry_t & e)const
 			{
-					return cov_value > e.cov_value;
+					return cov_value < e.cov_value;
 			}
 			bool operator>(const entry_t & e)const
 			{
-					return cov_value < e.cov_value;
+					return cov_value > e.cov_value;
 			}
 			bool operator<=(const entry_t & e)const
 			{
-					return cov_value >= e.cov_value;
+					return cov_value <= e.cov_value;
 			}
 			bool operator>=(const entry_t & e)const
 			{
-					return cov_value <= e.cov_value;
+					return cov_value >= e.cov_value;
 			}
 			bool operator==(const entry_t & e)const
 			{
 					return cov_value == e.cov_value;
+			}
+		};
+
+		// Named comparator for descending covariance sort (highest first)
+		struct desc_cov_compare
+		{
+			bool operator()(const entry_t & a, const entry_t & b)const
+			{
+				return a.cov_value > b.cov_value;
 			}
 		};
 
@@ -45,7 +54,7 @@ namespace hpgl
 		neighbour_lookup_t<sugarbox_grid_t, covariances_t> m_nlookup;
 		std::shared_ptr<clusterizer_t> m_clusterizer;
 		const covariances_t * m_cov;
-		int m_max_neighbours;
+		size_t m_max_neighbours;
 		const sugarbox_grid_t * m_grid;
 	public:
 		typedef sugarbox_grid_t grid_t;
@@ -95,23 +104,23 @@ namespace hpgl
 					}
 				}
 				
-				int count = 0;	
-				int result_size = //temp_sort_vector.get_them().size();
+				size_t count = 0;	
+				size_t result_size = //temp_sort_vector.get_them().size();
 					m_max_neighbours > temp_sort_vector.size() ? temp_sort_vector.size() : m_max_neighbours;
 				
-				// Partial sort: only need top result_size entries by covariance
-				// operator< returns cov_value > e.cov_value (descending by cov)
-				if (result_size < static_cast<int>(temp_sort_vector.size()))
-					std::partial_sort(temp_sort_vector.begin(), temp_sort_vector.begin() + result_size, temp_sort_vector.end());
-				else
-					std::sort(temp_sort_vector.begin(), temp_sort_vector.end());				
+			// Partial sort: only need top result_size entries by covariance
+			// desc_cov_compare sorts descending (highest covariance first)
+			if (result_size < temp_sort_vector.size())
+				std::partial_sort(temp_sort_vector.begin(), temp_sort_vector.begin() + result_size, temp_sort_vector.end(), detail::desc_cov_compare());
+			else
+				std::sort(temp_sort_vector.begin(), temp_sort_vector.end(), detail::desc_cov_compare());
 
 				
 				
 				indices.resize(result_size);
 				coords.resize(result_size);
 
-				const std::vector<detail::entry_t> entries = temp_sort_vector;//temp_sort_vector.get_them();
+				const auto& entries = temp_sort_vector;//temp_sort_vector.get_them();
 
 				for (size_t idx = 0, end_idx = entries.size();
 						idx != end_idx; ++idx)
@@ -123,7 +132,7 @@ namespace hpgl
 						break;
 				}
 				if (indices.size() > m_max_neighbours)
-					throw hpgl_exception("find_neighbours_with_clusterizer", "Error.");
+					HPGL_CHECK(false, "find_neighbours_with_clusterizer: indices.size() exceeds max_neighbours");
 			}
 		}
 

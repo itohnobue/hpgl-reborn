@@ -1384,11 +1384,11 @@ class TestCDFEdgeCases:
 
         cdf = calc_cdf(prop)
 
-        # HPGL calc_cdf returns n-1 intervals for n unique values
-        # 5 unique values -> 4 intervals
-        assert cdf.values.size == 4
-        # Probabilities are cumulative: 0.2, 0.4, 0.6, 0.8 (not 1.0 at end)
-        expected_probs = np.array([0.2, 0.4, 0.6, 0.8], dtype='float32')
+        # Returns all N unique values
+        # 5 unique values -> 5 values
+        assert cdf.values.size == 5
+        # Probabilities are cumulative, final reaches 1.0
+        expected_probs = np.array([0.2, 0.4, 0.6, 0.8, 1.0], dtype='float32')
         np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_degenerate_distribution_all_same_value(self):
@@ -1416,10 +1416,12 @@ class TestCDFEdgeCases:
 
         cdf = calc_cdf(prop)
 
-        # Two unique values -> HPGL returns 1 interval (n-1)
-        assert cdf.values.size == 1
+        # Two unique values -> returns both values
+        assert cdf.values.size == 2
         assert cdf.values[0] == 1.0
+        assert cdf.values[1] == 2.0
         assert cdf.probs[0] == 0.5  # 50% of values at/below first value
+        assert cdf.probs[-1] == 1.0  # Final cumulative probability is 1.0
 
     def test_cdf_with_many_unique_values(self):
         """Test CDF with many unique values"""
@@ -1432,8 +1434,8 @@ class TestCDFEdgeCases:
 
         cdf = calc_cdf(prop)
 
-        # HPGL returns n-1 intervals for n unique values
-        # With 1000 random values, most will be unique, so expect ~999 intervals
+        # Returns all N unique values
+        # With 1000 random values, most will be unique, so expect ~1000 values
         assert cdf.values.size > 900  # Allow for some duplicates
         # Probabilities should be monotonically increasing (not strictly - can have ties)
         assert np.all(np.diff(cdf.probs) >= 0)
@@ -1479,19 +1481,9 @@ class TestCDFEdgeCases:
 
         cdf = calc_cdf(prop)
 
-        # HPGL calc_cdf: For n>1 unique values, last prob is (n-1)/n, NOT 1.0
-        # This is because HPGL returns intervals (n-1 values), not n points
-        # For single value case, prob is 1.0
-        if len(cdf.probs) == 1:
-            # Single value or empty case
-            if cdf.values.size > 0:
-                # Single unique value - probability should be 1.0
-                assert abs(cdf.probs[-1] - 1.0) < 1e-6
-        else:
-            # Multiple values - last prob < 1.0 due to HPGL's interval representation
-            # The final interval has cumulative probability < 1.0
-            assert cdf.probs[-1] < 1.0
-            assert cdf.probs[-1] > 0
+        # Final cumulative probability is always 1.0
+        assert abs(cdf.probs[-1] - 1.0) < 1e-6
+        assert cdf.probs[-1] > 0
 
 
 # =============================================================================

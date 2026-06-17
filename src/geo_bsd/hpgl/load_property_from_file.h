@@ -7,18 +7,9 @@
 namespace hpgl
 {
 
-
-void
-load_property_from_file(
-		sp_double_property_array_t property_array,
-		const std::string & file_name, double undefined_value);
-
-
-void load_indicator_property_from_file(
-		sp_byte_property_array_t property_array,
-		const std::string & file_name,
-		int undefined_value);
-		
+// Reads a geostatistical property name from the file (skip comments/blank lines).
+// Advances file pointer past the property name line. Throws hpgl_exception on failure.
+void read_prop_name(FILE * file, std::string & prop_name);
 
 void load_variable_mean_from_file(
 		std::vector<mean_t> & data,

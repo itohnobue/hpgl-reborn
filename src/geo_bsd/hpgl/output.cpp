@@ -1,24 +1,27 @@
 #include "stdafx.h"
 #include "api.h"
 #include <string>
+#include <atomic>
 
 // Handler function pointers — set once at startup (before any concurrent calls).
-// Using raw pointers here to match C callback ABI (cannot use std::function across C boundary).
-// This is the standard ctypes callback pattern; synchronization deferred to caller.
-static int (*s_handler)(char * data, void * param) = nullptr;
-static void * s_param = nullptr;
+// std::atomic provides defense-in-depth memory ordering even though the contract
+// is single-threaded startup configuration. This is the standard ctypes callback
+// pattern; synchronization deferred to caller.
+static std::atomic<int (*)(char * data, void * param)> s_handler{nullptr};
+static std::atomic<void *> s_param{nullptr};
 
-static int (*s_progress_handler)(char * stage, int percentage, void * param) = nullptr;
-static void * s_progress_handler_param = nullptr;
+static std::atomic<int (*)(char * stage, int percentage, void * param)> s_progress_handler{nullptr};
+static std::atomic<void *> s_progress_handler_param{nullptr};
 
 
 namespace hpgl
 {
 	void write(const char * str)
 	{
-		if (s_handler)
+		auto h = s_handler.load(std::memory_order_acquire);
+		if (h)
 		{
-			s_handler(const_cast<char*>(str), s_param);
+			h(const_cast<char*>(str), s_param.load(std::memory_order_relaxed));
 		}
 		else
 		{
@@ -35,9 +38,10 @@ namespace hpgl
 
 	void update_progress(const char * stage, int percentage)
 	{
-		if (s_progress_handler)
+		auto ph = s_progress_handler.load();
+		if (ph)
 		{
-			s_progress_handler(const_cast<char*>(stage), percentage, s_progress_handler_param);
+			ph(const_cast<char*>(stage), percentage, s_progress_handler_param.load());
 		}
 		else
 		{
@@ -59,12 +63,12 @@ namespace hpgl
 
 HPGL_API void hpgl_set_output_handler(int (*handler)(char * data, void * param), void * param)
 {
-	s_handler = handler;
-	s_param = param;
+	s_handler.store(handler);
+	s_param.store(param);
 }
 
 HPGL_API void hpgl_set_progress_handler(int (*handler)(char * stage, int percentage, void * param), void * param)
 {
-	s_progress_handler  = handler;
-	s_progress_handler_param = param;
+	s_progress_handler.store(handler);
+	s_progress_handler_param.store(param);
 }

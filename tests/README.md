@@ -12,8 +12,8 @@ python tests/run_tests.py all
 pytest tests/python/ -v
 
 # Run specific test category
-pytest tests/python/test_kriging.py -v
-pytest tests/python/test_simulation.py -v
+pytest tests/python/test_kriging_complete.py -v
+pytest tests/python/test_simulation_complete.py -v
 pytest tests/python/test_numpy2_compat.py -v
 pytest tests/python/test_memory_leaks.py -v
 pytest tests/python/test_performance.py -v
@@ -24,17 +24,21 @@ pytest tests/python/test_performance.py -v
 | File | Description | Tests |
 |------|-------------|-------|
 | `test_classes.py` | Core classes | SugarboxGrid, CovarianceModel, ContProperty, IndProperty |
-| `test_kriging.py` | Kriging algorithms | OK, SK, IK |
-| `test_kriging_complete.py` | Kriging comprehensive | All kriging variants, LVM, cokriging, edge cases |
-| `test_simulation.py` | Simulation algorithms | SGS, SIS basic |
+| `test_kriging_complete.py` | Kriging comprehensive | All kriging variants, OK, SK, LVM, cokriging, edge cases |
 | `test_simulation_complete.py` | Simulation comprehensive | All SGS/SIS variants, LVM, masks, multi-realization |
 | `test_edge_cases.py` | Edge cases | Boundary conditions, error handling |
+| `test_cdf_edge_cases.py` | CDF edge cases | CDF computation boundary conditions |
 | `test_legacy_migrated.py` | Legacy tests | Migrated from original test suite |
 | `test_utilities.py` | Utility functions | I/O, CDF, mean calc, callbacks |
 | `test_numpy2_compat.py` | NumPy 2.0+ compatibility | Array handling, ctypes |
 | `test_memory_leaks.py` | Memory leak detection | Memory cleanup tests |
 | `test_performance.py` | Performance benchmarks | Timing and scaling |
 | `test_integration.py` | Integration tests | Complete workflows |
+| `test_cvariogram.py` | C variogram extension | C-extension variogram functions |
+| `test_gtsim.py` | GTSIM | General Truncated Gaussian Simulation |
+| `test_routines.py` | Routines module | High-level utility routines |
+| `test_validation.py` | Validation | Input validation framework |
+| `test_variogram.py` | Variogram | Pure-Python variogram analysis |
 
 ## Test Categories
 
@@ -61,7 +65,7 @@ pytest tests/python/test_performance.py -v
 ## Requirements
 
 - Python >= 3.9
-- NumPy >= 1.24
+- NumPy >= 2.0, < 3.0
 - pytest >= 7.0
 - HPGL library built successfully
 
@@ -70,7 +74,7 @@ pytest tests/python/test_performance.py -v
 Before running tests, ensure:
 - [ ] Build completed successfully
 - [ ] HPGL can be imported: `import geo_bsd`
-- [ ] NumPy >= 1.24: `python -c "import numpy; print(numpy.__version__)"`
+- [ ] NumPy >= 2.0, < 3.0: `python -c "import numpy; print(numpy.__version__)"`
 - [ ] pytest installed: `uv sync --extra test`
 
 ## Coverage

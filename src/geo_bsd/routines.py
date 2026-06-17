@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
+import os
+
 import numpy
 import numpy.ma as ma
 from numpy import (
@@ -178,7 +182,8 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
     """
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBPointSet: FileName must be a non-empty string")
-    safe_path = PathValidator.validate_filepath(FileName)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        FileName, basedir=os.path.dirname(os.path.abspath(FileName)))
 
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
@@ -235,7 +240,8 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
     """
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBCubes: FileName must be a non-empty string")
-    safe_path = PathValidator.validate_filepath(FileName)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        FileName, basedir=os.path.dirname(os.path.abspath(FileName)))
 
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
@@ -362,7 +368,8 @@ def LoadGslibFile(filename, property_size):
         raise ValueError("LoadGslibFile: filename must be a non-empty string")
 
     # Validate filepath for security (path traversal prevention, exists check)
-    safe_path = PathValidator.validate_filepath(filename, must_exist=True)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True)
 
     result = {}
     list_prop = []

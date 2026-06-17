@@ -20,6 +20,10 @@ namespace hpgl
 
 	void print_param (const std::string & param, const std::vector<double> & value)
 	{
+#ifndef NDEBUG
+		if (value.size() < 3)
+			return; // debug: silently skip undersized vector
+#endif
 		std::ostringstream oss;
 		oss << param << ": [" << value[0] << ", " << value[1] << ", " << value[2] << "]\n";
 		write(oss.str());
@@ -27,6 +31,10 @@ namespace hpgl
 
 	void print_param (const std::string & param, const double * value)
 	{
+#ifndef NDEBUG
+		if (value == nullptr)
+			return; // debug: silently skip null pointer
+#endif
 		std::ostringstream oss;
 		oss << param << ": [" << value[0] << ", " << value[1] << ", " << value[2] << "]\n";
 		write(oss.str());
@@ -129,6 +137,10 @@ namespace hpgl
 
 	void print_params(const indicator_params_t * p, int param_count, const mean_t * marginal_probs)
 	{
+#ifndef NDEBUG
+		if (p == nullptr || param_count <= 0)
+			return;
+#endif
 		std::string values         ("Indicators:\t");
 		std::string cov_type       ("Covariance:\t");
 		std::string ranges         ("Ranges    :\t");

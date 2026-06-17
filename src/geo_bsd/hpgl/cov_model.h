@@ -178,7 +178,12 @@ namespace hpgl
 			{
 				if (h > m_params.m_ranges[0])
 					return 0;
-				return (m_params.m_sill - m_params.m_nugget) * (1 - 1.5 * h / m_params.m_ranges[0] + 0.5 * pow(h / m_params.m_ranges[0], 3));
+				// Horner form: (1 - 1.5*x + 0.5*x³) for x = h/range.
+				// Stabilized with fmax to prevent negative results from
+				// cancellation when x → 1.0.
+				double x = h / m_params.m_ranges[0];
+				double val = (m_params.m_sill - m_params.m_nugget) * std::fmax(0.0, (1.0 - x * (1.5 - 0.5 * x * x)));
+				return val;
 			}
 		}
 	};

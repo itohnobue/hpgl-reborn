@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901abe5b7e43541d1efc0e572747c72a8b  # v4.2.3
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
@@ -24,7 +24,7 @@ jobs:
           enable-cache: true
 
       - name: Install dev dependencies
-        run: uv sync --all-extras
+        run: uv sync --frozen --all-extras
 
       - name: Ruff lint
         run: uv run ruff check src/ tests/
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901abe5b7e43541d1efc0e572747c72a8b  # v4.2.3
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
@@ -45,7 +45,7 @@ jobs:
           enable-cache: true
 
       - name: Install dev dependencies
-        run: uv sync --all-extras
+        run: uv sync --frozen --all-extras
 
       - name: Bandit security scan
         run: uv run bandit -r src/ -c pyproject.toml
@@ -56,7 +56,14 @@ jobs:
     timeout-minutes: 30
     needs: [lint, security]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901abe5b7e43541d1efc0e572747c72a8b  # v4.2.3
+
+      - name: Cache CMake build directory
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57  # v4.2.3
+        with:
+          path: build
+          key: ${{ runner.os }}-cmake-${{ hashFiles('CMakeLists.txt', 'src/**/*.cpp', 'src/**/*.h', 'src/**/*.hpp') }}
+          restore-keys: ${{ runner.os }}-cmake-
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
@@ -65,38 +72,102 @@ jobs:
 
       - name: Install system build dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
             ninja-build \
             libopenblas-dev \
             liblapack-dev \
             libomp-dev
 
       - name: Install Python dependencies
-        run: uv sync --all-extras
+        run: uv sync --frozen --all-extras
 
       - name: Configure CMake
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DHPGL_BUILD_PYTHON=ON
+          -DHPGL_BUILD_TESTS=ON
+          -DHPGL_BUILD_CPP_TESTS=ON
           -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install"
 
       - name: Build C++ extension
         run: cmake --build build --parallel $(nproc)
+
+      - name: Run C++ tests
+        run: ctest --test-dir build --output-on-failure -C Release
 
       - name: Install C++ extension
         run: cmake --install build
 
       - name: Link shared libraries into Python package
         run: |
-          # hpgl_wrap.py loads libhpgl.so from same directory as __file__
-          # cmake install puts libhpgl.so in lib/ but Python files in lib/hpgl/
-          # Create a symlink so Python finds the .so in its own directory
-          ln -sf "${{ github.workspace }}/install/lib/libhpgl.so" \
-                 "${{ github.workspace }}/install/lib/hpgl/"
+          set -euo pipefail
+          # hpgl_wrap.py loads the shared library from same directory as __file__
+          # cmake install puts the library in lib/ but Python files in lib/hpgl/
+          # Create a symlink (or copy on Windows) so Python finds it
+          INSTALL_DIR="${{ github.workspace }}/install"
+          case "$RUNNER_OS" in
+            Linux)
+              ln -sf "${INSTALL_DIR}/lib/libhpgl.so" "${INSTALL_DIR}/lib/hpgl/"
+              ;;
+            macOS)
+              ln -sf "${INSTALL_DIR}/lib/libhpgl.dylib" "${INSTALL_DIR}/lib/hpgl/"
+              ;;
+            Windows)
+              cp "${INSTALL_DIR}/bin/hpgl.dll" "${INSTALL_DIR}/lib/hpgl/" 2>/dev/null || true
+              ;;
+          esac
 
       - name: Run tests
         env:
           PYTHONPATH: "${{ github.workspace }}/install/lib:${{ github.workspace }}/src"
         run: uv run pytest tests/python/ -v
+
+      - name: Upload build artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92bf6a43e9ab9b3c6  # v4.7.1
+        with:
+          name: build-failure-${{ runner.os }}
+          path: |
+            build/
+            build.log
+          retention-days: 7
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11bd71901abe5b7e43541d1efc0e572747c72a8b  # v4.2.3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Configure CMake
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DHPGL_BUILD_PYTHON=ON
+          -DHPGL_USE_OPENMP=ON
+          -DHPGL_USE_MKL=OFF
+
+      - name: Build
+        run: cmake --build build --parallel ${{ runner.os == 'macOS' && '$(sysctl -n hw.logicalcpu)' || runner.os == 'Windows' && '$env:NUMBER_OF_PROCESSORS' || '$(nproc)' }}
+
+      - name: Upload build artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92bf6a43e9ab9b3c6  # v4.7.1
+        with:
+          name: build-failure-${{ runner.os }}-${{ github.run_id }}
+          path: |
+            build/
+          retention-days: 7
+

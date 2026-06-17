@@ -6,7 +6,10 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from geo_bsd import (
     ContProperty, SugarboxGrid, CovarianceModel,
-    simple_kriging, write_property, _clone_prop,
+    simple_kriging, write_property,
+    # WARNING: _clone_prop is a private/internal API — no public equivalent exists.
+    # These imports are for advanced usage only and may break with future HPGL versions.
+    _clone_prop,
 )
 from geo_bsd.sgs import sgs_simulation
 from geo_bsd.cdf import calc_cdf

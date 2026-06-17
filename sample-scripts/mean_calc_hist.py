@@ -1,7 +1,7 @@
 import sys
 import os
 import numpy as np
-from pylab import hist, show
+from matplotlib import pyplot as plt
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from geo_bsd import (
@@ -52,5 +52,5 @@ def mean_calc_hist(x, y, z, n, prop):
         ntg1[c] = all_r / numb
         print(ntg1[c])
         del sgs_result_prop
-    hist(ntg1, histtype='bar', orientation='vertical')
-    show()
+    plt.hist(ntg1, histtype='bar', orientation='vertical')
+    plt.show()

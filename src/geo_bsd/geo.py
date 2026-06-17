@@ -1,5 +1,8 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2009, HPGL Team
 import ctypes as C
 import logging
+import os
 import threading
 
 import numpy
@@ -20,6 +23,8 @@ from .hpgl_wrap import (
     __hpgl_cockriging_m2_params_t,
     __hpgl_cov_params_t,
     _hpgl_so,
+    hpgl_output_handler,
+    hpgl_progress_handler,
 )
 from .validation import (
     GridValidator,
@@ -32,10 +37,19 @@ from .validation import (
 # clear it after it's read. Without tracking, an error from one test (e.g.
 # a failed read_inc_file_byte) would cause all subsequent _check_hpgl_error
 # calls to falsely report failure.
-_last_hpgl_error_snapshot = None
+#
+# Using thread-local storage so that concurrent HPGL FFI calls in different
+# threads each track their own pre/post error snapshot independently.
+# The lock now protects the entire snapshot→call→check window.
+_error_local = threading.local()
 _error_snapshot_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of elements for slow Python-based file parsers.
+# Files exceeding this limit should use the fast C++ reader instead
+# (specify `size` parameter in load_cont_property / load_ind_property).
+_MAX_SLOW_PARSER_ELEMENTS = 10_000_000
 
 def _snapshot_hpgl_error():
     """
@@ -44,10 +58,12 @@ def _snapshot_hpgl_error():
     Call this BEFORE invoking any C++ function that might succeed.
     _check_hpgl_error will compare the post-call error against this snapshot
     to detect only NEW errors, avoiding stale error propagation.
+    
+    Stores the snapshot in thread-local storage with lock protection
+    so concurrent calls in different threads do not interfere.
     """
-    global _last_hpgl_error_snapshot
     with _error_snapshot_lock:
-        _last_hpgl_error_snapshot = _hpgl_so.hpgl_get_last_exception_message()
+        _error_local._hpgl_error_snapshot = _hpgl_so.hpgl_get_last_exception_message()
 
 def _check_hpgl_error(context=""):
     """
@@ -58,6 +74,9 @@ def _check_hpgl_error(context=""):
     has changed since the snapshot, indicating a new error from the
     current operation rather than a stale error from a previous call.
     
+    Uses thread-local storage so concurrent HPGL operations in different
+    threads each track their own pre/post error state independently.
+    
     Args:
         context: Description of the operation being checked (e.g. "ordinary_kriging")
     
@@ -67,7 +86,7 @@ def _check_hpgl_error(context=""):
     err = _hpgl_so.hpgl_get_last_exception_message()
     if err is not None and len(err) > 0:
         with _error_snapshot_lock:
-            snapshot = _last_hpgl_error_snapshot
+            snapshot = getattr(_error_local, '_hpgl_error_snapshot', None)
         if err == snapshot:
             # Same error as pre-call snapshot — stale, suppress.
             # NOTE: In the extremely unlikely event that a new C++ operation produces
@@ -78,7 +97,10 @@ def _check_hpgl_error(context=""):
         err_str = err.decode("utf-8", errors="replace")
         raise RuntimeError(f"{context} failed: {err_str}" if context else f"HPGL error: {err_str}")
 
-from .hpgl_wrap import hpgl_output_handler, hpgl_progress_handler
+
+# Module-level handler references initialized to None
+_h = None
+_progress_handler = None
 
 
 def _c_array(ar_type, size, values):
@@ -125,14 +147,20 @@ def __checked_create(T, **kargs):
     for k in kargs.keys():
         if k in fields:
             fields.remove(k)
-    assert len(fields) == 0, "No values for parameters: %s" % fields
+    if fields:
+        raise validation.CriticalValidationError(
+            f"No values for parameters: {fields}", "ctypes_struct"
+        )
     return T(**kargs)
 
 def checkFWA(a):
     """
     Checks for fortran-order, writable and aligned flags.
     """
-    assert (a.flags['F'] and a.flags['W'] and a.flags['A'])
+    if not (a.flags['F'] and a.flags['W'] and a.flags['A']):
+        raise RuntimeError(
+            f"Array checkFWA failed: F={a.flags['F']}, W={a.flags['W']}, A={a.flags['A']}"
+        )
 
 def _create_hpgl_cont_masked_array(prop, grid):
     if (grid is None):
@@ -381,7 +409,7 @@ class CovarianceModel:
     sill : float
     nugget : float
     """
-    def __init__(self, type = 0, ranges=(0,0,0), angles=(0.0,0.0,0.0), sill=1.0, nugget=0.0):
+    def __init__(self, type: int = 0, ranges: tuple = (0, 0, 0), angles: tuple = (0.0, 0.0, 0.0), sill: float = 1.0, nugget: float = 0.0):
         self.type = type
         self.ranges = ranges
         self.angles = angles
@@ -393,20 +421,28 @@ class CovarianceModel:
 
 def _load_prop_cont_slow(filename, undefined_value):
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = PathValidator.validate_filepath(filename, must_exist=False)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False)
 
     values = []
     mask = []
     skipped_count = 0
+    element_count = 0
     # Use validated path and explicit encoding
     with open(safe_path, encoding='utf-8') as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
             for part in line.split():
+                if element_count >= _MAX_SLOW_PARSER_ELEMENTS:
+                    raise MemoryError(
+                        f"_load_prop_cont_slow: file exceeds {_MAX_SLOW_PARSER_ELEMENTS} elements. "
+                        f"Use fast C++ reader by specifying `size` parameter."
+                    )
                 try:
                     val = float(part.strip())
                     values.append(val)
+                    element_count += 1
                     if (val == undefined_value):
                         mask.append(0)
                     else:
@@ -424,12 +460,14 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
         dict_map[ind_values[i]] = i
 
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = PathValidator.validate_filepath(filename, must_exist=False)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False)
 
     values = []
     mask = []
     skipped_parse = 0
     skipped_key = 0
+    element_count = 0
 
     # Use validated path and explicit encoding
     with open(safe_path, encoding='utf-8') as f:
@@ -437,6 +475,11 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
             if line.strip().startswith("--"):
                 continue
             for part in line.split():
+                if element_count >= _MAX_SLOW_PARSER_ELEMENTS:
+                    raise MemoryError(
+                        f"_load_prop_ind_slow: file exceeds {_MAX_SLOW_PARSER_ELEMENTS} elements. "
+                        f"Use fast C++ reader by specifying `size` parameter."
+                    )
                 try:
                     val = int(part.strip())
                 except (ValueError, TypeError):
@@ -449,6 +492,7 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
                     else:
                         values.append(dict_map[val])
                         mask.append(1)
+                    element_count += 1
                 except KeyError:
                     skipped_key += 1
 
@@ -555,10 +599,15 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
     write_gslib_property : Write property in GSLIB format.
     """
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = PathValidator.validate_filepath(filename, must_exist=False)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False)
 
     if indicator_values is None:
         indicator_values = []
+    if not isinstance(indicator_values, list):
+        raise TypeError(
+            f"write_property: indicator_values must be a list, got {type(indicator_values).__name__}"
+        )
 
     if (prop.data.ndim == 3):
         sh = _create_hpgl_shape(prop.data.shape)
@@ -603,10 +652,16 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
 @accepts_tuple('prop', 0)
 def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=None):
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = PathValidator.validate_filepath(filename, must_exist=False)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False)
 
     if indicator_values is None:
         indicator_values = []
+    if not isinstance(indicator_values, list):
+        raise TypeError(
+            f"write_gslib_property: indicator_values must be a list, "
+            f"got {type(indicator_values).__name__}"
+        )
 
     if isinstance(prop, ContProperty):
         _snapshot_hpgl_error()
@@ -665,7 +720,8 @@ def load_cont_property(filename, undefined_value, size=None):
     load_ind_property : Load indicator (categorical) property.
     """
     # Validate filename for security
-    safe_path = PathValidator.validate_filepath(filename, must_exist=True)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True)
 
     if size is None:
         logger.warning("load_cont_property: Size is not specified. Using slow Python-based parser "
@@ -677,7 +733,8 @@ def load_cont_property(filename, undefined_value, size=None):
 
 def read_inc_file_float(filename, undefined_value, size):
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = PathValidator.validate_filepath(filename, must_exist=True)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True)
 
     # Validate size parameters
     if isinstance(size, tuple) and len(size) == 3:
@@ -703,7 +760,8 @@ def read_inc_file_float(filename, undefined_value, size):
 
 def read_inc_file_byte(filename, undefined_value, size, indicator_values):
     # Security: Validate filename to prevent directory traversal attacks
-    safe_path = PathValidator.validate_filepath(filename, must_exist=True)
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True)
 
     # Validate size parameters
     if isinstance(size, tuple) and len(size) == 3:
@@ -1095,7 +1153,7 @@ def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
             angles = _c_array(C.c_double, 3, ikd["cov_model"].angles),
             sill = ikd["cov_model"].sill,
             nugget = ikd["cov_model"].nugget,
-            radiuses = _c_array(C.c_int, 3, ikd["radiuses"]),
+            radiuses = _c_array(C.c_int, 3, tuple(int(r) for r in ikd["radiuses"])),
             max_neighbours = ikd["max_neighbours"],
             marginal_prob = 0 if is_lvm else marginal_probs[i])
         ikps.append(ikp)
@@ -1302,35 +1360,102 @@ def simple_kriging_weights(center_point, n_x, n_y, n_z, ranges = (100000,100000,
     return weights
 
 def get_gslib_property(prop_dict, prop_name, undefined_value):
+    """Extract a property and its mask from a GSLIB property dictionary.
+    
+    Parameters
+    ----------
+    prop_dict : dict
+        Dictionary mapping property names to numpy arrays.
+    prop_name : str
+        Name of the property to extract.
+    undefined_value : float
+        Value marking undefined/uninformed cells.
+    
+    Returns
+    -------
+    tuple of (numpy.ndarray, numpy.ndarray)
+        Property array and uint8 mask array where 1 = informed, 0 = masked.
+    
+    Raises
+    ------
+    TypeError
+        If prop_dict is not a dict.
+    KeyError
+        If prop_name is not in prop_dict.
+    """
+    if not isinstance(prop_dict, dict):
+        raise TypeError(
+            f"get_gslib_property: prop_dict must be a dict, got {type(prop_dict).__name__}"
+        )
     prop = prop_dict[prop_name]
     informed_array = numpy.zeros(prop.shape, dtype=numpy.uint8)
     for i in range(prop.size):
-        if(prop[i] == undefined_value):
+        if prop[i] == undefined_value:
             informed_array[i] = 0
         else:
             informed_array[i] = 1
     return (prop_dict[prop_name], informed_array)
 
 def set_output_handler(handler, param):
-    global h
-    if (handler is None):
+    """Set or clear the HPGL C++ output handler callback.
+    
+    Parameters
+    ----------
+    handler : callable or None
+        Output handler function accepting (message: str, param) and
+        returning int. If None, clears the output handler.
+    param : any
+        User parameter forwarded to the handler callback.
+    
+    Raises
+    ------
+    TypeError
+        If handler is not callable and not None.
+    """
+    global _h
+    if handler is not None and not callable(handler):
+        raise TypeError(
+            f"set_output_handler: handler must be callable or None, "
+            f"got {type(handler).__name__}"
+        )
+    if handler is None:
         # Cast None to the expected type for ctypes compatibility
-        _hpgl_so.hpgl_set_output_handler(C.cast(None, hpgl_output_handler), None)
-        h = None
+        _hpgl_so.hpgl_set_output_handler(C.cast(None, hpgl_output_handler), None)  # type: ignore[arg-type]
+        _h = None
     else:
-        h = hpgl_output_handler(handler)
-        _hpgl_so.hpgl_set_output_handler(h, param)
+        _h = hpgl_output_handler(handler)
+        _hpgl_so.hpgl_set_output_handler(_h, param)
 
 
 def set_progress_handler(handler, param):
-    global progress_handler
-    if (handler is None):
+    """Set or clear the HPGL C++ progress handler callback.
+    
+    Parameters
+    ----------
+    handler : callable or None
+        Progress handler function accepting (message: str, percent: int, param)
+        and returning int. If None, clears the progress handler.
+    param : any
+        User parameter forwarded to the handler callback.
+    
+    Raises
+    ------
+    TypeError
+        If handler is not callable and not None.
+    """
+    global _progress_handler
+    if handler is not None and not callable(handler):
+        raise TypeError(
+            f"set_progress_handler: handler must be callable or None, "
+            f"got {type(handler).__name__}"
+        )
+    if handler is None:
         # Cast None to the expected type for ctypes compatibility
-        _hpgl_so.hpgl_set_progress_handler(C.cast(None, hpgl_progress_handler), None)
-        progress_handler = None
+        _hpgl_so.hpgl_set_progress_handler(C.cast(None, hpgl_progress_handler), None)  # type: ignore[arg-type]
+        _progress_handler = None
     else:
-        progress_handler = hpgl_progress_handler(handler)
-        _hpgl_so.hpgl_set_progress_handler(progress_handler, param)
+        _progress_handler = hpgl_progress_handler(handler)
+        _hpgl_so.hpgl_set_progress_handler(_progress_handler, param)
 
 __all__ = [
     "ContProperty", "IndProperty", "SugarboxGrid", "CovarianceModel", "covariance",

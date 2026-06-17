@@ -91,8 +91,7 @@ namespace hpgl
 				if(i==j)
 				{
 					// main diagonals [L(i,i)]
-						V = 0.0;
-						V += A[i*size + i];
+						V = A[i*size + i];
 						for (int k = 0; k <= i-1; k++)
 						{
 							V -= (A_U[k*size + i] * A_U[k * size + i]);
@@ -189,8 +188,7 @@ namespace hpgl
 				if(i==j)
 				{
 					// main diagonals [L(i,i)]
-						V = 0.0;
-						V += A[i*size + i];
+						V = A[i*size + i];
 						for (int k = 0; k <= i-1; k++)
 						{
 							V -= (A_U[k*size + i] * A_U[k * size + i]);

@@ -40,7 +40,7 @@ All notable changes to HPGL Reborn.
 - `variogram` module: `TVEllipsoid`, `TVVariogramSearchTemplate`, `PointSetScanContStyle`, `PointSetScanGridStyle`, `CubeScan`, CDF/covariance/correlogram functions
 - `cvariogram` C-extension module: `Ellipsoid`, `VariogramSearchTemplate`, `CalcVariograms`, `CalcVariogramsFromPointSet`, `CStackLayers`
 - `routines` module: `CalcVPC`, `CalcVPCsIndicator`, `CubeFromVPC`, `CubesFromVPCs`, `Cubes2PointSet`, `Cube2PointSet`, `PointSet2Cube`, `SaveGSLIBPointSet`, `SaveGSLIBCubes`, `LoadGslibFile`, `GetCubicalMask`, `GetEllipseMask`, `MovingAverage3D`, `MeanCalc`
-- 615 automated tests with pytest
+- 622 automated tests with pytest
 - Comprehensive README with build instructions for Windows, Linux, macOS
 
 ### Changed

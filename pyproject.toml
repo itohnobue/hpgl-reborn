@@ -91,8 +91,8 @@ all = [
 ]
 
 [project.urls]
-Homepage = "http://hpgl.github.io/hpgl/"
-Documentation = "http://hpgl.github.io/hpgl/"
+Homepage = "https://github.com/hpgl/hpgl"
+Documentation = "https://github.com/hpgl/hpgl"
 Repository = "https://github.com/hpgl/hpgl"
 Issues = "https://github.com/hpgl/hpgl/issues"
 Changelog = "https://github.com/hpgl/hpgl"
@@ -170,11 +170,7 @@ before-all = "yum install -y openblas-devel || apt-get update && apt-get install
 # Build for both x86_64 and arm64 (Apple Silicon)
 archs = ["x86_64", "arm64"]
 environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
-before-all = [
-    "brew install openblas libomp cmake",
-    'export LDFLAGS="-L$(brew --prefix openblas)/lib -L$(brew --prefix libomp)/lib"',
-    'export CPPFLAGS="-I$(brew --prefix openblas)/include -I$(brew --prefix libomp)/include"',
-]
+before-all = "brew install openblas libomp cmake && export LDFLAGS=\"-L$(brew --prefix openblas)/lib -L$(brew --prefix libomp)/lib\" && export CPPFLAGS=\"-I$(brew --prefix openblas)/include -I$(brew --prefix libomp)/include\""
 
 [tool.cibuildwheel.windows]
 # Build for x64 only

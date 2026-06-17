@@ -584,14 +584,14 @@ class TestCheckFWA:
     def test_non_fortran_array_raises(self):
         """Test checkFWA raises for non-Fortran array"""
         arr = np.ones((10, 10), dtype='float32')  # C-order by default
-        with pytest.raises(AssertionError):
+        with pytest.raises(RuntimeError):
             checkFWA(arr)
 
     def test_non_writable_array_raises(self):
         """Test checkFWA raises for non-writable array"""
         arr = np.asfortranarray(np.ones((10, 10), dtype='float32'))
         arr.flags.writeable = False
-        with pytest.raises(AssertionError):
+        with pytest.raises(RuntimeError):
             checkFWA(arr)
 
 

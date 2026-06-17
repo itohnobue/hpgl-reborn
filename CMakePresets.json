@@ -9,7 +9,7 @@
     {
       "name": "base",
       "hidden": true,
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "installDir": "${sourceDir}/install"
     },
     {
@@ -76,35 +76,21 @@
   "buildPresets": [
     {
       "name": "release",
-      "configurePreset": "release",
-      "configuration": "Release"
+      "configurePreset": "release"
     },
     {
       "name": "debug",
-      "configurePreset": "debug",
-      "configuration": "Debug"
+      "configurePreset": "debug"
     }
   ],
   "testPresets": [
     {
       "name": "release",
-      "configurePreset": "release",
-      "configuration": "Release",
-      "outputOnFailure": true
+      "configurePreset": "release"
     },
     {
       "name": "debug",
-      "configurePreset": "debug",
-      "configuration": "Debug",
-      "outputOnFailure": true
-    }
-  ],
-  "packagePresets": [
-    {
-      "name": "release",
-      "configurePreset": "release",
-      "configuration": "Release",
-      "packageDirectory": "${sourceDir}/dist"
+      "configurePreset": "debug"
     }
   ]
 }

@@ -27,7 +27,7 @@ namespace hpgl
 		int indicator_count,
 		std::vector<hpgl::indicator_params_t> & result);
 
-	const std::string & 
+	std::string
 	get_last_exception_message();
 
 	void

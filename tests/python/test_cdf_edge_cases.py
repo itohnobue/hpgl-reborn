@@ -38,17 +38,19 @@ class TestCalcCdfDuplicateValues:
     def test_two_groups_of_duplicates(self):
         prop = _make_prop([1.0] * 4 + [2.0] * 4, grid_shape=(2, 2, 2))
         cdf = calc_cdf(prop)
-        assert cdf.values.size == 1
-        assert cdf.values[0] == 1.0
-        assert abs(cdf.probs[0] - 0.5) < 1e-5
+        assert cdf.values.size == 2
+        expected_values = np.array([1.0, 2.0], dtype='float32')
+        np.testing.assert_array_almost_equal(cdf.values, expected_values)
+        expected_probs = np.array([0.5, 1.0], dtype='float32')
+        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_three_groups_of_duplicates(self):
         prop = _make_prop([1.0] * 3 + [2.0] * 3 + [3.0] * 3, grid_shape=(3, 3, 1))
         cdf = calc_cdf(prop)
-        assert cdf.values.size == 2
-        expected_values = np.array([1.0, 2.0], dtype='float32')
+        assert cdf.values.size == 3
+        expected_values = np.array([1.0, 2.0, 3.0], dtype='float32')
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([1/3, 2/3], dtype='float32')
+        expected_probs = np.array([1/3, 2/3, 1.0], dtype='float32')
         np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
 
@@ -108,7 +110,7 @@ class TestCalcCdfNegativeValues:
         prop = _make_prop([-100.0, -50.0, 0.0, 50.0, 100.0], grid_shape=(5, 1, 1))
         cdf = calc_cdf(prop)
         assert cdf.values[0] == -100.0
-        assert cdf.values[-1] == 50.0
+        assert cdf.values[-1] == 100.0
         assert np.all(np.diff(cdf.values) >= 0)
 
 
@@ -126,16 +128,20 @@ class TestCalcCdfEdgeCases:
                           mask=[1, 1, 0, 0, 0, 0, 0, 0],
                           grid_shape=(2, 2, 2))
         cdf = calc_cdf(prop)
-        assert cdf.values.size == 1
-        assert cdf.values[0] == 1.0
-        assert abs(cdf.probs[0] - 0.5) < 1e-5
+        assert cdf.values.size == 2
+        expected_values = np.array([1.0, 2.0], dtype='float32')
+        np.testing.assert_array_almost_equal(cdf.values, expected_values)
+        expected_probs = np.array([0.5, 1.0], dtype='float32')
+        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_two_unique_values_equal_counts(self):
         prop = _make_prop([10.0] * 6 + [20.0] * 6, grid_shape=(3, 2, 2))
         cdf = calc_cdf(prop)
-        assert cdf.values.size == 1
-        assert cdf.values[0] == 10.0
-        assert abs(cdf.probs[0] - 0.5) < 1e-5
+        assert cdf.values.size == 2
+        expected_values = np.array([10.0, 20.0], dtype='float32')
+        np.testing.assert_array_almost_equal(cdf.values, expected_values)
+        expected_probs = np.array([0.5, 1.0], dtype='float32')
+        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_many_unique_sorted(self):
         np.random.seed(42)
@@ -156,9 +162,11 @@ class TestCalcCdfEdgeCases:
     def test_large_value_range(self):
         prop = _make_prop([1e-10, 1e10], grid_shape=(2, 1, 1))
         cdf = calc_cdf(prop)
-        assert cdf.values.size == 1
-        assert cdf.values[0] == 1e-10
-        assert abs(cdf.probs[0] - 0.5) < 1e-5
+        assert cdf.values.size == 2
+        expected_values = np.array([1e-10, 1e10], dtype='float32')
+        np.testing.assert_array_almost_equal(cdf.values, expected_values)
+        expected_probs = np.array([0.5, 1.0], dtype='float32')
+        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_near_equal_floats(self):
         prop = _make_prop([1.0, 1.0000001, 1.0000002], grid_shape=(3, 1, 1))

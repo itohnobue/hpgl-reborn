@@ -877,7 +877,7 @@ namespace hpgl
 		}
 
 		double meanc = center_mean;
-		double delta = 0.00001;
+		double delta = CORRELOGRAM_DELTA;
 
 		if(meanc == 0)
 		{
