@@ -52,8 +52,9 @@ namespace hpgl
 
 		bool is_informed(size_type index)const
 		{
+			// Null mask = all cells are informed (per API contract at api.h:228-231)
 			if (m_mask == nullptr)
-				return false;
+				return true;
 			return (index<0)||(index>=m_size) ? false : m_mask[index]!=0;
 		}
 
@@ -105,8 +106,9 @@ namespace hpgl
 
 		bool is_informed(size_type index)const
 		{
+			// Null mask = all cells are informed (per API contract at api.h:228-231)
 			if (m_mask == nullptr)
-				return false;
+				return true;
 			if ((index < 0) || (index >= m_size))
 				return false;
 			else

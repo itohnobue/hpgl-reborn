@@ -32,11 +32,6 @@ def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
 
     if is_lvm:
         marginal_probs = [_require_cont_data(m) for m in marginal_probs]
-    for i in range(len(data)):
-        if is_lvm:
-            data[i]['marginal_prob'] = 0
-        else:
-            data[i]['marginal_prob'] = marginal_probs[i]
     if mask is not None:
         mask = _require_ind_data(mask)
 

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
 import ctypes as C
+import threading
 
 import numpy
 
@@ -11,8 +12,60 @@ from .hpgl_wrap import _safe_load_library
 
 cvar = _safe_load_library('_cvariogram', __file__)
 
+# Thread-safe error tracking (mirrors geo.py _error_local pattern).
+# The cvariogram C++ library stores the last error globally and does not
+# clear it after reading. Without tracking, a stale error from a previous
+# C call would cause all subsequent _check_cvar_error calls to falsely
+# report failure.
+_cvar_error_local = threading.local()
+_cvar_error_snapshot_lock = threading.Lock()
+
+cvar.cvar_get_last_error.restype = C.c_char_p
+cvar.cvar_get_last_error.argtypes = []
+
 MAX_NUM_LAGS = 10000
 MAX_POINT_SET_SIZE = 1_000_000
+
+def _snapshot_cvar_error():
+    """
+    Take a snapshot of the current cvariogram C++ error state.
+
+    Call this BEFORE invoking any C++ cvariogram function.
+    _check_cvar_error will compare the post-call error against this snapshot
+    to detect only NEW errors, avoiding stale error propagation.
+
+    Uses thread-local storage so concurrent cvariogram calls in different
+    threads each track their own pre/post error state independently.
+    """
+    with _cvar_error_snapshot_lock:
+        _cvar_error_local._cvar_error_snapshot = cvar.cvar_get_last_error()
+
+
+def _check_cvar_error(context=""):
+    """
+    Check for NEW cvariogram C++ errors after a computation call.
+
+    Compares current error state against a pre-call snapshot (set via
+    _snapshot_cvar_error). Raises RuntimeError ONLY if the error message
+    has changed since the snapshot, indicating a new error from the
+    current operation rather than a stale error from a previous call.
+
+    Args:
+        context: Description of the operation being checked (e.g. "CalcVariograms")
+
+    Raises:
+        RuntimeError: If the C++ computation produced a new error
+    """
+    err = cvar.cvar_get_last_error()
+    if err is not None and len(err) > 0:
+        with _cvar_error_snapshot_lock:
+            snapshot = getattr(_cvar_error_local, '_cvar_error_snapshot', None)
+        if err == snapshot:
+            # Same error as pre-call snapshot — stale, suppress.
+            return
+        err_str = err.decode("utf-8", errors="replace")
+        raise RuntimeError(f"{context} failed: {err_str}" if context else f"cvariogram error: {err_str}")
+
 
 class vector_t(C.Structure):
     _fields_ = [("data", C.c_double * 3)]
@@ -93,6 +146,12 @@ def checked_create(T, **kargs):
     fields = []
     for f, _ in T._fields_:
         fields.append(f)
+    # Allow callers to pass explicit references to prevent garbage collection
+    # of numpy arrays whose ctypes pointers are passed as struct fields.
+    # When ctypes pointers from .ctypes.data_as() are stored in the struct,
+    # the original numpy arrays must be kept alive via _array_refs.
+    # Match the pattern in geo.py:188 which stores (prop.data, prop.mask).
+    refs = kargs.pop('_refs', ())
     for k in kargs.keys():
         if k in fields:
             fields.remove(k)
@@ -101,7 +160,7 @@ def checked_create(T, **kargs):
     result = T(**kargs)
     # Preserve references to input values to prevent garbage collection
     # while C code holds pointers to the underlying data
-    result._array_refs = tuple(kargs.values())
+    result._array_refs = tuple(refs) if refs else tuple(kargs.values())
     return result
 
 def __strides(array):
@@ -135,7 +194,9 @@ class Ellipsoid:
             R1 = R1,
             R2 = R2,
             R3 = R3)
+        _snapshot_cvar_error()
         cvar.fill_ellipsoid_directions(C.byref(self.ell), azimuth, dip, rotation)
+        _check_cvar_error("fill_ellipsoid_directions")
 
 
 class VariogramSearchTemplate:
@@ -166,6 +227,10 @@ def CalcVariograms(templ, hard_data, percent=100):
         raise TypeError(f"CalcVariograms: hard_data[0] must be a float32 ndarray, got {type(hard_data[0]).__name__}")
     if not isinstance(hard_data[1], numpy.ndarray) or hard_data[1].dtype != numpy.uint8:
         raise TypeError(f"CalcVariograms: hard_data[1] must be a uint8 ndarray, got {type(hard_data[1]).__name__}")
+    if hard_data[0].ndim != 3:
+        raise ValueError(f"CalcVariograms: hard_data[0] must be 3-dimensional, got {hard_data[0].ndim}d")
+    if hard_data[1].ndim != 3:
+        raise ValueError(f"CalcVariograms: hard_data[1] must be 3-dimensional, got {hard_data[1].ndim}d")
     variogram = numpy.array([0] * templ.num_lags, dtype='float32')
 
     hd = checked_create(
@@ -175,14 +240,17 @@ def CalcVariograms(templ, hard_data, percent=100):
         data_shape = _c_array(C.c_int, 3, hard_data[0].shape),
         mask_shape = _c_array(C.c_int, 3, hard_data[1].shape),
         data_strides = _c_array(C.c_int, 3, __strides(hard_data[0])),
-        mask_strides = _c_array(C.c_int, 3, __strides(hard_data[1])))
+        mask_strides = _c_array(C.c_int, 3, __strides(hard_data[1])),
+        _refs = (hard_data[0], hard_data[1]))
 
+    _snapshot_cvar_error()
     cvar.calc_variograms(
         C.byref(templ.templ),
         C.byref(hd),
         variogram,
         variogram.size,
         percent)
+    _check_cvar_error("CalcVariograms")
 
     # Post-call validation: check for NaN/Inf in output
     if numpy.any(numpy.isnan(variogram)) or numpy.any(numpy.isinf(variogram)):
@@ -220,13 +288,16 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
         ys = point_set["Y"].ctypes.data_as(C.POINTER(C.c_float)),
         zs = point_set["Z"].ctypes.data_as(C.POINTER(C.c_float)),
         values = point_set["Property"].ctypes.data_as(C.POINTER(C.c_float)),
-        size = point_set["Property"].size)
+        size = point_set["Property"].size,
+        _refs = (point_set["X"], point_set["Y"], point_set["Z"], point_set["Property"]))
 
+    _snapshot_cvar_error()
     cvar.calc_variograms_from_point_set(
         C.byref(templ.templ),
         C.byref(ps),
         variogram,
         variogram.size)
+    _check_cvar_error("CalcVariogramsFromPointSet")
 
     # Post-call validation: check for NaN/Inf in output
     if numpy.any(numpy.isnan(variogram)) or numpy.any(numpy.isinf(variogram)):
@@ -247,7 +318,8 @@ def _create_float_data(array):
         float_data_t,
         data = array.ctypes.data_as(C.POINTER(C.c_float)),
         data_shape = _c_array(C.c_int, 3, array.shape),
-        data_strides = _c_array(C.c_int, 3, __strides(array)))
+        data_strides = _c_array(C.c_int, 3, __strides(array)),
+        _refs = (array,))
 
 def CStackLayers(layers, markers, nz, scalez, blank_value, result):
     if len(layers) == 0:
@@ -259,6 +331,7 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
         layers2.append(_create_float_data(layer))
 
     result2 = _create_float_data(result)
+    _snapshot_cvar_error()
     cvar.cvar_stack_layers(
         _c_array(float_data_t, len(layers2), layers2),
         _c_array(C.c_int, len(markers), markers),
@@ -267,6 +340,7 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
         scalez,
         blank_value,
         C.byref(result2))
+    _check_cvar_error("CStackLayers")
 
     # Post-call validation: check for NaN/Inf in the result array
     if numpy.any(numpy.isnan(result)) or numpy.any(numpy.isinf(result)):

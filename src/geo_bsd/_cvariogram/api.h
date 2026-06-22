@@ -140,5 +140,13 @@ cvar_stack_layers(
 		int blank_value,
 		float_data_t * result);
 
+/// Thread-safe error storage for the cvariogram module.
+/// Call after any CVAR_API function returns an error sentinel (nullptr, -1, etc.)
+/// to retrieve a human-readable description of the last error.
+CVAR_API const char * cvar_get_last_error(void);
+
+/// Internal: stores an error message (thread-safe).
+/// Not CVAR_API — for internal use within the cvariogram module only.
+void cvar_set_last_error(const char * message);
 
 #endif /* _API_H_ASDJASLJDWQJLK1289379812hfdsaksdjKNKZBCXJHSADbhj7834kjsdkf78s234 */

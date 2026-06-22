@@ -3,11 +3,64 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
+#include <mutex>
+#include <string>
 
 #include "api.h"
 
 namespace {
     constexpr int MAX_POINT_SET_SIZE = 1000000;
+
+    /// Thread-safe error storage for the cvariogram module.
+    std::string last_cvariogram_error;
+    std::mutex last_cvariogram_error_mutex;
+}
+
+/// Exported: retrieves the last error message (thread-safe, C ABI).
+extern "C" const char * cvar_get_last_error(void)
+{
+    std::lock_guard<std::mutex> lock(last_cvariogram_error_mutex);
+    thread_local std::string cached;
+    cached = last_cvariogram_error;
+    return cached.c_str();
+}
+
+/// Internal: stores an error message (thread-safe).
+void cvar_set_last_error(const char * message)
+{
+    std::lock_guard<std::mutex> lock(last_cvariogram_error_mutex);
+    last_cvariogram_error = message;
+}
+
+namespace {
+
+/// Seeds rand() once at first use with the current time.
+void seed_rand_once()
+{
+    static bool seeded = false;
+    if (!seeded)
+    {
+        srand(static_cast<unsigned int>(time(nullptr)));
+        seeded = true;
+    }
+}
+
+/// Validates a non-null pointer. Sets error and returns false on null.
+template<typename T>
+bool validate_ptr(T * ptr, const char * param_name)
+{
+    if (ptr == nullptr)
+    {
+        std::string msg = std::string("Null pointer argument: ") + param_name;
+        cvar_set_last_error(msg.c_str());
+        fprintf(stderr, "[HPGL ERROR] %s\n", msg.c_str());
+        fflush(stderr);
+        return false;
+    }
+    return true;
+}
+
 }
 
 double dot_product(vector_t * vec1, vector_t * vec2)
@@ -31,6 +84,9 @@ bool is_in_tunnel(
 		variogram_search_template_t * templ,
 		vector_t * vec)
 {
+	if (!validate_ptr(templ, "templ (is_in_tunnel)")) return false;
+	if (!validate_ptr(vec, "vec (is_in_tunnel)")) return false;
+
 	double ss1 = dot_product(vec, &(templ->m_ellipsoid.m_direction1));
 	double ss2 = dot_product(vec, &(templ->m_ellipsoid.m_direction2));
 	double ss3 = dot_product(vec, &(templ->m_ellipsoid.m_direction3));
@@ -50,6 +106,10 @@ bool is_in_tunnel_v(
 		variogram_search_template_t * templ,
 		vector_t * vec, bool * results, int count)
 {
+	if (!validate_ptr(templ, "templ (is_in_tunnel_v)")) return false;
+	if (!validate_ptr(vec, "vec (is_in_tunnel_v)")) return false;
+	if (!validate_ptr(results, "results (is_in_tunnel_v)")) return false;
+
 	for (int i = 0; i < count; ++i)
 	{
 		results[i] = is_in_tunnel(templ, &(vec[i]));
@@ -92,6 +152,9 @@ void calc_search_template_window(
 		variogram_search_template_t * templ,
 		search_template_window_t * window)
 {
+	if (!validate_ptr(templ, "templ (calc_search_template_window)")) return;
+	if (!validate_ptr(window, "window (calc_search_template_window)")) return;
+
 	double max = 1e10;
 	double mini, maxi, minj, maxj, mink, maxk;
 	mini = minj = mink = max;
@@ -157,7 +220,15 @@ void init_lag_list(variogram_search_template_t * templ, lag_t * lags, int count)
 
 lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_count)
 {
-    if (templ->m_num_lags <= 0) { fprintf(stderr, "HPGL FATAL: calc_lag_areas: num_lags must be positive\n"); abort(); }
+    if (!validate_ptr(templ, "templ (calc_lag_areas)")) return nullptr;
+    if (!validate_ptr(points_count, "points_count (calc_lag_areas)")) return nullptr;
+
+    if (templ->m_num_lags <= 0) {
+        fprintf(stderr, "[HPGL ERROR] calc_lag_areas: num_lags must be positive\n");
+        fflush(stderr);
+        cvar_set_last_error("calc_lag_areas: num_lags must be positive");
+        return nullptr;
+    }
 
     search_template_window_t window;
     calc_search_template_window(templ, &window);
@@ -170,7 +241,12 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
     int maxk = (int) ceil(window.m_max_k);
 
     lag_t * lags = (lag_t *) calloc(templ->m_num_lags, sizeof(lag_t));
-    if (!lags) { fprintf(stderr, "HPGL FATAL: calc_lag_areas: calloc(lags) failed\n"); abort(); }
+    if (!lags) {
+        fprintf(stderr, "[HPGL ERROR] calc_lag_areas: calloc(lags) failed\n");
+        fflush(stderr);
+        cvar_set_last_error("calc_lag_areas: calloc(lags) failed — out of memory");
+        return nullptr;
+    }
     //lag_t * first_lag = lags;
     //lag_t * last_lag = &lags[templ->m_num_lags - 1];
 
@@ -203,7 +279,13 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
     }
 
     lag_point_t * result = (lag_point_t *) calloc(*points_count, sizeof(lag_point_t));
-    if (!result) { free(lags); fprintf(stderr, "HPGL FATAL: calc_lag_areas: calloc(result) failed\n"); abort(); }
+    if (!result) {
+        free(lags);
+        fprintf(stderr, "[HPGL ERROR] calc_lag_areas: calloc(result) failed\n");
+        fflush(stderr);
+        cvar_set_last_error("calc_lag_areas: calloc(result) failed — out of memory");
+        return nullptr;
+    }
 
     int current_point = 0;
 
@@ -224,7 +306,14 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
                             && lag->m_start <= dist
                             && dist < lag->m_end)
                     {
-                        if (current_point >= *points_count) { free(lags); free(result); fprintf(stderr, "HPGL FATAL: calc_lag_areas: buffer overflow\n"); abort(); }
+                        if (current_point >= *points_count) {
+                            free(lags);
+                            free(result);
+                            fprintf(stderr, "[HPGL ERROR] calc_lag_areas: buffer overflow\n");
+                            fflush(stderr);
+                            cvar_set_last_error("calc_lag_areas: internal buffer overflow");
+                            return nullptr;
+                        }
                         lag_point_t * lp = &result[current_point++];
                         lp->m_coords[0] = i;
                         lp->m_coords[1] = j;
@@ -377,12 +466,23 @@ void calc_variograms(
 		int result_length,
 		int percentToUse)		
 {
+	if (!validate_ptr(templ, "templ (calc_variograms)")) return;
+	if (!validate_ptr(data, "data (calc_variograms)")) return;
+	if (!validate_ptr(result_covariations, "result_covariations (calc_variograms)")) return;
+
+	seed_rand_once();
+
 	int lag_count = templ->m_num_lags <= result_length 
 		? templ->m_num_lags
 		: result_length;
 
 	lag_statistics_t * lag_stats = (lag_statistics_t *) calloc(lag_count, sizeof(lag_statistics_t));
-	if (!lag_stats) { fprintf(stderr, "HPGL FATAL: calc_variograms: calloc(lag_stats) failed\n"); abort(); }
+	if (!lag_stats) {
+		fprintf(stderr, "[HPGL ERROR] calc_variograms: calloc(lag_stats) failed\n");
+		fflush(stderr);
+		cvar_set_last_error("calc_variograms: calloc(lag_stats) failed — out of memory");
+		return;
+	}
 	for (int i = 0; i < lag_count; ++i)
 	{
 		lag_stats[i].m_cov_count = 0;
@@ -466,12 +566,16 @@ void calc_variograms_from_point_set(
 		float * result_covariations,
 		int result_length)
 {
+	if (!validate_ptr(templ, "templ (calc_variograms_from_point_set)")) return;
+	if (!validate_ptr(result_covariations, "result_covariations (calc_variograms_from_point_set)")) return;
+
 	if (point_set == nullptr || point_set->size > MAX_POINT_SET_SIZE)
 	{
 		fprintf(stderr,
 			"[HPGL ERROR] calc_variograms_from_point_set: point_set size %d exceeds maximum %d\n",
 			point_set ? point_set->size : 0, MAX_POINT_SET_SIZE);
 		fflush(stderr);
+		cvar_set_last_error("calc_variograms_from_point_set: invalid point_set");
 		return;
 	}
 
@@ -480,7 +584,12 @@ void calc_variograms_from_point_set(
 		: result_length;
 
 	lag_statistics_t * lag_stats = (lag_statistics_t *) calloc(lag_count, sizeof(lag_statistics_t));
-	if (!lag_stats) { fprintf(stderr, "HPGL FATAL: calc_variograms_from_point_set: calloc(lag_stats) failed\n"); abort(); }
+	if (!lag_stats) {
+		fprintf(stderr, "[HPGL ERROR] calc_variograms_from_point_set: calloc(lag_stats) failed\n");
+		fflush(stderr);
+		cvar_set_last_error("calc_variograms_from_point_set: calloc(lag_stats) failed — out of memory");
+		return;
+	}
 	for (int i = 0; i < lag_count; ++i)
 	{
 		lag_stats[i].m_cov_count = 0;
@@ -488,7 +597,13 @@ void calc_variograms_from_point_set(
 	}
 
 	lag_t * lags = (lag_t*) calloc(lag_count, sizeof(lag_t));
-	if (!lags) { fprintf(stderr, "HPGL FATAL: calc_variograms_from_point_set: calloc(lags) failed\n"); abort(); }
+	if (!lags) {
+		free(lag_stats);
+		fprintf(stderr, "[HPGL ERROR] calc_variograms_from_point_set: calloc(lags) failed\n");
+		fflush(stderr);
+		cvar_set_last_error("calc_variograms_from_point_set: calloc(lags) failed — out of memory");
+		return;
+	}
 	init_lag_list(templ, lags, lag_count);
 
 	for (int idx1 = 0; idx1 < point_set->size; ++idx1)

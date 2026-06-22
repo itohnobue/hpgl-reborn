@@ -1184,14 +1184,12 @@ def indicator_kriging(prop, grid, data, marginal_probs):
             ikd["cov_model"].angles
         )
 
-    for i in range(len(data)):
-        data[i]['marginal_prob'] = marginal_probs[i]
     if(len(data) == 2):
         return median_ik(
             prop,
             grid,
-            (data[0]["marginal_prob"],
-             1 - data[0]["marginal_prob"]),
+            (marginal_probs[0],
+             1 - marginal_probs[0]),
             data[0]["radiuses"],
             data[0]["max_neighbours"],
             data[0]['cov_model'])

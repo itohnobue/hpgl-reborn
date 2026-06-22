@@ -1,6 +1,6 @@
 #include <math.h>
 #include <memory.h>
-#include <assert.h>
+#include <stdio.h>
 #include "api.h"
 
 double dot_row_col(double * m1, double * m2, int row, int col)
@@ -28,8 +28,12 @@ void multiple_matrices(double * m1, double * m2, double * m3)
 
 void cpycol(double * m, vector_t * dest, int col)
 {
-	assert(col < 3);
-	assert(col >= 0);
+	if (col < 0 || col >= 3)
+	{
+		fprintf(stderr, "[HPGL ERROR] cpycol: column index %d out of range [0, 2]\n", col);
+		fflush(stderr);
+		return;
+	}
 	for (int i = 0; i < 3; ++i)
 	{
 		dest->m_data[i] = m[i*3 + col];
@@ -38,6 +42,13 @@ void cpycol(double * m, vector_t * dest, int col)
 
 void fill_ellipsoid_directions(ellipsoid_t * ell, double azimuth, double dip, double rotation)
 {
+	if (ell == nullptr)
+	{
+		fprintf(stderr, "[HPGL ERROR] fill_ellipsoid_directions: ell is null\n");
+		fflush(stderr);
+		return;
+	}
+
 	double coef = 3.14159265358 / 180.0;
 	double razimuth = azimuth * coef;
 	double rdip = dip * coef;

@@ -17,12 +17,14 @@ namespace hpgl
 
 	void write_value(FILE * f, unsigned char value)
 	{
-		fprintf(f, "%d\n", static_cast<int>(value) );
+		if (fprintf(f, "%d\n", static_cast<int>(value) ) < 0)
+			throw hpgl_exception("write_value", "Error writing to file.");
 	}
 
 	void write_value(FILE * f, double value)
 	{
-		fprintf(f, "%E\n", value);
+		if (fprintf(f, "%E\n", value) < 0)
+			throw hpgl_exception("write_value", "Error writing to file.");
 	}
 
 	namespace {
@@ -49,7 +51,8 @@ namespace hpgl
 		{
 			blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
 			file_t f = open_file_checked(filename, "w+");
-			fprintf(f.get(), "%s\n", property_name);
+			if (fprintf(f.get(), "%s\n", property_name) < 0)
+				throw hpgl_exception("write_property_cont", "Error writing property name.");
 
 			for (int i = 0, end_i = property.size(); i < end_i; ++i)
 			{
@@ -59,7 +62,8 @@ namespace hpgl
 					write_value(f.get(), undefined_value);
 			}
 
-			fprintf(f.get(), "/\n");
+			if (fprintf(f.get(), "/\n") < 0)
+				throw hpgl_exception("write_property_cont", "Error writing end marker.");
 		}
 
 		void write_property_ind(
@@ -72,7 +76,8 @@ namespace hpgl
 		{
 			blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
 			file_t f = open_file_checked(filename, "w+");
-			fprintf(f.get(), "%s\n", property_name);
+			if (fprintf(f.get(), "%s\n", property_name) < 0)
+				throw hpgl_exception("write_property_ind", "Error writing property name.");
 
 			for (int i = 0, end_i = property.size(); i < end_i; ++i)
 			{
@@ -89,16 +94,18 @@ namespace hpgl
 					write_value(f.get(), undefined_value);
 			}
 
-			fprintf(f.get(), "/\n");
+			if (fprintf(f.get(), "/\n") < 0)
+				throw hpgl_exception("write_property_ind", "Error writing end marker.");
 		}
 	}
 
 	namespace {
 		void write_header(FILE * f,int var_num, const char * property_name)
 		{
-			fprintf(f, "HPGL saved GSLIB file\n");
-			fprintf(f, "%d\n", var_num);
-			fprintf(f, "%s\n", property_name);
+			if (fprintf(f, "HPGL saved GSLIB file\n") < 0 ||
+			    fprintf(f, "%d\n", var_num) < 0 ||
+			    fprintf(f, "%s\n", property_name) < 0)
+				throw hpgl_exception("write_header", "Error writing file header.");
 		}
 
 		void write_gslib_property_cont_c(

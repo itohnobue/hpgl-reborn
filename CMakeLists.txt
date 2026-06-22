@@ -153,25 +153,25 @@ endif()
 
 # Security hardening flags (non-Debug builds only)
 # Debug builds skip these to avoid interfering with debugging/sanitizers.
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-    if(MSVC)
-        # /sdl: Additional security checks (buffer overrun, strict const, etc.)
-        # /guard:cf: Control Flow Guard (compile + link)
-        target_compile_options(hpgl_core PRIVATE /sdl /guard:cf)
-        target_link_options(hpgl_core PRIVATE /guard:cf)
-    else()
-        # -fstack-protector-strong: Stack canary protection
-        # -ffile-prefix-map: Reproducible build paths
-        # _FORTIFY_SOURCE=2: Compile-time buffer overflow detection
-        # -Wl,-z,relro,-z,now: Full RELRO (read-only GOT, immediate binding)
-        # -Wl,-z,noexecstack: Non-executable stack
-        # -D_GLIBCXX_ASSERTIONS: libstdc++ runtime assertions (C++ only)
-        target_compile_options(hpgl_core PRIVATE -fstack-protector-strong -ffile-prefix-map=${CMAKE_SOURCE_DIR}=.)
-        target_compile_definitions(hpgl_core PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:_FORTIFY_SOURCE=2>)
-        target_link_options(hpgl_core PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,-z,relro,-z,now>)
-        target_link_options(hpgl_core PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,-z,noexecstack>)
-        target_compile_definitions(hpgl_core PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:_GLIBCXX_ASSERTIONS>)
-    endif()
+# Generator expressions ensure correct behavior for BOTH single-config
+# (Make, Ninja) and multi-config (VS, Xcode) generators.
+if(MSVC)
+    # /sdl: Additional security checks (buffer overrun, strict const, etc.)
+    # /guard:cf: Control Flow Guard (compile + link)
+    target_compile_options(hpgl_core PRIVATE $<$<NOT:$<CONFIG:Debug>>:/sdl> $<$<NOT:$<CONFIG:Debug>>:/guard:cf>)
+    target_link_options(hpgl_core PRIVATE $<$<NOT:$<CONFIG:Debug>>:/guard:cf>)
+else()
+    # -fstack-protector-strong: Stack canary protection
+    # -ffile-prefix-map: Reproducible build paths
+    # _FORTIFY_SOURCE=2: Compile-time buffer overflow detection
+    # -Wl,-z,relro,-z,now: Full RELRO (read-only GOT, immediate binding)
+    # -Wl,-z,noexecstack: Non-executable stack
+    # -D_GLIBCXX_ASSERTIONS: libstdc++ runtime assertions (C++ only)
+    target_compile_options(hpgl_core PRIVATE $<$<NOT:$<CONFIG:Debug>>:-fstack-protector-strong> $<$<NOT:$<CONFIG:Debug>>:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.>)
+    target_compile_definitions(hpgl_core PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:_FORTIFY_SOURCE=2>)
+    target_link_options(hpgl_core PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:-Wl,-z,relro,-z,now>)
+    target_link_options(hpgl_core PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:-Wl,-z,noexecstack>)
+    target_compile_definitions(hpgl_core PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:_GLIBCXX_ASSERTIONS>)
 endif()
 
 # OpenMP support
@@ -224,17 +224,17 @@ if(HPGL_BUILD_VARIOGRAM)
     endif()
 
     # Security hardening flags for variogram module (non-Debug builds only)
-    if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-        if(MSVC)
-            target_compile_options(hpgl_variogram PRIVATE /sdl /guard:cf)
-            target_link_options(hpgl_variogram PRIVATE /guard:cf)
-        else()
-            target_compile_options(hpgl_variogram PRIVATE -fstack-protector-strong -ffile-prefix-map=${CMAKE_SOURCE_DIR}=.)
-            target_compile_definitions(hpgl_variogram PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:_FORTIFY_SOURCE=2>)
-            target_link_options(hpgl_variogram PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,-z,relro,-z,now>)
-            target_link_options(hpgl_variogram PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:-Wl,-z,noexecstack>)
-            target_compile_definitions(hpgl_variogram PRIVATE $<$<NOT:$<PLATFORM_ID:Darwin>>:_GLIBCXX_ASSERTIONS>)
-        endif()
+    # Generator expressions ensure correct behavior for BOTH single-config
+    # (Make, Ninja) and multi-config (VS, Xcode) generators.
+    if(MSVC)
+        target_compile_options(hpgl_variogram PRIVATE $<$<NOT:$<CONFIG:Debug>>:/sdl> $<$<NOT:$<CONFIG:Debug>>:/guard:cf>)
+        target_link_options(hpgl_variogram PRIVATE $<$<NOT:$<CONFIG:Debug>>:/guard:cf>)
+    else()
+        target_compile_options(hpgl_variogram PRIVATE $<$<NOT:$<CONFIG:Debug>>:-fstack-protector-strong> $<$<NOT:$<CONFIG:Debug>>:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.>)
+        target_compile_definitions(hpgl_variogram PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:_FORTIFY_SOURCE=2>)
+        target_link_options(hpgl_variogram PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:-Wl,-z,relro,-z,now>)
+        target_link_options(hpgl_variogram PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:-Wl,-z,noexecstack>)
+        target_compile_definitions(hpgl_variogram PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:_GLIBCXX_ASSERTIONS>)
     endif()
 endif()
 

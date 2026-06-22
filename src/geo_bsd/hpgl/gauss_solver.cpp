@@ -97,10 +97,10 @@ namespace hpgl
 							V -= (A_U[k*size + i] * A_U[k * size + i]);
 						}
 
-						if( V <= 0)
-						{
-							return false;
-						}
+					if (V < std::numeric_limits<double>::epsilon())
+					{
+						return false;
+					}
 
 						A_L[i*size + i] = sqrt(V);
 						A_U[i*size + i] = sqrt(V);
@@ -194,13 +194,13 @@ namespace hpgl
 							V -= (A_U[k*size + i] * A_U[k * size + i]);
 						}
 
-						if( V <= 0)
-						{
-							return false;
-						}
+					if (V < std::numeric_limits<double>::epsilon())
+					{
+						return false;
+					}
 
-						A_L[i*size + i] = sqrt(V);
-						A_U[i*size + i] = sqrt(V);
+					A_L[i*size + i] = sqrt(V);
+					A_U[i*size + i] = sqrt(V);
 				}
 				else
 				{

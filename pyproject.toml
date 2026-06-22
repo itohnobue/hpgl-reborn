@@ -201,7 +201,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["src/hpgl", "src/geo_bsd"]
+source = ["src/geo_bsd"]
 branch = true
 parallel = true
 omit = [

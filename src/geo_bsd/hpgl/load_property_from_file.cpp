@@ -1,5 +1,8 @@
 #include "stdafx.h"
 
+#include <cerrno>
+#include <cstring>
+
 #include "load_property_from_file.h"
 #include "property_array.h"
 #include "hpgl_exception.h"
@@ -127,7 +130,15 @@ void load_variable_mean_from_file(
 	FILE * file = fopen(file_name.c_str(), "r");
 	if (file == 0)
 	{
-		throw hpgl_exception("load_variable_mean_from_file", std::string("Error opening file:") + file_name + ".");
+		// Use basename to avoid leaking full filesystem path in error messages.
+		// Also capture the errno before any other call may modify it.
+		int open_errno = errno;
+		const char * basename = strrchr(file_name.c_str(), '/');
+		if (basename == nullptr) basename = file_name.c_str();
+		else ++basename; // skip '/'
+		std::ostringstream oss;
+		oss << "Error opening file '" << basename << "': " << strerror(open_errno);
+		throw hpgl_exception("load_variable_mean_from_file", oss.str());
 	}
 	try
 	{

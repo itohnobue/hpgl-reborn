@@ -134,6 +134,9 @@ namespace hpgl
 		
 		prob_t operator()(value_t value)
 		{
+			if (m_cdf.size() <= 0)
+				return 0;
+
 			prob_t result;
 			typename cdf_t::iterator it = std::lower_bound(m_cdf.begin(), m_cdf.end(), std::make_pair(value, 1.0));
 			if (it == m_cdf.end())

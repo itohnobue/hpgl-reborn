@@ -1,6 +1,7 @@
 #include "api.h"
 
 #include <math.h>
+#include <stdio.h>
 #include "stack_layers.h"
 
 
@@ -14,6 +15,36 @@ cvar_stack_layers(
 		int blank_value,
 		float_data_t * result)
 {
+	if (thick_layers == nullptr)
+	{
+		fprintf(stderr,
+			"[HPGL ERROR] cvar_stack_layers: thick_layers is null\n");
+		fflush(stderr);
+		return;
+	}
+	if (layer_markers == nullptr)
+	{
+		fprintf(stderr,
+			"[HPGL ERROR] cvar_stack_layers: layer_markers is null\n");
+		fflush(stderr);
+		return;
+	}
+	if (result == nullptr)
+	{
+		fprintf(stderr,
+			"[HPGL ERROR] cvar_stack_layers: result is null\n");
+		fflush(stderr);
+		return;
+	}
+	if (layers_count <= 0)
+	{
+		fprintf(stderr,
+			"[HPGL ERROR] cvar_stack_layers: layers_count must be positive, got %d\n",
+			layers_count);
+		fflush(stderr);
+		return;
+	}
+
 	std::vector<float_data_t> layers;
 	layers.assign(thick_layers, thick_layers + layers_count);
 	

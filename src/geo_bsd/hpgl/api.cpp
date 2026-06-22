@@ -110,20 +110,35 @@ extern "C" {
 
 HPGL_API char * hpgl_get_last_exception_message()
 {
-	thread_local std::string cached_message;
-	cached_message = hpgl::get_last_exception_message();
-	// Returns pointer to thread_local buffer. Valid until next call on same thread.
-	// Python ctypes (c_char_p) copies the data immediately, so no lifetime issue.
-	return const_cast<char *>(cached_message.c_str());
+	try
+	{
+		thread_local std::string cached_message;
+		cached_message = hpgl::get_last_exception_message();
+		// Returns pointer to thread_local buffer. Valid until next call on same thread.
+		// Python ctypes (c_char_p) copies the data immediately, so no lifetime issue.
+		return const_cast<char *>(cached_message.c_str());
+	}
+	catch (const std::exception & ex)
+	{
+		handle_exception(ex);
+		return const_cast<char *>("");
+	}
 }
 
 HPGL_API void hpgl_set_thread_num(int n_threads)
 {
-	if (!hpgl::set_thread_num(n_threads))
+	try
 	{
-		std::ostringstream oss;
-		oss << "hpgl_set_thread_num: invalid thread count " << n_threads;
-		hpgl::set_last_exception_message(oss.str().c_str());
+		if (!hpgl::set_thread_num(n_threads))
+		{
+			std::ostringstream oss;
+			oss << "hpgl_set_thread_num: invalid thread count " << n_threads;
+			hpgl::set_last_exception_message(oss.str().c_str());
+		}
+	}
+	catch (const std::exception & ex)
+	{
+		handle_exception(ex);
 	}
 }
 
@@ -222,6 +237,7 @@ HPGL_API int hpgl_write_inc_file_float(
 	{
 		using namespace hpgl;
 		int vol = validate_shape_volume(get_shape_volume(&(arr->m_shape)), "write_inc_file_float");
+		if (vol < 0) return -1;
 		property_writer_t writer;
 		writer.init(filename, name);
 		cont_property_array_t prop(
@@ -286,6 +302,7 @@ HPGL_API int hpgl_write_inc_file_byte(
 	{
 		using namespace hpgl;
 		int vol = validate_shape_volume(get_shape_volume(&(arr->m_shape)), "write_inc_file_byte");
+		if (vol < 0) return -1;
 		std::vector<unsigned char> remap_table;
 		init_remap_table(values, values_count, arr->m_indicator_count, remap_table);
 
@@ -320,6 +337,7 @@ hpgl_write_gslib_cont_property(
 	{
 		using namespace hpgl;
 		int size = validate_shape_volume(get_shape_volume(&data->m_shape), "write_gslib_cont_property");
+		if (size < 0) return -1;
 		sp_double_property_array_t prop = std::make_shared<cont_property_array_t>(data->m_data, data->m_mask, size);
 		hpgl::property_writer_t writer;
 		writer.init(filename, name);
@@ -350,6 +368,7 @@ hpgl_write_gslib_byte_property(
 	{
 		using namespace hpgl;
 		int size = validate_shape_volume(get_shape_volume(&data->m_shape), "write_gslib_byte_property");
+		if (size < 0) return -1;
 		sp_byte_property_array_t prop = std::make_shared<indicator_property_array_t>(data->m_data, data->m_mask, size, data->m_indicator_count);
 		std::vector<unsigned char> remap_table;
 		init_remap_table(values, values_count, data->m_indicator_count, remap_table);

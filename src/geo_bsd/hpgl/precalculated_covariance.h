@@ -4,6 +4,7 @@
 #include "typedefs.h"
 #include "geometry.h"
 #include "var_radix_utils.h"
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 
@@ -66,6 +67,12 @@ namespace hpgl
 					size = tmp * sz_s;
 				}
 			}
+			// Guard: vr_to_dec returns int; index must fit in INT_MAX
+			if (size > static_cast<size_t>(INT_MAX))
+			{
+				fprintf(stderr, "HPGL FATAL: precalculated_covariance: volume exceeds INT_MAX\n");
+				abort();
+			}
 			m_covariances.resize(size);	
 			m_covariances.resize(size);
 			for (int z = 0; z < sz; ++z)
@@ -75,7 +82,7 @@ namespace hpgl
 						int index = vr_to_dec(sy, sx, z, y, x);
 						double c1[] = {0.0, 0.0, 0.0};
 						double c2[] = {static_cast<double>(x + dx), static_cast<double>(y + dy), static_cast<double>(z + dz)};
-						m_covariances[index] = cov(c1, c2);
+						m_covariances[static_cast<size_t>(index)] = cov(c1, c2);
 					}
 			m_box = rect_3d_t<int>(-rx, -ry, -rz, rx, ry, rz);
 			if (m_box.volume_inclusive() != size) { fprintf(stderr, "HPGL FATAL: precalculated_covariance: box volume mismatch\n"); abort(); }
@@ -89,7 +96,7 @@ namespace hpgl
 			if (m_box.has(vec))
 			{
 				int index = vr_to_dec(sy, sx, vec[2] - dz, vec[1] - dy, vec[0] - dx);
-				return m_covariances[index];
+				return m_covariances[static_cast<size_t>(index)];
 			}
 			else
 			{

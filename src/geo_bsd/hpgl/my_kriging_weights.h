@@ -485,15 +485,23 @@ namespace hpgl
 			SumOnes += ones_result[k];
 		}
 
-		if (std::abs(SumOnes) < 1e-15)
+		if (std::abs(SumOnes) < 1e-12)
 		{
-			// Degenerate case: SumOnes is zero, cannot compute OK weights
+			// Degenerate case: SumOnes is nearly zero, cannot compute OK weights
 			weights.resize(coords.size());
 			if (calc_variance) variance = -1;
 			return false;
 		}
 
 		double mu = (SumSK - 1) / SumOnes;
+
+		// Secondary guard: if mu would produce unstable weights, fall back to SK
+		if (std::abs(mu) > 1e10)
+		{
+			weights.resize(coords.size());
+			if (calc_variance) variance = -1;
+			return false;
+		}
 
 		for (int k = 0; k < size; k++)
 		{
@@ -646,15 +654,24 @@ namespace hpgl
 			SumOnes += ws.ones_result[k];
 		}
 
-		if (std::abs(SumOnes) < 1e-15)
+		if (std::abs(SumOnes) < 1e-12)
 		{
-			// Degenerate case: SumOnes is zero, cannot compute OK weights
+			// Degenerate case: SumOnes is nearly zero, cannot compute OK weights
 			weights.resize(coords.size());
 			if (calc_variance) variance = -1;
 			return false;
 		}
 
 		double mu = (SumSK - 1) / SumOnes;
+
+		// Secondary guard: if mu would produce unstable weights, fall back to SK
+		if (std::abs(mu) > 1e10)
+		{
+			weights.resize(coords.size());
+			if (calc_variance) variance = -1;
+			return false;
+		}
+
 		for (int k = 0; k < size; k++)
 		{
 			weights[k] = ws.sk_weights[k] - mu * ws.ones_result[k];

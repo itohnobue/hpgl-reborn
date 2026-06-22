@@ -208,6 +208,7 @@ def _safe_load_library(lib_name: str, ref_file: str):
         lib_paths.extend([
             lib_dir / f"lib{lib_name}.dylib",
             lib_dir / f"lib{lib_name}.so",
+            lib_dir / f"{lib_name}.dylib",
             lib_dir / f"{lib_name}.so",
         ])
     else:  # Linux and others
