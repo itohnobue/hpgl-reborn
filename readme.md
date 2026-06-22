@@ -949,9 +949,6 @@ The native library (`hpgl.dll` / `hpgl.so`) must be built and available in `src/
 ### Can I use pip instead of uv?
 The project uses `uv` for environment and dependency management. `uv sync` replaces `pip install`. Use `uv run` to execute scripts in the managed environment.
 
-### How do I contribute?
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and PR guidelines.
-
 ### Is HPGL production-ready?
 HPGL is used at Ufa Petroleum Institute for reservoir modeling research. The v1.6.0 release includes extensive validation and a comprehensive test suite. As with any scientific computing library, validate results against known benchmarks for your specific use case.
 
