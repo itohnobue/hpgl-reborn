@@ -25,14 +25,10 @@
 - [Dataclass Property Reference](#dataclass-property-reference)
 - [Common Use Cases](#common-use-cases)
 - [Error Handling](#error-handling)
-- [Validation Limits](#validation-limits)
 - [Testing](#testing)
 - [Project Structure](#project-structure)
-- [Migration Guide](#migration-guide)
-- [Changes from v0.9.9](#changes-from-v099)
 - [Troubleshooting](#troubleshooting)
 - [Frequently Asked Questions](#frequently-asked-questions)
-- [Getting Help](#getting-help)
 - [License](#license)
 
 ## Description
@@ -88,7 +84,6 @@ Key geostatistical terms used throughout this documentation:
 | New to HPGL, want to try it out | [Quick Start](#quick-start) — runnable example with no external data |
 | Need to build from source | [Build Instructions](#build-instructions) — Windows, Linux, macOS |
 | Already using HPGL, need API details | [API Overview](#api-overview) — function signatures and usage |
-| Upgrading from legacy HPGL (0.9.x) | [Migration Guide](#migration-guide) — breaking changes and new APIs |
 | Running into problems | [Troubleshooting](#troubleshooting) — common errors and fixes |
 
 ## Requirements
@@ -623,35 +618,6 @@ result = geo_bsd.sgs_simulation(prop, grid, cdf, ...)
 geo_bsd.set_progress_handler(None, None)  # unregister
 ```
 
-## Validation Limits
-
-HPGL enforces the following limits via `geo_bsd.validation.ValidationConstants`.
-Values outside these ranges raise `CriticalValidationError`.
-
-| Constant | Value | Applies To |
-|----------|-------|------------|
-| `MIN_GRID_DIMENSION` | 1 | Minimum grid axis size |
-| `MAX_GRID_DIMENSION` | 10,000,000 | Maximum single-axis grid size |
-| `MAX_GRID_SIZE` | 1,000,000,000 | Maximum total grid cells (1 billion) |
-| `MIN_NEIGHBORS` | 1 | Minimum neighbor count |
-| `MAX_NEIGHBORS` | 1,000 | Maximum neighbors (warning above this) |
-| `MAX_INDICATORS` | 256 | Maximum indicator categories |
-| `MIN_SILL` / `MAX_SILL` | 0.0 / 1e10 | Covariance sill range |
-| `MIN_NUGGET` / `MAX_NUGGET` | 0.0 / 1e10 | Nugget effect range |
-| `MIN_RANGE` / `MAX_RANGE` | 0.0 / 1e10 | Covariance range limits (per axis) |
-| `MIN_RADIUS` / `MAX_RADIUS` | 0.0 / 1,000,000.0 | Search radius limits (per axis) |
-| `MIN_ANGLE` / `MAX_ANGLE` | 0.0 / 360.0 | Anisotropy angle range (warn outside) |
-| `PROBABILITY_SUM_TOLERANCE` | 0.01 | Allowed deviation when probabilities sum to 1.0 |
-| `c_int` maximum | 2,147,483,647 | Maximum grid elements for fast C++ I/O readers |
-
-You can inspect these at runtime:
-
-```python
-from geo_bsd.validation import ValidationConstants
-print(f"Max grid size: {ValidationConstants.MAX_GRID_SIZE}")
-print(f"Max neighbor count: {ValidationConstants.MAX_NEIGHBORS}")
-```
-
 ## Testing
 
 Run the full test suite:
@@ -732,125 +698,6 @@ The `shared/` subdirectory contains utility modules (statistics, GSLIB file I/O,
 ### Legacy Documentation (`legacy_documentation/`)
 
 Original documentation from earlier HPGL versions, including PDF manuals (English and Russian), Word source documents, and the archived sample scripts documentation.
-
-## Migration Guide
-
-### Upgrading from HPGL 0.9.x (Legacy / Python 2)
-
-HPGL Reborn (v1.6.0) changed several key APIs. Follow these steps to migrate.
-
-#### 1. Python Version
-
-HPGL 1.6.0 requires **Python 3.9+**. Python 2 is no longer supported.
-
-#### 2. Import Path
-
-```python
-# Old (0.9.x, Boost.Python bindings):
-import hpgl
-
-# New (1.6.0, ctypes bindings):
-import sys
-sys.path.insert(0, "path/to/hpgl/src")
-import geo_bsd
-```
-
-#### 3. Package Manager
-
-The project now uses `uv` instead of `pip` directly. Set up with:
-
-```bash
-uv sync --extra test
-uv run python my_script.py
-```
-
-#### 4. Property Classes
-
-```python
-# Old: property classes accepted separate positional args
-# New: use named classes
-prop = geo_bsd.ContProperty(data_array, mask_array)
-ind_prop = geo_bsd.IndProperty(data_array, mask_array, indicator_count=3)
-```
-
-#### 5. Required `cov_model` Parameter
-
-All kriging functions now **require** the `cov_model` parameter. The old signature that accepted individual `sill`, `ranges`, `nugget`, etc. parameters has been removed.
-
-```python
-# Old (positional sill, ranges, nugget, etc.):
-geo_bsd.ordinary_kriging(prop, grid, radiuses, max_n, sill, ranges, ...)  # REMOVED
-
-# New (CovarianceModel object):
-cov = geo_bsd.CovarianceModel(type=geo_bsd.covariance.spherical, ranges=(10,10,5), sill=1.0, nugget=0.1)
-geo_bsd.ordinary_kriging(prop, grid, radiuses, max_n, cov_model=cov)
-```
-
-#### 6. SGS Simulation Signature
-
-`sgs_simulation` gained new parameters. The old positional-only call style still works but the new `kriging_type`, `use_harddata`, `use_regions`, `region_size`, `mask`, `force_single_thread`, `force_parallel`, and `min_neighbours` parameters are recommended.
-
-```python
-# New (all optional params shown):
-geo_bsd.sgs_simulation(
-    prop, grid, cdf,
-    radiuses=(10, 10, 5),
-    max_neighbours=12,
-    cov_model=cov,
-    seed=42,
-    kriging_type="sk",       # "sk" or "ok"
-    mean=None,                # float for stationary, ndarray for LVM
-    use_harddata=True,
-    mask=None,                # ndarray: 1=simulate, 0=skip
-    use_regions=False,        # enable region-wise simulation
-    region_size=None,         # tuple (rx, ry, rz) for region dimensions
-    force_single_thread=False,# force single-threaded execution
-    force_parallel=False,     # force multi-threaded execution
-    min_neighbours=0,
-)
-```
-
-#### 7. Input Validation
-
-HPGL 1.6.0 validates all parameters before passing them to C++. Invalid input raises `geo_bsd.validation.CriticalValidationError` instead of crashing or silently producing wrong results.
-
-```python
-try:
-    grid = geo_bsd.SugarboxGrid(x, y, z)
-except geo_bsd.validation.CriticalValidationError as e:
-    print(f"Invalid grid: {e}")
-```
-
-#### 8. Thread Management
-
-```python
-# Old:
-hpgl.set_num_threads(4)
-
-# New:
-geo_bsd.set_thread_num(4)
-```
-
-#### 9. Build System
-
-- **Windows**: Use `build.bat` (MSBuild 2022) instead of old VS 2008 project files.
-- **Linux/macOS**: Use CMake (`cmake .. && cmake --build .`) instead of SCons.
-- MKL is now the default BLAS backend on Windows; OpenBLAS on Linux/macOS.
-
-## Changes from v0.9.9
-
-- **Python 3 support**: Full Python 3.9+ compatibility (previously Python 2 only)
-- **NumPy 2.0+ support**: Compatible with modern NumPy versions
-- **Visual Studio 2022**: Windows build with newer MSVC toolchain (v143, C++17)
-- **Intel MKL**: Replaced CLAPACK with Intel MKL for LAPACK operations
-- **Boost removed**: Replaced legacy boost::python with ctypes-based Python bindings
-- **CMake build**: Cross-platform CMake build system alongside MSBuild
-- **Input validation**: Comprehensive parameter validation framework
-- **Security**: Path validation, array reference management, safe library loading
-- **Modern build**: MSBuild-based build.bat, pyproject.toml, CMakeLists.txt
-- **Algorithm bug fixes**: Fixed 6 mathematical bugs — covariance C(0) missing nugget contribution, OK kriging variance sign error, correlogram weight adjustment inverted, Cokriging Mark II cross-covariance ratio inverted, SGS normalization coefficient, and spurious /2 in covariance and indicator correlation functions
-- **Test suite**: 622 automated tests with pytest
-- **Legacy cleanup**: Removed unused libraries, old Boost.Python bindings, obsolete build systems (SCons, old Makefiles), Debian packaging, old VS 2008 project files, and a bundled Win32 installer, etc
 
 ## Troubleshooting
 
@@ -948,15 +795,6 @@ The native library (`hpgl.dll` / `hpgl.so`) must be built and available in `src/
 
 ### Can I use pip instead of uv?
 The project uses `uv` for environment and dependency management. `uv sync` replaces `pip install`. Use `uv run` to execute scripts in the managed environment.
-
-### Is HPGL production-ready?
-HPGL is used at Ufa Petroleum Institute for reservoir modeling research. The v1.6.0 release includes extensive validation and a comprehensive test suite. As with any scientific computing library, validate results against known benchmarks for your specific use case.
-
-## Getting Help
-
-- **Bug reports and feature requests**: [GitHub Issues](https://github.com/hpgl/hpgl/issues)
-- **Questions and discussions**: [GitHub Discussions](https://github.com/hpgl/hpgl/discussions)
-- **Before opening an issue**, run the [General Diagnostics](#general-diagnostics) commands and include the output
 
 ## License
 
