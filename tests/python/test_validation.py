@@ -6,30 +6,30 @@ context manager. These tests exercise edge cases documented in the
 adversarial review findings (Q4) including boundary values for
 MAX_GRID_SIZE, MIN_SILL, PROBABILITY_SUM_TOLERANCE, etc.
 """
+import os
+import sys
+from builtins import UserWarning
+from pathlib import Path
+
 import numpy as np
 import pytest
-import sys
-import os
-from builtins import UserWarning
-import tempfile
-from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from geo_bsd.validation import (
-        ValidationConstants,
-        ValidationError,
         CriticalValidationError,
-        ValidationWarning,
-        PathValidator,
         GridValidator,
         ParameterValidator,
+        PathValidator,
+        ValidationConstants,
+        ValidationContext,
+        ValidationError,
+        ValidationWarning,
+        validate_file_params,
         validate_grid_params,
         validate_kriging_params,
         validate_simulation_params,
-        validate_file_params,
-        ValidationContext,
     )
     VALIDATION_AVAILABLE = True
 except (ImportError, SyntaxError, IndentationError):
@@ -66,7 +66,7 @@ class TestValidationConstants:
         """MIN_SILL=0.0, MIN_NUGGET=0.0, MAX_INDICATORS=256."""
         assert ValidationConstants.MIN_SILL == 0.0
         assert ValidationConstants.MIN_NUGGET == 0.0
-        assert ValidationConstants.MAX_INDICATORS == 256
+        assert ValidationConstants.MAX_INDICATORS == 255
         assert ValidationConstants.MIN_SEED == 0
 
 
@@ -421,7 +421,12 @@ class TestParameterValidator:
 
     def test_indicator_count_at_max_passes(self):
         """Indicator count at MAX_INDICATORS passes."""
-        ParameterValidator.validate_indicator_count(256)
+        ParameterValidator.validate_indicator_count(255)
+
+    def test_indicator_count_at_max_plus_one_raises(self):
+        """Indicator count at MAX_INDICATORS + 1 raises."""
+        with pytest.raises(CriticalValidationError):
+            ParameterValidator.validate_indicator_count(256)
 
     # ---- Correlation Coef ----
 

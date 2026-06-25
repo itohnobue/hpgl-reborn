@@ -1,14 +1,14 @@
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
 
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
-    from geo_bsd.geo import ContProperty, SugarboxGrid
     from geo_bsd.cdf import CdfData, calc_cdf
+    from geo_bsd.geo import ContProperty, SugarboxGrid
 except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 

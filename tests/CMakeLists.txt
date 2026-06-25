@@ -4,25 +4,6 @@ cmake_minimum_required(VERSION 3.20)
 # HPGL Test Suite
 # ============================================================================
 
-# C++ Unit Tests
-option(HPGL_BUILD_CPP_TESTS "Build C++ unit tests" OFF)
-
-if(HPGL_BUILD_CPP_TESTS)
-    enable_testing()
-
-    # Test executable (paths relative to this CMakeLists.txt directory)
-    add_executable(hpgl_test
-        cpp/test_main.cpp
-        cpp/test_kriging.cpp
-        cpp/test_grid.cpp
-        cpp/test_covariance.cpp
-    )
-
-    target_link_libraries(hpgl_test PRIVATE hpgl::core)
-
-    add_test(NAME hpgl_cpp_tests COMMAND hpgl_test)
-endif()
-
 # Python Tests
 if(HPGL_BUILD_PYTHON)
     # Always register Python test via pytest (pytest availability checked at runtime)
@@ -31,3 +12,34 @@ if(HPGL_BUILD_PYTHON)
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python
     )
 endif()
+
+# ============================================================================
+# C++ Unit Tests (minimal, no external test framework)
+# ============================================================================
+
+# Build a standalone C++ test binary that verifies core numerical routines.
+# Links against the hpgl_core library (same as Python extension but tested
+# independently).
+add_executable(hpgl_core_tests
+    cpp/test_hpgl_core.cpp
+)
+
+target_include_directories(hpgl_core_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/tnt_126
+    ${CMAKE_SOURCE_DIR}/src/geo_bsd/hpgl
+)
+
+target_link_libraries(hpgl_core_tests PRIVATE hpgl_core)
+
+target_compile_features(hpgl_core_tests PRIVATE cxx_std_17)
+
+if(MSVC)
+    target_compile_options(hpgl_core_tests PRIVATE /W3)
+else()
+    target_compile_options(hpgl_core_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME hpgl_cpp_tests
+    COMMAND hpgl_core_tests
+)

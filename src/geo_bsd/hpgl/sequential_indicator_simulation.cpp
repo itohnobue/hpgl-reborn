@@ -14,6 +14,7 @@
 #include "is_informed_predicate.h"
 #include "cov_model.h"
 #include "hpgl_exception.h"
+#include "indicator_kriging.h"
 
 namespace hpgl
 {
@@ -32,6 +33,9 @@ void do_sis(
 		const weight_calculator_t & weight_calculator_sis,
 		const mask_t & mask)
 {
+	if (params.m_category_count == 0)
+		return;
+
 	typedef precalculated_covariances_t cov_t;
 	typedef neighbour_lookup_t<grid_t, cov_t> nl_t;
 	std::vector<cov_t> 							covariances(params.m_category_count);	
@@ -107,6 +111,17 @@ void do_sis(
 				}
 				probs.push_back(prob);
 			}
+		}
+		// Enforce monotonicity and [0,1] bounds on indicator probabilities
+		// before sampling. Mirrors the correct_order_relations() call in
+		// do_indicator_kriging (indicator_kriging.h:156).
+		// NOTE: Only applicable for multi-category (3+) SIS where indicator
+		// probabilities are cumulative [P(0), P(0or1), P(0or1or2), ...].
+		// For 2-category SIS, probabilities are complementary [prob, 1-prob],
+		// not cumulative — monotonicity correction would destroy the distribution.
+		if (params.m_category_count > 2)
+		{
+			detail::correct_order_relations(probs);
 		}
 		property.set_at(node, sample(gen, probs));
 	}

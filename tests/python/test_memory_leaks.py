@@ -13,23 +13,27 @@ To detect C++ memory leaks, run with:
 The 10MB threshold is intentionally generous to avoid false positives
 from Python's memory fragmentation, reference cycles, and GC timing.
 """
-import numpy as np
-import pytest
 import gc
 import sys
 from pathlib import Path
 
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
+    from geo_bsd.cdf import CdfData
     from geo_bsd.geo import (
-        ordinary_kriging, simple_kriging,
-        ContProperty, SugarboxGrid, CovarianceModel, covariance
+        ContProperty,
+        CovarianceModel,
+        SugarboxGrid,
+        covariance,
+        ordinary_kriging,
+        simple_kriging,
     )
     from geo_bsd.sgs import sgs_simulation
-    from geo_bsd.cdf import CdfData
-except (ImportError, OSError) as e:
+except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
 
@@ -37,13 +41,13 @@ except (ImportError, OSError) as e:
 @pytest.mark.slow
 class TestMemoryLeaks:
     """Memory leak detection tests"""
-    
+
     def test_kriging_memory_cleanup(self):
         """Test that kriging operations clean up memory properly"""
         try:
             import tracemalloc
             tracemalloc.start()
-            
+
             # Create test data
             grid = SugarboxGrid(x=20, y=20, z=10)
             data = np.random.rand(4000).astype('float32') * 100
@@ -55,11 +59,11 @@ class TestMemoryLeaks:
                 sill=1.0,
                 nugget=0.1
             )
-            
+
             # Get baseline memory
             gc.collect()
             snapshot1 = tracemalloc.take_snapshot()
-            
+
             # Run multiple iterations
             for _ in range(10):
                 result = ordinary_kriging(
@@ -70,21 +74,21 @@ class TestMemoryLeaks:
                     cov_model=cov_model
                 )
                 del result
-            
+
             gc.collect()
             snapshot2 = tracemalloc.take_snapshot()
-            
+
             # Check for significant memory increase
             top_stats = snapshot2.compare_to(snapshot1, 'lineno')
             total_increase = sum(stat.size_diff for stat in top_stats)
-            
+
             # Allow some increase but not excessive (>10MB)
             assert total_increase < 10 * 1024 * 1024, f"Memory leak detected: {total_increase / 1024 / 1024:.2f} MB"
-            
+
             tracemalloc.stop()
         except ImportError:
             pytest.skip("tracemalloc not available")
-    
+
     def test_simulation_memory_cleanup(self):
         """Test that simulation operations clean up memory properly"""
         try:
@@ -105,10 +109,10 @@ class TestMemoryLeaks:
                 np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype='float32'),
                 np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
             )
-            
+
             gc.collect()
             snapshot1 = tracemalloc.take_snapshot()
-            
+
             for _ in range(5):
                 result = sgs_simulation(
                     prop=prop,
@@ -120,20 +124,20 @@ class TestMemoryLeaks:
                     seed=42
                 )
                 del result
-            
+
             gc.collect()
             snapshot2 = tracemalloc.take_snapshot()
-            
+
             top_stats = snapshot2.compare_to(snapshot1, 'lineno')
             total_increase = sum(stat.size_diff for stat in top_stats)
-            
+
             # Allow some increase but not excessive
             assert total_increase < 10 * 1024 * 1024, f"Memory leak detected: {total_increase / 1024 / 1024:.2f} MB"
-            
+
             tracemalloc.stop()
         except ImportError:
             pytest.skip("tracemalloc not available")
-    
+
     def test_property_cleanup(self):
         """Test ContProperty cleanup via reference counting.
 
@@ -160,7 +164,7 @@ class TestMemoryLeaks:
             # Not fully collected — expected in some Python versions
             pass
         # If ref() is None, GC succeeded — this is the ideal case
-    
+
     def test_array_reference_leaks(self):
         """Test for array reference leaks"""
         try:

@@ -112,15 +112,15 @@ def CubesFromVPCs(VPCs, NX, NY):
 
 def Cubes2PointSet(CubesDictionary, Mask):
     NX, NY, NZ = list(CubesDictionary.values())[0].shape
-    I, J = mgrid[0:NX, 0:NY]
+    grid_i, grid_j = mgrid[0:NX, 0:NY]
     PointSet = {'X':zeros(0, dtype=int32), 'Y':zeros(0, dtype=int32), 'Z':zeros(0, dtype=int32)}
     for Key in CubesDictionary.keys():
         PointSet[Key] = zeros(0, dtype=int32)
 
     for k in range(NZ):
         Slice = Mask[:, :, k]
-        PointSet['X'] = append(PointSet['X'], I[Slice])
-        PointSet['Y'] = append(PointSet['Y'], J[Slice])
+        PointSet['X'] = append(PointSet['X'], grid_i[Slice])
+        PointSet['Y'] = append(PointSet['Y'], grid_j[Slice])
         PointSet['Z'] = append(PointSet['Z'], k * ones(Slice.sum(0).sum(0), dtype=int32))
         for Key in CubesDictionary.keys():
             DataSlice = CubesDictionary[Key][:, :, k]
@@ -130,15 +130,15 @@ def Cubes2PointSet(CubesDictionary, Mask):
 
 def Cube2PointSet(Cube, Mask):
     NX, NY, NZ = Cube.shape
-    I, J = mgrid[0:NX, 0:NY]
+    grid_i, grid_j = mgrid[0:NX, 0:NY]
     X = zeros(0, dtype=int32)
     Y = zeros(0, dtype=int32)
     Z = zeros(0, dtype=int32)
     Property = zeros(0, dtype=int32)
     for k in range(NZ):
         Slice = Mask[:, :, k]
-        X = append(X, I[Slice])
-        Y = append(Y, J[Slice])
+        X = append(X, grid_i[Slice])
+        Y = append(Y, grid_j[Slice])
         Z = append(Z, k * ones(Slice.sum(0).sum(0), dtype=int32))
         DataSlice = Cube[:, :, k]
         Property = append(Property, DataSlice[Slice])

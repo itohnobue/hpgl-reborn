@@ -5,10 +5,11 @@ This module provides comprehensive fixtures for testing HPGL (Geostatistical
 Python Library) functionality including grids, properties, covariance models,
 CDF data, and various test data scenarios.
 """
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
+
+import numpy as np
+import pytest
 
 # Add src directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))

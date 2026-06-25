@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2025, HPGL Team
+# hpglConfig.cmake — CMake package configuration for HPGL.
+# Generated from hpglConfig.cmake.in by CMake.
+#
+# Usage: find_package(hpgl REQUIRED)
+# Provides targets: hpgl::core
+
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/hpglTargets.cmake")
+
+# BLAS/LAPACK are PRIVATE link dependencies for non-MKL builds,
+# but consumers that compile with HPGL_USE_MKL may need the MKL target.
+# For non-MKL builds, BLAS/LAPACK are already embedded in the shared library.
+if(@HPGL_USE_MKL@)
+    find_dependency(MKL CONFIG QUIET)
+endif()
+
+# OpenMP is a PUBLIC dependency — consumers need OpenMP flags.
+if(@HPGL_USE_OPENMP@ AND @OPENMP_FOUND@)
+    find_dependency(OpenMP)
+endif()
+
+check_required_components(hpgl)

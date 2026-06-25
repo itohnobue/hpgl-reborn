@@ -59,7 +59,7 @@ class ValidationConstants:
     PROBABILITY_SUM_TOLERANCE = 0.01  # Allow 1% tolerance for floating point errors
 
     # Indicator limits
-    MAX_INDICATORS = 256
+    MAX_INDICATORS = 255
 
     # Seed limits
     MIN_SEED = 0
@@ -168,12 +168,12 @@ class PathValidator:
             basedir_resolved = pathlib.Path(basedir).resolve()
             try:
                 resolved_path.relative_to(basedir_resolved)
-            except ValueError:
+            except ValueError as err:
                 raise CriticalValidationError(
                     f"Path {resolved_path} is outside allowed base directory "
                     f"{basedir_resolved}",
                     "filename"
-                )
+                ) from err
 
         # Check extension if specified
         if allowed_extensions is not None:

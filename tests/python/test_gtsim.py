@@ -1,15 +1,15 @@
-import numpy as np
-import pytest
-import sys
 import os
+import sys
 from pathlib import Path
 
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from geo_bsd.geo import ContProperty, SugarboxGrid
-    from geo_bsd.gtsim import tk_calculation, pseudo_gaussian_transform
+    from geo_bsd.gtsim import pseudo_gaussian_transform, tk_calculation
 except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
@@ -172,8 +172,8 @@ class TestGtsimNoFileWrites:
 # sgs_simulation called without required cdf_data parameter.
 # These tests are written to work once geo.py and gtsim.py are fixed.
 try:
+    from geo_bsd.geo import ContProperty, CovarianceModel, SugarboxGrid, covariance
     from geo_bsd.gtsim import gtsim_2ind
-    from geo_bsd.geo import SugarboxGrid, ContProperty, CovarianceModel, covariance
     _GTSIM_2IND_AVAILABLE = True
 except (ImportError, SyntaxError, IndentationError, RuntimeError, OSError):
     _GTSIM_2IND_AVAILABLE = False

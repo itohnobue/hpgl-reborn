@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 
+# ============================================================================
+# BUILD SYSTEM NOTE
+# This CMakeLists.txt is the canonical build system for HPGL.
+# The MSVC vcxproj files and build.bat are secondary and MUST be manually
+# synced when sources, flags, or dependencies change in this file.
+# There is no automated sync between CMake and the Visual Studio project files.
+# ============================================================================
+
 # Read version from pyproject.toml (single source of truth).
 # When built via scikit-build-core, SKBUILD_PROJECT_VERSION is set automatically.
 # Fallback for standalone CMake builds reads pyproject.toml directly.
@@ -19,12 +27,28 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Link-Time Optimization (LTO/IPO) for Release builds.
+# Equivalent to vcxproj Release configs that enable LTO via /GL and /LTCG.
+include(CheckIPOSupported)
+check_ipo_supported(RESULT _hpgl_ipo_supported OUTPUT _hpgl_ipo_output)
+if(_hpgl_ipo_supported)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    message(STATUS "IPO/LTO enabled for Release builds")
+else()
+    message(STATUS "IPO/LTO not supported by this toolchain")
+endif()
+
 # Compiler warning flags (set per-target via target_compile_options)
 # NOTE: Both CMake and MSVC vcxproj now use /W3 (Level3) for consistency.
 if(MSVC)
     set(HPGL_COMPILE_WARNINGS /W3 /wd4100 /wd4127 /wd4514 /wd4710 /wd4820)
 else()
     set(HPGL_COMPILE_WARNINGS -Wall -Wextra -Wpedantic)
+    # TNT numeric library headers in src/tnt_126/ trigger -Wdeprecated-copy and
+    # -Wc++11-narrowing on Apple Clang 14+. Suppress these for clean builds.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "AppleClang")
+        list(APPEND HPGL_COMPILE_WARNINGS -Wno-deprecated-copy -Wno-c++11-narrowing)
+    endif()
 endif()
 
 # Build options
@@ -70,9 +94,8 @@ else()
         message(STATUS "BLAS libraries: ${BLAS_LIBRARIES}")
         message(STATUS "LAPACK libraries: ${LAPACK_LIBRARIES}")
     else()
-        message(WARNING "BLAS/LAPACK not found - using custom implementation")
-        set(BLAS_LIBRARIES "")
-        set(LAPACK_LIBRARIES "")
+        message(FATAL_ERROR "BLAS/LAPACK not found - one of these libraries is required. "
+                            "Install BLAS/LAPACK packages for your platform or set HPGL_USE_MKL=ON.")
     endif()
 endif()
 
@@ -123,11 +146,13 @@ target_include_directories(hpgl_core
         $<INSTALL_INTERFACE:include>
 )
 
-target_link_libraries(hpgl_core
-    PUBLIC
-        ${BLAS_LIBRARIES}
-        ${LAPACK_LIBRARIES}
-)
+# BLAS/LAPACK: PUBLIC for MKL (consumers need the MKL target), PRIVATE otherwise
+# (avoids baking raw library paths into export targets)
+if(HPGL_USE_MKL AND MKL_FOUND)
+    target_link_libraries(hpgl_core PUBLIC MKL::MKL)
+else()
+    target_link_libraries(hpgl_core PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
+endif()
 
 # MKL compile definition (after target creation)
 if(HPGL_USE_MKL AND MKL_FOUND)
@@ -245,11 +270,13 @@ endif()
 include(GNUInstallDirs)
 
 # Install core library
+# Native library must be co-located with Python wrapper scripts so that
+# _safe_load_library() (which searches ref_path.parent) can find it.
 install(TARGETS hpgl_core
     EXPORT hpglTargets
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
+    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
 )
 
 # Install headers
@@ -280,7 +307,7 @@ endif()
 # Install variogram module
 if(HPGL_BUILD_VARIOGRAM)
     install(TARGETS hpgl_variogram
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
     )
@@ -291,6 +318,24 @@ install(EXPORT hpglTargets
     FILE hpglTargets.cmake
     NAMESPACE hpgl::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hpgl
+)
+
+# Generate hpglConfig.cmake so consumers can use find_package(hpgl)
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hpglConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/hpglConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/hpgl"
+)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/hpglConfigVersion.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/hpglConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/hpglConfigVersion.cmake"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/hpgl"
 )
 
 # ============================================================================

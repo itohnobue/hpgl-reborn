@@ -10,24 +10,32 @@ across all HPGL functions including:
 - Simulation edge cases (determinism, masks)
 - CDF edge cases
 """
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
 
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
+    from geo_bsd.cdf import CdfData, calc_cdf
     from geo_bsd.geo import (
-        ordinary_kriging, simple_kriging, indicator_kriging,
-        ContProperty, IndProperty, CovarianceModel, covariance,
-        SugarboxGrid, calc_mean, _c_array, _create_hpgl_shape
+        ContProperty,
+        CovarianceModel,
+        IndProperty,
+        SugarboxGrid,
+        _c_array,
+        _create_hpgl_shape,
+        calc_mean,
+        covariance,
+        indicator_kriging,
+        ordinary_kriging,
+        simple_kriging,
     )
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
-    from geo_bsd.cdf import CdfData, calc_cdf
-except (ImportError, OSError) as e:
+except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
 
@@ -1333,6 +1341,83 @@ class TestSimulationEdgeCases:
         # All cells should have some result (simulated or original)
         assert np.all(np.isfinite(result.data))
 
+    def test_ik_with_indicator_count_1(self):
+        """C009 — IK with indicator_count=1 (degenerate single-category case).
+
+        Single-category IK is a degenerate case that must not crash and must
+        produce valid output of the correct shape. All data values are 0
+        (the only valid indicator for count=1).
+        """
+        from geo_bsd.geo import indicator_kriging
+        grid = SugarboxGrid(x=5, y=5, z=2)
+        data = np.zeros(50, dtype='uint8')
+        mask = np.ones(50, dtype='uint8')
+        mask[::5] = 0
+        prop = IndProperty(data, mask, indicator_count=1)
+
+        cov = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(3.0, 3.0, 2.0),
+            sill=1.0,
+            nugget=0.0
+        )
+
+        ik_data = [{
+            'cov_model': cov,
+            'radiuses': (2, 2, 1),
+            'max_neighbours': 6
+        }]
+
+        result = indicator_kriging(
+            prop=prop, grid=grid, data=ik_data,
+            marginal_probs=(1.0,)
+        )
+
+        assert isinstance(result, IndProperty)
+        assert result.indicator_count == 1
+        # HPGL returns flat 1D output; verify cell count matches grid
+        assert result.data.size == 50  # 5*5*2
+        # With count=1, all indicator values must be 0
+        assert np.all(result.data == 0)
+
+    def test_sis_with_indicator_count_1(self):
+        """C009 — SIS with indicator_count=1 (degenerate single-category case).
+
+        Single-category SIS is a degenerate case that must not crash. All
+        simulated cells should receive category 0 (the only possible value).
+        """
+        from geo_bsd.sis import sis_simulation
+        grid = SugarboxGrid(x=5, y=5, z=2)
+        data = np.zeros(50, dtype='uint8')
+        mask = np.ones(50, dtype='uint8')
+        mask[::5] = 0
+        prop = IndProperty(data, mask, indicator_count=1)
+
+        cov = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(3.0, 3.0, 2.0),
+            sill=1.0,
+            nugget=0.0
+        )
+
+        sis_data = [{
+            'cov_model': cov,
+            'radiuses': (2, 2, 1),
+            'max_neighbours': 6
+        }]
+
+        result = sis_simulation(
+            prop=prop, grid=grid, data=sis_data,
+            seed=42, marginal_probs=(1.0,)
+        )
+
+        assert isinstance(result, IndProperty)
+        assert result.indicator_count == 1
+        # HPGL returns flat 1D output; verify cell count matches grid
+        assert result.data.size == 50  # 5*5*2
+        # With count=1, all values must be 0
+        assert np.all(result.data == 0)
+
 
 # =============================================================================
 # 6. CDF EDGE CASES
@@ -1579,8 +1664,10 @@ class TestProductionFixes:
 
     def test_write_property_none_indicator_values(self):
         """write_property with indicator_values=None should behave same as empty list."""
+        import os
+        import tempfile
+
         from geo_bsd.geo import write_property
-        import tempfile, os
 
         data = np.array([1.0, 2.0, 3.0], dtype='float32')
         mask = np.ones(3, dtype='uint8')
@@ -1597,8 +1684,10 @@ class TestProductionFixes:
 
     def test_write_gslib_property_none_indicator_values(self):
         """write_gslib_property with indicator_values=None should behave same as empty list."""
+        import os
+        import tempfile
+
         from geo_bsd.geo import write_gslib_property
-        import tempfile, os
 
         data = np.array([1.0, 2.0, 3.0], dtype='float32')
         mask = np.ones(3, dtype='uint8')
@@ -1614,8 +1703,10 @@ class TestProductionFixes:
 
     def test_load_cont_slow_skips_non_numeric_tokens(self):
         """_load_prop_cont_slow should skip non-numeric tokens without crashing."""
+        import os
+        import tempfile
+
         from geo_bsd.geo import _load_prop_cont_slow
-        import tempfile, os
 
         content = "-- comment line\n1.0 2.0 BADTOKEN 3.0\n-- another comment\n4.0\n"
         with tempfile.NamedTemporaryFile(mode='w', suffix='.inc', delete=False, encoding='utf-8') as f:
@@ -1630,8 +1721,10 @@ class TestProductionFixes:
 
     def test_load_ind_slow_skips_non_numeric_tokens(self):
         """_load_prop_ind_slow should skip non-numeric tokens without crashing."""
+        import os
+        import tempfile
+
         from geo_bsd.geo import _load_prop_ind_slow
-        import tempfile, os
 
         content = "0 1 BADTOKEN 0 1\n"
         with tempfile.NamedTemporaryFile(mode='w', suffix='.inc', delete=False, encoding='utf-8') as f:
@@ -1664,9 +1757,15 @@ class TestErrorHandling:
 
     def test_error_raised_on_invalid_covariance(self):
         """HIGH: Verify validation catches invalid covariance parameters before C++ call."""
-        from geo_bsd.geo import ordinary_kriging, ContProperty, CovarianceModel, covariance, SugarboxGrid
-        from geo_bsd.validation import ValidationError, CriticalValidationError
         import numpy as np
+
+        from geo_bsd.geo import (
+            ContProperty,
+            CovarianceModel,
+            SugarboxGrid,
+            covariance,
+        )
+        from geo_bsd.validation import CriticalValidationError, ValidationError
 
         grid = SugarboxGrid(x=5, y=5, z=3)
         data = np.random.rand(75).astype('float32') * 100
@@ -1685,8 +1784,9 @@ class TestErrorHandling:
 
     def test_simple_kriging_weights_return_value_checked(self):
         """HIGH: Verify hpgl_simple_kriging_weights return value is checked."""
-        from geo_bsd.geo import simple_kriging_weights
         import numpy as np
+
+        from geo_bsd.geo import simple_kriging_weights
 
         # Test with valid parameters — should produce non-trivial weights
         center = (0.0, 0.0, 0.0)
@@ -1707,8 +1807,9 @@ class TestIndicatorKrigingFix:
         """Verify that the most_probable_category fix produces correct results
         through median_ik with balanced probabilities (should not always pick
         highest index)."""
-        from geo_bsd.geo import median_ik, IndProperty, CovarianceModel, covariance, SugarboxGrid
         import numpy as np
+
+        from geo_bsd.geo import CovarianceModel, IndProperty, SugarboxGrid, covariance, median_ik
 
         grid = SugarboxGrid(x=5, y=5, z=2)
         # Create indicator data: all category 0 (informed)
@@ -1732,8 +1833,15 @@ class TestIndicatorKrigingFix:
     def test_indicator_kriging_with_3_categories(self):
         """Verify indicator_kriging with K=3 categories doesn't crash and produces
         valid results after the most_probable_category fix."""
-        from geo_bsd.geo import indicator_kriging, IndProperty, CovarianceModel, covariance, SugarboxGrid
         import numpy as np
+
+        from geo_bsd.geo import (
+            CovarianceModel,
+            IndProperty,
+            SugarboxGrid,
+            covariance,
+            indicator_kriging,
+        )
 
         grid = SugarboxGrid(x=6, y=6, z=3)
         data = np.random.randint(0, 3, 108, dtype='uint8')

@@ -8,13 +8,13 @@ or slower than the hard floor, whichever is smaller).
 
 Baselines are stored in .benchmarks/ and can be reset by deleting that directory.
 """
-import numpy as np
-import pytest
-import time
 import json
 import sys
+import time
 from pathlib import Path
 
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
@@ -74,14 +74,18 @@ def _benchmark(name, elapsed, hard_floor=120.0):
     return result
 
 try:
+    from geo_bsd.cdf import CdfData
     from geo_bsd.geo import (
-        ordinary_kriging, simple_kriging,
-        ContProperty, SugarboxGrid, CovarianceModel, covariance,
-        calc_mean
+        ContProperty,
+        CovarianceModel,
+        SugarboxGrid,
+        calc_mean,
+        covariance,
+        ordinary_kriging,
+        simple_kriging,
     )
     from geo_bsd.sgs import sgs_simulation
-    from geo_bsd.cdf import CdfData
-except (ImportError, OSError) as e:
+except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
 
@@ -89,7 +93,7 @@ except (ImportError, OSError) as e:
 @pytest.mark.slow
 class TestPerformance:
     """Performance benchmarking tests"""
-    
+
     def test_ok_small_grid_performance(self):
         """Benchmark ordinary kriging on small grid (10x10x5)
 
@@ -125,7 +129,7 @@ class TestPerformance:
 
         assert _benchmark("ok_small_grid", elapsed, hard_floor=10.0), \
             f"OK small grid performance degraded: {elapsed:.3f}s"
-    
+
     def test_ok_medium_grid_performance(self):
         """Benchmark ordinary kriging on medium grid (50x50x20)
 
@@ -159,7 +163,7 @@ class TestPerformance:
 
         assert _benchmark("ok_medium_grid", elapsed, hard_floor=120.0), \
             f"OK medium grid performance degraded: {elapsed:.3f}s"
-    
+
     def test_sgs_small_grid_performance(self):
         """Benchmark SGS on small grid with baseline comparison"""
         grid = SugarboxGrid(x=10, y=10, z=5)
@@ -196,7 +200,7 @@ class TestPerformance:
 
         assert _benchmark("sgs_small_grid", elapsed, hard_floor=30.0), \
             f"SGS small grid performance degraded: {elapsed:.3f}s"
-    
+
     def test_neighbour_count_performance_impact(self):
         """Test performance impact of different neighbour counts.
 
@@ -230,7 +234,7 @@ class TestPerformance:
             # Each run should complete within hard floor
             assert elapsed < 5.0, \
                 f"Kriging with {max_neighbours} neighbours took too long: {elapsed:.3f}s"
-    
+
     def test_covariance_type_performance(self):
         """Test performance of different covariance types.
 

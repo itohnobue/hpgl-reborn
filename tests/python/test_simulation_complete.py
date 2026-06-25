@@ -17,20 +17,20 @@ Tests cover:
 - Multiple realizations
 - Result validation (shape, indicator count, statistics)
 """
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
 
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src" / "geo_bsd"))
 
 try:
+    from geo_bsd.cdf import CdfData, calc_cdf
+    from geo_bsd.geo import ContProperty, CovarianceModel, IndProperty, SugarboxGrid, covariance
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
-    from geo_bsd.geo import ContProperty, IndProperty, CovarianceModel, covariance, SugarboxGrid
-    from geo_bsd.cdf import CdfData, calc_cdf
-except (ImportError, OSError) as e:
+except (ImportError, OSError):
     # Dummy covariance for module-level parametrize decorators
     # Tests are skipped by @pytest.mark.hpgl when HPGL is unavailable
     class _DummyCovarianceTypes:

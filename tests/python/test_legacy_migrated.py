@@ -9,28 +9,38 @@ Legacy tests are marked with @pytest.mark.legacy
 Tests use data files restored from git history where available,
 and synthetic data where original files were never committed.
 """
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
 
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 TEST_DATA_DIR = Path(__file__).parent / "test_data"
 
 try:
+    from geo_bsd.cdf import CdfData, calc_cdf
     from geo_bsd.geo import (
-        ordinary_kriging, simple_kriging, lvm_kriging, indicator_kriging,
-        simple_cokriging_markI, simple_cokriging_markII,
-        ContProperty, IndProperty, CovarianceModel, covariance,
-        SugarboxGrid, calc_mean, load_cont_property, load_ind_property,
-        write_property
+        ContProperty,
+        CovarianceModel,
+        IndProperty,
+        SugarboxGrid,
+        calc_mean,
+        covariance,
+        indicator_kriging,
+        load_cont_property,
+        load_ind_property,
+        lvm_kriging,
+        ordinary_kriging,
+        simple_cokriging_markI,
+        simple_cokriging_markII,
+        simple_kriging,
+        write_property,
     )
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
-    from geo_bsd.cdf import CdfData, calc_cdf
-except (ImportError, OSError) as e:
+except (ImportError, OSError):
     # Dummy covariance for module-level parametrize decorators
     # Tests are skipped by @pytest.mark.hpgl when HPGL is unavailable
     class _DummyCovarianceTypes:

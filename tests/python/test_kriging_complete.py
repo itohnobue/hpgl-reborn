@@ -14,24 +14,32 @@ Tests cover:
 7. simple_cokriging_markII(grid, primary_data, secondary_data, correlation_coef, radiuses, max_neighbours)
 8. simple_kriging_weights(center_point, n_x, n_y, n_z, ranges, sill, cov_type, nugget, angles)
 """
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
 
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from geo_bsd.geo import (
-        ordinary_kriging, simple_kriging, lvm_kriging,
-        indicator_kriging, median_ik,
-        simple_cokriging_markI, simple_cokriging_markII,
+        ContProperty,
+        CovarianceModel,
+        IndProperty,
+        SugarboxGrid,
+        calc_mean,
+        covariance,
+        indicator_kriging,
+        lvm_kriging,
+        median_ik,
+        ordinary_kriging,
+        simple_cokriging_markI,
+        simple_cokriging_markII,
+        simple_kriging,
         simple_kriging_weights,
-        ContProperty, IndProperty, CovarianceModel, covariance,
-        SugarboxGrid, calc_mean
     )
-except (ImportError, OSError) as e:
+except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
 

@@ -6,21 +6,25 @@ Comprehensive tests for all HPGL core classes:
 - IndProperty (Indicator Property)
 - CdfData
 """
-import numpy as np
-import pytest
 import sys
 from pathlib import Path
 
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
-    from geo_bsd.geo import (
-        SugarboxGrid, CovarianceModel, ContProperty, IndProperty,
-        covariance, checkFWA
-    )
     from geo_bsd.cdf import CdfData
-except (ImportError, OSError) as e:
+    from geo_bsd.geo import (
+        ContProperty,
+        CovarianceModel,
+        IndProperty,
+        SugarboxGrid,
+        checkFWA,
+        covariance,
+    )
+except (ImportError, OSError):
     # Dummy covariance for module-level parametrize decorators
     # Tests are skipped by @pytest.mark.hpgl when HPGL is unavailable
     class _DummyCovarianceTypes:
@@ -227,7 +231,7 @@ class TestContProperty:
         mask = np.asfortranarray(np.ones((10, 10, 3), dtype='uint8'))  # Different shape
         prop = ContProperty(data, mask)
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(ValueError):
             prop.validate()
 
     def test_fix_shape_reshapes_flat_data(self):

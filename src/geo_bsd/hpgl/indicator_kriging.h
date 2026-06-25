@@ -104,6 +104,9 @@ namespace hpgl
 
 		print_algo_name("Indicator Kriging");
 		print_params(params);
+		if (params.m_category_count == 0)
+			return;
+
 		progress_reporter_t report(grid.size());
 
 		typedef precalculated_covariances_t cov_t;

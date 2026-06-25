@@ -1,13 +1,17 @@
 #ifndef __BS_PROPERTY_ARRAY_H__069FA229_B0A2_470D_84DD_385DCDBAAFC3__
 #define __BS_PROPERTY_ARRAY_H__069FA229_B0A2_470D_84DD_385DCDBAAFC3__
 
-#include <memory>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include "typedefs.h"
 
-// Runtime safety check macro — prints error and aborts instead of throwing
-// (safe across ctypes/C API boundary, unlike exceptions)
+// Runtime safety check macro — prints error and aborts instead of throwing.
+// abort() is safe inside OpenMP parallel regions and across ctypes/C API
+// boundaries (C++ exceptions through OpenMP are undefined behavior per the
+// standard). These checks guard programming errors (null pointers, invalid
+// indices) that should never occur in correct usage — abort() is appropriate
+// for invariant violations.
 #define HPGL_CHECK(cond, msg) \
 	do { if (!(cond)) { fprintf(stderr, "HPGL FATAL: %s\n", msg); abort(); } } while(0)
 

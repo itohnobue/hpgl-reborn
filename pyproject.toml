@@ -114,7 +114,6 @@ cmake.args = [
 
 # Wheel configuration
 wheel.py-api = "py3"
-wheel.install-dir = "hpgl"
 
 # Build directory settings
 build-dir = "build/{wheel_tag}"
@@ -146,6 +145,11 @@ exclude = [
     "**/build/",
     "**/dist/",
     "**/*.egg-info",
+    # Exclude compiled/platform-specific binaries from sdist
+    "**/*.so",
+    "**/*.dylib",
+    "**/*.dll",
+    "**/*.pyd",
 ]
 
 [tool.cibuildwheel]
@@ -156,7 +160,8 @@ build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
 skip = "*-win32 *-manylinux_i686 pp*"
 
 # Testing commands
-test-command = "python -c 'import hpgl; print(\"hpgl imported successfully\")'"
+# Verify not just import but that the native library loaded and key API is present
+test-command = "python -c \"import hpgl; v = hpgl.__version__; assert v, 'no version'; assert hasattr(hpgl, 'simple_kriging'), 'API missing'; print(f'hpgl {v} OK')\""
 
 # Environment variables
 environment = { CMAKE_BUILD_PARALLEL_LEVEL = "4" }
@@ -164,13 +169,13 @@ environment = { CMAKE_BUILD_PARALLEL_LEVEL = "4" }
 [tool.cibuildwheel.linux]
 # Use manylinux2014 for broader compatibility
 archs = ["x86_64", "aarch64"]
-before-all = "yum install -y openblas-devel || apt-get update && apt-get install -y libopenblas-dev"
+before-all = "yum install -y openblas-devel || { apt-get update && apt-get install -y libopenblas-dev; }"
 
 [tool.cibuildwheel.macos]
 # Build for both x86_64 and arm64 (Apple Silicon)
 archs = ["x86_64", "arm64"]
 environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
-before-all = "brew install openblas libomp cmake && export LDFLAGS=\"-L$(brew --prefix openblas)/lib -L$(brew --prefix libomp)/lib\" && export CPPFLAGS=\"-I$(brew --prefix openblas)/include -I$(brew --prefix libomp)/include\""
+before-all = "brew install openblas libomp cmake && export OpenMP_ROOT=$(brew --prefix libomp) && export LDFLAGS=\"-L$(brew --prefix openblas)/lib -L$(brew --prefix libomp)/lib\" && export CPPFLAGS=\"-I$(brew --prefix openblas)/include -I$(brew --prefix libomp)/include\""
 
 [tool.cibuildwheel.windows]
 # Build for x64 only

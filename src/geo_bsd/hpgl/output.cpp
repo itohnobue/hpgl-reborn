@@ -8,6 +8,11 @@
 // is single-threaded startup configuration. This is the standard ctypes callback
 // pattern; synchronization deferred to caller.
 static std::atomic<int (*)(char * data, void * param)> s_handler{nullptr};
+// s_param stores an opaque handle to a caller-owned Python object (e.g. a
+// Python file-like or StringIO passed via ctypes). The caller MUST ensure the
+// object remains alive for the lifetime of all C++ operations that invoke the
+// output handler. If Python GC collects the object, this pointer dangles.
+// The Python side (hpgl_wrap.py) is responsible for holding a reference.
 static std::atomic<void *> s_param{nullptr};
 
 static std::atomic<int (*)(char * stage, int percentage, void * param)> s_progress_handler{nullptr};

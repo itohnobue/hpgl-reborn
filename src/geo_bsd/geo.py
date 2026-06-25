@@ -40,7 +40,7 @@ from .validation import (
 #
 # Using thread-local storage so that concurrent HPGL FFI calls in different
 # threads each track their own pre/post error snapshot independently.
-# The lock now protects the entire snapshot→call→check window.
+# The lock synchronizes access to thread-local snapshot storage.
 _error_local = threading.local()
 _error_snapshot_lock = threading.Lock()
 
@@ -51,56 +51,75 @@ logger = logging.getLogger(__name__)
 # (specify `size` parameter in load_cont_property / load_ind_property).
 _MAX_SLOW_PARSER_ELEMENTS = 10_000_000
 
+
 def _snapshot_hpgl_error():
     """
     Take a snapshot of the current HPGL C++ error state.
-    
+
     Call this BEFORE invoking any C++ function that might succeed.
     _check_hpgl_error will compare the post-call error against this snapshot
     to detect only NEW errors, avoiding stale error propagation.
-    
-    Stores the snapshot in thread-local storage with lock protection
-    so concurrent calls in different threads do not interfere.
+
+    Stores the snapshot in thread-local storage under _error_snapshot_lock.
+    The lock protects the snapshot write against concurrent snapshot reads
+    in _check_hpgl_error.
     """
     with _error_snapshot_lock:
         _error_local._hpgl_error_snapshot = _hpgl_so.hpgl_get_last_exception_message()
 
+
 def _check_hpgl_error(context=""):
     """
     Check for NEW HPGL C++ errors after a computation call.
-    
+
     Compares current error state against a pre-call snapshot (set via
     _snapshot_hpgl_error). Raises RuntimeError ONLY if the error message
     has changed since the snapshot, indicating a new error from the
     current operation rather than a stale error from a previous call.
-    
+
     Uses thread-local storage so concurrent HPGL operations in different
     threads each track their own pre/post error state independently.
-    
+
+    The entire read-compare-raise sequence is atomic under
+    _error_snapshot_lock, preventing races between concurrent calls
+    to this function that access the same thread-local snapshot.
+    However, between _snapshot_hpgl_error releasing the lock and this
+    function acquiring it, another thread's C++ call may update the
+    global HPGL error state. In practice, snapshot identity comparison
+    (byte-for-byte match) combined with the C++ library's inclusion
+    of __FILE__:__LINE__ in error messages makes false-positive
+    RuntimeErrors infeasible.
+
     Args:
         context: Description of the operation being checked (e.g. "ordinary_kriging")
-    
+
     Raises:
         RuntimeError: If the C++ computation produced a new error
     """
-    err = _hpgl_so.hpgl_get_last_exception_message()
-    if err is not None and len(err) > 0:
-        with _error_snapshot_lock:
-            snapshot = getattr(_error_local, '_hpgl_error_snapshot', None)
-        if err == snapshot:
-            # Same error as pre-call snapshot — stale, suppress.
-            # NOTE: In the extremely unlikely event that a new C++ operation produces
-            # an error message byte-for-byte identical to the pre-call snapshot,
-            # it would be falsely suppressed. The C++ library always includes
-            # __FILE__:__LINE__ in error messages, making collision infeasible.
-            return
-        err_str = err.decode("utf-8", errors="replace")
-        raise RuntimeError(f"{context} failed: {err_str}" if context else f"HPGL error: {err_str}")
+    with _error_snapshot_lock:
+        err = _hpgl_so.hpgl_get_last_exception_message()
+        if err is not None and len(err) > 0:
+            snapshot = getattr(_error_local, "_hpgl_error_snapshot", None)
+            if err == snapshot:
+                # Same error as pre-call snapshot — stale, suppress.
+                # NOTE: In the extremely unlikely event that a new C++ operation produces
+                # an error message byte-for-byte identical to the pre-call snapshot,
+                # it would be falsely suppressed. The C++ library always includes
+                # __FILE__:__LINE__ in error messages, making collision infeasible.
+                return
+            err_str = err.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"{context} failed: {err_str}" if context else f"HPGL error: {err_str}"
+            )
 
 
 # Module-level handler references initialized to None
 _h = None
 _progress_handler = None
+# Store param references to prevent garbage collection while C++ holds void*.
+# Without these, the caller dropping param would create a dangling pointer.
+_output_handler_param = None
+_progress_handler_param = None
 
 
 def _c_array(ar_type, size, values):
@@ -112,6 +131,7 @@ def _c_array(ar_type, size, values):
     result._array_refs = tuple(values)
     return result
 
+
 def _create_hpgl_shape(shape, strides=None):
     # Normalize shape to 3D tuple
     if len(shape) == 1:
@@ -122,11 +142,15 @@ def _create_hpgl_shape(shape, strides=None):
     if strides is None:
         # C-order strides (row-major) to match C++ indexing: z * x * y + y * x + x
         # The strides array is (stride_x, stride_y, stride_z)
-        return _HPGL_SHAPE(m_data = _c_array(C.c_int, 3, shape),
-                   m_strides = _c_array(C.c_int, 3, (1, shape[0], shape[0]*shape[1])))
+        return _HPGL_SHAPE(
+            m_data=_c_array(C.c_int, 3, shape),
+            m_strides=_c_array(C.c_int, 3, (1, shape[0], shape[0] * shape[1])),
+        )
     else:
-        return _HPGL_SHAPE(m_data = _c_array(C.c_int, 3, shape),
-                   m_strides = _c_array(C.c_int, 3, strides))
+        return _HPGL_SHAPE(
+            m_data=_c_array(C.c_int, 3, shape), m_strides=_c_array(C.c_int, 3, strides)
+        )
+
 
 def __get_strides(prop):
     ndim = prop.ndim
@@ -135,9 +159,11 @@ def __get_strides(prop):
     elif ndim == 2:
         return (1, prop.shape[0], prop.shape[0] * prop.shape[1])
     else:  # ndim == 3
-        return (prop.strides[0] // prop.itemsize,
+        return (
+            prop.strides[0] // prop.itemsize,
             prop.strides[1] // prop.itemsize,
-            prop.strides[2] // prop.itemsize)
+            prop.strides[2] // prop.itemsize,
+        )
 
 
 def __checked_create(T, **kargs):
@@ -153,17 +179,19 @@ def __checked_create(T, **kargs):
         )
     return T(**kargs)
 
+
 def checkFWA(a):
     """
     Checks for fortran-order, writable and aligned flags.
     """
-    if not (a.flags['F'] and a.flags['W'] and a.flags['A']):
+    if not (a.flags["F"] and a.flags["W"] and a.flags["A"]):
         raise RuntimeError(
             f"Array checkFWA failed: F={a.flags['F']}, W={a.flags['W']}, A={a.flags['A']}"
         )
 
+
 def _create_hpgl_cont_masked_array(prop, grid):
-    if (grid is None):
+    if grid is None:
         sh = _create_hpgl_shape(prop.data.shape, __get_strides(prop.data))
     else:
         # Use actual NumPy strides if array is 3D, otherwise compute strides from grid
@@ -173,7 +201,10 @@ def _create_hpgl_cont_masked_array(prop, grid):
             # For 1D arrays, compute expected strides based on grid dimensions
             sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
         if grid.x * grid.y * grid.z != prop.data.size:
-            raise RuntimeError("Invalid data size. Size of data = %s. Size of grid = %s" % (prop.data.size, grid.x * grid.y * grid.z))
+            raise RuntimeError(
+                f"Invalid data size. Size of data = {prop.data.size}. "
+                f"Size of grid = {grid.x * grid.y * grid.z}"
+            )
 
     # Security: Keep references to arrays to prevent use-after-free
     # The C code will hold pointers to this memory, so we must ensure
@@ -181,7 +212,8 @@ def _create_hpgl_cont_masked_array(prop, grid):
     result = _HPGL_CONT_MASKED_ARRAY(
         data=prop.data.ctypes.data_as(C.POINTER(C.c_float)),
         mask=prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
-        shape = sh)
+        shape=sh,
+    )
 
     # Store array references on the result object to prevent garbage collection
     # This ensures the arrays live as long as the C structure does
@@ -189,10 +221,11 @@ def _create_hpgl_cont_masked_array(prop, grid):
 
     return result
 
+
 def _create_hpgl_ind_masked_array(prop, grid):
-    if (grid is None):
+    if grid is None:
         sh = _create_hpgl_shape(prop.data.shape, __get_strides(prop.data))
-        assert(prop.data.strides == prop.mask.strides)
+        assert prop.data.strides == prop.mask.strides
     else:
         sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
@@ -200,37 +233,41 @@ def _create_hpgl_ind_masked_array(prop, grid):
     result = _HPGL_IND_MASKED_ARRAY(
         data=prop.data.ctypes.data_as(C.POINTER(C.c_ubyte)),
         mask=prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
-        shape = sh,
-        indicator_count = prop.indicator_count)
+        shape=sh,
+        indicator_count=prop.indicator_count,
+    )
 
     # Store array references to prevent garbage collection while C code uses them
     result._array_refs = (prop.data, prop.mask)
 
     return result
 
+
 def _create_hpgl_ubyte_array(array, grid):
     checkFWA(array)
-    if (grid is None):
+    if grid is None:
         sh = _create_hpgl_shape(array.shape, strides=__get_strides(array))
     else:
         sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
     # Security: Keep array reference to prevent use-after-free
-    result = _HPGL_UBYTE_ARRAY(data = array.ctypes.data_as(C.POINTER(C.c_ubyte)), shape = sh)
+    result = _HPGL_UBYTE_ARRAY(data=array.ctypes.data_as(C.POINTER(C.c_ubyte)), shape=sh)
     result._array_ref = array
     return result
+
 
 def _create_hpgl_float_array(array, grid):
     checkFWA(array)
-    if (grid is None):
+    if grid is None:
         sh = _create_hpgl_shape(array.shape, strides=__get_strides(array))
     else:
         sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
     # Security: Keep array reference to prevent use-after-free
-    result = _HPGL_FLOAT_ARRAY(data = array.ctypes.data_as(C.POINTER(C.c_float)), shape = sh)
+    result = _HPGL_FLOAT_ARRAY(data=array.ctypes.data_as(C.POINTER(C.c_float)), shape=sh)
     result._array_ref = array
     return result
+
 
 class ContProperty:
     """Continuous (floating-point) property with informed/uninformed mask.
@@ -254,20 +291,27 @@ class ContProperty:
     mask : numpy.ndarray
         Mask array (uint8, Fortran order).
     """
+
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray):
-        self.data = numpy.require(data, 'float32', 'F')
-        self.mask = numpy.require(mask, 'uint8', 'F')
+        self.data = numpy.require(data, "float32", "F")
+        self.mask = numpy.require(mask, "uint8", "F")
+
     def validate(self):
         checkFWA(self.data)
         checkFWA(self.mask)
-        assert(self.data.shape == self.mask.shape)
+        if self.data.shape != self.mask.shape:
+            raise ValueError(
+                f"Data shape {self.data.shape} does not match mask shape {self.mask.shape}"
+            )
+
     def fix_shape(self, grid):
         if self.data.ndim != 3:
             if self.data.size == grid.x * grid.y * grid.z:
-                self.data = self.data.reshape((grid.x, grid.y, grid.z), order='F')
+                self.data = self.data.reshape((grid.x, grid.y, grid.z), order="F")
         if self.mask.ndim != 3:
             if self.mask.size == grid.x * grid.y * grid.z:
-                self.mask = self.mask.reshape((grid.x, grid.y, grid.z), order='F')
+                self.mask = self.mask.reshape((grid.x, grid.y, grid.z), order="F")
+
     def __getitem__(self, idx):
         if idx == 0:
             return self.data
@@ -275,6 +319,7 @@ class ContProperty:
             return self.mask
         else:
             raise RuntimeError("Index out of range.")
+
 
 class IndProperty:
     """Indicator (categorical) property with informed/uninformed mask.
@@ -307,17 +352,29 @@ class IndProperty:
     indicator_count : int
         Number of indicator categories.
     """
+
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray, indicator_count: int):
-        self.data = numpy.require(data, 'uint8', 'F')
-        self.mask = numpy.require(mask, 'uint8', 'F')
+        self.data = numpy.require(data, "uint8", "F")
+        self.mask = numpy.require(mask, "uint8", "F")
         self.indicator_count = indicator_count
         if numpy.sum(numpy.bitwise_and((mask > 0), (data >= indicator_count))) > 0:
-            raise RuntimeError("Property contains some indicators outside of [0..%s] range." % (indicator_count - 1))
-        assert(data.shape == mask.shape)
+            raise RuntimeError(
+                "Property contains some indicators outside of [0..%s] range."
+                % (indicator_count - 1)
+            )
+        if data.shape != mask.shape:
+            raise ValueError(
+                f"Data shape {data.shape} does not match mask shape {mask.shape}"
+            )
+
     def validate(self):
         checkFWA(self.data)
         checkFWA(self.mask)
-        assert(self.data.shape == self.mask.shape)
+        if self.data.shape != self.mask.shape:
+            raise ValueError(
+                f"Data shape {self.data.shape} does not match mask shape {self.mask.shape}"
+            )
+
     def __getitem__(self, idx):
         if idx == 0:
             return self.data
@@ -328,6 +385,7 @@ class IndProperty:
         else:
             raise RuntimeError("Index out of range.")
 
+
 def _prop_to_tuple_(prop):
     if isinstance(prop, ContProperty):
         return (prop.data, prop.mask)
@@ -336,15 +394,18 @@ def _prop_to_tuple_(prop):
     else:
         raise RuntimeError(f"_prop_to_tuple_: unknown property type: {type(prop)}")
 
+
 def append_mask(prop, mask):
     infs = prop[1]
     infs &= mask
     infs.choose(-99, prop[0], out=prop[0])
 
+
 class covariance:
     spherical = 0
     exponential = 1
     gaussian = 2
+
 
 class SugarboxGrid:
     """Regular 3D grid definition used by all kriging and simulation functions.
@@ -360,7 +421,7 @@ class SugarboxGrid:
 
     Raises
     ------
-    ValueError
+    CriticalValidationError
         If any dimension is non-positive or exceeds the maximum allowed
         grid size.
 
@@ -369,12 +430,14 @@ class SugarboxGrid:
     x, y, z : int
         Grid dimensions.
     """
+
     def __init__(self, x: int, y: int, z: int):
         # Validate grid dimensions
         GridValidator.validate_grid_dimensions(x, y, z)
         self.x = x
         self.y = y
         self.z = z
+
 
 class CovarianceModel:
     """Variogram/covariance model parameters for kriging and simulation.
@@ -397,7 +460,7 @@ class CovarianceModel:
 
     Raises
     ------
-    ValueError
+    CriticalValidationError
         If sill is not positive, nugget is negative, or ranges
         contain non-positive values.
 
@@ -409,7 +472,15 @@ class CovarianceModel:
     sill : float
     nugget : float
     """
-    def __init__(self, type: int = 0, ranges: tuple = (0, 0, 0), angles: tuple = (0.0, 0.0, 0.0), sill: float = 1.0, nugget: float = 0.0):
+
+    def __init__(
+        self,
+        type: int = 0,
+        ranges: tuple = (0, 0, 0),
+        angles: tuple = (0.0, 0.0, 0.0),
+        sill: float = 1.0,
+        nugget: float = 0.0,
+    ):
         self.type = type
         self.ranges = ranges
         self.angles = angles
@@ -419,17 +490,19 @@ class CovarianceModel:
         # Validate covariance parameters
         ParameterValidator.validate_covariance_parameters(sill, nugget, ranges, angles)
 
+
 def _load_prop_cont_slow(filename, undefined_value):
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False)
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False
+    )
 
     values = []
     mask = []
     skipped_count = 0
     element_count = 0
     # Use validated path and explicit encoding
-    with open(safe_path, encoding='utf-8') as f:
+    with open(safe_path, encoding="utf-8") as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -443,16 +516,19 @@ def _load_prop_cont_slow(filename, undefined_value):
                     val = float(part.strip())
                     values.append(val)
                     element_count += 1
-                    if (val == undefined_value):
+                    if val == undefined_value:
                         mask.append(0)
                     else:
                         mask.append(1)
                 except (ValueError, TypeError):
                     skipped_count += 1
     if skipped_count > 0:
-        logger.warning("_load_prop_cont_slow: skipped %d non-numeric tokens in %s", skipped_count, safe_path)
+        logger.warning(
+            "_load_prop_cont_slow: skipped %d non-numeric tokens in %s", skipped_count, safe_path
+        )
 
     return ContProperty(numpy.array(values, dtype="float32"), numpy.array(mask, dtype="uint8"))
+
 
 def _load_prop_ind_slow(filename, undefined_value, ind_values):
     dict_map = {}
@@ -461,7 +537,8 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
 
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False)
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False
+    )
 
     values = []
     mask = []
@@ -470,7 +547,7 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
     element_count = 0
 
     # Use validated path and explicit encoding
-    with open(safe_path, encoding='utf-8') as f:
+    with open(safe_path, encoding="utf-8") as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -486,7 +563,7 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
                     skipped_parse += 1
                     continue
                 try:
-                    if (val == undefined_value):
+                    if val == undefined_value:
                         values.append(255)
                         mask.append(0)
                     else:
@@ -497,23 +574,38 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
                     skipped_key += 1
 
     if skipped_parse > 0:
-        logger.warning("_load_prop_ind_slow: skipped %d unparseable tokens in %s", skipped_parse, safe_path)
+        logger.warning(
+            "_load_prop_ind_slow: skipped %d unparseable tokens in %s", skipped_parse, safe_path
+        )
     if skipped_key > 0:
-        logger.warning("_load_prop_ind_slow: skipped %d tokens with unknown indicator values (not in %s) in %s",
-                       skipped_key, ind_values, safe_path)
+        logger.warning(
+            "_load_prop_ind_slow: skipped %d tokens with unknown indicator values (not in %s) in %s",
+            skipped_key,
+            ind_values,
+            safe_path,
+        )
 
-    return IndProperty(numpy.array(values, dtype="uint8", order='F'), numpy.array(mask, dtype="uint8", order='F'), len(ind_values))
+    return IndProperty(
+        numpy.array(values, dtype="uint8", order="F"),
+        numpy.array(mask, dtype="uint8", order="F"),
+        len(ind_values),
+    )
+
 
 def _create_cont_prop(size):
-    return ContProperty(numpy.zeros(size, dtype="float32"), numpy.zeros(size, dtype='uint8'))
+    return ContProperty(numpy.zeros(size, dtype="float32"), numpy.zeros(size, dtype="uint8"))
+
 
 def _create_ind_prop(size, indicator_count):
-    return IndProperty(numpy.zeros(size, dtype="uint8"), numpy.zeros(size, dtype='uint8'), indicator_count)
+    return IndProperty(
+        numpy.zeros(size, dtype="uint8"), numpy.zeros(size, dtype="uint8"), indicator_count
+    )
+
 
 def _empty_clone(prop):
-    data2 = prop.data.copy('F')
+    data2 = prop.data.copy("F")
     data2.fill(0)
-    mask2 = prop.mask.copy('F')
+    mask2 = prop.mask.copy("F")
     mask2.fill(0)
     if isinstance(prop, IndProperty):
         return IndProperty(data2, mask2, prop.indicator_count)
@@ -522,9 +614,10 @@ def _empty_clone(prop):
     else:
         raise RuntimeError(f"_empty_clone: unknown property type: {type(prop)}")
 
+
 def _clone_prop(prop):
-    data2 = prop.data.copy('F')
-    mask2 = prop.mask.copy('F')
+    data2 = prop.data.copy("F")
+    mask2 = prop.mask.copy("F")
     if isinstance(prop, IndProperty):
         return IndProperty(data2, mask2, prop.indicator_count)
     elif isinstance(prop, ContProperty):
@@ -532,15 +625,18 @@ def _clone_prop(prop):
     else:
         raise RuntimeError(f"_clone_prop: unknown property type: {type(prop)}")
 
+
 def _require_cont_data(data):
     if data is None:
         return None
-    return numpy.require(data, dtype='float32', requirements='F')
+    return numpy.require(data, dtype="float32", requirements="F")
+
 
 def _require_ind_data(data):
     if data is None:
         return None
-    return numpy.require(data, dtype='uint8', requirements='F')
+    return numpy.require(data, dtype="uint8", requirements="F")
+
 
 def accepts_tuple(arg_name, arg_pos):
     def tuple_to_prop(t):
@@ -553,22 +649,30 @@ def accepts_tuple(arg_name, arg_pos):
                 raise RuntimeError(f"{arg_name}: tuple must have 2 or 3 elements, got {len(t)}")
         else:
             if not isinstance(t, (ContProperty, IndProperty)):
-                raise RuntimeError(f"{arg_name}: expected ContProperty, IndProperty, or tuple, got {type(t)}")
+                raise RuntimeError(
+                    f"{arg_name}: expected ContProperty, IndProperty, or tuple, got {type(t)}"
+                )
             return t
+
     def decorator(f):
         def new_f(*args, **kargs):
             if arg_name in kargs:
                 kargs[arg_name] = tuple_to_prop(kargs[arg_name])
             elif len(args) > arg_pos:
-                args = args[:arg_pos] + (tuple_to_prop(args[arg_pos]),) + args[arg_pos+1:]
+                args = args[:arg_pos] + (tuple_to_prop(args[arg_pos]),) + args[arg_pos + 1 :]
             else:
-                raise RuntimeError(f"{arg_name}: missing required positional argument at position {arg_pos}")
+                raise RuntimeError(
+                    f"{arg_name}: missing required positional argument at position {arg_pos}"
+                )
             return f(*args, **kargs)
+
         new_f.__name__ = f.__name__
         return new_f
+
     return decorator
 
-@accepts_tuple('prop', 0)
+
+@accepts_tuple("prop", 0)
 def write_property(prop, filename, prop_name, undefined_value, indicator_values=None):
     """Write a property to an INC-format file via the C++ backend.
 
@@ -600,7 +704,8 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
     """
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False)
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False
+    )
 
     if indicator_values is None:
         indicator_values = []
@@ -609,33 +714,36 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
             f"write_property: indicator_values must be a list, got {type(indicator_values).__name__}"
         )
 
-    if (prop.data.ndim == 3):
+    if prop.data.ndim == 3:
         sh = _create_hpgl_shape(prop.data.shape)
     else:
         sh = _create_hpgl_shape((prop.data.size, 1, 1))
     if isinstance(prop, ContProperty):
         marr = _HPGL_CONT_MASKED_ARRAY(
-            data = prop.data.ctypes.data_as(C.POINTER(C.c_float)),
-            mask = prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
-            shape = sh)
+            data=prop.data.ctypes.data_as(C.POINTER(C.c_float)),
+            mask=prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
+            shape=sh,
+        )
         # Security: Keep array references to prevent use-after-free
         marr._array_refs = (prop.data, prop.mask)
         _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_inc_file_float(
-            safe_path.encode("utf-8"),
-            C.byref(marr),
-            undefined_value,
-            prop_name.encode("utf-8"))
+            safe_path.encode("utf-8"), C.byref(marr), undefined_value, prop_name.encode("utf-8")
+        )
         if rc != 0:
-            raise RuntimeError("write_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
+            raise RuntimeError(
+                "write_property failed: "
+                + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+            )
     else:
         # Security: Keep reference to indicator_values array
-        ind_arr = numpy.array(indicator_values, dtype='uint8')
+        ind_arr = numpy.array(indicator_values, dtype="uint8")
         marr = _HPGL_IND_MASKED_ARRAY(
-            data = prop.data.ctypes.data_as(C.POINTER(C.c_ubyte)),
-            mask = prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
-            shape = sh,
-            indicator_count = prop.indicator_count)
+            data=prop.data.ctypes.data_as(C.POINTER(C.c_ubyte)),
+            mask=prop.mask.ctypes.data_as(C.POINTER(C.c_ubyte)),
+            shape=sh,
+            indicator_count=prop.indicator_count,
+        )
         # Security: Keep array references to prevent use-after-free
         marr._array_refs = (prop.data, prop.mask, ind_arr)
         _snapshot_hpgl_error()
@@ -645,15 +753,21 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
             undefined_value,
             prop_name.encode("utf-8"),
             ind_arr.ctypes.data_as(C.POINTER(C.c_ubyte)),
-            len(indicator_values))
+            len(indicator_values),
+        )
         if rc != 0:
-            raise RuntimeError("write_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
+            raise RuntimeError(
+                "write_property failed: "
+                + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+            )
 
-@accepts_tuple('prop', 0)
+
+@accepts_tuple("prop", 0)
 def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=None):
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False)
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False
+    )
 
     if indicator_values is None:
         indicator_values = []
@@ -669,9 +783,13 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
             _create_hpgl_cont_masked_array(prop, None),
             safe_path.encode("utf-8"),
             prop_name.encode("utf-8"),
-            undefined_value)
+            undefined_value,
+        )
         if rc != 0:
-            raise RuntimeError("write_gslib_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
+            raise RuntimeError(
+                "write_gslib_property failed: "
+                + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+            )
     else:
         _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_gslib_byte_property(
@@ -680,9 +798,14 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
             prop_name.encode("utf-8"),
             undefined_value,
             _c_array(C.c_ubyte, len(indicator_values), indicator_values),
-            len(indicator_values))
+            len(indicator_values),
+        )
         if rc != 0:
-            raise RuntimeError("write_gslib_property failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
+            raise RuntimeError(
+                "write_gslib_property failed: "
+                + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+            )
+
 
 def load_cont_property(filename, undefined_value, size=None):
     """Load a continuous property from an INC-format file.
@@ -721,57 +844,80 @@ def load_cont_property(filename, undefined_value, size=None):
     """
     # Validate filename for security
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True)
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
+    )
 
     if size is None:
-        logger.warning("load_cont_property: Size is not specified. Using slow Python-based parser "
-                       "that loads entire file into memory unbounded. For large files (>100MB) "
-                       "specify size to use the fast C++ reader which uses pre-allocated buffers.")
+        logger.warning(
+            "load_cont_property: Size is not specified. Using slow Python-based parser "
+            "that loads entire file into memory unbounded. For large files (>100MB) "
+            "specify size to use the fast C++ reader which uses pre-allocated buffers."
+        )
         return _load_prop_cont_slow(safe_path, undefined_value)
     else:
-        return read_inc_file_float(safe_path, undefined_value, size)
+        try:
+            return read_inc_file_float(safe_path, undefined_value, size)
+        except RuntimeError as e:
+            logger.warning(
+                "load_cont_property: Fast C++ reader failed, falling back to slow "
+                "Python parser. C++ error: %s",
+                e,
+            )
+            return _load_prop_cont_slow(safe_path, undefined_value)
+
 
 def read_inc_file_float(filename, undefined_value, size):
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True)
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
+    )
 
     # Validate size parameters
     if isinstance(size, tuple) and len(size) == 3:
         GridValidator.validate_grid_dimensions(size[0], size[1], size[2])
 
-    total_elements = size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+    total_elements = (
+        size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+    )
     if total_elements > 2147483647:
-        raise ValueError(f"Grid too large: {total_elements} elements exceeds c_int max (2147483647)")
-    data = numpy.zeros(total_elements, dtype='float32', order='F')
-    mask = numpy.zeros(total_elements, dtype='uint8', order='F')
+        raise ValueError(
+            f"Grid too large: {total_elements} elements exceeds c_int max (2147483647)"
+        )
+    data = numpy.zeros(total_elements, dtype="float32", order="F")
+    mask = numpy.zeros(total_elements, dtype="uint8", order="F")
 
     _snapshot_hpgl_error()
     rc = _hpgl_so.hpgl_read_inc_file_float(
-        safe_path.encode("utf-8"),
-        undefined_value,
-        total_elements,
-        data,
-        mask)
+        safe_path.encode("utf-8"), undefined_value, total_elements, data, mask
+    )
     if rc != 0:
-        raise RuntimeError("read_inc_file_float failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
+        raise RuntimeError(
+            "read_inc_file_float failed: "
+            + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+        )
 
     return ContProperty(data, mask)
+
 
 def read_inc_file_byte(filename, undefined_value, size, indicator_values):
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True)
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
+    )
 
     # Validate size parameters
     if isinstance(size, tuple) and len(size) == 3:
         GridValidator.validate_grid_dimensions(size[0], size[1], size[2])
 
-    total_elements = size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+    total_elements = (
+        size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+    )
     if total_elements > 2147483647:
-        raise ValueError(f"Grid too large: {total_elements} elements exceeds c_int max (2147483647)")
-    data = numpy.zeros(total_elements, dtype='uint8', order='F')
-    mask = numpy.zeros(total_elements, dtype='uint8', order='F')
+        raise ValueError(
+            f"Grid too large: {total_elements} elements exceeds c_int max (2147483647)"
+        )
+    data = numpy.zeros(total_elements, dtype="uint8", order="F")
+    mask = numpy.zeros(total_elements, dtype="uint8", order="F")
     _snapshot_hpgl_error()
     rc = _hpgl_so.hpgl_read_inc_file_byte(
         safe_path.encode("utf-8"),
@@ -779,24 +925,36 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
         total_elements,
         data,
         mask,
-        numpy.array(indicator_values, dtype='uint8'),
-        len(indicator_values))
+        numpy.array(indicator_values, dtype="uint8"),
+        len(indicator_values),
+    )
     if rc != 0:
-        raise RuntimeError("read_inc_file_byte failed: " + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace"))
+        raise RuntimeError(
+            "read_inc_file_byte failed: "
+            + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+        )
     return IndProperty(data, mask, len(indicator_values))
 
+
 def load_ind_property(filename, undefined_value, indicator_values, size=None):
-    if (size is None):
-        logger.warning("load_ind_property: Size is not specified. Using slow Python-based parser "
-                       "that loads entire file into memory unbounded. For large files (>100MB) "
-                       "specify size to use the fast C++ reader which uses pre-allocated buffers.")
+    if size is None:
+        logger.warning(
+            "load_ind_property: Size is not specified. Using slow Python-based parser "
+            "that loads entire file into memory unbounded. For large files (>100MB) "
+            "specify size to use the fast C++ reader which uses pre-allocated buffers."
+        )
         return _load_prop_ind_slow(filename, undefined_value, indicator_values)
     else:
         try:
             return read_inc_file_byte(filename, undefined_value, size, indicator_values)
-        except RuntimeError:
-            logger.warning("load_ind_property: Fast method failed, falling back to slow method.")
+        except RuntimeError as e:
+            logger.warning(
+                "load_ind_property: Fast C++ reader failed, falling back to slow "
+                "Python parser. C++ error: %s",
+                e,
+            )
             return _load_prop_ind_slow(filename, undefined_value, indicator_values)
+
 
 def set_thread_num(num):
     """Set the number of OpenMP threads for parallel computation.
@@ -828,18 +986,23 @@ def set_thread_num(num):
         raise ValueError(f"set_thread_num: num must be at least 1, got {num}")
     # Sanity-check: warn if num exceeds available CPU count
     import os
+
     cpu_count = os.cpu_count()
     if cpu_count is not None and num > cpu_count * 4:
         logger.warning(
             "set_thread_num: num=%d exceeds 4x CPU count (%d). "
             "This may cause thread oversubscription and performance degradation.",
-            num, cpu_count)
+            num,
+            cpu_count,
+        )
     _hpgl_so.hpgl_set_thread_num(num)
+
 
 def get_thread_num():
     return _hpgl_so.hpgl_get_thread_num()
 
-@accepts_tuple('prop', 0)
+
+@accepts_tuple("prop", 0)
 def calc_mean(prop):
     """Calculate the arithmetic mean of informed (unmasked) values.
 
@@ -863,7 +1026,8 @@ def calc_mean(prop):
         raise ValueError("calc_mean: no informed values (all masked)")
     return float(masked.mean())
 
-@accepts_tuple('prop', 0)
+
+@accepts_tuple("prop", 0)
 def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     """Perform Ordinary Kriging (OK) interpolation on a 3D grid.
 
@@ -891,8 +1055,9 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
 
     Raises
     ------
-    ValueError
-        If grid dimensions or covariance parameters are invalid.
+    CriticalValidationError
+        If grid dimensions, radiuses, max_neighbours, or covariance
+        parameters are invalid.
     RuntimeError
         If the C++ computation produces an error.
     """
@@ -900,40 +1065,40 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
     # Validate radiuses
-    valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
 
     # Validate max_neighbours
     ParameterValidator.validate_max_neighbors(max_neighbours)
 
     # Validate covariance model
     ParameterValidator.validate_covariance_parameters(
-        cov_model.sill,
-        cov_model.nugget,
-        cov_model.ranges,
-        cov_model.angles
+        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
     )
 
     out_prop = _clone_prop(prop)
 
     okp = _HPGL_OK_PARAMS(
-        covariance_type = cov_model.type,
-        ranges = cov_model.ranges,
-        angles = cov_model.angles,
-        sill = cov_model.sill,
-        nugget = cov_model.nugget,
-        radiuses = valid_radiuses,
-        max_neighbours = max_neighbours)
+        covariance_type=cov_model.type,
+        ranges=cov_model.ranges,
+        angles=cov_model.angles,
+        sill=cov_model.sill,
+        nugget=cov_model.nugget,
+        radiuses=valid_radiuses,
+        max_neighbours=max_neighbours,
+    )
 
     _snapshot_hpgl_error()
     _hpgl_so.hpgl_ordinary_kriging(
         _create_hpgl_cont_masked_array(prop, grid),
         C.byref(okp),
-        _create_hpgl_cont_masked_array(out_prop, grid))
+        _create_hpgl_cont_masked_array(out_prop, grid),
+    )
     _check_hpgl_error("ordinary_kriging")
 
     return out_prop
 
-@accepts_tuple('prop', 0)
+
+@accepts_tuple("prop", 0)
 def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     """Perform Simple Kriging (SK) interpolation on a 3D grid.
 
@@ -962,8 +1127,9 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
 
     Raises
     ------
-    ValueError
-        If grid dimensions or covariance parameters are invalid.
+    CriticalValidationError
+        If grid dimensions, radiuses, max_neighbours, or covariance
+        parameters are invalid.
     RuntimeError
         If the C++ computation produces an error.
     """
@@ -971,45 +1137,42 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
     # Validate radiuses
-    valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
 
     # Validate max_neighbours
     ParameterValidator.validate_max_neighbors(max_neighbours)
 
     # Validate covariance model
     ParameterValidator.validate_covariance_parameters(
-        cov_model.sill,
-        cov_model.nugget,
-        cov_model.ranges,
-        cov_model.angles
+        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
     )
 
     out_prop = _clone_prop(prop)
 
     skp = _HPGL_SK_PARAMS(
-        covariance_type = cov_model.type,
-        ranges = cov_model.ranges,
-        angles = cov_model.angles,
-        sill = cov_model.sill,
-        nugget = cov_model.nugget,
-        radiuses = valid_radiuses,
-        max_neighbours = max_neighbours,
-        automatic_mean = (mean is None),
-        mean = (mean if mean is not None else 0))
+        covariance_type=cov_model.type,
+        ranges=cov_model.ranges,
+        angles=cov_model.angles,
+        sill=cov_model.sill,
+        nugget=cov_model.nugget,
+        radiuses=valid_radiuses,
+        max_neighbours=max_neighbours,
+        automatic_mean=(mean is None),
+        mean=(mean if mean is not None else 0),
+    )
 
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
     _snapshot_hpgl_error()
     _hpgl_so.hpgl_simple_kriging(
-        prop.data, prop.mask,
-        C.byref(sh), C.byref(skp),
-        out_prop[0], out_prop[1],
-        C.byref(sh))
+        prop.data, prop.mask, C.byref(sh), C.byref(skp), out_prop[0], out_prop[1], C.byref(sh)
+    )
     _check_hpgl_error("simple_kriging")
 
     return out_prop
 
-@accepts_tuple('prop', 0)
+
+@accepts_tuple("prop", 0)
 def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
     """Perform Kriging with Locally Varying Mean (LVM).
 
@@ -1039,9 +1202,12 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 
     Raises
     ------
+    CriticalValidationError
+        If grid dimensions, radiuses, max_neighbours, or covariance
+        parameters are invalid.
     ValueError
-        If ``mean_data`` is not a NumPy array, its size doesn't match
-        the grid, or covariance parameters are invalid.
+        If ``mean_data`` is not a NumPy array or its size doesn't match
+        the grid.
     RuntimeError
         If the C++ computation produces an error.
     """
@@ -1049,90 +1215,93 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
     # Validate radiuses
-    valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
 
     # Validate max_neighbours
     ParameterValidator.validate_max_neighbors(max_neighbours)
 
     # Validate covariance model
     ParameterValidator.validate_covariance_parameters(
-        cov_model.sill,
-        cov_model.nugget,
-        cov_model.ranges,
-        cov_model.angles
+        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
     )
 
     # Validate mean_data
     if not isinstance(mean_data, numpy.ndarray):
         raise ValueError("lvm_kriging: mean_data must be a numpy array")
     if mean_data.dtype != numpy.float32:
-        mean_data = numpy.require(mean_data, dtype='float32')
+        mean_data = numpy.require(mean_data, dtype="float32")
     expected_size = grid.x * grid.y * grid.z
     if mean_data.size != expected_size:
         raise ValueError(
             f"lvm_kriging: mean_data size {mean_data.size} does not match "
-            f"grid dimensions {grid.x}x{grid.y}x{grid.z} = {expected_size}")
+            f"grid dimensions {grid.x}x{grid.y}x{grid.z} = {expected_size}"
+        )
 
     out_prop = _clone_prop(prop)
 
     okp = _HPGL_OK_PARAMS(
-        covariance_type = cov_model.type,
-        ranges = cov_model.ranges,
-        angles = cov_model.angles,
-        sill = cov_model.sill,
-        nugget = cov_model.nugget,
-        radiuses = valid_radiuses,
-        max_neighbours = max_neighbours)
+        covariance_type=cov_model.type,
+        ranges=cov_model.ranges,
+        angles=cov_model.angles,
+        sill=cov_model.sill,
+        nugget=cov_model.nugget,
+        radiuses=valid_radiuses,
+        max_neighbours=max_neighbours,
+    )
 
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
     _snapshot_hpgl_error()
     _hpgl_so.hpgl_lvm_kriging(
-        prop.data, prop.mask, C.byref(sh),
-        mean_data, C.byref(sh),
+        prop.data,
+        prop.mask,
+        C.byref(sh),
+        mean_data,
+        C.byref(sh),
         C.byref(okp),
-        out_prop.data, out_prop.mask,
-        C.byref(sh))
+        out_prop.data,
+        out_prop.mask,
+        C.byref(sh),
+    )
     _check_hpgl_error("lvm_kriging")
 
     return out_prop
 
-@accepts_tuple('prop', 0)
+
+@accepts_tuple("prop", 0)
 def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
     # Validate radiuses
-    valid_radiuses = ParameterValidator.validate_radius(radiuses, 'radiuses')
+    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
 
     # Validate max_neighbours
     ParameterValidator.validate_max_neighbors(max_neighbours)
 
     # Validate covariance model
     ParameterValidator.validate_covariance_parameters(
-        cov_model.sill,
-        cov_model.nugget,
-        cov_model.ranges,
-        cov_model.angles
+        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
     )
 
     # Validate marginal_probs
     if len(marginal_probs) != 2:
         raise ValueError("median_ik: marginal_probs must have exactly 2 elements")
     for i, p in enumerate(marginal_probs):
-        ParameterValidator.validate_probability(p, f'marginal_probs[{i}]')
+        ParameterValidator.validate_probability(p, f"marginal_probs[{i}]")
 
     out_prop = _clone_prop(prop)
 
     miksp = _HPGL_MEDIAN_IK_PARAMS(
-        covariance_type = cov_model.type,
-        ranges = cov_model.ranges,
-        angles = cov_model.angles,
-        sill = cov_model.sill,
-        nugget = cov_model.nugget,
-        radiuses = valid_radiuses,
-        max_neighbours = max_neighbours,
-        marginal_probs = marginal_probs)
+        covariance_type=cov_model.type,
+        ranges=cov_model.ranges,
+        angles=cov_model.angles,
+        sill=cov_model.sill,
+        nugget=cov_model.nugget,
+        radiuses=valid_radiuses,
+        max_neighbours=max_neighbours,
+        marginal_probs=marginal_probs,
+    )
 
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
@@ -1141,6 +1310,7 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     _check_hpgl_error("median_ik")
     return out_prop
 
+
 def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
     ikps = []
     assert len(data) == indicator_count
@@ -1148,18 +1318,20 @@ def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
         ikd = data[i]
         ikp = __checked_create(
             _HPGL_IK_PARAMS,
-            covariance_type = ikd["cov_model"].type,
-            ranges = _c_array(C.c_double, 3, ikd["cov_model"].ranges),
-            angles = _c_array(C.c_double, 3, ikd["cov_model"].angles),
-            sill = ikd["cov_model"].sill,
-            nugget = ikd["cov_model"].nugget,
-            radiuses = _c_array(C.c_int, 3, tuple(int(r) for r in ikd["radiuses"])),
-            max_neighbours = ikd["max_neighbours"],
-            marginal_prob = 0 if is_lvm else marginal_probs[i])
+            covariance_type=ikd["cov_model"].type,
+            ranges=_c_array(C.c_double, 3, ikd["cov_model"].ranges),
+            angles=_c_array(C.c_double, 3, ikd["cov_model"].angles),
+            sill=ikd["cov_model"].sill,
+            nugget=ikd["cov_model"].nugget,
+            radiuses=_c_array(C.c_int, 3, tuple(int(r) for r in ikd["radiuses"])),
+            max_neighbours=ikd["max_neighbours"],
+            marginal_prob=0 if is_lvm else marginal_probs[i],
+        )
         ikps.append(ikp)
     return _c_array(_HPGL_IK_PARAMS, indicator_count, ikps)
 
-@accepts_tuple('prop', 0)
+
+@accepts_tuple("prop", 0)
 def indicator_kriging(prop, grid, data, marginal_probs):
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
@@ -1169,59 +1341,73 @@ def indicator_kriging(prop, grid, data, marginal_probs):
 
     # Validate marginal_probs
     if len(marginal_probs) != len(data):
-        raise ValueError(f"indicator_kriging: marginal_probs length ({len(marginal_probs)}) must match data length ({len(data)})")
+        raise ValueError(
+            f"indicator_kriging: marginal_probs length ({len(marginal_probs)}) must match data length ({len(data)})"
+        )
     for i, p in enumerate(marginal_probs):
-        ParameterValidator.validate_probability(p, f'marginal_probs[{i}]')
+        ParameterValidator.validate_probability(p, f"marginal_probs[{i}]")
 
     # Validate per-indicator parameters
     for i, ikd in enumerate(data):
-        ParameterValidator.validate_radius(ikd["radiuses"], f'data[{i}].radiuses')
+        ParameterValidator.validate_radius(ikd["radiuses"], f"data[{i}].radiuses")
         ParameterValidator.validate_max_neighbors(ikd["max_neighbours"])
         ParameterValidator.validate_covariance_parameters(
             ikd["cov_model"].sill,
             ikd["cov_model"].nugget,
             ikd["cov_model"].ranges,
-            ikd["cov_model"].angles
+            ikd["cov_model"].angles,
         )
 
-    if(len(data) == 2):
+    if len(data) == 2:
         return median_ik(
             prop,
             grid,
-            (marginal_probs[0],
-             1 - marginal_probs[0]),
+            (marginal_probs[0], 1 - marginal_probs[0]),
             data[0]["radiuses"],
             data[0]["max_neighbours"],
-            data[0]['cov_model'])
+            data[0]["cov_model"],
+        )
     out_prop = _clone_prop(prop)
     _snapshot_hpgl_error()
     _hpgl_so.hpgl_indicator_kriging(
         C.byref(_create_hpgl_ind_masked_array(prop, grid)),
         C.byref(_create_hpgl_ind_masked_array(out_prop, grid)),
         __create_hpgl_ik_params(data, len(data), False, marginal_probs),
-        len(data))
+        len(data),
+    )
     _check_hpgl_error("indicator_kriging")
 
     return out_prop
 
-@accepts_tuple('prop', 0)
-def simple_cokriging_markI(prop, grid,
-        radiuses, max_neighbours, cov_model,
-        secondary_data, primary_mean, secondary_mean, secondary_variance, correlation_coef):
+
+@accepts_tuple("prop", 0)
+def simple_cokriging_markI(
+    prop,
+    grid,
+    radiuses,
+    max_neighbours,
+    cov_model,
+    secondary_data,
+    primary_mean,
+    secondary_mean,
+    secondary_variance,
+    correlation_coef,
+):
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
     # Validate radiuses and max_neighbours
-    ParameterValidator.validate_radius(radiuses, 'radiuses')
+    ParameterValidator.validate_radius(radiuses, "radiuses")
     ParameterValidator.validate_max_neighbors(max_neighbours)
 
     # Validate covariance model
     ParameterValidator.validate_covariance_parameters(
-        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles)
+        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
+    )
 
     # Validate cokriging-specific parameters
     ParameterValidator.validate_correlation_coef(correlation_coef)
-    ParameterValidator.validate_variance(secondary_variance, 'secondary_variance')
+    ParameterValidator.validate_variance(secondary_variance, "secondary_variance")
 
     out_prop = _clone_prop(prop)
 
@@ -1229,44 +1415,59 @@ def simple_cokriging_markI(prop, grid,
     _hpgl_so.hpgl_simple_cokriging_mark1(
         C.byref(_create_hpgl_cont_masked_array(prop, grid)),
         C.byref(_create_hpgl_cont_masked_array(secondary_data, grid)),
-        C.byref(__checked_create(
+        C.byref(
+            __checked_create(
                 __hpgl_cockriging_m1_params_t,
-                covariance_type = cov_model.type,
-                ranges = _c_array(C.c_double, 3, cov_model.ranges),
-                angles = _c_array(C.c_double, 3, cov_model.angles),
-                sill = cov_model.sill,
-                nugget = cov_model.nugget,
-                radiuses = _c_array(C.c_int, 3, radiuses),
-                max_neighbours = max_neighbours,
-                primary_mean = primary_mean,
-                secondary_mean = secondary_mean,
-                secondary_variance = secondary_variance,
-                correlation_coef = correlation_coef)),
-        C.byref(_create_hpgl_cont_masked_array(out_prop, grid)))
+                covariance_type=cov_model.type,
+                ranges=_c_array(C.c_double, 3, cov_model.ranges),
+                angles=_c_array(C.c_double, 3, cov_model.angles),
+                sill=cov_model.sill,
+                nugget=cov_model.nugget,
+                radiuses=_c_array(C.c_int, 3, radiuses),
+                max_neighbours=max_neighbours,
+                primary_mean=primary_mean,
+                secondary_mean=secondary_mean,
+                secondary_variance=secondary_variance,
+                correlation_coef=correlation_coef,
+            )
+        ),
+        C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
+    )
     _check_hpgl_error("simple_cokriging_markI")
     return out_prop
 
-def simple_cokriging_markII(grid,
-        primary_data,
-        secondary_data,
-        correlation_coef,
-        radiuses,
-        max_neighbours):
+
+def simple_cokriging_markII(
+    grid, primary_data, secondary_data, correlation_coef, radiuses, max_neighbours
+):
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
     # Validate radiuses and max_neighbours
-    ParameterValidator.validate_radius(radiuses, 'radiuses')
+    ParameterValidator.validate_radius(radiuses, "radiuses")
     ParameterValidator.validate_max_neighbors(max_neighbours)
 
     # Validate correlation coefficient
     ParameterValidator.validate_correlation_coef(correlation_coef)
 
-    # Validate both covariance models
+    # Validate primary_data and secondary_data are dicts with required keys
     for label, d in [("primary", primary_data), ("secondary", secondary_data)]:
+        if not isinstance(d, dict):
+            raise validation.CriticalValidationError(
+                f"simple_cokriging_markII: {label}_data must be a dict, got {type(d).__name__}",
+                f"{label}_data",
+            )
+        for key in ("data", "cov_model", "mean"):
+            if key not in d:
+                raise validation.CriticalValidationError(
+                    f"simple_cokriging_markII: {label}_data missing required key '{key}'",
+                    f"{label}_data",
+                )
+
+    # Validate both covariance models
+    for _label, d in [("primary", primary_data), ("secondary", secondary_data)]:
         cm = d["cov_model"]
-        ParameterValidator.validate_covariance_parameters(
-            cm.sill, cm.nugget, cm.ranges, cm.angles)
+        ParameterValidator.validate_covariance_parameters(cm.sill, cm.nugget, cm.ranges, cm.angles)
 
     out_prop = _clone_prop(primary_data["data"])
 
@@ -1277,89 +1478,114 @@ def simple_cokriging_markII(grid,
     _hpgl_so.hpgl_simple_cokriging_mark2(
         C.byref(_create_hpgl_cont_masked_array(primary_data["data"], grid)),
         C.byref(_create_hpgl_cont_masked_array(secondary_data["data"], grid)),
-        C.byref(__checked_create(
+        C.byref(
+            __checked_create(
                 __hpgl_cockriging_m2_params_t,
-                primary_cov_params = __checked_create(
+                primary_cov_params=__checked_create(
                     __hpgl_cov_params_t,
-                    covariance_type = pcp.type,
-                    ranges = _c_array(C.c_double, 3, pcp.ranges),
-                    angles = _c_array(C.c_double, 3, pcp.angles),
-                    sill = pcp.sill,
-                    nugget = pcp.nugget),
-                secondary_cov_params = __checked_create(
+                    covariance_type=pcp.type,
+                    ranges=_c_array(C.c_double, 3, pcp.ranges),
+                    angles=_c_array(C.c_double, 3, pcp.angles),
+                    sill=pcp.sill,
+                    nugget=pcp.nugget,
+                ),
+                secondary_cov_params=__checked_create(
                     __hpgl_cov_params_t,
-                    covariance_type = scp.type,
-                    ranges = _c_array(C.c_double, 3, scp.ranges),
-                    angles = _c_array(C.c_double, 3, scp.angles),
-                    sill = scp.sill,
-                    nugget = scp.nugget),
-                radiuses = _c_array(C.c_int, 3, radiuses),
-                max_neighbours = max_neighbours,
-                primary_mean = primary_data["mean"],
-                secondary_mean = secondary_data["mean"],
-                correlation_coef = correlation_coef)),
-        C.byref(_create_hpgl_cont_masked_array(out_prop, grid)))
+                    covariance_type=scp.type,
+                    ranges=_c_array(C.c_double, 3, scp.ranges),
+                    angles=_c_array(C.c_double, 3, scp.angles),
+                    sill=scp.sill,
+                    nugget=scp.nugget,
+                ),
+                radiuses=_c_array(C.c_int, 3, radiuses),
+                max_neighbours=max_neighbours,
+                primary_mean=primary_data["mean"],
+                secondary_mean=secondary_data["mean"],
+                correlation_coef=correlation_coef,
+            )
+        ),
+        C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
+    )
     _check_hpgl_error("simple_cokriging_markII")
     return out_prop
 
-def simple_kriging_weights(center_point, n_x, n_y, n_z, ranges = (100000,100000,100000), sill = 1, cov_type = covariance.exponential, nugget = None, angles = None):
+
+def simple_kriging_weights(
+    center_point,
+    n_x,
+    n_y,
+    n_z,
+    ranges=(100000, 100000, 100000),
+    sill=1,
+    cov_type=covariance.exponential,
+    nugget=None,
+    angles=None,
+):
     if angles is None:
-        angles = (0,0,0)
+        angles = (0, 0, 0)
     if nugget is None:
         nugget = 0
 
     # Validate pointset arrays have matching lengths and non-zero count
     if len(n_x) != len(n_y) or len(n_x) != len(n_z):
-        raise RuntimeError("Invalid pointset. %s,%s,%s." % (len(n_x), len(n_y), len(n_z)))
+        raise RuntimeError(f"Invalid pointset. {len(n_x)},{len(n_y)},{len(n_z)}.")
     if len(n_x) == 0:
         raise RuntimeError("simple_kriging_weights: at least one data point is required")
     if len(n_x) > validation.ValidationConstants.MAX_NEIGHBORS:
         validation.validation_logger.warning(
             f"simple_kriging_weights: point count {len(n_x)} exceeds recommended maximum "
-            f"{validation.ValidationConstants.MAX_NEIGHBORS}. Performance may be degraded.")
+            f"{validation.ValidationConstants.MAX_NEIGHBORS}. Performance may be degraded."
+        )
 
     # Validate covariance parameters
     ParameterValidator.validate_covariance_parameters(sill, nugget, ranges, angles)
 
     # Validate pointset arrays for NaN/inf
-    for name, arr in [('n_x', n_x), ('n_y', n_y), ('n_z', n_z)]:
-        arr_np = numpy.asarray(arr, dtype='float32')
+    for name, arr in [("n_x", n_x), ("n_y", n_y), ("n_z", n_z)]:
+        arr_np = numpy.asarray(arr, dtype="float32")
         if numpy.any(numpy.isnan(arr_np)) or numpy.any(numpy.isinf(arr_np)):
             raise ValueError(f"simple_kriging_weights: {name} contains NaN or infinite values")
 
     # Validate center_point for NaN/inf
-    cp = numpy.asarray(center_point, dtype='float32')
+    cp = numpy.asarray(center_point, dtype="float32")
     if numpy.any(numpy.isnan(cp)) or numpy.any(numpy.isinf(cp)):
         raise ValueError("simple_kriging_weights: center_point contains NaN or infinite values")
 
-    covp = C.byref(__checked_create(
+    covp = C.byref(
+        __checked_create(
             __hpgl_cov_params_t,
-            covariance_type = cov_type,
-            ranges = _c_array(C.c_double, 3, ranges),
-            angles = _c_array(C.c_double, 3, angles),
-            sill = sill,
-            nugget = nugget))
+            covariance_type=cov_type,
+            ranges=_c_array(C.c_double, 3, ranges),
+            angles=_c_array(C.c_double, 3, angles),
+            sill=sill,
+            nugget=nugget,
+        )
+    )
 
-    weights = numpy.array([0]*len(n_x), dtype='float32')
+    weights = numpy.array([0] * len(n_x), dtype="float32")
 
     _snapshot_hpgl_error()
     rc = _hpgl_so.hpgl_simple_kriging_weights(
         _c_array(C.c_float, 3, center_point),
-        numpy.array(n_x, dtype='float32'),
-        numpy.array(n_y, dtype='float32'),
-        numpy.array(n_z, dtype='float32'),
+        numpy.array(n_x, dtype="float32"),
+        numpy.array(n_y, dtype="float32"),
+        numpy.array(n_z, dtype="float32"),
         len(n_x),
         covp,
-        weights)
+        weights,
+    )
     if rc != 0:
-        _check_hpgl_error("simple_kriging_weights")
-        raise RuntimeError("simple_kriging_weights failed: unknown error (empty exception message)")
+        raise RuntimeError(
+            "simple_kriging_weights failed: "
+            + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+        )
 
     return weights
 
+
 def get_gslib_property(prop_dict, prop_name, undefined_value):
     """Extract a property and its mask from a GSLIB property dictionary.
-    
+
     Parameters
     ----------
     prop_dict : dict
@@ -1368,12 +1594,12 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
         Name of the property to extract.
     undefined_value : float
         Value marking undefined/uninformed cells.
-    
+
     Returns
     -------
     tuple of (numpy.ndarray, numpy.ndarray)
         Property array and uint8 mask array where 1 = informed, 0 = masked.
-    
+
     Raises
     ------
     TypeError
@@ -1394,9 +1620,10 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
             informed_array[i] = 1
     return (prop_dict[prop_name], informed_array)
 
+
 def set_output_handler(handler, param):
     """Set or clear the HPGL C++ output handler callback.
-    
+
     Parameters
     ----------
     handler : callable or None
@@ -1404,30 +1631,31 @@ def set_output_handler(handler, param):
         returning int. If None, clears the output handler.
     param : any
         User parameter forwarded to the handler callback.
-    
+
     Raises
     ------
     TypeError
         If handler is not callable and not None.
     """
-    global _h
+    global _h, _output_handler_param
     if handler is not None and not callable(handler):
         raise TypeError(
-            f"set_output_handler: handler must be callable or None, "
-            f"got {type(handler).__name__}"
+            f"set_output_handler: handler must be callable or None, got {type(handler).__name__}"
         )
     if handler is None:
         # Cast None to the expected type for ctypes compatibility
         _hpgl_so.hpgl_set_output_handler(C.cast(None, hpgl_output_handler), None)  # type: ignore[arg-type]
         _h = None
+        _output_handler_param = None
     else:
         _h = hpgl_output_handler(handler)
+        _output_handler_param = param
         _hpgl_so.hpgl_set_output_handler(_h, param)
 
 
 def set_progress_handler(handler, param):
     """Set or clear the HPGL C++ progress handler callback.
-    
+
     Parameters
     ----------
     handler : callable or None
@@ -1435,36 +1663,55 @@ def set_progress_handler(handler, param):
         and returning int. If None, clears the progress handler.
     param : any
         User parameter forwarded to the handler callback.
-    
+
     Raises
     ------
     TypeError
         If handler is not callable and not None.
     """
-    global _progress_handler
+    global _progress_handler, _progress_handler_param
     if handler is not None and not callable(handler):
         raise TypeError(
-            f"set_progress_handler: handler must be callable or None, "
-            f"got {type(handler).__name__}"
+            f"set_progress_handler: handler must be callable or None, got {type(handler).__name__}"
         )
     if handler is None:
         # Cast None to the expected type for ctypes compatibility
         _hpgl_so.hpgl_set_progress_handler(C.cast(None, hpgl_progress_handler), None)  # type: ignore[arg-type]
         _progress_handler = None
+        _progress_handler_param = None
     else:
         _progress_handler = hpgl_progress_handler(handler)
+        _progress_handler_param = param
         _hpgl_so.hpgl_set_progress_handler(_progress_handler, param)
 
+
 __all__ = [
-    "ContProperty", "IndProperty", "SugarboxGrid", "CovarianceModel", "covariance",
-    "checkFWA", "append_mask", "accepts_tuple",
-    "ordinary_kriging", "simple_kriging", "lvm_kriging",
-    "indicator_kriging", "median_ik",
-    "simple_cokriging_markI", "simple_cokriging_markII",
+    "ContProperty",
+    "IndProperty",
+    "SugarboxGrid",
+    "CovarianceModel",
+    "covariance",
+    "checkFWA",
+    "append_mask",
+    "accepts_tuple",
+    "ordinary_kriging",
+    "simple_kriging",
+    "lvm_kriging",
+    "indicator_kriging",
+    "median_ik",
+    "simple_cokriging_markI",
+    "simple_cokriging_markII",
     "simple_kriging_weights",
-    "write_property", "write_gslib_property",
-    "load_cont_property", "load_ind_property",
-    "read_inc_file_float", "read_inc_file_byte",
-    "calc_mean", "set_thread_num", "get_thread_num",
-    "get_gslib_property", "set_output_handler", "set_progress_handler",
+    "write_property",
+    "write_gslib_property",
+    "load_cont_property",
+    "load_ind_property",
+    "read_inc_file_float",
+    "read_inc_file_byte",
+    "calc_mean",
+    "set_thread_num",
+    "get_thread_num",
+    "get_gslib_property",
+    "set_output_handler",
+    "set_progress_handler",
 ]

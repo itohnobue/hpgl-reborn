@@ -7,34 +7,34 @@ This file adds dedicated tests for all 16 public functions in routines.py.
 Note: routines.py imports from geo.py which may have syntax issues.
 Tests skip gracefully when the module cannot be imported.
 """
+import os
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
-import sys
-import os
-import tempfile
-from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 # Attempt import — routines.py depends on geo.py which may have syntax issues
 try:
     from geo_bsd.routines import (
-        CalcMean,
         CalcMarginalProbsIndicator,
+        CalcMean,
         CalcVPC,
         CalcVPCsIndicator,
-        CubeFromVPC,
-        CubesFromVPCs,
-        Cubes2PointSet,
         Cube2PointSet,
-        PointSet2Cube,
-        SaveGSLIBPointSet,
-        SaveGSLIBCubes,
+        CubeFromVPC,
+        Cubes2PointSet,
+        CubesFromVPCs,
         GetCubicalMask,
         GetEllipseMask,
+        LoadGslibFile,
         MeanCalc,
         MovingAverage3D,
-        LoadGslibFile,
+        PointSet2Cube,
+        SaveGSLIBCubes,
+        SaveGSLIBPointSet,
     )
     ROUTINES_AVAILABLE = True
 except (ImportError, SyntaxError, IndentationError, RuntimeError):

@@ -19,6 +19,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "HPGL_BUILD_PYTHON": "ON",
+        "HPGL_BUILD_TESTS": "ON",
         "HPGL_USE_OPENMP": "ON"
       }
     },
@@ -29,6 +30,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "HPGL_BUILD_PYTHON": "ON",
+        "HPGL_BUILD_TESTS": "ON",
         "HPGL_USE_OPENMP": "ON"
       }
     },

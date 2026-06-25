@@ -8,30 +8,36 @@ Tests cover:
 - I/O functions: load/write properties in INC and GSLib formats
 - Utility functions: append_mask
 """
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
-import sys
-import tempfile
-from pathlib import Path
-from unittest.mock import Mock, MagicMock
-
 
 # Add src directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
+    from geo_bsd.cdf import CdfData, calc_cdf
     from geo_bsd.geo import (
-        ContProperty, IndProperty,
-        load_cont_property, load_ind_property,
-        read_inc_file_float, read_inc_file_byte,
-        write_property, write_gslib_property,
-        set_thread_num, get_thread_num,
-        set_output_handler, set_progress_handler,
-        append_mask, calc_mean, SugarboxGrid,
-        _load_prop_ind_slow  # For testing INC format parsing
+        ContProperty,
+        IndProperty,
+        SugarboxGrid,
+        _load_prop_ind_slow,  # For testing INC format parsing
+        append_mask,
+        calc_mean,
+        get_thread_num,
+        load_cont_property,
+        load_ind_property,
+        read_inc_file_byte,
+        read_inc_file_float,
+        set_output_handler,
+        set_progress_handler,
+        set_thread_num,
+        write_gslib_property,
+        write_property,
     )
-    from geo_bsd.cdf import calc_cdf, CdfData
-except (ImportError, OSError) as e:
+except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
 
@@ -421,7 +427,7 @@ class TestIOContinuousProperty:
 
         # Check file exists and has expected content
         assert Path(filename).exists()
-        with open(filename, 'r') as f:
+        with open(filename) as f:
             content = f.read()
             # Should contain the header, property name and values
             assert "HPGL saved GSLIB file" in content
@@ -475,7 +481,7 @@ class TestIOContinuousProperty:
 
         # Verify file was created and contains expected data
         assert Path(filename).exists()
-        with open(filename, 'r') as f:
+        with open(filename) as f:
             content = f.read()
             # Should have property name and some values
             assert "3d_test" in content

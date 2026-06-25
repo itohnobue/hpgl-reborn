@@ -256,6 +256,13 @@ HPGL_API int hpgl_write_inc_file_float(
 
 void init_remap_table(unsigned char * values, int values_count, int indicator_count, std::vector<unsigned char> & remap_table)
 {
+	// Validate against negative counts which cause UB in pointer arithmetic
+	// (values + negative_count is undefined behavior).
+	if (values_count < 0)
+		throw hpgl::hpgl_exception("init_remap_table", "Negative values_count");
+	if (indicator_count < 0)
+		throw hpgl::hpgl_exception("init_remap_table", "Negative indicator_count");
+
 	if (values == nullptr)
 	{
 		// No remap table provided: use identity mapping [0, 1, 2, ...]
@@ -298,6 +305,11 @@ HPGL_API int hpgl_write_inc_file_byte(
 	if (validate_pointer(filename, "filename (write_inc_file_byte)") != 0) return -1;
 	if (validate_pointer(arr, "arr (write_inc_file_byte)") != 0) return -1;
 	if (validate_pointer(name, "name (write_inc_file_byte)") != 0) return -1;
+	if (values_count < 0)
+	{
+		hpgl::set_last_exception_message("write_inc_file_byte: negative values_count");
+		return -1;
+	}
 	try
 	{
 		using namespace hpgl;
@@ -364,6 +376,11 @@ hpgl_write_gslib_byte_property(
 	if (validate_pointer(filename, "filename (write_gslib_byte_property)") != 0) return -1;
 	if (validate_pointer(name, "name (write_gslib_byte_property)") != 0) return -1;
 	if (validate_pointer(values, "values (write_gslib_byte_property)") != 0) return -1;
+	if (values_count < 0)
+	{
+		hpgl::set_last_exception_message("write_gslib_byte_property: negative values_count");
+		return -1;
+	}
 	try
 	{
 		using namespace hpgl;
@@ -606,9 +623,13 @@ hpgl_indicator_kriging(
 	validate_pointer_or_throw(out_data, "out_data (indicator_kriging)");
 	validate_pointer_or_throw(params, "params (indicator_kriging)");
 
-	// NOTE: indicator_count is provided by the Python caller which ensures it matches
-	// the actual data dimensions (in_data->m_indicator_count). This is a contract
-	// requirement of the C API — no cross-check is performed here for performance.
+	// Validate indicator_count matches the data's actual indicator_count.
+	// Direct C callers may pass mismatched values, leading to out-of-bounds reads
+	// in init_sis_params or indicator_kriging.
+	if (indicator_count != in_data->m_indicator_count)
+		throw hpgl_exception("hpgl_indicator_kriging",
+			"indicator_count mismatch with in_data->m_indicator_count");
+
 	int size = get_shape_volume(&in_data->m_shape);
 	validate_shape_volume_or_throw(size, "indicator_kriging input");
 	int size2 = get_shape_volume(&out_data->m_shape);
@@ -770,6 +791,24 @@ hpgl_sis_simulation(
 	validate_pointer_or_throw(data, "data (sis_simulation)");
 	validate_pointer_or_throw(params, "params (sis_simulation)");
 
+	// Validate indicator_count matches the data's actual indicator_count.
+	// Direct C callers may pass mismatched values, leading to out-of-bounds reads.
+	if (indicator_count != data->m_indicator_count)
+		throw hpgl_exception("hpgl_sis_simulation",
+			"indicator_count mismatch with data->m_indicator_count");
+
+	// Defense-in-depth: indicator_index_t is unsigned char (max 255).
+	// indicator_count > 255 causes infinite loop in do_sis().
+	if (indicator_count > 255)
+		throw hpgl_exception("hpgl_sis_simulation",
+			"indicator_count exceeds unsigned char max (255)");
+
+	// Guard against m_category_count == 0 which causes do_sis() to
+	// silently corrupt data (sample() returns SIZE_MAX, wraps to 255).
+	if (indicator_count <= 0)
+		throw hpgl_exception("hpgl_sis_simulation",
+			"indicator_count must be positive");
+
 	int size = get_shape_volume(&data->m_shape);
 	validate_shape_volume_or_throw(size, "sis_simulation");
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
@@ -811,13 +850,25 @@ hpgl_sis_simulation_lvm(
 	validate_pointer_or_throw(params, "params (sis_simulation_lvm)");
 	validate_pointer_or_throw(mean_data, "mean_data (sis_simulation_lvm)");
 
+	// Validate indicator_count matches the data's actual indicator_count.
+	// Direct C callers may pass mismatched values, leading to out-of-bounds reads.
+	if (indicator_count != data->m_indicator_count)
+		throw hpgl_exception("hpgl_sis_simulation_lvm",
+			"indicator_count mismatch with data->m_indicator_count");
+
+	// Defense-in-depth: indicator_index_t is unsigned char (max 255).
+	// indicator_count > 255 causes infinite loop in do_sis().
+	if (indicator_count > 255)
+		throw hpgl_exception("hpgl_sis_simulation_lvm",
+			"indicator_count exceeds unsigned char max (255)");
+
 	int size = get_shape_volume(&data->m_shape);
 	validate_shape_volume_or_throw(size, "sis_simulation_lvm");
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
 
-	// NOTE: The Python caller always ensures indicator_count matches mean_data's
-	// array size before calling this function. This is a contract requirement — no
-	// bounds check is performed here for performance reasons.
+	// NOTE: indicator_count is validated below against the reasonable range
+	// [0, 1000000] in all builds to prevent out-of-bounds access from direct
+	// C callers. The Python caller (hpgl_wrap.py) also enforces this contract.
 	sugarbox_grid_t grid;
 	init_grid(grid, &data->m_shape);
 
@@ -827,16 +878,13 @@ hpgl_sis_simulation_lvm(
 	progress_reporter_t rep(size);
 
 	// Build means array from mean_data structs.
-	// NOTE: The Python caller guarantees indicator_count <= mean_data array size
-	// (contract enforced in hpgl_wrap.py). Defensive null check on m_data per entry.
+	// NOTE: indicator_count is validated against the reasonable range [0, 1000000]
+	// below in all builds to prevent out-of-bounds access from direct C callers.
 	std::vector<const mean_t *> means;
-#ifndef NDEBUG
-	// Debug-mode sanity: reject unreasonably large indicator counts to catch
-	// mismatched-contract bugs early.
-	if (indicator_count < 0 || indicator_count > 1000000)
+
+	if (indicator_count <= 0 || indicator_count > 1000000)
 		throw hpgl_exception("hpgl_sis_simulation_lvm",
-			"indicator_count out of reasonable range [0, 1000000]");
-#endif
+			"indicator_count out of reasonable range [1, 1000000]");
 	for (int i = 0; i < indicator_count; ++i)
 	{
 		if (mean_data[i].m_data == nullptr)

@@ -12,8 +12,10 @@ import numpy
 # NumPy 2.0+ compatibility
 from numpy import ctypeslib as NC
 
+
 # Since numpy>=2.0 is required, always use direct ctypes.CDLL
-_load_lib_func = lambda libpath: C.CDLL(str(libpath))
+def _load_lib_func(libpath: str) -> C.CDLL:
+    return C.CDLL(str(libpath))
 
 ndpointer = NC.ndpointer
 
@@ -229,11 +231,11 @@ def _safe_load_library(lib_name: str, ref_file: str):
                 lib = _load_lib_func(str(resolved_lib))
                 _verify_library_hash(lib_name, resolved_lib)
                 return lib
-            except ValueError:
+            except ValueError as err:
                 # Library path escapes allowed directory
                 raise ValueError(
                     f"Library path {resolved_lib} is outside allowed directory {lib_dir}"
-                )
+                ) from err
 
     # If not found, try the original load_library behavior as fallback
     # but wrap it with additional validation
@@ -249,10 +251,10 @@ def _safe_load_library(lib_name: str, ref_file: str):
                 resolved = loaded_path.resolve()
                 try:
                     resolved.relative_to(lib_dir)
-                except ValueError:
+                except ValueError as err:
                     raise ValueError(
                         f"Loaded library {resolved} is outside allowed directory {lib_dir}"
-                    )
+                    ) from err
         _verify_library_hash(lib_name, pathlib.Path(os.path.join(str(ref_path.parent), lib_name)))
         return lib
     except OSError as e:

@@ -1,19 +1,27 @@
-import numpy as np
-import pytest
 import ctypes as C
 import sys
 from pathlib import Path
+
+import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from geo_bsd.cvariogram import (
-        vector_t, ellipsoid_t, variogram_search_template_t,
-        hard_data_t, cont_point_set_t, float_data_t,
-        checked_create, _c_array, __strides,
-        Ellipsoid, VariogramSearchTemplate,
-        CalcVariograms, CalcVariogramsFromPointSet, CStackLayers,
-        cvar
+        CalcVariograms,
+        CalcVariogramsFromPointSet,
+        CStackLayers,
+        Ellipsoid,
+        VariogramSearchTemplate,
+        _c_array,
+        checked_create,
+        cont_point_set_t,
+        ellipsoid_t,
+        float_data_t,
+        hard_data_t,
+        variogram_search_template_t,
+        vector_t,
     )
     CVAR_AVAILABLE = True
 except Exception:
