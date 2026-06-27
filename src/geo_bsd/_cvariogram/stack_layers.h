@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <iostream>
+#include "api.h"
 
 void stack_layers(
 	std::vector<float_data_t> & thick_layers, 
@@ -10,6 +11,14 @@ void stack_layers(
 	int blank_value,
 	float_data_t & result)
 {
+	if (scalez <= 0.0f)
+	{
+		cvar_set_last_error("stack_layers: scalez must be > 0");
+		std::cerr << "[HPGL ERROR] stack_layers: scalez must be > 0, got "
+		          << scalez << std::endl;
+		return;
+	}
+
 	int nx = thick_layers[0].m_data_shape[0];
 	int ny = thick_layers[0].m_data_shape[1];
 
@@ -49,6 +58,8 @@ void stack_layers(
 				else
 				{
 					int k_start = static_cast<int>(ceil(cumulative_k[map_index] + (thick_layers[layer].m_data[map_index] / scalez)));
+					if (k_start < 0)
+						k_start = 0;
 					for(int k = k_start; k < nz; k++)
 					{
 						int cube_index = result.m_data_strides[0]*i + result.m_data_strides[1]*j + result.m_data_strides[2]*k;

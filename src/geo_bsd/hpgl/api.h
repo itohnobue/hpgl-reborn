@@ -170,7 +170,7 @@ hpgl_set_output_handler(int (*handler)(char * str, void * param), void * param);
 HPGL_API void 
 hpgl_set_progress_handler(int (*handler)(char * stage, int percentage, void * param), void * param);
 
-HPGL_API void hpgl_set_thread_num(int n_threads);
+HPGL_API int hpgl_set_thread_num(int n_threads);
 HPGL_API int hpgl_get_thread_num();
 
 HPGL_API int hpgl_read_inc_file_float(

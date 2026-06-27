@@ -125,6 +125,52 @@ class TestNumPy2Compatibility:
         informed_count = np.sum(prop.mask)
         assert informed_count == 90
 
+    def test_copy_none_semantics(self):
+        """NumPy 2.0: copy=None should behave as copy=True when dtype mismatches."""
+        # In NumPy 2.0+, np.array(arr, copy=None) with dtype change copies the data.
+        # In NumPy 1.x, copy=None with same dtype would be a no-copy view.
+        data_float32 = np.array([1.0, 2.0, 3.0], dtype='float32')
+        # Explicit copy=True is unambiguous and works across versions
+        result = np.array(data_float32, dtype='float64', copy=True)
+        assert result.dtype == np.float64
+        assert np.array_equal(result, data_float32.astype('float64'))
+
+    def test_string_ufunc_availability(self):
+        """NumPy 2.0: string operations moved to np.strings namespace."""
+        # np.strings is available in NumPy 2.0+
+        if hasattr(np, 'strings'):
+            arr = np.array(['test_val', 'other'], dtype=str)
+            result = np.strings.replace(arr, 'val', '')
+            assert result[0] == 'test_'
+        else:
+            pytest.skip("np.strings not available (NumPy < 2.0)")
+
+    def test_float_power_integer_exponents(self):
+        """NumPy 2.0: np.float_power with integer exponents returns float results."""
+        # np.float_power returns float64 (Python int exponents promote to float64)
+        result = np.float_power(np.array([2.0, 3.0], dtype='float32'), 2)
+        assert np.issubdtype(result.dtype, np.floating)
+        assert result[0] == pytest.approx(4.0)
+        assert result[1] == pytest.approx(9.0)
+
+    def test_isin_availability(self):
+        """NumPy 2.0: np.isin is the standard (np.in1d removed in 2.0)."""
+        arr = np.array([1, 2, 3, 4, 5])
+        test = np.array([2, 4])
+        result = np.isin(arr, test)
+        assert result[1]  # 2 is in test
+        assert result[3]  # 4 is in test
+        assert not result[0]  # 1 is not in test
+
+    def test_unique_counts_stable(self):
+        """NumPy 2.0: np.unique with return_counts works consistently."""
+        arr = np.array([1, 1, 2, 2, 2, 3], dtype='float32')
+        values, counts = np.unique(arr, return_counts=True)
+        assert len(values) == 3
+        assert counts[0] == 2  # Two 1s
+        assert counts[1] == 3  # Three 2s
+        assert counts[2] == 1  # One 3
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

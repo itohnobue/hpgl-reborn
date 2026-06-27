@@ -149,8 +149,24 @@ if /i "%BUILD_CONFIG%"=="Debug" set "DLL_SUFFIX=_d"
 
 REM Warn that Debug build may overwrite a Release DLL at the runtime location
 if /i "%BUILD_CONFIG%"=="Debug" (
-    echo WARNING: Debug build copies %DLL_SUFFIX%.dll over the runtime hpgl.dll
-    echo   If a Release build was previously copied, it will be overwritten.
+    echo.
+    echo ========================================
+    echo WARNING: Debug Build -- Runtime DLL Overwrite
+    echo ========================================
+    echo.
+    echo The Debug build will copy hpgl_d.dll and _cvariogram_d.dll
+    echo to the runtime location ^(src\geo_bsd\^) as hpgl.dll and _cvariogram.dll.
+    echo This WILL overwrite any previously built Release DLLs at that location.
+    echo.
+    if not defined CI (
+        set /p CONFIRM="Continue with Debug build and overwrite runtime DLLs? [y/N]: "
+        if /i not "!CONFIRM!"=="y" (
+            echo Build cancelled.
+            endlocal
+            exit /b 0
+        )
+        echo.
+    )
 )
 
 set "DLL_COPY_FAILED=0"

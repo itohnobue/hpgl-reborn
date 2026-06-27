@@ -382,7 +382,7 @@ _hpgl_so.hpgl_indicator_kriging.argtypes = [
     C.POINTER(_HPGL_IK_PARAMS),
     C.c_int]
 
-_hpgl_so.hpgl_set_thread_num.restype = None
+_hpgl_so.hpgl_set_thread_num.restype = C.c_int
 _hpgl_so.hpgl_set_thread_num.argtypes = [C.c_int]
 
 _hpgl_so.hpgl_get_thread_num.restype = C.c_int

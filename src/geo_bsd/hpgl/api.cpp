@@ -17,17 +17,7 @@
 #include "hpgl_exception.h"
 #include "output.h"
 
-static void init_cov_param(hpgl::covariance_param_t * cp, hpgl_cov_params_t * params)
-{
-	for (int i = 0; i < 3; ++i)
-	{
-		cp->m_ranges[i] = params->m_ranges[i];
-		cp->m_angles[i] = params->m_angles[i];
-	}
-	cp->m_sill = params->m_sill;
-	cp->m_nugget = params->m_nugget;
-	cp->m_covariance_type = (hpgl::covariance_type_t) params->m_covariance_type;
-}
+
 
 /// Initializes the common covariance fields shared by ok_params_t, sk_params_t,
 /// median_ik_params, etc. from a C API params struct pointer.
@@ -125,7 +115,7 @@ HPGL_API char * hpgl_get_last_exception_message()
 	}
 }
 
-HPGL_API void hpgl_set_thread_num(int n_threads)
+HPGL_API int hpgl_set_thread_num(int n_threads)
 {
 	try
 	{
@@ -134,11 +124,14 @@ HPGL_API void hpgl_set_thread_num(int n_threads)
 			std::ostringstream oss;
 			oss << "hpgl_set_thread_num: invalid thread count " << n_threads;
 			hpgl::set_last_exception_message(oss.str().c_str());
+			return -1;
 		}
+		return 0;
 	}
 	catch (const std::exception & ex)
 	{
 		handle_exception(ex);
+		return -1;
 	}
 }
 
@@ -630,6 +623,12 @@ hpgl_indicator_kriging(
 		throw hpgl_exception("hpgl_indicator_kriging",
 			"indicator_count mismatch with in_data->m_indicator_count");
 
+	// Defense-in-depth: indicator_index_t is unsigned char (max 255).
+	// indicator_count > 255 causes wrap-around in cdf_utils.cpp most_probable_category loop.
+	if (indicator_count > 255)
+		throw hpgl_exception("hpgl_indicator_kriging",
+			"indicator_count exceeds unsigned char max (255)");
+
 	int size = get_shape_volume(&in_data->m_shape);
 	validate_shape_volume_or_throw(size, "indicator_kriging input");
 	int size2 = get_shape_volume(&out_data->m_shape);
@@ -1036,8 +1035,8 @@ hpgl_simple_cokriging_mark2(
 
 		covariance_param_t primary_cp, secondary_cp;
 
-		init_cov_param(&primary_cp, &params->m_primary_cov_params);
-		init_cov_param(&secondary_cp, &params->m_secondary_cov_params);
+		init_cov_params_base(primary_cp, &params->m_primary_cov_params);
+		init_cov_params_base(secondary_cp, &params->m_secondary_cov_params);
 
 		neighbourhood_param_t np;
 		np.m_max_neighbours = params->m_max_neighbours;

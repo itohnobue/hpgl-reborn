@@ -73,7 +73,6 @@ namespace hpgl
 				fprintf(stderr, "HPGL FATAL: precalculated_covariance: volume exceeds INT_MAX\n");
 				abort();
 			}
-			m_covariances.resize(size);	
 			m_covariances.resize(size);
 			for (int z = 0; z < sz; ++z)
 				for (int y = 0; y < sy; ++y)

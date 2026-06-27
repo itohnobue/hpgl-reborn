@@ -1,6 +1,7 @@
 #ifndef __SGS_PARAMS_H__DD8E93BC_D7B4_4C04_A0AC_6FD6AF563A4C__
 #define __SGS_PARAMS_H__DD8E93BC_D7B4_4C04_A0AC_6FD6AF563A4C__
 
+#include <stdint.h>
 #include "sk_params.h"
 
 namespace hpgl
@@ -15,7 +16,7 @@ namespace hpgl
 	public:
 		sgs_params_t();
 		kriging_kind_t m_kriging_kind;
-		long int m_seed;
+		int64_t m_seed;
 		mean_kind_t m_mean_kind;
 		mean_t * m_lvm;		
 		int m_min_neighbours;

@@ -5,7 +5,7 @@
 import logging
 
 import numpy as np
-from numpy import exp, pi, sqrt, zeros
+from numpy import exp, pi, sqrt
 
 from .cdf import calc_cdf
 from .geo import simple_kriging
@@ -17,11 +17,14 @@ logger = logging.getLogger(__name__)
 def pseudo_gaussian_transform(prop, pk_prop, rng=None):
     if rng is None:
         rng = np.random.RandomState()
+    # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
+    prop_flat = prop.data.ravel(order='K')
+    pk_flat = pk_prop.data.ravel(order='K')
     for i in range(pk_prop.data.size):
-        if (prop.data.flat[i] == 0):
-            prop.data.flat[i] = rng.uniform(0.0, pk_prop.data.flat[i])
-        if (prop.data.flat[i] == 1):
-            prop.data.flat[i] = rng.uniform(pk_prop.data.flat[i], 1.0)
+        if (prop_flat[i] == 0):
+            prop_flat[i] = rng.uniform(0.0, pk_flat[i])
+        if (prop_flat[i] == 1):
+            prop_flat[i] = rng.uniform(pk_flat[i], 1.0)
     return prop
 
 def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
@@ -52,11 +55,11 @@ def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
     if std_dev <= 0:
         raise ValueError(f"std_dev must be positive, got {std_dev}")
 
-    values = zeros(pk_prop.data.size, dtype=float)
-    for i in range(pk_prop.data.size):
-        values[i] = 1./(std_dev*sqrt(2*pi))*exp(-(1./2)*((pk_prop.data.flat[i]-mean)/std_dev)*((pk_prop.data.flat[i]-mean)/std_dev))
-    for i in range(pk_prop.data.size):
-        pk_prop.data.flat[i] = values[i]
+    # Vectorized Gaussian PDF computation.
+    # Uses ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
+    pk_flat = pk_prop.data.ravel(order='K')
+    normalized = (pk_flat - mean) / std_dev
+    pk_flat[:] = 1.0 / (std_dev * sqrt(2 * pi)) * exp(-0.5 * normalized * normalized)
     return pk_prop
 
 def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
@@ -140,10 +143,13 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     # if sgs_result(u) < tk_prop(u) -> sgs_result(u) = 0
 
     logger.info("Truncation.")
+    # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
+    prop1_flat = prop1.data.ravel(order='K')
+    tk_flat = tk_prop.data.ravel(order='K')
     for i in range(prop.data.size):
-        if (prop1.data.flat[i] >= tk_prop.data.flat[i]):
-            prop1.data.flat[i] = 1
-        elif (prop1.data.flat[i] < tk_prop.data.flat[i]):
-            prop1.data.flat[i] = 0
+        if (prop1_flat[i] >= tk_flat[i]):
+            prop1_flat[i] = 1
+        elif (prop1_flat[i] < tk_flat[i]):
+            prop1_flat[i] = 0
     logger.info("Done.")
     return prop1

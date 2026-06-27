@@ -118,19 +118,6 @@ namespace hpgl
 	{
 		return rect_3d_t<T>(overlap(rect1.x, rect2.x), overlap(rect1.y, rect2.y), overlap(rect1.z, rect2.z));
 	}	
-
-	template<typename iterator_t, typename T>
-	rect_3d_t<T> bounding_box_from_zerobased_rects(iterator_t it1, iterator_t it2)
-	{
-		iterator_t it = it1;
-		int z[] = {0,0,0};
-		rect_3d_t<T> result(z, *it);
-		while (++it != it2)
-		{
-			result = bounding_box(result, rect_3d_t<T>(z, *it));
-		}
-		return result;
-	}
 	
 }
 

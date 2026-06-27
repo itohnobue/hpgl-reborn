@@ -99,6 +99,15 @@ class TestTVVariogramSearchTemplate:
         assert templ.TolDistance == 1.0
         assert templ.NumLags == 10
 
+    def test_num_lags_exceeds_max_raises(self):
+        """Test that NumLags > MAX_NUM_LAGS raises ValueError."""
+        ell = TVEllipsoid(R1=10, R2=5, R3=3)
+        with pytest.raises(ValueError, match="NumLags .* exceeds maximum"):
+            TVVariogramSearchTemplate(
+                LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
+                NumLags=20000, Ellipsoid=ell
+            )
+
     def test_first_lag_distance_default(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(

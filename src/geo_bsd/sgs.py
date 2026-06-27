@@ -9,15 +9,14 @@ from .cdf import CdfData
 from .geo import (
     CovarianceModel,
     __checked_create,
-    _check_hpgl_error,
     _clone_prop,
     _create_hpgl_cont_masked_array,
     _create_hpgl_float_array,
     _create_hpgl_ubyte_array,
     _empty_clone,
+    _hpgl_error_guard,
     _require_cont_data,
     _require_ind_data,
-    _snapshot_hpgl_error,
     accepts_tuple,
 )
 from .hpgl_wrap import _HPGL_KRIGING_KIND, _HPGL_SGS_PARAMS, _hpgl_so, hpgl_non_parametric_cdf_t
@@ -175,27 +174,26 @@ CriticalValidationError
     if mean is None or numpy.isscalar(mean):
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
         _c_mean = C.c_double(mean) if mean is not None else None
-        _snapshot_hpgl_error()
-        _hpgl_so.hpgl_sgs_simulation(
-            C.byref(_cont_marr),
-            C.byref(sgsp),
-            hpgl_cdf,
-            C.byref(_c_mean) if _c_mean is not None else None,
-            hpgl_mask
-            )
-        _check_hpgl_error("sgs_simulation")
+        with _hpgl_error_guard("sgs_simulation"):
+            _hpgl_so.hpgl_sgs_simulation(
+                C.byref(_cont_marr),
+                C.byref(sgsp),
+                hpgl_cdf,
+                C.byref(_c_mean) if _c_mean is not None else None,
+                hpgl_mask
+                )
 
 
     else:
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
+        GridValidator.validate_array_size(mean, (grid.x, grid.y, grid.z))
         _float_arr = _create_hpgl_float_array(mean, grid)
-        _snapshot_hpgl_error()
-        _hpgl_so.hpgl_sgs_lvm_simulation(
-            C.byref(_cont_marr),
-            C.byref(sgsp),
-            hpgl_cdf,
-            C.byref(_float_arr),
-            hpgl_mask)
-        _check_hpgl_error("sgs_lvm_simulation")
+        with _hpgl_error_guard("sgs_lvm_simulation"):
+            _hpgl_so.hpgl_sgs_lvm_simulation(
+                C.byref(_cont_marr),
+                C.byref(sgsp),
+                hpgl_cdf,
+                C.byref(_float_arr),
+                hpgl_mask)
 
     return out_prop

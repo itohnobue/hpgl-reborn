@@ -343,6 +343,8 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
+    else:
+        return zeros((VariogramSearchTemplate.NumLags, 1)), LagDistance
 
     Index = array(range(0, len(PX)))
     for i in range(len(PX)):
@@ -430,6 +432,8 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
         Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
+    else:
+        return zeros((VariogramSearchTemplate.NumLags, 1)), LagDistance
 
     Index = array(range(0, len(PI)))
     for i in range(len(PI)):
@@ -496,6 +500,8 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
         Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
+    else:
+        return zeros((VariogramSearchTemplate.NumLags, 1)), LagDistance
 
     GI, GJ, GK = mgrid[0:NI, 0:NJ, 0:NK]
 

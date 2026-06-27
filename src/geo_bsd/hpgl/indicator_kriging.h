@@ -48,9 +48,12 @@ namespace hpgl
 
 			// Step 2: Iterative averaging until monotonic
 			// A single pass may not fix cascading violations, so repeat until
-			// no inversions remain (max iterations = probs.size() ensures termination)
+			// no inversions remain. Using 2× probs.size() ensures convergence
+			// even for small category counts where cascading violations require
+			// multiple passes (worst case: alternating violations propagate
+			// one position per pass).
 			bool changed = true;
-			for (size_t iter = 0; iter < probs.size() && changed; ++iter)
+			for (size_t iter = 0; iter < probs.size() * 2 && changed; ++iter)
 			{
 				changed = false;
 				for (size_t i = 0; i + 1 < probs.size(); ++i)
@@ -123,6 +126,8 @@ namespace hpgl
 
 		add_defined_cells(nblookups, input_property);	
 
+		typedef typename nl_t::coord_t coord_t;
+
 		std::vector<indicator_array_adapter_t> ind_props;
 		for (int i = 0; i < params.m_category_count; ++i)
 		{
@@ -138,6 +143,10 @@ namespace hpgl
 		{
 			int local_lap_count = 0;
 			std::vector<indicator_probability_t> probs;
+			// Per-thread workspace: eliminates 5 heap allocations per
+			// (node × indicator) pair. Vectors are re-filled on each
+			// kriging_interpolation_ws call — same memory, zero heap churn.
+			kriging_ws_t<indicator_value_t, coord_t> ws;
 			#pragma omp for schedule(dynamic)
 			for (node_index_t node_idx = 0;	node_idx < size; ++node_idx)
 			{
@@ -146,7 +155,7 @@ namespace hpgl
 				{
 					indicator_probability_t prob;
 
-					ki_result_t ki_result = kriging_interpolation(ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(input_property), node_idx, covariances[idx], mps[idx], nblookups[idx], sk_weight_calculator_t(), prob);
+					ki_result_t ki_result = kriging_interpolation_ws(ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(input_property), node_idx, covariances[idx], mps[idx], nblookups[idx], sk_weight_calculator_t(), prob, ws);
 
 					if (ki_result != ki_result_t::KI_SUCCESS)
 					{

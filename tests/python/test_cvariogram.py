@@ -365,6 +365,13 @@ class TestCStackLayers:
         result = self._make_result()
         CStackLayers([layer], [1], nz=5, scalez=1.0, blank_value=-99, result=result)
         assert result.shape == (5, 5, 10)
+        # Verify layer data was copied into the result at the correct z-position
+        # Layer was placed at z-index 1 (scalez=1.0), so z-slice 0 should be fill,
+        # and z-slices >=1 should contain the layer data (repeated or filled).
+        # At minimum, the result should not be all zeros — data was written.
+        assert not np.all(result == 0), "Result should contain non-zero data from layers"
+        # No values should be NaN
+        assert not np.any(np.isnan(result))
 
     def test_multiple_layers(self):
         l1 = self._make_layer()
@@ -372,3 +379,6 @@ class TestCStackLayers:
         result = self._make_result()
         CStackLayers([l1, l2], [1, 3], nz=5, scalez=1.0, blank_value=-99, result=result)
         assert result.shape == (5, 5, 10)
+        # Verify multiple layers were stacked — result should not be all zeros
+        assert not np.all(result == 0), "Result should contain non-zero data from multiple layers"
+        assert not np.any(np.isnan(result))

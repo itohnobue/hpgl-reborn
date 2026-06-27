@@ -9,7 +9,6 @@ namespace hpgl
 	{
 	public:
 		neighbourhood_param_t();
-		neighbourhood_param_t(const sugarbox_search_ellipsoid_t & radiuses, int max_neighbours);
 		sugarbox_search_ellipsoid_t m_radiuses;
 		size_t m_max_neighbours;
 		// NOTE: radiuses are stored as doubles (search_ellipsoid_t) but the public

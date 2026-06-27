@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <cassert>
 #include <iostream>
-#include "hpgl_exception.h"
 
  //#include "bos_report.h"
 
@@ -84,106 +83,9 @@ namespace blue_sky {
 		}
 
 		asserter*
-			asserter::warning()
-		{
-			trace_type = TRACE_TYPE::TRACE_TYPE_WARNING;
-			return this;
-		}
-		asserter*
-			asserter::debug()
-		{
-			trace_type = TRACE_TYPE::TRACE_TYPE_DEBUG;
-			return this;
-		}
-		asserter*
-			asserter::error()
-		{
-			trace_type = TRACE_TYPE::TRACE_TYPE_ERROR;
-			return this;
-		}
-		asserter*
-			asserter::fatal()
-		{
-			trace_type = TRACE_TYPE::TRACE_TYPE_FATAL;
-			return this;
-		}
-
-		asserter*
 			assert_factory::make(bool b, const char* file, int line, const char* cond_str)
 		{
 			return new asserter(b, file, line, cond_str);
-		}
-
-		void trace_warning(asserter* pa)
-		{
-			//    BOSERR << bs_lock << "Cond: " << pa->cond << "\tFile: " << pa->file << "\tLine: " << pa->line << "\tExpression: " << pa->cond_s << "\nValues: " << pa->var_list << bs_end;
-		}
-
-		trace_wrapper::trace_wrapper(asserter* pa)
-		{
-			if (!pa)
-				return;
-
-			struct helper
-			{
-				helper(asserter* a)
-					: a(a)
-				{
-
-				}
-
-				~helper()
-				{
-					delete a;
-				}
-
-				asserter* a;
-			};
-
-			helper ha(pa);
-
-			switch (pa->trace_type)
-			{
-			case blue_sky::bs_assert::asserter::TRACE_TYPE::TRACE_TYPE_WARNING:
-				if (!pa->cond)
-				{
-					trace_warning(pa);
-				}
-				break;
-			case blue_sky::bs_assert::asserter::TRACE_TYPE::TRACE_TYPE_DEBUG:
-				if (!pa->handle())
-				{
-					BREAK_HERE;
-				}
-				break;
-			case blue_sky::bs_assert::asserter::TRACE_TYPE::TRACE_TYPE_ERROR:
-				if (!pa->cond)
-				{
-					trace_warning(pa);
-#ifdef _DEBUG
-					pa->cond = false;
-					if (!pa->handle())
-					{
-						BREAK_HERE;
-					}
-#endif
-					throw hpgl::hpgl_exception(pa->cond_s, pa->var_list.empty() ? "" : pa->var_list.c_str());
-				}
-				break;
-			case blue_sky::bs_assert::asserter::TRACE_TYPE::TRACE_TYPE_FATAL:
-				if (!pa->cond)
-				{
-					trace_warning(pa);
-#ifdef _DEBUG
-					pa->cond = false;
-					if (!pa->handle())
-					{
-						BREAK_HERE;
-					}
-#endif
-					abort();
-				}
-			}
 		}
 
 	} // namespace bs_assert

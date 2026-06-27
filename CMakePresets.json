@@ -83,6 +83,26 @@
     {
       "name": "debug",
       "configurePreset": "debug"
+    },
+    {
+      "name": "release-mkl",
+      "displayName": "Build Release with MKL",
+      "configurePreset": "release-mkl"
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Build Windows (MSVC)",
+      "configurePreset": "windows-msvc"
+    },
+    {
+      "name": "linux-ninja",
+      "displayName": "Build Linux (Ninja)",
+      "configurePreset": "linux-ninja"
+    },
+    {
+      "name": "macos-clang",
+      "displayName": "Build macOS (Clang)",
+      "configurePreset": "macos-clang"
     }
   ],
   "testPresets": [
@@ -93,6 +113,26 @@
     {
       "name": "debug",
       "configurePreset": "debug"
+    },
+    {
+      "name": "release-mkl",
+      "displayName": "Test Release with MKL",
+      "configurePreset": "release-mkl"
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Test Windows (MSVC)",
+      "configurePreset": "windows-msvc"
+    },
+    {
+      "name": "linux-ninja",
+      "displayName": "Test Linux (Ninja)",
+      "configurePreset": "linux-ninja"
+    },
+    {
+      "name": "macos-clang",
+      "displayName": "Test macOS (Clang)",
+      "configurePreset": "macos-clang"
     }
   ]
 }

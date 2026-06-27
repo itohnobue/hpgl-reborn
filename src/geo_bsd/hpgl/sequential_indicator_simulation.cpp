@@ -77,8 +77,6 @@ void do_sis(
 				int idx = 0;
 
 				double prob;
-				std::vector<node_index_t> indices;
-				std::vector<kriging_weight_t> weights;				
 				
 				ki_result_t ki_result = kriging_interpolation(
 					ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(property), 
@@ -98,8 +96,6 @@ void do_sis(
 			for (indicator_index_t idx = 0; idx < params.m_category_count; ++idx)
 			{
 				double prob;
-				std::vector<node_index_t> indices;
-				std::vector<kriging_weight_t> weights;				
 				
 				ki_result_t ki_result = kriging_interpolation(
 					ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(property), 
@@ -116,12 +112,18 @@ void do_sis(
 		// before sampling. Mirrors the correct_order_relations() call in
 		// do_indicator_kriging (indicator_kriging.h:156).
 		// NOTE: Only applicable for multi-category (3+) SIS where indicator
-		// probabilities are cumulative [P(0), P(0or1), P(0or1or2), ...].
+		// probabilities are cumulative [P(0), P(0or1), P(0or1or2), ..., 1.0].
 		// For 2-category SIS, probabilities are complementary [prob, 1-prob],
 		// not cumulative — monotonicity correction would destroy the distribution.
 		if (params.m_category_count > 2)
 		{
 			detail::correct_order_relations(probs);
+			// Convert cumulative CDF values to class-level probabilities for
+			// the PMF sampler. probs currently holds [P(Z≤0), P(Z≤1), ..., 1.0];
+			// backward differencing produces [p_0, p_1, ..., p_{K-1}] where
+			// p_0 = P(Z≤0) and p_i = P(Z≤z_i) - P(Z≤z_{i-1}) for i > 0.
+			for (size_t i = probs.size() - 1; i > 0; --i)
+				probs[i] -= probs[i - 1];
 		}
 		property.set_at(node, sample(gen, probs));
 	}

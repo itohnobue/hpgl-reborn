@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+import contextlib
 import ctypes as C
+import functools
 import logging
 import os
 import threading
@@ -43,6 +45,37 @@ from .validation import (
 # The lock synchronizes access to thread-local snapshot storage.
 _error_local = threading.local()
 _error_snapshot_lock = threading.Lock()
+
+# Serializes C++ HPGL calls with error checking to prevent cross-thread
+# error races. The C++ error state is global (not thread_local), so
+# concurrent calls from different threads can corrupt error reporting.
+# This lock ensures only one thread is in the snapshot→C++ call→check
+# window at a time. This is a Python-side mitigation; the proper fix
+# requires making the C++ error state thread_local.
+_hpgl_call_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _hpgl_error_guard(context=""):
+    """Serialize a C++ HPGL call with error checking to prevent cross-thread races.
+
+    Usage::
+
+        with _hpgl_error_guard("ordinary_kriging"):
+            _hpgl_so.hpgl_ordinary_kriging(...)
+
+    Acquires ``_hpgl_call_lock`` before the snapshot, holds it across the
+    C++ call window, and releases it in ``finally``.  Error checking
+    happens inside the ``try`` block so that a ``RuntimeError`` from a
+    new C++ error does not prevent lock release.
+    """
+    _hpgl_call_lock.acquire()
+    _snapshot_hpgl_error()
+    try:
+        yield
+        _check_hpgl_error(context)
+    finally:
+        _hpgl_call_lock.release()
 
 logger = logging.getLogger(__name__)
 
@@ -655,6 +688,7 @@ def accepts_tuple(arg_name, arg_pos):
             return t
 
     def decorator(f):
+        @functools.wraps(f)
         def new_f(*args, **kargs):
             if arg_name in kargs:
                 kargs[arg_name] = tuple_to_prop(kargs[arg_name])
@@ -666,7 +700,6 @@ def accepts_tuple(arg_name, arg_pos):
                 )
             return f(*args, **kargs)
 
-        new_f.__name__ = f.__name__
         return new_f
 
     return decorator
@@ -726,7 +759,6 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
         )
         # Security: Keep array references to prevent use-after-free
         marr._array_refs = (prop.data, prop.mask)
-        _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_inc_file_float(
             safe_path.encode("utf-8"), C.byref(marr), undefined_value, prop_name.encode("utf-8")
         )
@@ -746,7 +778,6 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
         )
         # Security: Keep array references to prevent use-after-free
         marr._array_refs = (prop.data, prop.mask, ind_arr)
-        _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_inc_file_byte(
             safe_path.encode("utf-8"),
             C.byref(marr),
@@ -778,7 +809,6 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
         )
 
     if isinstance(prop, ContProperty):
-        _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_gslib_cont_property(
             _create_hpgl_cont_masked_array(prop, None),
             safe_path.encode("utf-8"),
@@ -791,7 +821,6 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
                 + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
             )
     else:
-        _snapshot_hpgl_error()
         rc = _hpgl_so.hpgl_write_gslib_byte_property(
             _create_hpgl_ind_masked_array(prop, None),
             safe_path.encode("utf-8"),
@@ -886,7 +915,6 @@ def read_inc_file_float(filename, undefined_value, size):
     data = numpy.zeros(total_elements, dtype="float32", order="F")
     mask = numpy.zeros(total_elements, dtype="uint8", order="F")
 
-    _snapshot_hpgl_error()
     rc = _hpgl_so.hpgl_read_inc_file_float(
         safe_path.encode("utf-8"), undefined_value, total_elements, data, mask
     )
@@ -918,7 +946,6 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
         )
     data = numpy.zeros(total_elements, dtype="uint8", order="F")
     mask = numpy.zeros(total_elements, dtype="uint8", order="F")
-    _snapshot_hpgl_error()
     rc = _hpgl_so.hpgl_read_inc_file_byte(
         safe_path.encode("utf-8"),
         undefined_value,
@@ -1087,13 +1114,12 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
         max_neighbours=max_neighbours,
     )
 
-    _snapshot_hpgl_error()
-    _hpgl_so.hpgl_ordinary_kriging(
-        _create_hpgl_cont_masked_array(prop, grid),
-        C.byref(okp),
-        _create_hpgl_cont_masked_array(out_prop, grid),
-    )
-    _check_hpgl_error("ordinary_kriging")
+    with _hpgl_error_guard("ordinary_kriging"):
+        _hpgl_so.hpgl_ordinary_kriging(
+            _create_hpgl_cont_masked_array(prop, grid),
+            C.byref(okp),
+            _create_hpgl_cont_masked_array(out_prop, grid),
+        )
 
     return out_prop
 
@@ -1163,11 +1189,10 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
 
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
-    _snapshot_hpgl_error()
-    _hpgl_so.hpgl_simple_kriging(
-        prop.data, prop.mask, C.byref(sh), C.byref(skp), out_prop[0], out_prop[1], C.byref(sh)
-    )
-    _check_hpgl_error("simple_kriging")
+    with _hpgl_error_guard("simple_kriging"):
+        _hpgl_so.hpgl_simple_kriging(
+            prop.data, prop.mask, C.byref(sh), C.byref(skp), out_prop[0], out_prop[1], C.byref(sh)
+        )
 
     return out_prop
 
@@ -1251,19 +1276,18 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
-    _snapshot_hpgl_error()
-    _hpgl_so.hpgl_lvm_kriging(
-        prop.data,
-        prop.mask,
-        C.byref(sh),
-        mean_data,
-        C.byref(sh),
-        C.byref(okp),
-        out_prop.data,
-        out_prop.mask,
-        C.byref(sh),
-    )
-    _check_hpgl_error("lvm_kriging")
+    with _hpgl_error_guard("lvm_kriging"):
+        _hpgl_so.hpgl_lvm_kriging(
+            prop.data,
+            prop.mask,
+            C.byref(sh),
+            mean_data,
+            C.byref(sh),
+            C.byref(okp),
+            out_prop.data,
+            out_prop.mask,
+            C.byref(sh),
+        )
 
     return out_prop
 
@@ -1305,9 +1329,8 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
 
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
-    _snapshot_hpgl_error()
-    _hpgl_so.hpgl_median_ik(C.byref(inp), C.byref(miksp), C.byref(outp))
-    _check_hpgl_error("median_ik")
+    with _hpgl_error_guard("median_ik"):
+        _hpgl_so.hpgl_median_ik(C.byref(inp), C.byref(miksp), C.byref(outp))
     return out_prop
 
 
@@ -1346,6 +1369,7 @@ def indicator_kriging(prop, grid, data, marginal_probs):
         )
     for i, p in enumerate(marginal_probs):
         ParameterValidator.validate_probability(p, f"marginal_probs[{i}]")
+    ParameterValidator.validate_probability_sum(marginal_probs)
 
     # Validate per-indicator parameters
     for i, ikd in enumerate(data):
@@ -1368,14 +1392,13 @@ def indicator_kriging(prop, grid, data, marginal_probs):
             data[0]["cov_model"],
         )
     out_prop = _clone_prop(prop)
-    _snapshot_hpgl_error()
-    _hpgl_so.hpgl_indicator_kriging(
-        C.byref(_create_hpgl_ind_masked_array(prop, grid)),
-        C.byref(_create_hpgl_ind_masked_array(out_prop, grid)),
-        __create_hpgl_ik_params(data, len(data), False, marginal_probs),
-        len(data),
-    )
-    _check_hpgl_error("indicator_kriging")
+    with _hpgl_error_guard("indicator_kriging"):
+        _hpgl_so.hpgl_indicator_kriging(
+            C.byref(_create_hpgl_ind_masked_array(prop, grid)),
+            C.byref(_create_hpgl_ind_masked_array(out_prop, grid)),
+            __create_hpgl_ik_params(data, len(data), False, marginal_probs),
+            len(data),
+        )
 
     return out_prop
 
@@ -1409,31 +1432,47 @@ def simple_cokriging_markI(
     ParameterValidator.validate_correlation_coef(correlation_coef)
     ParameterValidator.validate_variance(secondary_variance, "secondary_variance")
 
+    # Validate secondary_data
+    if not isinstance(secondary_data, ContProperty):
+        raise TypeError(
+            f"simple_cokriging_markI: secondary_data must be a ContProperty, "
+            f"got {type(secondary_data).__name__}"
+        )
+    sec_size = secondary_data.data.size
+    expected_size = grid.x * grid.y * grid.z
+    if sec_size == 0:
+        raise ValueError("simple_cokriging_markI: secondary_data.data is empty")
+    if sec_size != expected_size:
+        raise ValueError(
+            f"simple_cokriging_markI: secondary_data size {sec_size} "
+            f"does not match grid size {expected_size} "
+            f"({grid.x}x{grid.y}x{grid.z})"
+        )
+
     out_prop = _clone_prop(prop)
 
-    _snapshot_hpgl_error()
-    _hpgl_so.hpgl_simple_cokriging_mark1(
-        C.byref(_create_hpgl_cont_masked_array(prop, grid)),
-        C.byref(_create_hpgl_cont_masked_array(secondary_data, grid)),
-        C.byref(
-            __checked_create(
-                __hpgl_cockriging_m1_params_t,
-                covariance_type=cov_model.type,
-                ranges=_c_array(C.c_double, 3, cov_model.ranges),
-                angles=_c_array(C.c_double, 3, cov_model.angles),
-                sill=cov_model.sill,
-                nugget=cov_model.nugget,
-                radiuses=_c_array(C.c_int, 3, radiuses),
-                max_neighbours=max_neighbours,
-                primary_mean=primary_mean,
-                secondary_mean=secondary_mean,
-                secondary_variance=secondary_variance,
-                correlation_coef=correlation_coef,
-            )
-        ),
-        C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
-    )
-    _check_hpgl_error("simple_cokriging_markI")
+    with _hpgl_error_guard("simple_cokriging_markI"):
+        _hpgl_so.hpgl_simple_cokriging_mark1(
+            C.byref(_create_hpgl_cont_masked_array(prop, grid)),
+            C.byref(_create_hpgl_cont_masked_array(secondary_data, grid)),
+            C.byref(
+                __checked_create(
+                    __hpgl_cockriging_m1_params_t,
+                    covariance_type=cov_model.type,
+                    ranges=_c_array(C.c_double, 3, cov_model.ranges),
+                    angles=_c_array(C.c_double, 3, cov_model.angles),
+                    sill=cov_model.sill,
+                    nugget=cov_model.nugget,
+                    radiuses=_c_array(C.c_int, 3, radiuses),
+                    max_neighbours=max_neighbours,
+                    primary_mean=primary_mean,
+                    secondary_mean=secondary_mean,
+                    secondary_variance=secondary_variance,
+                    correlation_coef=correlation_coef,
+                )
+            ),
+            C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
+        )
     return out_prop
 
 
@@ -1474,39 +1513,38 @@ def simple_cokriging_markII(
     pcp = primary_data["cov_model"]
     scp = secondary_data["cov_model"]
 
-    _snapshot_hpgl_error()
-    _hpgl_so.hpgl_simple_cokriging_mark2(
-        C.byref(_create_hpgl_cont_masked_array(primary_data["data"], grid)),
-        C.byref(_create_hpgl_cont_masked_array(secondary_data["data"], grid)),
-        C.byref(
-            __checked_create(
-                __hpgl_cockriging_m2_params_t,
-                primary_cov_params=__checked_create(
-                    __hpgl_cov_params_t,
-                    covariance_type=pcp.type,
-                    ranges=_c_array(C.c_double, 3, pcp.ranges),
-                    angles=_c_array(C.c_double, 3, pcp.angles),
-                    sill=pcp.sill,
-                    nugget=pcp.nugget,
-                ),
-                secondary_cov_params=__checked_create(
-                    __hpgl_cov_params_t,
-                    covariance_type=scp.type,
-                    ranges=_c_array(C.c_double, 3, scp.ranges),
-                    angles=_c_array(C.c_double, 3, scp.angles),
-                    sill=scp.sill,
-                    nugget=scp.nugget,
-                ),
-                radiuses=_c_array(C.c_int, 3, radiuses),
-                max_neighbours=max_neighbours,
-                primary_mean=primary_data["mean"],
-                secondary_mean=secondary_data["mean"],
-                correlation_coef=correlation_coef,
-            )
-        ),
-        C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
-    )
-    _check_hpgl_error("simple_cokriging_markII")
+    with _hpgl_error_guard("simple_cokriging_markII"):
+        _hpgl_so.hpgl_simple_cokriging_mark2(
+            C.byref(_create_hpgl_cont_masked_array(primary_data["data"], grid)),
+            C.byref(_create_hpgl_cont_masked_array(secondary_data["data"], grid)),
+            C.byref(
+                __checked_create(
+                    __hpgl_cockriging_m2_params_t,
+                    primary_cov_params=__checked_create(
+                        __hpgl_cov_params_t,
+                        covariance_type=pcp.type,
+                        ranges=_c_array(C.c_double, 3, pcp.ranges),
+                        angles=_c_array(C.c_double, 3, pcp.angles),
+                        sill=pcp.sill,
+                        nugget=pcp.nugget,
+                    ),
+                    secondary_cov_params=__checked_create(
+                        __hpgl_cov_params_t,
+                        covariance_type=scp.type,
+                        ranges=_c_array(C.c_double, 3, scp.ranges),
+                        angles=_c_array(C.c_double, 3, scp.angles),
+                        sill=scp.sill,
+                        nugget=scp.nugget,
+                    ),
+                    radiuses=_c_array(C.c_int, 3, radiuses),
+                    max_neighbours=max_neighbours,
+                    primary_mean=primary_data["mean"],
+                    secondary_mean=secondary_data["mean"],
+                    correlation_coef=correlation_coef,
+                )
+            ),
+            C.byref(_create_hpgl_cont_masked_array(out_prop, grid)),
+        )
     return out_prop
 
 
@@ -1564,7 +1602,6 @@ def simple_kriging_weights(
 
     weights = numpy.array([0] * len(n_x), dtype="float32")
 
-    _snapshot_hpgl_error()
     rc = _hpgl_so.hpgl_simple_kriging_weights(
         _c_array(C.c_float, 3, center_point),
         numpy.array(n_x, dtype="float32"),

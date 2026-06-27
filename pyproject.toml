@@ -150,6 +150,13 @@ exclude = [
     "**/*.dylib",
     "**/*.dll",
     "**/*.pyd",
+    # Exclude compiler/linker intermediate files
+    "**/*.obj",
+    "**/*.o",
+    "**/*.lib",
+    "**/*.exp",
+    "**/*.pdb",
+    "**/*.ilk",
 ]
 
 [tool.cibuildwheel]
@@ -174,7 +181,7 @@ before-all = "yum install -y openblas-devel || { apt-get update && apt-get insta
 [tool.cibuildwheel.macos]
 # Build for both x86_64 and arm64 (Apple Silicon)
 archs = ["x86_64", "arm64"]
-environment = { MACOSX_DEPLOYMENT_TARGET = "10.15" }
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
 before-all = "brew install openblas libomp cmake && export OpenMP_ROOT=$(brew --prefix libomp) && export LDFLAGS=\"-L$(brew --prefix openblas)/lib -L$(brew --prefix libomp)/lib\" && export CPPFLAGS=\"-I$(brew --prefix openblas)/include -I$(brew --prefix libomp)/include\""
 
 [tool.cibuildwheel.windows]

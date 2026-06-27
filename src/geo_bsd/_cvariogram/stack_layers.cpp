@@ -17,6 +17,7 @@ cvar_stack_layers(
 {
 	if (thick_layers == nullptr)
 	{
+		cvar_set_last_error("cvar_stack_layers: thick_layers is null");
 		fprintf(stderr,
 			"[HPGL ERROR] cvar_stack_layers: thick_layers is null\n");
 		fflush(stderr);
@@ -24,6 +25,7 @@ cvar_stack_layers(
 	}
 	if (layer_markers == nullptr)
 	{
+		cvar_set_last_error("cvar_stack_layers: layer_markers is null");
 		fprintf(stderr,
 			"[HPGL ERROR] cvar_stack_layers: layer_markers is null\n");
 		fflush(stderr);
@@ -31,6 +33,7 @@ cvar_stack_layers(
 	}
 	if (result == nullptr)
 	{
+		cvar_set_last_error("cvar_stack_layers: result is null");
 		fprintf(stderr,
 			"[HPGL ERROR] cvar_stack_layers: result is null\n");
 		fflush(stderr);
@@ -38,6 +41,7 @@ cvar_stack_layers(
 	}
 	if (layers_count <= 0)
 	{
+		cvar_set_last_error("cvar_stack_layers: layers_count must be positive");
 		fprintf(stderr,
 			"[HPGL ERROR] cvar_stack_layers: layers_count must be positive, got %d\n",
 			layers_count);

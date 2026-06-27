@@ -285,6 +285,29 @@ class TestPointSet2Cube:
         assert len(x) > 0, "Expected at least one informed point"
         assert len(prop) > 0
 
+    @pytest.mark.xfail(reason="Known Fortran-order bug: Z array length mismatches X/Y")
+    def test_fortran_order_output_consistency(self):
+        """Regression test: Cube2PointSet with Fortran-order input must produce
+        consistent-length output arrays (X, Y, Z, and prop all same length).
+
+        This is a regression test for the documented Fortran-order bug where
+        X, Y, Z arrays may have mismatched lengths due to different sum()
+        vs boolean-indexing semantics in the Z computation path.
+
+        Marked xfail: the bug is confirmed to exist as of v1.6.0.
+        When fixed, this test should pass and the xfail marker should be removed.
+        """
+        cube = np.arange(27, dtype='float32').reshape((3, 3, 3), order='F')
+        mask = np.ones((3, 3, 3), dtype='uint8')
+        mask[0, 0, 0] = 0  # One uninformed cell
+        x, y, z, prop = Cube2PointSet(cube, mask)
+        # Regression assertion: all output arrays must have the same length
+        n = len(x)
+        assert n > 0, "Expected at least one informed point"
+        assert len(y) == n, f"Y length {len(y)} != X length {n} (Fortran-order bug)"
+        assert len(z) == n, f"Z length {len(z)} != X length {n} (Fortran-order bug)"
+        assert len(prop) == n, f"prop length {len(prop)} != X length {n} (Fortran-order bug)"
+
     def test_out_of_bounds_points_ignored(self):
         """Points outside the cube are silently ignored."""
         cube = np.zeros((2, 2, 2), dtype='float32')

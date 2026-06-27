@@ -52,6 +52,27 @@ void init_rnd(rnd_state_t & state, long int size, long int seed)
 		}
 	}
 
+	// Guard: ensure gcd(C, M) = 1 for full-period LCG.
+	// When all primes up to size/3 divide size (happens for small even sizes),
+	// the loop above falls through with C=2. For even M, gcd(2, M) ≥ 2,
+	// violating the Hull-Dobell condition and producing a degenerate generator.
+	// Search forward into higher primes for one coprime to M.
+	if (state.C % 2 == 0 && state.M % 2 == 0)
+	{
+		for (int k = idx + 1; primes[k] > 0; ++k)
+		{
+			if (size % primes[k] != 0)
+			{
+				state.C = primes[k];
+				break;
+			}
+		}
+		// Ultimate fallback: 3 is the smallest odd prime; always coprime
+		// to powers of 2 (the only case where all tested primes divide size).
+		if (state.C % 2 == 0 && state.M % 2 == 0)
+			state.C = 3;
+	}
+
 	state.R = seed % size;
 }
 

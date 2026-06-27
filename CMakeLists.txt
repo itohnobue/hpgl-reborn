@@ -67,7 +67,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # OpenMP
 if(HPGL_USE_OPENMP)
     find_package(OpenMP)
-    if(OPENMP_FOUND)
+    if(OpenMP_FOUND)
         message(STATUS "OpenMP found - version ${OpenMP_CXX_VERSION}")
     else()
         message(WARNING "OpenMP not found - parallel algorithms will be disabled")
@@ -200,7 +200,7 @@ else()
 endif()
 
 # OpenMP support
-if(HPGL_USE_OPENMP AND OPENMP_FOUND)
+if(HPGL_USE_OPENMP AND OpenMP_FOUND)
     target_link_libraries(hpgl_core PUBLIC OpenMP::OpenMP_CXX)
     target_compile_options(hpgl_core PUBLIC
         $<$<COMPILE_LANGUAGE:CXX>:${OpenMP_CXX_FLAGS}>
@@ -322,6 +322,17 @@ install(EXPORT hpglTargets
 
 # Generate hpglConfig.cmake so consumers can use find_package(hpgl)
 include(CMakePackageConfigHelpers)
+
+# Normalize OpenMP status to a CMake boolean for hpglConfig.cmake.in.
+# find_package(OpenMP) sets OpenMP_FOUND to TRUE (boolean), but the
+# package config template gets a raw 0/1 integer substitution.
+# Convert to explicit TRUE/FALSE for idiomatic CMake conditionals.
+if(OpenMP_FOUND)
+    set(HPGL_OPENMP_BOOL TRUE)
+else()
+    set(HPGL_OPENMP_BOOL FALSE)
+endif()
+
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hpglConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/hpglConfig.cmake"
@@ -369,7 +380,7 @@ message(STATUS "Dependencies:")
 message(STATUS "  BLAS:                ${BLAS_LIBRARIES}")
 message(STATUS "  LAPACK:              ${LAPACK_LIBRARIES}")
 message(STATUS "  Eigen:               not used (no Eigen headers in source)")
-message(STATUS "  OpenMP:              ${OPENMP_FOUND}")
+message(STATUS "  OpenMP:              ${OpenMP_FOUND}")
 if(HPGL_BUILD_PYTHON)
     message(STATUS "  Python:              ${Python3_EXECUTABLE}")
 endif()

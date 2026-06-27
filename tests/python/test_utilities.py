@@ -21,19 +21,23 @@ try:
     from geo_bsd.cdf import CdfData, calc_cdf
     from geo_bsd.geo import (
         ContProperty,
+        CovarianceModel,
         IndProperty,
         SugarboxGrid,
         _load_prop_ind_slow,  # For testing INC format parsing
         append_mask,
         calc_mean,
+        covariance,
         get_thread_num,
         load_cont_property,
         load_ind_property,
+        ordinary_kriging,
         read_inc_file_byte,
         read_inc_file_float,
         set_output_handler,
         set_progress_handler,
         set_thread_num,
+        simple_kriging_weights,
         write_gslib_property,
         write_property,
     )
@@ -295,8 +299,7 @@ class TestCallbackHandlers:
     """Test output and progress callback handlers"""
 
     def test_set_output_handler_with_mock(self):
-        """Test setting output handler with callable callback"""
-        # Use a real callable instead of Mock for ctypes compatibility
+        """Test setting output handler and verifying it is invoked by HPGL operations"""
         call_count = [0]
         received_messages = []
 
@@ -309,14 +312,36 @@ class TestCallbackHandlers:
 
         param = 42
 
-        # This should not raise an exception
+        # Register the output handler
         set_output_handler(output_handler, param)
+
+        # Invoke an HPGL operation that triggers output callbacks.
+        # ordinary_kriging iterates over all grid cells and emits output per cell.
+        np.random.seed(42)
+        grid = SugarboxGrid(x=5, y=5, z=3)
+        size = grid.x * grid.y * grid.z
+        data = np.random.rand(size).astype('float32') * 100
+        mask = np.ones(size, dtype='uint8')
+        prop = ContProperty(data, mask)
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(5.0, 5.0, 3.0),
+            sill=1.0,
+            nugget=0.1
+        )
+        ordinary_kriging(
+            prop=prop,
+            grid=grid,
+            radiuses=(3, 3, 1),
+            max_neighbours=8,
+            cov_model=cov_model
+        )
 
         # Clear handler
         set_output_handler(None, None)
 
-        # Verify handler was called at least during setup
-        # (The exact behavior depends on whether HPGL emits messages during setup)
+        # Verify handler was invoked by the HPGL operation
+        assert call_count[0] > 0, "Output handler was not called during HPGL operation"
 
     def test_set_output_handler_none(self):
         """Test clearing output handler"""
@@ -330,7 +355,7 @@ class TestCallbackHandlers:
         set_output_handler(None, None)
 
     def test_set_progress_handler_with_mock(self):
-        """Test setting progress handler with callable callback"""
+        """Test setting progress handler and verifying it is invoked by HPGL operations"""
         call_count = [0]
 
         def progress_handler(msg, progress, param):
@@ -340,11 +365,36 @@ class TestCallbackHandlers:
 
         param = 100
 
-        # This should not raise an exception
+        # Register the progress handler
         set_progress_handler(progress_handler, param)
+
+        # Invoke an HPGL operation that triggers progress callbacks.
+        # ordinary_kriging iterates over all grid cells and emits progress.
+        np.random.seed(42)
+        grid = SugarboxGrid(x=5, y=5, z=3)
+        size = grid.x * grid.y * grid.z
+        data = np.random.rand(size).astype('float32') * 100
+        mask = np.ones(size, dtype='uint8')
+        prop = ContProperty(data, mask)
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(5.0, 5.0, 3.0),
+            sill=1.0,
+            nugget=0.1
+        )
+        ordinary_kriging(
+            prop=prop,
+            grid=grid,
+            radiuses=(3, 3, 1),
+            max_neighbours=8,
+            cov_model=cov_model
+        )
 
         # Clear handler
         set_progress_handler(None, None)
+
+        # Verify handler was invoked by the HPGL operation
+        assert call_count[0] > 0, "Progress handler was not called during HPGL operation"
 
     def test_set_progress_handler_none(self):
         """Test clearing progress handler"""
@@ -848,6 +898,46 @@ class TestPerformanceUtilities:
         # Final cumulative probability reaches 1.0
         assert result.probs[-1] == pytest.approx(1.0)
         assert result.probs[-1] > 0.9  # Should be close to 1 for large n
+
+
+# =============================================================================
+# I/O Error Path Tests
+# =============================================================================
+
+@pytest.mark.hpgl
+class TestWritePropertyErrorPaths:
+    """Test error paths in write_property and write_gslib_property."""
+
+    def test_write_property_invalid_indicator_values_type(self, tmp_path):
+        """write_property raises TypeError when indicator_values is not a list."""
+        data = np.array([0, 1, 0], dtype='uint8')
+        mask = np.ones(3, dtype='uint8')
+        prop = IndProperty(data, mask, 2)
+        filename = str(tmp_path / "test.inc")
+
+        with pytest.raises(TypeError, match="indicator_values must be a list"):
+            write_property(prop, filename, "test", 255, indicator_values="not_a_list")
+
+    def test_write_gslib_property_invalid_indicator_values_type(self, tmp_path):
+        """write_gslib_property raises TypeError when indicator_values is not a list."""
+        data = np.array([0, 1, 0], dtype='uint8')
+        mask = np.ones(3, dtype='uint8')
+        prop = IndProperty(data, mask, 2)
+        filename = str(tmp_path / "test.dat")
+
+        with pytest.raises(TypeError, match="indicator_values must be a list"):
+            write_gslib_property(prop, filename, "test", 255, indicator_values=123)
+
+    def test_write_property_none_indicator_values(self, tmp_path):
+        """write_property with indicator_values=None defaults to empty list (no error)."""
+        data = np.array([0, 1, 0], dtype='uint8')
+        mask = np.ones(3, dtype='uint8')
+        prop = IndProperty(data, mask, 2)
+        filename = str(tmp_path / "test.inc")
+
+        # indicator_values=None should default to [] and not raise
+        write_property(prop, filename, "test", 255)  # No indicator_values
+        assert Path(filename).exists()
 
 
 if __name__ == '__main__':

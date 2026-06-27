@@ -71,8 +71,6 @@ namespace hpgl
 			if (mask[node] != 1)
 				continue;
 
-			std::vector<node_index_t> indices;
-			std::vector<kriging_weight_t> weights;
 			double variance;						
 			sugarbox_location_t loc = grid[node];			
 
@@ -136,8 +134,6 @@ namespace hpgl
 			if(property.is_informed(node)) 
 				continue;
 
-			std::vector<node_index_t> indices;
-			std::vector<kriging_weight_t> weights;
 			double variance;						
 			sugarbox_location_t loc = grid[node];			
 

@@ -61,11 +61,6 @@ namespace hpgl
 				return true;
 			return (index<0)||(index>=m_size) ? false : m_mask[index]!=0;
 		}
-
-		bool defined(node_index_t center_node, node_index_t neighbour_node)const
-		{
-			return is_informed(neighbour_node);
-		}
 	};
 
 	class indicator_property_array_t
@@ -117,11 +112,6 @@ namespace hpgl
 				return false;
 			else
 				return m_mask[index] != 0;
-		}
-
-		bool defined(node_index_t center_node, node_index_t neighbour_node)const
-		{
-			return is_informed(neighbour_node);
 		}
 
 		void delete_value_at(node_index_t node)

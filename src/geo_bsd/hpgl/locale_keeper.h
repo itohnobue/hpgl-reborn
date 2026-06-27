@@ -9,9 +9,6 @@
 #define BS_LOCALE_KEEPER_H_
 
 #include <locale.h>
-#ifdef __GLIBC__
-#include <xlocale.h>
-#endif
 
 namespace blue_sky {
 

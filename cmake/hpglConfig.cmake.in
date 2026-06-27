@@ -18,7 +18,7 @@ if(@HPGL_USE_MKL@)
 endif()
 
 # OpenMP is a PUBLIC dependency — consumers need OpenMP flags.
-if(@HPGL_USE_OPENMP@ AND @OPENMP_FOUND@)
+if(@HPGL_USE_OPENMP@ AND @HPGL_OPENMP_BOOL@)
     find_dependency(OpenMP)
 endif()
 

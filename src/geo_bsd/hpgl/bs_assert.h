@@ -125,11 +125,6 @@ namespace blue_sky {
         return "asserter";
       }
 
-      asserter *warning ();
-      asserter *debug ();
-      asserter *error ();
-      asserter *fatal ();
-
       static assert_factory *&
       factory ()
       {
@@ -141,16 +136,6 @@ namespace blue_sky {
 
       asserter                *ASSERTER_A;
       asserter                *ASSERTER_B;
-
-      enum TRACE_TYPE
-      {
-        TRACE_TYPE_WARNING,
-        TRACE_TYPE_DEBUG,
-        TRACE_TYPE_ERROR,
-        TRACE_TYPE_FATAL
-      };
-
-      TRACE_TYPE              trace_type;
 
     public:
       int                     line;
@@ -183,11 +168,6 @@ namespace blue_sky {
       }
     };
 
-    struct BS_API_PLUGIN trace_wrapper
-    {
-      trace_wrapper (asserter *pa);
-    };
-
   } // namespace bs_assert
 
 #ifdef _DEBUG
@@ -198,56 +178,6 @@ namespace blue_sky {
 #define BS_ASSERT(cond)                                         \
   if (true) ; else												\
 	blue_sky::bs_assert::assert_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround(__FILE__, __LINE__, (#cond)).make(!!(cond))->ASSERTER_A
-#endif
-
-#ifndef BS_DISABLE_TRACE
-#define BS_TRACE(cond)                    \
-  if (false) ; else                       \
-  blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!!(cond))->ASSERTER_A
-#else
-#define BS_TRACE(cond)                    \
-  if (true) ; else                        \
-    blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!!(cond))->ASSERTER_A
-#endif
-
-#if !defined(BS_DISABLE_TRACE) && !defined(BS_DISABLE_TRACE_WARNING)
-#define BS_WARNING(cond)                  \
-  if (false) ; else                       \
-  blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!! (cond))->warning ()->ASSERTER_A
-#else
-#define BS_WARNING(cond)                  \
-  if (true) ; else                        \
-  blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!! (cond))->warning ()->ASSERTER_A
-#endif
-
-#if !defined(BS_DISABLE_TRACE) && !defined(BS_DISABLE_TRACE_DEBUG)
-#define BS_DEBUG(cond)                    \
-  if (false) ; else                       \
-  blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!! (cond))->debug ()->ASSERTER_A
-#else
-#define BS_DEBUG(cond)                    \
-  if (true) ; else                        \
-  blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!! (cond))->debug ()->ASSERTER_A
-#endif
-
-#if !defined(BS_DISABLE_TRACE) && !defined(BS_DISABLE_TRACE_ERROR)
-#define BS_ERROR(cond)                    \
-  if (false) ; else                       \
-  blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!! (cond))->error ()->ASSERTER_A
-#else
-#define BS_ERROR(cond)                    \
-  if (true) ; else                        \
-  blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!! (cond))->error ()->ASSERTER_A
-#endif
-
-#if !defined(BS_DISABLE_TRACE) && !defined(BS_DISABLE_TRACE_FATAL)
-#define BS_FATAL(cond)                    \
-  if (false) ; else                       \
-  blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!! (cond))->fatal ()->ASSERTER_A
-#else
-#define BS_FATAL(cond)                    \
-  if (true) ; else                        \
-  blue_sky::bs_assert::trace_wrapper wrapper_ = blue_sky::bs_assert::asserter::workaround (__FILE__, __LINE__, (#cond)).make (!! (cond))->fatal ()->ASSERTER_A
 #endif
 
 #define ASSERTER_A(x)           ASSERTER_OP_(x, B)

@@ -1531,7 +1531,7 @@ class TestSimpleKrigingWeights:
             assert isinstance(weights, np.ndarray)
 
     def test_weights_result_validation(self, neighbor_points):
-        """Test weights are valid (no NaN, Inf, sum to approximately 1)"""
+        """Test weights are valid (no NaN, Inf, correct count, finite)"""
         n_x, n_y, n_z = neighbor_points
         center_point = (5.0, 5.0, 2.5)
 
@@ -1549,6 +1549,9 @@ class TestSimpleKrigingWeights:
         # Check for NaN and Inf
         assert not np.any(np.isnan(weights))
         assert not np.any(np.isinf(weights))
+        # SK weights must be finite and match neighbor count
+        assert len(weights) == len(n_x)
+        assert np.all(np.isfinite(weights))
 
     def test_weights_reproducibility(self, neighbor_points):
         """Test weights calculation is reproducible"""
@@ -1621,6 +1624,31 @@ class TestSimpleKrigingWeights:
             nugget=0.1
         )
         assert len(weights) == 1
+
+    def test_weights_single_neighbor_zero_nugget(self):
+        """With a single neighbor at the same location and nugget=0, SK weight is 1.0."""
+        center_point = (5.0, 5.0, 2.5)
+        # Neighbor at exactly the same 3D location as center
+        n_x = np.array([5.0], dtype='float32')
+        n_y = np.array([5.0], dtype='float32')
+        n_z = np.array([2.5], dtype='float32')
+
+        weights = simple_kriging_weights(
+            center_point=center_point,
+            n_x=n_x,
+            n_y=n_y,
+            n_z=n_z,
+            ranges=(5.0, 5.0, 3.0),
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0
+        )
+        assert len(weights) == 1
+        # With zero distance and zero nugget, the covariance is sill,
+        # so the SK weight C(0)/C(0) = 1.0
+        assert abs(weights[0] - 1.0) < 1e-5, (
+            f"SK weight for co-located neighbor with nugget=0 should be 1.0, got {weights[0]}"
+        )
 
     # Error-path tests: exercise all validation branches in simple_kriging_weights
 

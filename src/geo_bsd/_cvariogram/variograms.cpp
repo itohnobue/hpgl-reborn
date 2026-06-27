@@ -347,57 +347,6 @@ bool is_inside(hard_data_t * data, int x, int y, int z)
 	return true;
 }
 
-int get_mask_flat_idx_nocheck(hard_data_t * data, int x, int y, int z)
-{
-	return
-		data->m_mask_strides[0] * x +
-		data->m_mask_strides[1] * y +
-		data->m_mask_strides[2] * z;
-}
-
-bool get_mask_flat_idx(hard_data_t * data, int x, int y, int z, int * result)
-{
-	if (x < 0 || y < 0 || z < 0)
-		return false;
-	if (x >= data->m_mask_shape[0] ||
-		y >= data->m_mask_shape[1] ||
-		z >= data->m_mask_shape[2])
-		return false;
-	*result =
-		data->m_mask_strides[0] * x +
-		data->m_mask_strides[1] * y +
-		data->m_mask_strides[2] * z;
-	return true;
-}
-
-bool is_informed(hard_data_t * data, int x, int y, int z)
-{
-	if (x < 0 || y < 0 || z < 0)
-		return false;
-	if (x >= data->m_mask_shape[0] ||
-		y >= data->m_mask_shape[1] ||
-		z >= data->m_mask_shape[2])
-		return false;
-	int idx = 
-		data->m_mask_strides[0] * x +
-		data->m_mask_strides[1] * y +
-		data->m_mask_strides[2] * z;
-
-	return data->m_mask[idx] != 0;
-}
-
-bool is_informed_nocheck(hard_data_t * data, int x, int y, int z)
-{
-	int idx = 
-		data->m_mask_strides[0] * x +
-		data->m_mask_strides[1] * y +
-		data->m_mask_strides[2] * z;
-
-	return data->m_mask[idx] != 0;
-}
-
-
-
 double get_value(hard_data_t * data, int x, int y, int z)
 {
 	int idx = 
@@ -523,8 +472,6 @@ void calc_variograms(
 								 ++x1, dpx += data->m_data_strides[0], mpx += data->m_mask_strides[0])
 							{
 								if (*mpx != 0)
-								//if (is_informed_nocheck(data, x1, y1, z1))
-								//if (is_informed(data, x1, y1, z1))
 								{
 									double v1 = *dpx;
 									//double v1 = get_value(data, x1, y1, z1);
@@ -532,7 +479,6 @@ void calc_variograms(
 									int y = y1 + vec.m_data[1];
 									int z = z1 + vec.m_data[2];
 									if (is_inside(data, x,y,z) && mpx[moffset])
-									//if (is_informed(data, x,y,z))
 									{
 										if ((rand() % 100) >= percentToUse)
 											continue;

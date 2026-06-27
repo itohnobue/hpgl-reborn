@@ -14,8 +14,11 @@ namespace hpgl
 			: m_mean(0), m_var(1)
 		{}
 
+		// Variance must be non-negative. Negative values are clamped to 0,
+		// producing a degenerate step-function CDF (P(X ≤ x) = 1 if x ≥ mean, 0 otherwise),
+		// which is safer than passing -nan/-inf results downstream.
 		gaussian_cdf_t(double mean, double var)
-			: m_mean(mean), m_var(var)
+			: m_mean(mean), m_var(var < 0.0 ? 0.0 : var)
 		{}
 
 		inline double prob(double x)

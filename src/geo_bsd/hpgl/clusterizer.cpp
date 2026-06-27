@@ -87,9 +87,9 @@ namespace hpgl
 		int gx, gy, gz;
 		grid->get_dimensions(gx, gy, gz);
 		
-		m_state->m_x = gx / ellipsoid[0] + 2;
-		m_state->m_y = gy / ellipsoid[1] + 2;
-		m_state->m_z = gz / ellipsoid[2] + 2;
+		m_state->m_x = gx / m_ellipsoid[0] + 2;
+		m_state->m_y = gy / m_ellipsoid[1] + 2;
+		m_state->m_z = gz / m_ellipsoid[2] + 2;
 
 		m_state->m_cluster_box = rect_3d_t<int>(0, 0, 0, m_state->m_x, m_state->m_y, m_state->m_z);
 		m_state->m_clusters.resize(m_state->m_cluster_box.volume());		
@@ -158,14 +158,15 @@ namespace hpgl
 			for (int j = cy - 1; j	<= cy + 1; ++j)
 				for (int i = cx - 1; i <= cx + 1; ++i)
 				{
-					int cluster_idx = get_index(i, j, k);
-					if (cluster_idx >= 0)
-					{
-			   			//size_t cluster_size = m_clusters[cluster_idx]->count();
-						const std::vector<node_index_t> & nodes = m_state->m_clusters[cluster_idx]->nodes();
-						neighbours.reserve(neighbours.size() + nodes.size());	
-						std::copy(nodes.begin(), nodes.end(), std::back_inserter(neighbours));					
-					}
+				int cluster_idx = get_index(i, j, k);
+				if (cluster_idx >= 0)
+				{
+					if (m_state->m_clusters[cluster_idx]->limit_exceeded())
+						{ fprintf(stderr, "HPGL FATAL: clusterizer_t: cluster limit exceeded\n"); abort(); }
+					const std::vector<node_index_t> & nodes = m_state->m_clusters[cluster_idx]->nodes();
+					neighbours.reserve(neighbours.size() + nodes.size());	
+					std::copy(nodes.begin(), nodes.end(), std::back_inserter(neighbours));					
+				}
 				}
 		return true;
 	}

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+import contextlib
 import ctypes as C
 import threading
 
@@ -20,11 +21,41 @@ cvar = _safe_load_library("_cvariogram", __file__)
 _cvar_error_local = threading.local()
 _cvar_error_snapshot_lock = threading.Lock()
 
+# Serializes C++ cvariogram calls with error checking to prevent cross-thread
+# error races. The C++ error state is global (not thread_local), so
+# concurrent calls from different threads can corrupt error reporting.
+# This lock ensures only one thread is in the snapshot→C++ call→check
+# window at a time, mirroring geo.py's _hpgl_call_lock.
+_cvar_call_lock = threading.Lock()
+
 cvar.cvar_get_last_error.restype = C.c_char_p
 cvar.cvar_get_last_error.argtypes = []
 
 MAX_NUM_LAGS = 10000
 MAX_POINT_SET_SIZE = 1_000_000
+
+
+@contextlib.contextmanager
+def _cvar_error_guard(context=""):
+    """Serialize a C++ cvariogram call with error checking to prevent cross-thread races.
+
+    Usage::
+
+        with _cvar_error_guard("CalcVariograms"):
+            cvar.calc_variograms(...)
+
+    Acquires ``_cvar_call_lock`` before the snapshot, holds it across the
+    C++ call window, and releases it in ``finally``.  Error checking
+    happens inside the ``try`` block so that a ``RuntimeError`` from a
+    new C++ error does not prevent lock release.
+    """
+    _cvar_call_lock.acquire()
+    _snapshot_cvar_error()
+    try:
+        yield
+        _check_cvar_error(context)
+    finally:
+        _cvar_call_lock.release()
 
 
 def _snapshot_cvar_error():
@@ -222,9 +253,8 @@ class Ellipsoid:
         self.ell = checked_create(
             ellipsoid_t, direction1=vec, direction2=vec, direction3=vec, R1=R1, R2=R2, R3=R3
         )
-        _snapshot_cvar_error()
-        cvar.fill_ellipsoid_directions(C.byref(self.ell), azimuth, dip, rotation)
-        _check_cvar_error("fill_ellipsoid_directions")
+        with _cvar_error_guard("fill_ellipsoid_directions"):
+            cvar.fill_ellipsoid_directions(C.byref(self.ell), azimuth, dip, rotation)
 
 
 class VariogramSearchTemplate:
@@ -283,9 +313,8 @@ def CalcVariograms(templ, hard_data, percent=100):
         _refs=(hard_data[0], hard_data[1]),
     )
 
-    _snapshot_cvar_error()
-    cvar.calc_variograms(C.byref(templ.templ), C.byref(hd), variogram, variogram.size, percent)
-    _check_cvar_error("CalcVariograms")
+    with _cvar_error_guard("CalcVariograms"):
+        cvar.calc_variograms(C.byref(templ.templ), C.byref(hd), variogram, variogram.size, percent)
 
     # Post-call validation: check for NaN/Inf in output
     if numpy.any(numpy.isnan(variogram)) or numpy.any(numpy.isinf(variogram)):
@@ -328,11 +357,10 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
         _refs=(point_set["X"], point_set["Y"], point_set["Z"], point_set["Property"]),
     )
 
-    _snapshot_cvar_error()
-    cvar.calc_variograms_from_point_set(
-        C.byref(templ.templ), C.byref(ps), variogram, variogram.size
-    )
-    _check_cvar_error("CalcVariogramsFromPointSet")
+    with _cvar_error_guard("CalcVariogramsFromPointSet"):
+        cvar.calc_variograms_from_point_set(
+            C.byref(templ.templ), C.byref(ps), variogram, variogram.size
+        )
 
     # Post-call validation: check for NaN/Inf in output
     if numpy.any(numpy.isnan(variogram)) or numpy.any(numpy.isinf(variogram)):
@@ -364,22 +392,48 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
         raise ValueError("CStackLayers: layers list is empty")
     if nz <= 0:
         raise ValueError(f"CStackLayers: nz must be positive, got {nz}")
+    # Validate scalez and blank_value are finite and positive
+    if not numpy.isfinite(scalez):
+        raise ValueError(f"CStackLayers: scalez must be finite, got {scalez}")
+    if scalez <= 0:
+        raise ValueError(f"CStackLayers: scalez must be positive, got {scalez}")
+    if not numpy.isfinite(blank_value):
+        raise ValueError(f"CStackLayers: blank_value must be finite, got {blank_value}")
+    # Validate all layers have matching 2D shapes
+    if len(layers) > 1:
+        ref_shape = layers[0].shape[:2]
+        for i, layer in enumerate(layers[1:], start=1):
+            if layer.shape[:2] != ref_shape:
+                raise ValueError(
+                    f"CStackLayers: layer {i} shape {layer.shape[:2]} does not match "
+                    f"reference shape {ref_shape}"
+                )
+    # Validate nz fits within result array dimensions
+    if nz > result.shape[2]:
+        raise ValueError(
+            f"CStackLayers: nz ({nz}) exceeds result.shape[2] ({result.shape[2]})"
+        )
+    # Validate markers count matches layers count
+    if len(markers) != len(layers):
+        raise ValueError(
+            f"CStackLayers: len(markers) ({len(markers)}) must match "
+            f"len(layers) ({len(layers)})"
+        )
     layers2 = []
     for layer in layers:
         layers2.append(_create_float_data(layer))
 
     result2 = _create_float_data(result)
-    _snapshot_cvar_error()
-    cvar.cvar_stack_layers(
-        _c_array(float_data_t, len(layers2), layers2),
-        _c_array(C.c_int, len(markers), markers),
-        len(layers2),
-        nz,
-        scalez,
-        blank_value,
-        C.byref(result2),
-    )
-    _check_cvar_error("CStackLayers")
+    with _cvar_error_guard("CStackLayers"):
+        cvar.cvar_stack_layers(
+            _c_array(float_data_t, len(layers2), layers2),
+            _c_array(C.c_int, len(markers), markers),
+            len(layers2),
+            nz,
+            scalez,
+            blank_value,
+            C.byref(result2),
+        )
 
     # Post-call validation: check for NaN/Inf in the result array
     if numpy.any(numpy.isnan(result)) or numpy.any(numpy.isinf(result)):

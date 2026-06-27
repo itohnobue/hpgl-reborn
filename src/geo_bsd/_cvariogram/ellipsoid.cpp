@@ -30,6 +30,7 @@ void cpycol(double * m, vector_t * dest, int col)
 {
 	if (col < 0 || col >= 3)
 	{
+		cvar_set_last_error("cpycol: column index out of range [0, 2]");
 		fprintf(stderr, "[HPGL ERROR] cpycol: column index %d out of range [0, 2]\n", col);
 		fflush(stderr);
 		return;
@@ -44,6 +45,7 @@ void fill_ellipsoid_directions(ellipsoid_t * ell, double azimuth, double dip, do
 {
 	if (ell == nullptr)
 	{
+		cvar_set_last_error("fill_ellipsoid_directions: ell is null");
 		fprintf(stderr, "[HPGL ERROR] fill_ellipsoid_directions: ell is null\n");
 		fflush(stderr);
 		return;

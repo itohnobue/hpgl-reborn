@@ -202,7 +202,7 @@ def build_pytest_args(
 
     # Add coverage if requested
     if coverage:
-        args.extend(["--cov=geo_bsd", "--cov=geo", "--cov=sgs", "--cov=sis"])
+        args.extend(["--cov=geo_bsd"])
         args.extend([f"--cov-report={cov_report}", "--cov-report=html"])
 
     # Verbosity
@@ -246,8 +246,8 @@ def build_pytest_args(
     # Map test types to files/directories
     test_targets = {
         "all": str(tests_dir),
-        "kriging": str(tests_dir / "test_kriging.py"),
-        "simulation": str(tests_dir / "test_simulation.py"),
+        "kriging": str(tests_dir / "test_kriging_complete.py"),
+        "simulation": str(tests_dir / "test_simulation_complete.py"),
         "numpy2": str(tests_dir / "test_numpy2_compat.py"),
         "memory": str(tests_dir / "test_memory_leaks.py"),
         "performance": str(tests_dir / "test_performance.py"),

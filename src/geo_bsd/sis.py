@@ -8,15 +8,14 @@ import numpy
 from .geo import (
     __checked_create,
     _c_array,
-    _check_hpgl_error,
     _clone_prop,
     _create_hpgl_float_array,
     _create_hpgl_ind_masked_array,
     _create_hpgl_ubyte_array,
     _empty_clone,
+    _hpgl_error_guard,
     _require_cont_data,
     _require_ind_data,
-    _snapshot_hpgl_error,
     accepts_tuple,
 )
 from .hpgl_wrap import _HPGL_FLOAT_ARRAY, _HPGL_IK_PARAMS, _hpgl_so
@@ -144,27 +143,28 @@ RuntimeError
     means = []
     if is_lvm:
         for i in range(len(data)):
+            GridValidator.validate_array_size(
+                marginal_probs[i], (grid.x, grid.y, grid.z)
+            )
             means.append(_create_hpgl_float_array(marginal_probs[i], grid))
 
     if not is_lvm:
-        _snapshot_hpgl_error()
-        _hpgl_so.hpgl_sis_simulation(
-            prop_2,
-            ikps,
-            len(data),
-            seed,
-            _create_hpgl_ubyte_array(mask, grid) if mask is not None else None)
-        _check_hpgl_error("sis_simulation")
+        with _hpgl_error_guard("sis_simulation"):
+            _hpgl_so.hpgl_sis_simulation(
+                prop_2,
+                ikps,
+                len(data),
+                seed,
+                _create_hpgl_ubyte_array(mask, grid) if mask is not None else None)
     else:
-        _snapshot_hpgl_error()
-        _hpgl_so.hpgl_sis_simulation_lvm(
-            prop_2,
-            ikps,
-            _c_array(_HPGL_FLOAT_ARRAY, len(data), means),
-            len(data),
-            seed,
-            _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
-            use_correlogram
-            )
-        _check_hpgl_error("sis_simulation_lvm")
+        with _hpgl_error_guard("sis_simulation_lvm"):
+            _hpgl_so.hpgl_sis_simulation_lvm(
+                prop_2,
+                ikps,
+                _c_array(_HPGL_FLOAT_ARRAY, len(data), means),
+                len(data),
+                seed,
+                _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
+                use_correlogram
+                )
     return out_prop

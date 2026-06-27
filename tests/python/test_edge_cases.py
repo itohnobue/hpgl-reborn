@@ -35,6 +35,7 @@ try:
     )
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
+    from geo_bsd.validation import CriticalValidationError
 except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
@@ -1203,10 +1204,15 @@ class TestSimulationEdgeCases:
         # Verify result shape and no NaN
         assert result.data.shape == (10, 10, 5)
         assert not np.any(np.isnan(result.data))
-        # The C++ engine processes the mask; with all-zero mask the result
-        # may still contain simulated values (HPGL's mask interpretation).
-        # The key check is that the result is finite and the operation completes.
+        # The C++ engine processes the mask; with all-zero simulate_mask the
+        # result should be finite and within a plausible range for the CDF.
         assert np.all(np.isfinite(result.data.astype('float64')))
+        # Additional behavioral verification: result values should be in a
+        # plausible range (not all identical, not all at the initial 100.0).
+        result_flat = result.data.astype('float64').flatten()
+        assert np.min(result_flat) >= 0, "Simulated values should be non-negative"
+        assert np.max(result_flat) <= 100, "Simulated values should be within CDF range"
+        assert np.std(result_flat) > 0, "Result should not be uniform (all identical)"
 
     def test_mask_covering_no_cells_simulate_all(self):
         """Test simulation with mask covering no cells (simulate all)
@@ -1252,7 +1258,7 @@ class TestSimulationEdgeCases:
         # Should simulate all cells
         assert result.data.shape == (10, 10, 5)
         # Values should be from CDF range (approximately - may vary slightly)
-        assert np.all(result.data >= 0) or np.all(np.isfinite(result.data))
+        assert np.all(result.data >= 0) and np.all(np.isfinite(result.data))
 
     def test_sis_same_seed_determinism(self):
         """Test SIS determinism: same seed produces same results"""
@@ -1863,6 +1869,101 @@ class TestIndicatorKrigingFix:
         # All output values should be valid indicator values (0, 1, or 2)
         assert np.all(result.data >= 0) and np.all(result.data < 3), \
             f"Invalid indicator values: min={result.data.min()}, max={result.data.max()}"
+
+
+# =============================================================================
+# NaN/Inf Input Handling Tests
+# =============================================================================
+
+@pytest.mark.hpgl
+class TestNaNInfInputHandling:
+    """Test that HPGL properly handles NaN and Inf inputs."""
+
+    def test_covariance_model_nan_sill_raises(self):
+        """CovarianceModel with NaN sill should raise CriticalValidationError."""
+        with pytest.raises(CriticalValidationError):
+            CovarianceModel(
+                type=covariance.spherical,
+                ranges=(5.0, 5.0, 3.0),
+                sill=float('nan'),
+                nugget=0.1
+            )
+
+    def test_covariance_model_inf_sill_raises(self):
+        """CovarianceModel with Inf sill should raise CriticalValidationError."""
+        with pytest.raises(CriticalValidationError):
+            CovarianceModel(
+                type=covariance.spherical,
+                ranges=(5.0, 5.0, 3.0),
+                sill=float('inf'),
+                nugget=0.1
+            )
+
+    def test_covariance_model_nan_nugget_raises(self):
+        """CovarianceModel with NaN nugget should raise."""
+        with pytest.raises(CriticalValidationError):
+            CovarianceModel(
+                type=covariance.spherical,
+                ranges=(5.0, 5.0, 3.0),
+                sill=1.0,
+                nugget=float('nan')
+            )
+
+    def test_covariance_model_inf_nugget_raises(self):
+        """CovarianceModel with Inf nugget should raise."""
+        with pytest.raises(CriticalValidationError):
+            CovarianceModel(
+                type=covariance.spherical,
+                ranges=(5.0, 5.0, 3.0),
+                sill=1.0,
+                nugget=float('inf')
+            )
+
+    def test_covariance_model_nan_range_raises(self):
+        """CovarianceModel with NaN range should raise."""
+        with pytest.raises(CriticalValidationError):
+            CovarianceModel(
+                type=covariance.spherical,
+                ranges=(float('nan'), 5.0, 3.0),
+                sill=1.0,
+                nugget=0.1
+            )
+
+    def test_covariance_model_inf_range_raises(self):
+        """CovarianceModel with Inf range should raise."""
+        with pytest.raises(CriticalValidationError):
+            CovarianceModel(
+                type=covariance.spherical,
+                ranges=(float('inf'), 5.0, 3.0),
+                sill=1.0,
+                nugget=0.1
+            )
+
+    def test_covariance_model_nan_angle_raises(self):
+        """CovarianceModel with NaN angle should raise."""
+        with pytest.raises(CriticalValidationError):
+            CovarianceModel(
+                type=covariance.spherical,
+                ranges=(5.0, 5.0, 3.0),
+                angles=(float('nan'), 0.0, 0.0),
+                sill=1.0,
+                nugget=0.1
+            )
+
+    def test_cont_property_nan_data_construction(self):
+        """ContProperty with NaN data should be constructable but operations should handle it."""
+        data = np.array([1.0, np.nan, 3.0], dtype='float32')
+        mask = np.ones(3, dtype='uint8')
+        prop = ContProperty(data, mask)
+        # The property is constructed; NaN-aware operations will detect NaN later
+        assert prop.data.shape == (3,)
+
+    def test_cont_property_inf_data_construction(self):
+        """ContProperty with Inf data should be constructable."""
+        data = np.array([1.0, np.inf, 3.0], dtype='float32')
+        mask = np.ones(3, dtype='uint8')
+        prop = ContProperty(data, mask)
+        assert prop.data.shape == (3,)
 
 
 if __name__ == '__main__':
