@@ -470,6 +470,14 @@ class TestSequentialGaussianSimulationUseHarddata:
         )
 
         assert isinstance(result, ContProperty)
+        # use_harddata=True must preserve hard data values at informed positions
+        informed_mask = sample_property.mask == 1
+        np.testing.assert_allclose(
+            result.data[informed_mask].astype('float64'),
+            sample_property.data[informed_mask].astype('float64'),
+            rtol=1e-5,
+            err_msg="Hard data values should be preserved with use_harddata=True"
+        )
 
     def test_sgs_use_harddata_false(self, sample_property, sample_grid,
                                      sample_covariance_model, sgs_cdf_data_multi):
@@ -488,6 +496,12 @@ class TestSequentialGaussianSimulationUseHarddata:
         assert isinstance(result, ContProperty)
         # With use_harddata=False, output should not match input where informed
         # (output is simulated fresh)
+        informed_mask = sample_property.mask == 1
+        assert not np.allclose(
+            result.data[informed_mask].astype('float64'),
+            sample_property.data[informed_mask].astype('float64'),
+            rtol=1e-5
+        ), "Result should differ from input with use_harddata=False"
 
 
 # =============================================================================
@@ -617,6 +631,34 @@ class TestSequentialGaussianSimulationStatistics:
         simulated_values = result.data[result.mask > 0]
         assert np.all(simulated_values >= min_cdf - 1.0)
         assert np.all(simulated_values <= max_cdf + 1.0)
+
+    def test_sgs_result_variance_plausible(self, sample_property, sample_grid,
+                                            sample_covariance_model, sgs_cdf_data_multi):
+        """Test SGS result variance is within reasonable bounds of input variance.
+
+        The simulated output should have variance comparable to the CDF data range,
+        not degenerate (near-zero) or exploding.
+        """
+        result = sgs_simulation(
+            prop=sample_property,
+            grid=sample_grid,
+            cdf_data=sgs_cdf_data_multi,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=sample_covariance_model,
+            seed=42
+        )
+
+        cdf_range = sgs_cdf_data_multi.values.max() - sgs_cdf_data_multi.values.min()
+        simulated_values = result.data[result.mask > 0].astype('float64')
+        result_var = np.var(simulated_values)
+
+        # Variance should be positive and bounded by (range/2)^2 max possible
+        max_possible_var = (cdf_range / 2.0) ** 2
+        assert result_var > 0.0, "SGS result should have non-zero variance"
+        assert result_var < max_possible_var * 4, (
+            f"SGS variance {result_var} exceeds plausible bound {max_possible_var * 4}"
+        )
 
 
 # =============================================================================
@@ -834,6 +876,12 @@ class TestSequentialIndicatorSimulationUseHarddata:
         )
 
         assert isinstance(result, IndProperty)
+        # use_harddata=True must preserve hard data values at informed positions
+        informed_mask = sample_indicator_property.mask == 1
+        assert np.array_equal(
+            result.data[informed_mask],
+            sample_indicator_property.data[informed_mask]
+        ), "Hard data should be preserved with use_harddata=True"
 
     def test_sis_use_harddata_false(self, sample_indicator_property, sample_grid,
                                      sis_data_3indicator):
@@ -848,6 +896,12 @@ class TestSequentialIndicatorSimulationUseHarddata:
         )
 
         assert isinstance(result, IndProperty)
+        # With use_harddata=False, output should generally differ from input
+        informed_mask = sample_indicator_property.mask == 1
+        assert not np.array_equal(
+            result.data[informed_mask],
+            sample_indicator_property.data[informed_mask]
+        ), "Result should differ from input with use_harddata=False"
 
 
 # =============================================================================
@@ -1279,6 +1333,14 @@ class TestSGSAdvancedParams:
             err_msg="Parallel SGS std differs from single-thread beyond tolerance"
         )
 
+        # Per-cell element-wise comparison for deterministic correctness
+        np.testing.assert_array_almost_equal(
+            single_result.data.astype('float64'),
+            parallel_result.data.astype('float64'),
+            decimal=5,
+            err_msg="Parallel SGS per-cell values differ from single-thread"
+        )
+
 
 @pytest.mark.hpgl
 class TestSISAdvancedParams:
@@ -1376,6 +1438,13 @@ class TestSISAdvancedParams:
             np.nanstd(single_result.data.astype('float64')),
             rtol=rtol * 10,
             err_msg="Parallel SIS std differs from single-thread beyond tolerance"
+        )
+
+        # Per-cell element-wise comparison for deterministic correctness
+        np.testing.assert_array_equal(
+            single_result.data,
+            parallel_result.data,
+            err_msg="Parallel SIS per-cell values differ from single-thread"
         )
 
 

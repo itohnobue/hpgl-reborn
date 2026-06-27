@@ -82,7 +82,7 @@ def CalcVPC(Cube, Mask, MarginalMean):
     CubeMasked = copy(Cube)
     CubeMasked[Mask == 0] = 0
 
-    CubeSum = Cube.sum(0).sum(0)
+    CubeSum = CubeMasked.sum(0).sum(0)
     Result = ones(NZ) * MarginalMean
     Filter = MaskSum > 0
     Result[Filter] = float32(CubeSum[Filter]) / float32(MaskSum[Filter])

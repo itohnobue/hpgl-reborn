@@ -72,7 +72,7 @@ class TestGridEdgeCases:
         )
 
         assert result.data.shape == (1, 1, 1)
-        assert result.data[0, 0, 0] == 42.5  # Single cell should retain its value
+        assert result.data[0, 0, 0] == pytest.approx(42.5, rel=1e-5)  # Single cell should retain its value
 
     def test_non_cubic_grid_flat_x(self):
         """Test with flat grid along X axis (1 x 10 x 10)
@@ -264,7 +264,7 @@ class TestDataEdgeCases:
         assert result.data.shape == (10, 10, 5)
         # Original informed cells should remain informed
         # Note: result.mask is now 3D, so we need to flatten it for comparison
-        assert np.all(result.mask.flatten()[mask == 1] == 1)
+        assert np.all(result.mask.flatten(order='F')[mask == 1] == 1)
         # Some uninformed cells may become informed if they found neighbors
         # (but with high sparsity, many may remain uninformed)
 
@@ -301,7 +301,7 @@ class TestDataEdgeCases:
         assert result.data.shape == (10, 10, 5)
         # Original informed cells should remain informed
         # Note: result.mask is now 3D, so we need to flatten it for comparison
-        assert np.all(result.mask.flatten()[mask == 1] == 1)
+        assert np.all(result.mask.flatten(order='F')[mask == 1] == 1)
 
     def test_sparse_data_99_percent_uninformed(self):
         """Test with 99% of data uninformed (nearly empty)
@@ -336,7 +336,7 @@ class TestDataEdgeCases:
         assert result.data.shape == (10, 10, 10)
         # Original informed cells should remain informed
         # Note: result.mask is now 3D, so we need to flatten it for comparison
-        assert np.all(result.mask.flatten()[mask == 1] == 1)
+        assert np.all(result.mask.flatten(order='F')[mask == 1] == 1)
 
     def test_dense_data_100_percent_informed(self):
         """Test with 100% of data informed (dense data scenario)
@@ -563,7 +563,7 @@ class TestDataEdgeCases:
         assert result.data.shape == (10, 10, 5)
         # Original informed cells should remain informed
         # Note: result.mask is now 3D, so we need to flatten it for comparison
-        assert np.all(result.mask.flatten()[mask == 1] == 1)
+        assert np.all(result.mask.flatten(order='F')[mask == 1] == 1)
         # No NaN in result
         assert not np.any(np.isnan(result.data))
 
@@ -680,7 +680,7 @@ class TestParameterValidation:
         assert np.any(result.mask == 1)
 
     def test_zero_neighbors(self):
-        """Test with max_neighbours=0 - may cause error or use default"""
+        """Test with max_neighbours=0 - should raise validation error"""
         grid = SugarboxGrid(x=10, y=10, z=5)
         data = np.random.rand(500).astype('float32') * 100
         mask = np.ones(500, dtype='uint8')
@@ -694,31 +694,25 @@ class TestParameterValidation:
             nugget=0.1
         )
 
-        # May fail or handle gracefully
-        try:
-            result = ordinary_kriging(
+        # max_neighbours=0 should raise validation error (min is 1)
+        with pytest.raises(CriticalValidationError):
+            ordinary_kriging(
                 prop=prop,
                 grid=grid,
                 radiuses=(5, 5, 3),
                 max_neighbours=0,
                 cov_model=cov_model
             )
-            # If succeeds, check shape
-            assert result.data.shape == (10, 10, 5)
-        except Exception:
-            # Expected to fail
-            pass
 
     def test_negative_range(self):
-        """Test with negative range value - should raise error or handle gracefully"""
+        """Test with negative range value - should raise validation error"""
         grid = SugarboxGrid(x=10, y=10, z=5)
         data = np.random.rand(500).astype('float32') * 100
         mask = np.ones(500, dtype='uint8')
         prop = ContProperty(data, mask)
 
-        # May raise error or handle by taking absolute value
-        try:
-            # Negative range should be handled
+        # Negative range should raise validation error
+        with pytest.raises((ValueError, RuntimeError, CriticalValidationError)):
             cov_model = CovarianceModel(
                 type=covariance.spherical,
                 ranges=(-5.0, 5.0, 3.0),  # Negative X range
@@ -726,16 +720,43 @@ class TestParameterValidation:
                 sill=1.0,
                 nugget=0.1
             )
-            result = ordinary_kriging(
+            ordinary_kriging(
                 prop=prop,
                 grid=grid,
                 radiuses=(5, 5, 3),
                 max_neighbours=12,
                 cov_model=cov_model
             )
-        except (ValueError, RuntimeError, Exception):
-            # Expected - negative range should raise validation error
-            pass
+
+    def test_zero_sill_kriging(self):
+        """Test OK/SK kriging with sill=0.0 handles the degenerate case gracefully.
+
+        With zero sill, the covariance matrix is nugget-only. This is a boundary
+        condition that must not crash and must produce finite output.
+        """
+        grid = SugarboxGrid(x=10, y=10, z=5)
+        np.random.seed(42)
+        data = np.random.rand(500).astype('float32') * 100
+        mask = np.ones(500, dtype='uint8')
+        mask[::10] = 0
+        prop = ContProperty(data, mask)
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(5.0, 5.0, 3.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=0.0,
+            nugget=0.0
+        )
+        result = ordinary_kriging(
+            prop=prop,
+            grid=grid,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=cov_model
+        )
+        result.fix_shape(grid)
+        assert result.data.shape == (10, 10, 5)
+        assert np.all(np.isfinite(result.data.astype('float64')))
 
     def test_negative_angle(self):
         """Test with negative angle values

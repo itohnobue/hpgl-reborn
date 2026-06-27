@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <limits>
 #include <mutex>
 #include <string>
 
@@ -86,6 +87,20 @@ bool is_in_tunnel(
 {
 	if (!validate_ptr(templ, "templ (is_in_tunnel)")) return false;
 	if (!validate_ptr(vec, "vec (is_in_tunnel)")) return false;
+
+	// M22: Guard against zero direction vectors — if any ellipsoid
+	// direction is the zero vector, is_in_tunnel returns true for ALL
+	// input vectors (degenerate case). Bail early.
+	if ((templ->m_ellipsoid.m_direction1.m_data[0] == 0.0
+	  && templ->m_ellipsoid.m_direction1.m_data[1] == 0.0
+	  && templ->m_ellipsoid.m_direction1.m_data[2] == 0.0)
+	 || (templ->m_ellipsoid.m_direction2.m_data[0] == 0.0
+	  && templ->m_ellipsoid.m_direction2.m_data[1] == 0.0
+	  && templ->m_ellipsoid.m_direction2.m_data[2] == 0.0)
+	 || (templ->m_ellipsoid.m_direction3.m_data[0] == 0.0
+	  && templ->m_ellipsoid.m_direction3.m_data[1] == 0.0
+	  && templ->m_ellipsoid.m_direction3.m_data[2] == 0.0))
+		return false;
 
 	double ss1 = dot_product(vec, &(templ->m_ellipsoid.m_direction1));
 	double ss2 = dot_product(vec, &(templ->m_ellipsoid.m_direction2));
@@ -252,81 +267,88 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
 
     init_lag_list(templ, lags, templ->m_num_lags);
 
-    *points_count = 0;
-
-    vector_t vec;
-
-    for (int lag_idx = 0; lag_idx < templ->m_num_lags; ++lag_idx)
+    // M26: Pre-allocate with conservative upper bound (total iteration space)
+    // and fill in a single pass instead of counting first then re-iterating.
     {
-        lag_t * lag = &lags[lag_idx];
-        for (int i = mini; i <= maxi; ++i)
-        {
-            for (int j = minj; j <= maxj; ++j)
-            {
-                for (int k = mink; k <= maxk; ++k)
-                {
-                    vec.m_data[0] = i;
-                    vec.m_data[1] = j;
-                    vec.m_data[2] = k;
-                    double dist = sqrt( (double)i*i + (double)j*j + (double)k*k );
-                    if (is_in_tunnel(templ, &vec) 
-                            && lag->m_start <= dist
-                            && dist < lag->m_end)
-                        (*points_count)++;
-                }
-            }
+        size_t span_i = static_cast<size_t>(maxi - mini + 1);
+        size_t span_j = static_cast<size_t>(maxj - minj + 1);
+        size_t span_k = static_cast<size_t>(maxk - mink + 1);
+        size_t max_points = static_cast<size_t>(templ->m_num_lags);
+        bool overflow = false;
+
+        // Overflow-safe multiplication
+        if (span_i > 0 && max_points > SIZE_MAX / span_i) overflow = true;
+        else max_points *= span_i;
+        if (!overflow && span_j > 0 && max_points > SIZE_MAX / span_j) overflow = true;
+        else if (!overflow) max_points *= span_j;
+        if (!overflow && span_k > 0 && max_points > SIZE_MAX / span_k) overflow = true;
+        else if (!overflow) max_points *= span_k;
+        // Ensure max_points fits in int for points_count output
+        if (!overflow && max_points > static_cast<size_t>(std::numeric_limits<int>::max()))
+            overflow = true;
+
+        if (overflow) {
+            free(lags);
+            fprintf(stderr, "[HPGL ERROR] calc_lag_areas: search template window too large\n");
+            fflush(stderr);
+            cvar_set_last_error("calc_lag_areas: search template window too large");
+            return nullptr;
         }
-    }
 
-    lag_point_t * result = (lag_point_t *) calloc(*points_count, sizeof(lag_point_t));
-    if (!result) {
-        free(lags);
-        fprintf(stderr, "[HPGL ERROR] calc_lag_areas: calloc(result) failed\n");
-        fflush(stderr);
-        cvar_set_last_error("calc_lag_areas: calloc(result) failed — out of memory");
-        return nullptr;
-    }
+        lag_point_t * result = (lag_point_t *) calloc(max_points, sizeof(lag_point_t));
+        if (!result) {
+            free(lags);
+            fprintf(stderr, "[HPGL ERROR] calc_lag_areas: calloc(result) failed\n");
+            fflush(stderr);
+            cvar_set_last_error("calc_lag_areas: calloc(result) failed — out of memory");
+            return nullptr;
+        }
 
-    int current_point = 0;
+        int current_point = 0;
+        vector_t vec;
 
-    for (int lag_idx = 0; lag_idx < templ->m_num_lags; ++lag_idx)
-    {
-        lag_t * lag = &lags[lag_idx];
-        for (int i = mini; i <= maxi; ++i)
+        for (int lag_idx = 0; lag_idx < templ->m_num_lags; ++lag_idx)
         {
-            for (int j = minj; j <= maxj; ++j)
+            lag_t * lag = &lags[lag_idx];
+            for (int i = mini; i <= maxi; ++i)
             {
-                for (int k = mink; k <= maxk; ++k)
+                for (int j = minj; j <= maxj; ++j)
                 {
-                    vec.m_data[0] = i;
-                    vec.m_data[1] = j;
-                    vec.m_data[2] = k;
-                    double dist = sqrt( (double)i*i + (double)j*j + (double)k*k );
-                    if (is_in_tunnel(templ, &vec)
-                            && lag->m_start <= dist
-                            && dist < lag->m_end)
+                    for (int k = mink; k <= maxk; ++k)
                     {
-                        if (current_point >= *points_count) {
-                            free(lags);
-                            free(result);
-                            fprintf(stderr, "[HPGL ERROR] calc_lag_areas: buffer overflow\n");
-                            fflush(stderr);
-                            cvar_set_last_error("calc_lag_areas: internal buffer overflow");
-                            return nullptr;
+                        vec.m_data[0] = i;
+                        vec.m_data[1] = j;
+                        vec.m_data[2] = k;
+                        double dist = sqrt( (double)i*i + (double)j*j + (double)k*k );
+                        if (is_in_tunnel(templ, &vec)
+                                && lag->m_start <= dist
+                                && dist < lag->m_end)
+                        {
+                            // Upper-bound guard: should never trigger since
+                            // max_points >= total iteration count
+                            if (static_cast<size_t>(current_point) >= max_points) {
+                                free(lags);
+                                free(result);
+                                fprintf(stderr, "[HPGL ERROR] calc_lag_areas: buffer overflow\n");
+                                fflush(stderr);
+                                cvar_set_last_error("calc_lag_areas: internal buffer overflow");
+                                return nullptr;
+                            }
+                            lag_point_t * lp = &result[current_point++];
+                            lp->m_coords[0] = i;
+                            lp->m_coords[1] = j;
+                            lp->m_coords[2] = k;
+                            lp->m_lag_index = lag_idx;
                         }
-                        lag_point_t * lp = &result[current_point++];
-                        lp->m_coords[0] = i;
-                        lp->m_coords[1] = j;
-                        lp->m_coords[2] = k;
-                        lp->m_lag_index = lag_idx;                        
                     }
                 }
             }
         }
-    }
 
-    free(lags);
-    return result;
+        *points_count = current_point;
+        free(lags);
+        return result;
+    }
 }
 
 

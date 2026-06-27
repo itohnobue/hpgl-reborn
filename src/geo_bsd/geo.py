@@ -759,14 +759,15 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
         )
         # Security: Keep array references to prevent use-after-free
         marr._array_refs = (prop.data, prop.mask)
-        rc = _hpgl_so.hpgl_write_inc_file_float(
-            safe_path.encode("utf-8"), C.byref(marr), undefined_value, prop_name.encode("utf-8")
-        )
-        if rc != 0:
-            raise RuntimeError(
-                "write_property failed: "
-                + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+        with _hpgl_error_guard("write_property"):
+            rc = _hpgl_so.hpgl_write_inc_file_float(
+                safe_path.encode("utf-8"), C.byref(marr), undefined_value, prop_name.encode("utf-8")
             )
+            if rc != 0:
+                raise RuntimeError(
+                    "write_property failed: "
+                    + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+                )
     else:
         # Security: Keep reference to indicator_values array
         ind_arr = numpy.array(indicator_values, dtype="uint8")
@@ -778,19 +779,20 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
         )
         # Security: Keep array references to prevent use-after-free
         marr._array_refs = (prop.data, prop.mask, ind_arr)
-        rc = _hpgl_so.hpgl_write_inc_file_byte(
-            safe_path.encode("utf-8"),
-            C.byref(marr),
-            undefined_value,
-            prop_name.encode("utf-8"),
-            ind_arr.ctypes.data_as(C.POINTER(C.c_ubyte)),
-            len(indicator_values),
-        )
-        if rc != 0:
-            raise RuntimeError(
-                "write_property failed: "
-                + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+        with _hpgl_error_guard("write_property"):
+            rc = _hpgl_so.hpgl_write_inc_file_byte(
+                safe_path.encode("utf-8"),
+                C.byref(marr),
+                undefined_value,
+                prop_name.encode("utf-8"),
+                ind_arr.ctypes.data_as(C.POINTER(C.c_ubyte)),
+                len(indicator_values),
             )
+            if rc != 0:
+                raise RuntimeError(
+                    "write_property failed: "
+                    + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+                )
 
 
 @accepts_tuple("prop", 0)
@@ -809,31 +811,33 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
         )
 
     if isinstance(prop, ContProperty):
-        rc = _hpgl_so.hpgl_write_gslib_cont_property(
-            _create_hpgl_cont_masked_array(prop, None),
-            safe_path.encode("utf-8"),
-            prop_name.encode("utf-8"),
-            undefined_value,
-        )
-        if rc != 0:
-            raise RuntimeError(
-                "write_gslib_property failed: "
-                + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+        with _hpgl_error_guard("write_gslib_property"):
+            rc = _hpgl_so.hpgl_write_gslib_cont_property(
+                _create_hpgl_cont_masked_array(prop, None),
+                safe_path.encode("utf-8"),
+                prop_name.encode("utf-8"),
+                undefined_value,
             )
+            if rc != 0:
+                raise RuntimeError(
+                    "write_gslib_property failed: "
+                    + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+                )
     else:
-        rc = _hpgl_so.hpgl_write_gslib_byte_property(
-            _create_hpgl_ind_masked_array(prop, None),
-            safe_path.encode("utf-8"),
-            prop_name.encode("utf-8"),
-            undefined_value,
-            _c_array(C.c_ubyte, len(indicator_values), indicator_values),
-            len(indicator_values),
-        )
-        if rc != 0:
-            raise RuntimeError(
-                "write_gslib_property failed: "
-                + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+        with _hpgl_error_guard("write_gslib_property"):
+            rc = _hpgl_so.hpgl_write_gslib_byte_property(
+                _create_hpgl_ind_masked_array(prop, None),
+                safe_path.encode("utf-8"),
+                prop_name.encode("utf-8"),
+                undefined_value,
+                _c_array(C.c_ubyte, len(indicator_values), indicator_values),
+                len(indicator_values),
             )
+            if rc != 0:
+                raise RuntimeError(
+                    "write_gslib_property failed: "
+                    + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+                )
 
 
 def load_cont_property(filename, undefined_value, size=None):
@@ -1602,20 +1606,21 @@ def simple_kriging_weights(
 
     weights = numpy.array([0] * len(n_x), dtype="float32")
 
-    rc = _hpgl_so.hpgl_simple_kriging_weights(
-        _c_array(C.c_float, 3, center_point),
-        numpy.array(n_x, dtype="float32"),
-        numpy.array(n_y, dtype="float32"),
-        numpy.array(n_z, dtype="float32"),
-        len(n_x),
-        covp,
-        weights,
-    )
-    if rc != 0:
-        raise RuntimeError(
-            "simple_kriging_weights failed: "
-            + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+    with _hpgl_error_guard("simple_kriging_weights"):
+        rc = _hpgl_so.hpgl_simple_kriging_weights(
+            _c_array(C.c_float, 3, center_point),
+            numpy.array(n_x, dtype="float32"),
+            numpy.array(n_y, dtype="float32"),
+            numpy.array(n_z, dtype="float32"),
+            len(n_x),
+            covp,
+            weights,
         )
+        if rc != 0:
+            raise RuntimeError(
+                "simple_kriging_weights failed: "
+                + _hpgl_so.hpgl_get_last_exception_message().decode("utf-8", errors="replace")
+            )
 
     return weights
 
@@ -1650,11 +1655,14 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
         )
     prop = prop_dict[prop_name]
     informed_array = numpy.zeros(prop.shape, dtype=numpy.uint8)
-    for i in range(prop.size):
-        if prop[i] == undefined_value:
-            informed_array[i] = 0
-        else:
-            informed_array[i] = 1
+    # Use tolerance-based comparison for float undefined_value handling.
+    # np.isclose correctly returns False for NaN cells, avoiding false
+    # positives when NaN sentinels are used.
+    if numpy.isnan(undefined_value):
+        uninformed = numpy.isnan(prop)
+    else:
+        uninformed = numpy.isclose(prop, undefined_value)
+    informed_array = numpy.where(uninformed, 0, 1).astype(numpy.uint8)
     return (prop_dict[prop_name], informed_array)
 
 

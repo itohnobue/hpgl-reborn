@@ -13,6 +13,12 @@ indicator_index_t most_probable_category(const std::vector<indicator_probability
 	size_t size = cdf.size();
 	if (size == 0) { fprintf(stderr, "HPGL FATAL: most_probable_category: empty vector\n"); abort(); }
 	if (size == 1) return 0;
+	// indicator_index_t is unsigned char (max 255); reject larger inputs
+	// to prevent silent truncation in the loop index below
+	if (size > 255) {
+		throw hpgl_exception("most_probable_category",
+			"CDF size exceeds indicator_index_t capacity (max 255)");
+	}
 
 	// Compute probability mass function (PMF) from cumulative CDF.
 	// For K categories with cumulative indicators P_0, P_1, ..., P_{K-1},

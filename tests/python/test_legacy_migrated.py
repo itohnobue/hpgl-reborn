@@ -1124,8 +1124,8 @@ class TestSGSSeedVariations:
             np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
         )
 
-        # Run multiple SGS realizations
-        n_realizations = 10
+        # Run multiple SGS realizations (100 for statistical convergence)
+        n_realizations = 100
         sum_array = np.zeros(sk_result.data.size, dtype='float32')
 
         for i in range(n_realizations):
@@ -1138,20 +1138,19 @@ class TestSGSSeedVariations:
                 radiuses=(10, 10, 10),
                 max_neighbours=12,
                 cov_model=cov_model,
-                seed=(94234523 // (i + 1)) - (234432 // (i + 1))
+                seed=int(100000 + i * 99991)
             )
-            sum_array += sgs_result.data.flatten()
+            sum_array += sgs_result.data.flatten(order='F')
 
         # Calculate average
         average = sum_array / n_realizations
 
         # Check that average is reasonably close to SK estimate
-        # We allow some tolerance due to random variation
-        mean_diff = np.mean(np.abs(average - sk_result.data.flatten()))
+        # With 100 realizations, convergence should be tighter
+        mean_diff = np.mean(np.abs(average - sk_result.data.flatten(order='F')))
 
-        # The difference should be relatively small
-        # (this is a statistical test, so we use a loose tolerance)
-        assert mean_diff < 50.0, f"Mean difference {mean_diff} too large"
+        # The difference should be small with 100 realizations (tighter than original 50.0)
+        assert mean_diff < 1.0, f"Mean difference {mean_diff} too large"
 
 
 if __name__ == '__main__':

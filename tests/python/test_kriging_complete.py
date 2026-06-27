@@ -221,6 +221,9 @@ class TestOrdinaryKriging:
                 cov_model=cov_model
             )
             assert isinstance(result, ContProperty), f"Failed for {name}"
+            assert not np.any(np.isnan(result.data))
+            assert not np.any(np.isinf(result.data))
+            assert np.all(np.isfinite(result.data[result.mask != 0]))
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
     def test_ok_various_neighbor_counts(self, continuous_property_medium, krig_medium_grid,
@@ -235,6 +238,7 @@ class TestOrdinaryKriging:
         )
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
     @pytest.mark.parametrize("radiuses", [(3, 3, 2), (5, 5, 3), (10, 10, 5), (15, 15, 8)])
     def test_ok_various_radiuses(self, continuous_property_medium, krig_medium_grid,
@@ -249,6 +253,7 @@ class TestOrdinaryKriging:
         )
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
     def test_ok_reproducibility(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test OK produces reproducible results"""
@@ -389,6 +394,9 @@ class TestSimpleKriging:
             mean=None
         )
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data))
+        assert not np.any(np.isinf(result.data))
+        assert np.all(np.isfinite(result.data[result.mask != 0]))
 
     def test_sk_explicit_mean(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test SK with explicit mean value"""
@@ -403,6 +411,7 @@ class TestSimpleKriging:
         )
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
     def test_sk_automatic_mean(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test SK with automatic mean calculation"""
@@ -416,6 +425,7 @@ class TestSimpleKriging:
         )
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
     def test_sk_reproducibility(self, continuous_property_medium, krig_medium_grid, covariance_spherical):
         """Test SK produces reproducible results"""
@@ -532,6 +542,7 @@ class TestLVMKriging:
         )
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
     def test_lvm_reproducibility(self, continuous_property_medium, krig_medium_grid,
                                   mean_data_medium, covariance_spherical):
@@ -855,6 +866,10 @@ class TestMedianIK:
             )
         )
         assert isinstance(result, IndProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
+        assert np.all(np.isfinite(result.data.astype('float64')))
+        assert result.data.shape == indicator_property_medium.data.shape
 
     def test_median_ik_reproducibility(self, indicator_property_medium, krig_medium_grid):
         """Test median IK produces reproducible results"""
@@ -1006,6 +1021,7 @@ class TestSimpleCokrigingMarkI:
         )
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
     def test_ck_markI_various_neighbor_counts(self, continuous_property_medium, krig_medium_grid,
@@ -1232,6 +1248,9 @@ class TestSimpleCokrigingMarkII:
             max_neighbours=12
         )
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data))
+        assert not np.any(np.isinf(result.data))
+        assert np.all(np.isfinite(result.data[result.mask != 0]))
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
     def test_ck_markII_various_neighbor_counts(self, continuous_property_medium, krig_medium_grid,
@@ -1270,6 +1289,9 @@ class TestSimpleCokrigingMarkII:
             max_neighbours=max_neighbours
         )
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data))
+        assert not np.any(np.isinf(result.data))
+        assert np.all(np.isfinite(result.data[result.mask != 0]))
 
     def test_ck_markII_reproducibility(self, continuous_property_medium, krig_medium_grid,
                                         secondary_property_medium):

@@ -66,6 +66,12 @@ void do_sis(
 		if (property.is_informed(node))
 			continue;
 
+		// Bounds-guard: validate node index before mask access.
+		// node_index_t is signed int; path generator should produce valid
+		// indices but double-check in case mask is undersized.
+		if (node < 0 || node >= property.size())
+			continue;
+
 		if (mask[node] != 1)
 			continue;
 

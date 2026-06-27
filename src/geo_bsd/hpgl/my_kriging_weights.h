@@ -165,6 +165,7 @@ namespace hpgl
 
 		//bool system_solved = gauss_solve(&A[0], &b[0], &weights[0], size);	
 		bool system_solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
+		if (!system_solved) return false;
 		cholesky_solve(&A_L[0], &A_U[0], &b[0], &weights[0], size);
 
 		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
@@ -298,6 +299,7 @@ namespace hpgl
 		ws.A_U.resize(size*size);
 		ws.A_L.resize(size*size);
 		bool system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
+		if (!system_solved) return false;
 		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &weights[0], size);
 		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 #endif
@@ -419,6 +421,7 @@ namespace hpgl
 		std::vector<double> A_L(size*size,0.0);
 		
 		bool system_solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
+		if (!system_solved) return false;
 
 		cholesky_solve(&A_L[0], &A_U[0], &b[0], &sk_weights[0], size);	
 		cholesky_solve(&A_L[0], &A_U[0], &ones[0], &ones_result[0], size);	
@@ -604,6 +607,7 @@ namespace hpgl
 		ws.A_L.resize(size*size);
 
 		system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
+		if (!system_solved) return false;
 		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &ws.sk_weights[0], size);
 		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.ones[0], &ws.ones_result[0], size);
 #endif
@@ -800,6 +804,7 @@ namespace hpgl
 		
 		//bool system_solved = gauss_solve(&A[0], &b[0], &weights[0], size);	
 		bool system_solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
+		if (!system_solved) return false;
 		cholesky_solve(&A_L[0], &A_U[0], &b[0], &weights[0], size);
 
 #endif
@@ -943,6 +948,7 @@ namespace hpgl
 		ws.A_L.resize(size*size);
 
 		system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
+		if (!system_solved) return false;
 		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &weights[0], size);
 #endif
 

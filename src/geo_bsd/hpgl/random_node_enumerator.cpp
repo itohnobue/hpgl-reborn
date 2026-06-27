@@ -9,19 +9,26 @@
 #include "hpgl_exception.h"
 
 namespace hpgl
-{	
+{
+	// Validate size before member initialization to prevent division-by-zero
+	// in path_random_generator_t's constructor when size == 0.
+	namespace {
+		static size_t validate_path_gen_size(size_t size) {
+			if (size <= 0) {
+				std::ostringstream oss;
+				oss << "Invalid size: " << size;
+				throw hpgl_exception("random_path_generator_t", oss.str());
+			}
+			return size;
+		}
+	}
+
 	random_path_generator_t::random_path_generator_t(size_t size, int seed)
-		: m_path_gen(size, seed),
+		: m_path_gen(validate_path_gen_size(size), seed),
 		m_counter(0),
 		m_size(size),
 		m_eop(false)
 	{
-		if (size <= 0)
-		{
-			std::ostringstream oss;
-			oss << "Invalid size: " << size;
-			throw hpgl_exception("random_path_generator_t", oss.str());
-		}
 	}
 
 	

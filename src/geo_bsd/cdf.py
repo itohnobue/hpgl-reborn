@@ -57,35 +57,19 @@ def calc_cdf(prop):
     ``CdfData`` is used as input to ``geo_bsd.sgs_simulation``.
     """
     # Handle both 1D (flat) and 3D (grid) property data
-    if prop.data.ndim == 3:
-        dx, dy, dz = prop.data.shape
-        total_cells = dx * dy * dz
-        data_flat = prop.data.flat
-        mask_flat = prop.mask.flat
-    else:
-        total_cells = prop.data.size
-        data_flat = prop.data.flat
-        mask_flat = prop.mask.flat
+    data_flat = prop.data.flat
+    mask_flat = prop.mask.flat
 
-    counts = {}
-    full_count = 0
-    for i in range(total_cells):
-        if mask_flat[i] != 0:
-            value = data_flat[i]
-            full_count += 1
-            if value in counts:
-                counts[value] += 1
-            else:
-                counts[value] = 1
-    full_count = float(full_count)
+    informed = data_flat[mask_flat != 0]
+    full_count = float(informed.size)
     if full_count == 0:
         raise ValueError("calc_cdf: no informed values (all cells are masked)")
-    values = numpy.sort(list(counts.keys()))
+    values, counts = numpy.unique(informed, return_counts=True)
+    # numpy.unique returns sorted unique values
     size = values.size
-    probs = numpy.zeros(values.shape)
+    probs = numpy.zeros(size)
     last_prob = 0.0
     for i in range(size):
-        probs[i] = last_prob + counts[values[i]] / full_count
+        probs[i] = last_prob + counts[i] / full_count
         last_prob = probs[i]
-    values = numpy.array(values)  # ensure full-size values array
     return CdfData(values=values, probs=probs)

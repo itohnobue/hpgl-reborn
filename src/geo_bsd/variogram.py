@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+import numpy
 from numpy import (
     array,
     bitwise_and,
@@ -543,6 +544,11 @@ def CalcVariogramFunction(Point1, Point2, Result, Params):
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
     else:
+        # Guard against scalar inputs (e.g. integer indices from
+        # PointSetScanGridStyle) which would crash shape() indexing.
+        if numpy.ndim(Point1) == 0:
+            Point1 = numpy.array([Point1])
+            Point2 = numpy.array([Point2])
         NumPoints = shape(Point1)[len(shape(Point1))-1]
 
         Values1 = zeros((NumValues, NumPoints))

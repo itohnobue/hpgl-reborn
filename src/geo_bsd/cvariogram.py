@@ -227,8 +227,6 @@ def __strides(array):
     ndim = array.ndim
     if ndim == 1:
         return (1, array.shape[0], array.shape[0])
-    elif ndim == 2:
-        return (1, array.shape[0], array.shape[0] * array.shape[1])
     elif ndim >= 3:
         return (
             array.strides[0] // array.itemsize,
@@ -236,7 +234,10 @@ def __strides(array):
             array.strides[2] // array.itemsize,
         )
     else:
-        raise ValueError(f"__strides: array must have at least 1 dimension, got ndim={ndim}")
+        raise ValueError(
+            f"__strides: unsupported ndim={ndim}. "
+            f"Expected ndim=1 or ndim>=3 (all current callers use ndim=3)."
+        )
 
 
 def _c_array(t, size, values):

@@ -110,6 +110,13 @@ void load_doubles_into_vector(FILE * file, std::vector<T> & data)
 				++skipped_count;
 				continue;
 			}
+			// M21: reject non-finite values (NaN, Inf) — mirroring
+			// load_floats_into_vector in read_inc_file.cpp
+			if (!std::isfinite(value))
+			{
+				++skipped_count;
+				continue;
+			}
 			data.push_back(value);
 		}
 	}
