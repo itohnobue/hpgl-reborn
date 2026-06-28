@@ -40,6 +40,7 @@ try:
         simple_kriging_weights,
         write_gslib_property,
         write_property,
+        get_gslib_property,
     )
 except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
@@ -337,9 +338,6 @@ class TestCallbackHandlers:
             cov_model=cov_model
         )
 
-        # Clear handler
-        set_output_handler(None, None)
-
         # Verify handler was invoked by the HPGL operation
         assert call_count[0] > 0, "Output handler was not called during HPGL operation"
 
@@ -390,9 +388,6 @@ class TestCallbackHandlers:
             cov_model=cov_model
         )
 
-        # Clear handler
-        set_progress_handler(None, None)
-
         # Verify handler was invoked by the HPGL operation
         assert call_count[0] > 0, "Progress handler was not called during HPGL operation"
 
@@ -425,10 +420,6 @@ class TestCallbackHandlers:
         # Should not raise exceptions
         set_output_handler(output_handler, "test_param")
         set_progress_handler(progress_handler, 0)
-
-        # Cleanup
-        set_output_handler(None, None)
-        set_progress_handler(None, None)
 
 
 # =============================================================================
@@ -938,6 +929,84 @@ class TestWritePropertyErrorPaths:
         # indicator_values=None should default to [] and not raise
         write_property(prop, filename, "test", 255)  # No indicator_values
         assert Path(filename).exists()
+
+
+# =============================================================================
+# get_gslib_property Tests (H3)
+# =============================================================================
+
+@pytest.mark.hpgl
+class TestGetGslibProperty:
+    """Tests for get_gslib_property function (geo.py:1628-1666)."""
+
+    def test_happy_path_returns_correct_masked_array(self):
+        """get_gslib_property returns (property_array, mask_array) with correct values."""
+        data = np.array([1.0, 2.0, 3.0, -99.0], dtype='float32')
+        prop_dict = {"my_prop": data}
+        result = get_gslib_property(prop_dict, "my_prop", -99.0)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        prop_array, mask_array = result
+        assert prop_array.shape == data.shape
+        assert mask_array.shape == data.shape
+        # Mask should have 0 at undefined positions
+        assert mask_array[3] == 0  # -99.0 is undefined
+        assert mask_array[0] == 1  # valid value
+        # Property values preserved
+        assert prop_array[0] == pytest.approx(1.0)
+
+    def test_nan_undefined_value(self):
+        """get_gslib_property correctly handles NaN as undefined_value."""
+        data = np.array([1.0, np.nan, 3.0], dtype='float32')
+        prop_dict = {"prop": data}
+        result = get_gslib_property(prop_dict, "prop", np.nan)
+        prop_array, mask_array = result
+        assert mask_array[1] == 0  # NaN cell should be masked
+        assert mask_array[0] == 1
+        assert mask_array[2] == 1
+
+    def test_finite_undefined_value(self):
+        """get_gslib_property correctly handles a finite float as undefined_value."""
+        data = np.array([10.0, -999.0, 30.0], dtype='float32')
+        prop_dict = {"prop": data}
+        result = get_gslib_property(prop_dict, "prop", -999.0)
+        prop_array, mask_array = result
+        assert mask_array[1] == 0  # -999 cell should be masked
+        assert mask_array[0] == 1
+        assert mask_array[2] == 1
+
+    def test_mask_correctness_all_informed(self):
+        """Mask is all-ones when no values match undefined_value."""
+        data = np.array([1.0, 2.0, 3.0], dtype='float32')
+        prop_dict = {"prop": data}
+        result = get_gslib_property(prop_dict, "prop", -99.0)
+        prop_array, mask_array = result
+        assert np.all(mask_array == 1)
+
+    def test_mask_correctness_all_undefined(self):
+        """Mask is all-zeros when all values match undefined_value."""
+        data = np.array([-99.0, -99.0, -99.0], dtype='float32')
+        prop_dict = {"prop": data}
+        result = get_gslib_property(prop_dict, "prop", -99.0)
+        prop_array, mask_array = result
+        assert np.all(mask_array == 0)
+
+    def test_not_dict_raises_typeerror(self):
+        """get_gslib_property raises TypeError when prop_dict is not a dict."""
+        with pytest.raises(TypeError, match="prop_dict must be a dict"):
+            get_gslib_property([1, 2, 3], "prop", -99.0)
+
+    def test_missing_key_raises_keyerror(self):
+        """get_gslib_property raises KeyError when prop_name not in prop_dict."""
+        prop_dict = {"other_prop": np.array([1.0], dtype='float32')}
+        with pytest.raises(KeyError):
+            get_gslib_property(prop_dict, "missing_prop", -99.0)
+
+    def test_non_string_prop_name_raises(self):
+        """get_gslib_property raises KeyError (or TypeError) for non-string prop_name."""
+        prop_dict = {"my_prop": np.array([1.0], dtype='float32')}
+        with pytest.raises((KeyError, TypeError)):
+            get_gslib_property(prop_dict, 123, -99.0)
 
 
 if __name__ == '__main__':

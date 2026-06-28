@@ -51,7 +51,10 @@ namespace hpgl
 	node_index_t sugarbox_grid_t::get_index(const sugarbox_location_t & loc)const
 	{
 		if (contains(loc))
-			return loc[2] * m_x * m_y + loc[1] * m_x + loc[0];
+			return static_cast<node_index_t>(
+				static_cast<long long>(loc[2]) * m_x * m_y
+				+ static_cast<long long>(loc[1]) * m_x
+				+ loc[0]);
 		else
 			return -1;
 	}

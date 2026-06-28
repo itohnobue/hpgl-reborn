@@ -118,7 +118,7 @@ def Cubes2PointSet(CubesDictionary, Mask):
         PointSet[Key] = zeros(0, dtype=int32)
 
     for k in range(NZ):
-        Slice = Mask[:, :, k]
+        Slice = Mask[:, :, k].astype(bool)
         PointSet['X'] = append(PointSet['X'], grid_i[Slice])
         PointSet['Y'] = append(PointSet['Y'], grid_j[Slice])
         PointSet['Z'] = append(PointSet['Z'], k * ones(Slice.sum(0).sum(0), dtype=int32))
@@ -136,7 +136,7 @@ def Cube2PointSet(Cube, Mask):
     Z = zeros(0, dtype=int32)
     Property = zeros(0, dtype=int32)
     for k in range(NZ):
-        Slice = Mask[:, :, k]
+        Slice = Mask[:, :, k].astype(bool)
         X = append(X, grid_i[Slice])
         Y = append(Y, grid_j[Slice])
         Z = append(Z, k * ones(Slice.sum(0).sum(0), dtype=int32))

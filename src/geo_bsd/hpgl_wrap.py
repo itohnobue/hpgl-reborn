@@ -301,7 +301,17 @@ def _verify_library_hash(lib_name: str, lib_path: pathlib.Path) -> None:
         )
 
 if 'HPGL_DEBUG' in os.environ:
-    _hpgl_so = _safe_load_library('hpgl_d', __file__)
+    try:
+        _hpgl_so = _safe_load_library('hpgl_d', __file__)
+    except OSError:
+        # Debug-suffixed library not found: CMake only sets DEBUG_POSTFIX
+        # on Windows. Non-Windows debug builds use the standard name.
+        # Fall back to the unsuffixed library name.
+        logger.warning(
+            "HPGL_DEBUG is set but hpgl_d library not found. "
+            "Falling back to 'hpgl' (release name)."
+        )
+        _hpgl_so = _safe_load_library('hpgl', __file__)
 else:
     _hpgl_so = _safe_load_library('hpgl', __file__)
 

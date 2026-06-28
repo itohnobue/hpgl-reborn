@@ -24,8 +24,12 @@ namespace hpgl
 	sugarbox_location_t sugarbox_grid_t::operator[](node_index_t index)const
 	{
 		HPGL_CHECK(m_x > 0, "sugarbox_grid_t::operator[]: m_x must be positive");
-		HPGL_CHECK(m_x * m_y > 0, "sugarbox_grid_t::operator[]: m_x * m_y must be positive");
-		return sugarbox_location_t(index % m_x, index % (m_x * m_y) / m_x, index / (m_x * m_y) );
+		const long long m_x_times_m_y = static_cast<long long>(m_x) * m_y;
+		HPGL_CHECK(m_x_times_m_y > 0, "sugarbox_grid_t::operator[]: m_x * m_y must be positive");
+		return sugarbox_location_t(
+			static_cast<int>(index % m_x),
+			static_cast<int>(index % m_x_times_m_y / m_x),
+			static_cast<int>(index / m_x_times_m_y));
 	}
 
 	sugarbox_grid_t::~sugarbox_grid_t() = default;

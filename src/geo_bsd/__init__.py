@@ -30,6 +30,8 @@ variogram, cvariogram, routines, validation
 """
 
 # Import validation module for user convenience
+import logging
+
 from . import cvariogram, routines, validation, variogram
 from .cdf import *
 from .geo import *
@@ -37,10 +39,19 @@ from .sgs import sgs_simulation
 from .sis import sis_simulation
 
 try:
-    from importlib.metadata import version as _get_version  # noqa: E402
-    __version__ = _get_version("hpgl")
-except Exception:
+    from importlib.metadata import PackageNotFoundError  # noqa: E402
+    from importlib.metadata import version as _get_version
+except ImportError:
     __version__ = "1.6.0"
+else:
+    try:
+        __version__ = _get_version("hpgl")
+    except PackageNotFoundError:
+        logging.warning(
+            "hpgl package not found via importlib.metadata; "
+            "falling back to default version 1.6.0"
+        )
+        __version__ = "1.6.0"
 
 __all__ = [
     # Kriging algorithms

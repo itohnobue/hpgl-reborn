@@ -1725,5 +1725,300 @@ class TestSimpleKrigingWeights:
             )
 
 
+# =============================================================================
+# Tuplet Input Tests for Kriging Functions (M22)
+# =============================================================================
+
+@pytest.mark.hpgl
+class TestKrigingTupleInputs:
+    """Test that kriging functions decorated with @accepts_tuple accept tuple input.
+
+    Each of the 6 kriging functions with @accepts_tuple("prop", 0) should
+    accept prop as a tuple (data, mask) or (data, mask, n_indicators),
+    mirroring the pattern in test_simulation_complete.py.
+    """
+
+    def test_ok_accepts_tuple_prop(self, krig_medium_grid, covariance_spherical):
+        """ordinary_kriging accepts prop as (data, mask) tuple."""
+        np.random.seed(42)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        data = np.random.rand(size).astype('float32') * 100
+        mask = np.ones(size, dtype='uint8')
+
+        result = ordinary_kriging(
+            prop=(data, mask),
+            grid=krig_medium_grid,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=covariance_spherical
+        )
+        assert isinstance(result, ContProperty)
+        assert result.data.shape == data.shape
+
+    def test_sk_accepts_tuple_prop(self, krig_medium_grid, covariance_spherical):
+        """simple_kriging accepts prop as (data, mask) tuple."""
+        np.random.seed(42)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        data = np.random.rand(size).astype('float32') * 100
+        mask = np.ones(size, dtype='uint8')
+
+        result = simple_kriging(
+            prop=(data, mask),
+            grid=krig_medium_grid,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=covariance_spherical
+        )
+        assert isinstance(result, ContProperty)
+        assert result.data.shape == data.shape
+
+    def test_lvm_accepts_tuple_prop(self, krig_medium_grid, covariance_spherical):
+        """lvm_kriging accepts prop as (data, mask) tuple."""
+        np.random.seed(42)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        data = np.random.rand(size).astype('float32') * 100
+        mask = np.ones(size, dtype='uint8')
+        mean_data = np.random.rand(size).astype('float32') * 50
+
+        result = lvm_kriging(
+            prop=(data, mask),
+            grid=krig_medium_grid,
+            mean_data=mean_data,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=covariance_spherical
+        )
+        assert isinstance(result, ContProperty)
+        assert result.data.shape == data.shape
+
+    def test_mik_accepts_tuple_prop(self, krig_medium_grid):
+        """median_ik accepts prop as (data, mask, indicator_count) tuple."""
+        np.random.seed(42)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        data = np.random.randint(0, 2, size, dtype='uint8')
+        mask = np.ones(size, dtype='uint8')
+
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(5.0, 5.0, 3.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.1
+        )
+
+        result = median_ik(
+            prop=(data, mask, 2),
+            grid=krig_medium_grid,
+            marginal_probs=(0.5, 0.5),
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=cov_model
+        )
+        assert isinstance(result, IndProperty)
+
+    def test_ik_accepts_tuple_prop(self, krig_medium_grid):
+        """indicator_kriging accepts prop as (data, mask, indicator_count) tuple."""
+        np.random.seed(42)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        data = np.random.randint(0, 3, size, dtype='uint8')
+        mask = np.ones(size, dtype='uint8')
+
+        ik_data = []
+        marginal_probs = [0.3, 0.4, 0.3]
+        for _ in range(3):
+            ik_data.append({
+                'cov_model': CovarianceModel(
+                    type=covariance.spherical,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1
+                ),
+                'radiuses': (5, 5, 3),
+                'max_neighbours': 12
+            })
+
+        result = indicator_kriging(
+            prop=(data, mask, 3),
+            grid=krig_medium_grid,
+            data=ik_data,
+            marginal_probs=marginal_probs
+        )
+        assert isinstance(result, IndProperty)
+
+    def test_ck_markI_accepts_tuple_prop(self, krig_medium_grid, covariance_spherical):
+        """simple_cokriging_markI accepts prop as (data, mask) tuple."""
+        np.random.seed(42)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        data = np.random.rand(size).astype('float32') * 100
+        mask = np.ones(size, dtype='uint8')
+
+        np.random.seed(43)
+        sec_data = np.random.rand(size).astype('float32') * 80
+        sec_mask = np.ones(size, dtype='uint8')
+        secondary = ContProperty(sec_data, sec_mask)
+
+        result = simple_cokriging_markI(
+            prop=(data, mask),
+            grid=krig_medium_grid,
+            secondary_data=secondary,
+            primary_mean=50.0,
+            secondary_mean=40.0,
+            secondary_variance=100.0,
+            correlation_coef=0.8,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=covariance_spherical
+        )
+        assert isinstance(result, ContProperty)
+        assert result.data.shape == data.shape
+
+
+# =============================================================================
+# Negative Tests for Kriging Functions (H2)
+# =============================================================================
+
+@pytest.mark.hpgl
+class TestKrigingNegativeCases:
+    """Negative/error-path tests for all 6 kriging functions.
+
+    Tests exercise validation branches for invalid input: empty properties,
+    mismatched dimensions, invalid parameters, and wrong input types.
+    """
+
+    def test_sk_max_neighbours_zero(self, krig_medium_grid, covariance_spherical):
+        """simple_kriging raises CriticalValidationError when max_neighbours=0"""
+        data = np.random.rand(500).astype('float32') * 100
+        mask = np.ones(500, dtype='uint8')
+        prop = ContProperty(data, mask)
+        from geo_bsd.validation import CriticalValidationError
+        with pytest.raises(CriticalValidationError):
+            simple_kriging(prop, krig_medium_grid, (5, 5, 3), 0, covariance_spherical)
+
+    def test_sk_none_prop_raises(self):
+        """simple_kriging raises RuntimeError when prop is None"""
+        from geo_bsd.validation import CriticalValidationError
+        with pytest.raises((RuntimeError, CriticalValidationError, AttributeError)):
+            simple_kriging(None, SugarboxGrid(10, 10, 5), (5, 5, 3), 12,
+                           CovarianceModel(covariance.spherical, (5.0, 5.0, 3.0), (0, 0, 0), 1.0, 0.1))
+
+    def test_lvm_mismatched_mean_data(self, continuous_property_medium, krig_medium_grid,
+                                       covariance_spherical):
+        """lvm_kriging raises ValueError when mean_data size doesn't match grid"""
+        # Create mean_data with wrong size
+        bad_mean = np.random.rand(100).astype('float32') * 50  # grid is 500 cells
+        with pytest.raises(ValueError, match="mean_data size"):
+            lvm_kriging(continuous_property_medium, krig_medium_grid, bad_mean,
+                        (5, 5, 3), 12, covariance_spherical)
+
+    def test_lvm_non_array_mean(self, continuous_property_medium, krig_medium_grid,
+                                 covariance_spherical):
+        """lvm_kriging raises ValueError when mean_data is not a numpy array"""
+        with pytest.raises(ValueError, match="mean_data must be a numpy array"):
+            lvm_kriging(continuous_property_medium, krig_medium_grid, "not_an_array",
+                        (5, 5, 3), 12, covariance_spherical)
+
+    def test_lvm_max_neighbours_zero(self, continuous_property_medium, krig_medium_grid,
+                                      covariance_spherical):
+        """lvm_kriging raises CriticalValidationError when max_neighbours=0"""
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        mean_data = np.random.rand(size).astype('float32') * 50
+        from geo_bsd.validation import CriticalValidationError
+        with pytest.raises(CriticalValidationError):
+            lvm_kriging(continuous_property_medium, krig_medium_grid, mean_data,
+                        (5, 5, 3), 0, covariance_spherical)
+
+    def test_ik_mismatched_marginal_probs(self, indicator_property_medium, krig_medium_grid):
+        """indicator_kriging raises ValueError when marginal_probs doesn't match data"""
+        ik_data = [{
+            'cov_model': CovarianceModel(covariance.spherical, (5.0, 5.0, 3.0),
+                                          (0, 0, 0), 1.0, 0.1),
+            'radiuses': (5, 5, 3),
+            'max_neighbours': 12
+        } for _ in range(3)]
+        # Wrong length: 2 probs for 3 indicators
+        with pytest.raises(ValueError, match="marginal_probs length"):
+            indicator_kriging(indicator_property_medium, krig_medium_grid,
+                              ik_data, [0.3, 0.7])
+
+    def test_ik_empty_data_list(self, indicator_property_medium, krig_medium_grid):
+        """indicator_kriging raises error when data list is empty"""
+        from geo_bsd.validation import CriticalValidationError
+        with pytest.raises((CriticalValidationError, ValueError)):
+            indicator_kriging(indicator_property_medium, krig_medium_grid, [], [0.5])
+
+    def test_mik_wrong_marginal_probs_count(self, indicator_property_medium, krig_medium_grid):
+        """median_ik raises ValueError when marginal_probs doesn't have 2 elements"""
+        cov_model = CovarianceModel(covariance.spherical, (5.0, 5.0, 3.0),
+                                     (0, 0, 0), 1.0, 0.1)
+        with pytest.raises(ValueError, match="2 elements"):
+            median_ik(indicator_property_medium, krig_medium_grid,
+                      (0.3, 0.4, 0.3), (5, 5, 3), 12, cov_model)
+
+    def test_mik_max_neighbours_zero(self, indicator_property_medium, krig_medium_grid):
+        """median_ik raises CriticalValidationError when max_neighbours=0"""
+        cov_model = CovarianceModel(covariance.spherical, (5.0, 5.0, 3.0),
+                                     (0, 0, 0), 1.0, 0.1)
+        from geo_bsd.validation import CriticalValidationError
+        with pytest.raises(CriticalValidationError):
+            median_ik(indicator_property_medium, krig_medium_grid,
+                      (0.5, 0.5), (5, 5, 3), 0, cov_model)
+
+    def test_ck_markI_mismatched_secondary(self, continuous_property_medium, krig_medium_grid,
+                                             covariance_spherical):
+        """simple_cokriging_markI raises ValueError when secondary_data size mismatches grid"""
+        # Create secondary_data with wrong size
+        bad_sec_data = np.random.rand(100).astype('float32') * 80
+        bad_sec_mask = np.ones(100, dtype='uint8')
+        bad_secondary = ContProperty(bad_sec_data, bad_sec_mask)
+        with pytest.raises(ValueError, match="secondary_data size"):
+            simple_cokriging_markI(continuous_property_medium, krig_medium_grid,
+                                   (5, 5, 3), 12, covariance_spherical,
+                                   bad_secondary, 50.0, 40.0, 100.0, 0.8)
+
+    def test_ck_markI_invalid_correlation(self, continuous_property_medium, krig_medium_grid,
+                                            secondary_property_medium, covariance_spherical):
+        """simple_cokriging_markI raises CriticalValidationError for invalid correlation"""
+        from geo_bsd.validation import CriticalValidationError
+        with pytest.raises(CriticalValidationError):
+            simple_cokriging_markI(continuous_property_medium, krig_medium_grid,
+                                   (5, 5, 3), 12, covariance_spherical,
+                                   secondary_property_medium, 50.0, 40.0, 100.0, 1.5)
+
+    def test_ck_markII_non_dict_primary(self, krig_medium_grid, secondary_property_medium):
+        """simple_cokriging_markII raises CriticalValidationError for non-dict primary_data"""
+        from geo_bsd.validation import CriticalValidationError
+
+        sec_data = {
+            'data': secondary_property_medium,
+            'mean': 40.0,
+            'cov_model': CovarianceModel(covariance.spherical, (5.0, 5.0, 3.0),
+                                          (0, 0, 0), 1.0, 0.1)
+        }
+        with pytest.raises(CriticalValidationError, match="primary_data must be a dict"):
+            simple_cokriging_markII(krig_medium_grid, "not_a_dict",
+                                    sec_data, 0.8, (5, 5, 3), 12)
+
+    def test_ck_markII_missing_key(self, continuous_property_medium, krig_medium_grid,
+                                     secondary_property_medium):
+        """simple_cokriging_markII raises CriticalValidationError when primary_data missing key"""
+        from geo_bsd.validation import CriticalValidationError
+
+        primary_data = {
+            'data': continuous_property_medium,
+            'mean': 50.0,
+            # 'cov_model' missing
+        }
+        sec_data = {
+            'data': secondary_property_medium,
+            'mean': 40.0,
+            'cov_model': CovarianceModel(covariance.spherical, (5.0, 5.0, 3.0),
+                                          (0, 0, 0), 1.0, 0.1)
+        }
+        with pytest.raises(CriticalValidationError, match="missing required key"):
+            simple_cokriging_markII(krig_medium_grid, primary_data,
+                                    sec_data, 0.8, (5, 5, 3), 12)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

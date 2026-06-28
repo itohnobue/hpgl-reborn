@@ -2,6 +2,7 @@
 #include "api.h"
 #include <string>
 #include <atomic>
+#include <mutex>
 
 // Handler function pointers — set once at startup (before any concurrent calls).
 // std::atomic provides defense-in-depth memory ordering even though the contract
@@ -18,6 +19,13 @@ static std::atomic<void *> s_param{nullptr};
 static std::atomic<int (*)(char * stage, int percentage, void * param)> s_progress_handler{nullptr};
 static std::atomic<void *> s_progress_handler_param{nullptr};
 
+// Mutex serializes handler invocations from concurrent threads.
+// The write() and update_progress() handlers may be called from
+// multiple OpenMP threads simultaneously. Without serialization,
+// concurrent calls to a Python ctypes callback can corrupt GIL state
+// or interleave output.
+static std::mutex s_handler_mutex;
+
 
 namespace hpgl
 {
@@ -26,10 +34,12 @@ namespace hpgl
 		auto h = s_handler.load(std::memory_order_acquire);
 		if (h)
 		{
+			std::lock_guard<std::mutex> lock(s_handler_mutex);
 			h(const_cast<char*>(str), s_param.load(std::memory_order_relaxed));
 		}
 		else
 		{
+			std::lock_guard<std::mutex> lock(s_handler_mutex);
 			std::cout << "[LOG2]";
 			std::cout << str;
 			std::cout.flush();
@@ -46,22 +56,25 @@ namespace hpgl
 		auto ph = s_progress_handler.load();
 		if (ph)
 		{
+			std::lock_guard<std::mutex> lock(s_handler_mutex);
 			ph(const_cast<char*>(stage), percentage, s_progress_handler_param.load());
 		}
 		else
 		{
+			std::lock_guard<std::mutex> lock(s_handler_mutex);
 			if (percentage == 0)
 			{
-				write(std::string(stage) + ": ");
+				std::cout << stage << ": ";
 			}
 			else if (percentage == -1)
 			{
-				write("Done.\n");
+				std::cout << "Done.\n";
 			}
 			else
 			{
-				write(std::to_string(percentage) + "%... ");
+				std::cout << percentage << "%... ";
 			}
+			std::cout.flush();
 		}
 	}
 }

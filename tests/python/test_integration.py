@@ -207,5 +207,110 @@ class TestIOIntegration:
         )
 
 
+# =============================================================================
+# Multi-Stage Workflow Tests (M21)
+# =============================================================================
+
+@pytest.mark.hpgl
+@pytest.mark.integration
+class TestMultiStageWorkflows:
+    """Test multi-stage geostatistical workflows: variogram→kriging, IK→SIS."""
+
+    def test_variogram_to_kriging_chain(self):
+        """Compute variogram model from data, then use it for ordinary_kriging.
+
+        The CovarianceModel serves as the variogram model (they are equivalent
+        in the HPGL framework). This test validates that a covariance model
+        constructed from data characteristics can drive a complete kriging
+        workflow.
+        """
+        grid = SugarboxGrid(x=10, y=10, z=5)
+        np.random.seed(42)
+        data = np.random.rand(500).astype('float32') * 100
+        mask = np.ones(500, dtype='uint8')
+
+        # Step 1: Compute mean and variance from data (simulates variogram analysis)
+        prop = ContProperty(data, mask)
+        data_mean = calc_mean(prop)
+        data_std = np.sqrt(np.mean((data - data_mean) ** 2))
+
+        # Step 2: Build covariance/variogram model from data statistics
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(5.0, 5.0, 3.0),
+            sill=float(data_std ** 2),
+            nugget=float(data_std ** 2 * 0.1)
+        )
+
+        # Step 3: Run ordinary kriging with the derived model
+        kriged = ordinary_kriging(
+            prop=prop,
+            grid=grid,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=cov_model
+        )
+
+        assert isinstance(kriged, ContProperty)
+        assert kriged.data.shape == (500,)
+        assert not np.any(np.isnan(kriged.data.astype('float64')))
+        assert not np.any(np.isinf(kriged.data.astype('float64')))
+
+    def test_indicator_kriging_to_sis_chain(self):
+        """Run indicator_kriging, then use results for sis_simulation.
+
+        This validates the complete IK→SIS multi-stage workflow:
+        indicator kriging produces probability maps, which feed into
+        sequential indicator simulation for realization generation.
+        """
+        grid = SugarboxGrid(x=10, y=10, z=5)
+        np.random.seed(42)
+        size = grid.x * grid.y * grid.z
+
+        # Create indicator property (3 categories)
+        data = np.random.randint(0, 3, size, dtype='uint8')
+        mask = np.ones(size, dtype='uint8')
+        ind_prop = IndProperty(data, mask, 3)
+
+        # Step 1: Setup indicator kriging data
+        ik_data = []
+        marginal_probs = [0.3, 0.4, 0.3]
+        for _ in range(3):
+            ik_data.append({
+                'cov_model': CovarianceModel(
+                    type=covariance.spherical,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1
+                ),
+                'radiuses': (5, 5, 3),
+                'max_neighbours': 12
+            })
+
+        # Step 2: Run indicator kriging
+        ik_result = indicator_kriging(
+            prop=ind_prop,
+            grid=grid,
+            data=ik_data,
+            marginal_probs=marginal_probs
+        )
+        assert isinstance(ik_result, IndProperty)
+        assert ik_result.indicator_count == 3
+
+        # Step 3: Run SIS using IK results
+        sis_result = sis_simulation(
+            prop=ik_result,
+            grid=grid,
+            data=ik_data,
+            seed=42,
+            marginal_probs=marginal_probs
+        )
+
+        assert isinstance(sis_result, IndProperty)
+        assert sis_result.indicator_count == 3
+        assert sis_result.data.shape == ik_result.data.shape
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

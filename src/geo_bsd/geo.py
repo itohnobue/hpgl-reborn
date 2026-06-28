@@ -55,6 +55,8 @@ _error_snapshot_lock = threading.Lock()
 _hpgl_call_lock = threading.Lock()
 
 
+
+
 @contextlib.contextmanager
 def _hpgl_error_guard(context=""):
     """Serialize a C++ HPGL call with error checking to prevent cross-thread races.
@@ -134,12 +136,10 @@ def _check_hpgl_error(context=""):
         if err is not None and len(err) > 0:
             snapshot = getattr(_error_local, "_hpgl_error_snapshot", None)
             if err == snapshot:
-                # Same error as pre-call snapshot — stale, suppress.
-                # NOTE: In the extremely unlikely event that a new C++ operation produces
-                # an error message byte-for-byte identical to the pre-call snapshot,
-                # it would be falsely suppressed. The C++ library always includes
-                # __FILE__:__LINE__ in error messages, making collision infeasible.
+                # Error unchanged from pre-call snapshot — C++ call did
+                # not produce a new error. Always suppress stale errors.
                 return
+            # Genuine new error (different from pre-call snapshot)
             err_str = err.decode("utf-8", errors="replace")
             raise RuntimeError(
                 f"{context} failed: {err_str}" if context else f"HPGL error: {err_str}"
@@ -261,6 +261,11 @@ def _create_hpgl_ind_masked_array(prop, grid):
         assert prop.data.strides == prop.mask.strides
     else:
         sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
+        if grid.x * grid.y * grid.z != prop.data.size:
+            raise RuntimeError(
+                f"Invalid data size. Size of data = {prop.data.size}. "
+                f"Size of grid = {grid.x * grid.y * grid.z}"
+            )
 
     # Security: Keep references to arrays to prevent use-after-free
     result = _HPGL_IND_MASKED_ARRAY(
@@ -576,7 +581,7 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
     values = []
     mask = []
     skipped_parse = 0
-    skipped_key = 0
+    unknown_values = set()
     element_count = 0
 
     # Use validated path and explicit encoding
@@ -595,27 +600,26 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
                 except (ValueError, TypeError):
                     skipped_parse += 1
                     continue
-                try:
-                    if val == undefined_value:
-                        values.append(255)
-                        mask.append(0)
-                    else:
-                        values.append(dict_map[val])
-                        mask.append(1)
+                if val == undefined_value:
+                    values.append(255)
+                    mask.append(0)
                     element_count += 1
-                except KeyError:
-                    skipped_key += 1
+                elif val in dict_map:
+                    values.append(dict_map[val])
+                    mask.append(1)
+                    element_count += 1
+                else:
+                    unknown_values.add(val)
 
     if skipped_parse > 0:
         logger.warning(
             "_load_prop_ind_slow: skipped %d unparseable tokens in %s", skipped_parse, safe_path
         )
-    if skipped_key > 0:
-        logger.warning(
-            "_load_prop_ind_slow: skipped %d tokens with unknown indicator values (not in %s) in %s",
-            skipped_key,
-            ind_values,
-            safe_path,
+    if unknown_values:
+        sorted_unknown = sorted(unknown_values, key=int)
+        raise ValueError(
+            f"_load_prop_ind_slow: unknown indicator value(s) {sorted_unknown} "
+            f"found in {safe_path}. Expected indicator values: {list(ind_values)}"
         )
 
     return IndProperty(
@@ -919,9 +923,10 @@ def read_inc_file_float(filename, undefined_value, size):
     data = numpy.zeros(total_elements, dtype="float32", order="F")
     mask = numpy.zeros(total_elements, dtype="uint8", order="F")
 
-    rc = _hpgl_so.hpgl_read_inc_file_float(
-        safe_path.encode("utf-8"), undefined_value, total_elements, data, mask
-    )
+    with _hpgl_error_guard("read_inc_file_float"):
+        rc = _hpgl_so.hpgl_read_inc_file_float(
+            safe_path.encode("utf-8"), undefined_value, total_elements, data, mask
+        )
     if rc != 0:
         raise RuntimeError(
             "read_inc_file_float failed: "
@@ -950,15 +955,16 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
         )
     data = numpy.zeros(total_elements, dtype="uint8", order="F")
     mask = numpy.zeros(total_elements, dtype="uint8", order="F")
-    rc = _hpgl_so.hpgl_read_inc_file_byte(
-        safe_path.encode("utf-8"),
-        undefined_value,
-        total_elements,
-        data,
-        mask,
-        numpy.array(indicator_values, dtype="uint8"),
-        len(indicator_values),
-    )
+    with _hpgl_error_guard("read_inc_file_byte"):
+        rc = _hpgl_so.hpgl_read_inc_file_byte(
+            safe_path.encode("utf-8"),
+            undefined_value,
+            total_elements,
+            data,
+            mask,
+            numpy.array(indicator_values, dtype="uint8"),
+            len(indicator_values),
+        )
     if rc != 0:
         raise RuntimeError(
             "read_inc_file_byte failed: "
@@ -1177,6 +1183,16 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
         cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
     )
 
+    # Validate property data size against grid
+    if prop.data.size == 0:
+        raise ValueError("simple_kriging: prop.data is empty")
+    expected_size = grid.x * grid.y * grid.z
+    if prop.data.size != expected_size:
+        raise ValueError(
+            f"simple_kriging: prop.data size {prop.data.size} does not match "
+            f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
+        )
+
     out_prop = _clone_prop(prop)
 
     skp = _HPGL_SK_PARAMS(
@@ -1264,6 +1280,15 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
         raise ValueError(
             f"lvm_kriging: mean_data size {mean_data.size} does not match "
             f"grid dimensions {grid.x}x{grid.y}x{grid.z} = {expected_size}"
+        )
+
+    # Validate property data size against grid
+    if prop.data.size == 0:
+        raise ValueError("lvm_kriging: prop.data is empty")
+    if prop.data.size != expected_size:
+        raise ValueError(
+            f"lvm_kriging: prop.data size {prop.data.size} does not match "
+            f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
         )
 
     out_prop = _clone_prop(prop)

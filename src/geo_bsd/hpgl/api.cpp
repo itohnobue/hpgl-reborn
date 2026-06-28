@@ -149,6 +149,11 @@ HPGL_API int hpgl_read_inc_file_float(
 {
 	if (validate_pointer(filename, "filename (read_inc_file_float)") != 0) return -1;
 	if (validate_pointer(data, "data (read_inc_file_float)") != 0) return -1;
+	if (size <= 0)
+	{
+		hpgl::set_last_exception_message("read_inc_file_float: size must be positive");
+		return -1;
+	}
 	// mask is optional: may be nullptr (all cells active)
 	try
 	{
@@ -183,6 +188,11 @@ HPGL_API int hpgl_read_inc_file_byte(
 	if (values_count <= 0)
 	{
 		hpgl::set_last_exception_message("read_inc_file_byte: values_count must be positive");
+		return -1;
+	}
+	if (size <= 0)
+	{
+		hpgl::set_last_exception_message("read_inc_file_byte: size must be positive");
 		return -1;
 	}
 	try
@@ -255,6 +265,9 @@ void init_remap_table(unsigned char * values, int values_count, int indicator_co
 		throw hpgl::hpgl_exception("init_remap_table", "Negative values_count");
 	if (indicator_count < 0)
 		throw hpgl::hpgl_exception("init_remap_table", "Negative indicator_count");
+	if (indicator_count > 255)
+		throw hpgl::hpgl_exception("init_remap_table",
+			"indicator_count exceeds unsigned char max (255)");
 
 	if (values == nullptr)
 	{
@@ -744,7 +757,14 @@ HPGL_API void hpgl_median_ik(
 	validate_pointer_or_throw(out_data, "out_data (median_ik)");
 
 	int size = get_shape_volume(&(in_data->m_shape));
-	validate_shape_volume_or_throw(size, "median_ik");
+	validate_shape_volume_or_throw(size, "median_ik input");
+
+	int out_size = get_shape_volume(&(out_data->m_shape));
+	validate_shape_volume_or_throw(out_size, "median_ik output");
+
+	if (size != out_size)
+		throw hpgl_exception("hpgl_median_ik",
+			"input and output shape volume mismatch");
 
 	sugarbox_grid_t grid;
 	init_grid(grid, &(in_data->m_shape));

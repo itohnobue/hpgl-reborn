@@ -9,6 +9,8 @@
 #define BS_LOCALE_KEEPER_H_
 
 #include <locale.h>
+#include <mutex>
+#include <string>
 
 namespace blue_sky {
 
@@ -17,6 +19,15 @@ namespace blue_sky {
 #ifndef __GLIBC__
     std::string locale_;
     int category_;
+    // Mutex protects setlocale() calls on non-GLIBC platforms
+    // where setlocale() modifies global process state and is
+    // not thread-safe. Concurrent locale_keeper construction
+    // or destruction from multiple threads can corrupt the
+    // locale string returned by setlocale(category_, 0).
+    static std::mutex& get_mutex() {
+      static std::mutex m;
+      return m;
+    }
 #endif
 #ifdef __GLIBC__
     locale_t old_locale_;
@@ -35,8 +46,11 @@ namespace blue_sky {
       if (new_locale_)
         uselocale(new_locale_);
 #else
-      locale_ = std::string(setlocale(category_, 0));
-      setlocale(category_, new_name);
+      {
+        std::lock_guard<std::mutex> lock(get_mutex());
+        locale_ = std::string(setlocale(category_, 0));
+        setlocale(category_, new_name);
+      }
 #endif
     }
 
@@ -49,7 +63,10 @@ namespace blue_sky {
         freelocale(new_locale_);
       }
 #else
-      setlocale(category_, locale_.c_str());
+      {
+        std::lock_guard<std::mutex> lock(get_mutex());
+        setlocale(category_, locale_.c_str());
+      }
 #endif
     }
   };

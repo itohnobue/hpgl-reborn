@@ -271,13 +271,7 @@ class TestPointSet2Cube:
     """Tests for PointSet2Cube function."""
 
     def test_round_trip(self):
-        """Cube2PointSet -> PointSet2Cube smoke test (completes without crash).
-
-        Note: Cube2PointSet has a known bug with Fortran-ordered arrays
-        where X, Y, Z arrays may have mismatched lengths due to different
-        sum() vs boolean-indexing semantics in the Z computation.
-        This test verifies the function completes and produces non-empty output.
-        """
+        """Cube2PointSet -> PointSet2Cube smoke test (completes without crash)."""
         cube = np.arange(8, dtype='float32').reshape((2, 2, 2), order='F')
         mask = np.ones((2, 2, 2), dtype='uint8')
         mask[0, 0, 1] = 0  # One uninformed cell
@@ -285,17 +279,15 @@ class TestPointSet2Cube:
         assert len(x) > 0, "Expected at least one informed point"
         assert len(prop) > 0
 
-    @pytest.mark.xfail(reason="Known Fortran-order bug: Z array length mismatches X/Y")
     def test_fortran_order_output_consistency(self):
         """Regression test: Cube2PointSet with Fortran-order input must produce
         consistent-length output arrays (X, Y, Z, and prop all same length).
 
-        This is a regression test for the documented Fortran-order bug where
-        X, Y, Z arrays may have mismatched lengths due to different sum()
-        vs boolean-indexing semantics in the Z computation path.
+        This test verifies the fix for the documented Fortran-order bug where
+        uint8 mask slices were treated as fancy-index integers instead of
+        boolean masks. The fix converts mask slices to bool dtype before indexing.
 
-        Marked xfail: the bug is confirmed to exist as of v1.6.0.
-        When fixed, this test should pass and the xfail marker should be removed.
+        Fixed as of v1.6.1 — the xfail marker has been removed.
         """
         cube = np.arange(27, dtype='float32').reshape((3, 3, 3), order='F')
         mask = np.ones((3, 3, 3), dtype='uint8')

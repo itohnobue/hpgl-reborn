@@ -122,12 +122,23 @@ def check_test_files():
     tests_dir = Path(__file__).parent / "python"
     test_files = [
         "conftest.py",
-        "test_kriging.py",
-        "test_simulation.py",
+        "test_classes.py",
+        "test_kriging_complete.py",
+        "test_simulation_complete.py",
+        "test_routines.py",
+        "test_utilities.py",
+        "test_integration.py",
+        "test_edge_cases.py",
         "test_numpy2_compat.py",
         "test_memory_leaks.py",
         "test_performance.py",
-        "test_integration.py"
+        "test_legacy_migrated.py",
+        "test_cvariogram.py",
+        "test_gtsim.py",
+        "test_cdf_edge_cases.py",
+        "test_variogram.py",
+        "test_validation.py",
+        "test_regression_v150.py"
     ]
 
     all_exist = True

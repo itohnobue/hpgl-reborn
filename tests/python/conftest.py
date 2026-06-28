@@ -25,6 +25,29 @@ except (ImportError, SyntaxError, IndentationError, OSError):
 
 
 # =============================================================================
+# Autouse Fixture: Handler Cleanup (M10)
+# =============================================================================
+
+@pytest.fixture(autouse=True)
+def _clear_handlers():
+    """Autouse fixture: clear output and progress handlers on teardown.
+
+    Ensures output_handler and progress_handler are always reset to None
+    after every test, even if a C++ crash or assertion failure interrupts
+    the test before inline cleanup runs. This is a yield-based fixture:
+    setup runs before the test, teardown after.
+    """
+    yield
+    if HPGL_AVAILABLE:
+        try:
+            from geo_bsd.geo import set_output_handler, set_progress_handler
+            set_output_handler(None, None)
+            set_progress_handler(None, None)
+        except (ImportError, OSError):
+            pass
+
+
+# =============================================================================
 # Grid Fixtures
 # =============================================================================
 

@@ -301,6 +301,11 @@ def CalcVariograms(templ, hard_data, percent=100):
         raise ValueError(
             f"CalcVariograms: hard_data[1] must be 3-dimensional, got {hard_data[1].ndim}d"
         )
+    if hard_data[0].shape != hard_data[1].shape:
+        raise ValueError(
+            f"CalcVariograms: hard_data[0].shape {hard_data[0].shape} does not match "
+            f"hard_data[1].shape {hard_data[1].shape}"
+        )
     variogram = numpy.array([0] * templ.num_lags, dtype="float32")
 
     hd = checked_create(
@@ -344,6 +349,16 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
         raise ValueError(
             f"CalcVariogramsFromPointSet: point_set size {len(pts)} exceeds "
             f"MAX_POINT_SET_SIZE ({MAX_POINT_SET_SIZE})"
+        )
+    # Validate coordinate arrays have matching lengths
+    x_len = len(point_set["X"])
+    y_len = len(point_set["Y"])
+    z_len = len(point_set["Z"])
+    p_len = len(point_set["Property"])
+    if not (x_len == y_len == z_len == p_len):
+        raise ValueError(
+            f"CalcVariogramsFromPointSet: coordinate array length mismatch: "
+            f"len(X)={x_len}, len(Y)={y_len}, len(Z)={z_len}, len(Property)={p_len}"
         )
     if variogram is None:
         variogram = numpy.array([0] * templ.num_lags, dtype="float32")
