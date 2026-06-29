@@ -115,6 +115,8 @@ RuntimeError
     ParameterValidator.validate_seed(seed)
 
     # Validate marginal probabilities
+    if len(marginal_probs) == 0:
+        raise ValueError("sis_simulation: marginal_probs must not be empty")
     is_lvm = not numpy.isscalar(marginal_probs[0])
     if not is_lvm:
         ParameterValidator.validate_probability_sum(marginal_probs)

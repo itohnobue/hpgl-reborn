@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+import warnings
+
 import numpy
 from numpy import (
     array,
@@ -163,6 +165,12 @@ def _IsInTunnel(VariogramSearchTemplate, V):
     SS3 = abs(dot(V, D3))
 
     if VariogramSearchTemplate.Ellipsoid.R2 == 0 or VariogramSearchTemplate.Ellipsoid.R3 == 0:
+        warnings.warn(
+            f"_IsInTunnel: R2={VariogramSearchTemplate.Ellipsoid.R2!r} or "
+            f"R3={VariogramSearchTemplate.Ellipsoid.R3!r} is zero. "
+            f"Returning all-False result (no vectors in tunnel).",
+            stacklevel=2,
+        )
         return zeros(V.shape[0], dtype=bool)
 
     S2 = SS2 / VariogramSearchTemplate.Ellipsoid.R2
@@ -497,6 +505,13 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
 
     LI, LJ, LK, LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
 
+    if len(LagIndexes) == 0:
+        raise ValueError(
+            "CubeScan: _CalcLagsAreas returned empty LagIndexes — "
+            "no lag offsets found. Check search template parameters "
+            "(NumLags, LagSeparation, LagWidth, Ellipsoid ranges)."
+        )
+
     if Function is not None:
         Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
@@ -570,6 +585,11 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
     else:
+        # Normalize Point1/Point2 to scalar indices for point-by-point functions.
+        # PointSetScanContStyle passes list-point args [i], [j] which must be
+        # converted to scalars for consistent single-element array indexing.
+        Point1 = numpy.asarray(Point1).flat[0] if not numpy.isscalar(Point1) else Point1
+        Point2 = numpy.asarray(Point2).flat[0] if not numpy.isscalar(Point2) else Point2
         Values1 = zeros(NumValues)
         Values2 = zeros(NumValues)
         SoftValues1 = zeros(NumValues)
@@ -593,6 +613,11 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
     else:
+        # Normalize Point1/Point2 to scalar indices for point-by-point functions.
+        # PointSetScanContStyle passes list-point args [i], [j] which must be
+        # converted to scalars for consistent single-element array indexing.
+        Point1 = numpy.asarray(Point1).flat[0] if not numpy.isscalar(Point1) else Point1
+        Point2 = numpy.asarray(Point2).flat[0] if not numpy.isscalar(Point2) else Point2
         Values1 = zeros(NumValues)
         Values2 = zeros(NumValues)
         SoftValues1 = zeros(NumValues)
@@ -603,7 +628,7 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
             SoftValues1[i] = SoftData[i][Point1]
             SoftValues2[i] = SoftData[i][Point2]
         denom = (SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1-SoftValues2)) ** 0.5
-        denom[denom == 0] = 1.0  # Avoid div/0; numerator is 0 when soft value is 0 or 1
+        denom[denom <= 0] = 1.0  # Avoid div/0 and NaN from negative floating-point noise
         Covariances = float32((Values1 - SoftValues1)*(Values2 - SoftValues2) / denom)
         Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Covariances
         Result[NumValues + NumValues] += 1

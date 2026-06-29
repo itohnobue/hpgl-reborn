@@ -423,6 +423,17 @@ class TestVariogramCoreFunctions:
         result = CalcCovarianceFunction(p1, p2, result, params)
         assert np.all(np.isfinite(result))
 
+    def test_calc_covariance_list_args(self):
+        """CalcCovarianceFunction handles list-type point args (PointSetScanContStyle path)."""
+        from geo_bsd.variogram import CalcCovarianceFunction
+        values = [np.array([10.0, 20.0, 30.0], dtype='float32')]
+        soft = [np.array([10.0, 20.0, 30.0], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcCovarianceFunction(None, None, None, params)
+        # Pass lists like PointSetScanContStyle does: [i], [j]
+        result = CalcCovarianceFunction([0], [1], result, params)
+        assert np.all(np.isfinite(result))
+
     # ---- CalcIndCorrelationFunction ----
 
     def test_calc_ind_correlation_initializes_result(self):
@@ -448,6 +459,17 @@ class TestVariogramCoreFunctions:
         p2 = np.int64(1)
         result = CalcIndCorrelationFunction(p1, p2, result, params)
         assert np.all(np.isfinite(result)), "Denom guard should prevent NaN/Inf"
+
+    def test_calc_ind_correlation_list_args(self):
+        """CalcIndCorrelationFunction handles list-type point args (PointSetScanContStyle path)."""
+        from geo_bsd.variogram import CalcIndCorrelationFunction
+        values = [np.array([10.0, 20.0, 30.0], dtype='float32')]
+        soft = [np.array([10.0, 20.0, 30.0], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcIndCorrelationFunction(None, None, None, params)
+        # Pass lists like PointSetScanContStyle does: [i], [j]
+        result = CalcIndCorrelationFunction([0], [1], result, params)
+        assert np.all(np.isfinite(result))
 
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")

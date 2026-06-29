@@ -43,7 +43,9 @@ namespace hpgl
 	line_section_t<T> intersect(const line_section_t<T> & ls1, const line_section_t<T> & ls2)
 	{
 		line_section_t<T> result(std::max(ls1.c1, ls2.c1), std::min(ls1.c2, ls2.c2));
-		if (result.c1 < result.c2)
+		// Use <= so point-touch intersections (c1 == c2) return the
+		// single-point section instead of a degenerate (0,0) result.
+		if (result.c1 <= result.c2)
 			return result;
 		else
 			return line_section_t<T>(0, 0);

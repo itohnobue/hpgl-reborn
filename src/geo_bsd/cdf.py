@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+import warnings
+
 import numpy
 
 __all__ = ["CdfData", "calc_cdf"]
@@ -64,6 +66,19 @@ def calc_cdf(prop):
     full_count = float(informed.size)
     if full_count == 0:
         raise ValueError("calc_cdf: no informed values (all cells are masked)")
+    if numpy.any(numpy.isnan(informed)) or numpy.any(numpy.isinf(informed)):
+        warnings.warn(
+            "calc_cdf: informed values contain NaN or Inf values. "
+            "Filtering them out before computing the CDF.",
+            stacklevel=2,
+        )
+        informed = informed[numpy.isfinite(informed)]
+        full_count = float(informed.size)
+        if full_count == 0:
+            raise ValueError(
+                "calc_cdf: no informed values after filtering NaN/Inf — "
+                "all informed cells contained NaN or Inf"
+            )
     values, counts = numpy.unique(informed, return_counts=True)
     # numpy.unique returns sorted unique values
     size = values.size

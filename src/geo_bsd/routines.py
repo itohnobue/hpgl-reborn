@@ -312,8 +312,16 @@ def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):
     if kmax > Cube.shape[2]:
         kmax = Cube.shape[2]
 
-    if (sum ( (Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[0:(imax-imin), 0:(jmax-jmin), 0:(kmax-kmin)]==1) ) > 0):
-        return Cube[imin:imax, jmin:jmax, kmin:kmax][nonzero((Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[0:(imax-imin), 0:(jmax-jmin), 0:(kmax-kmin)]==1))].mean()
+    # Compute MeanMask offsets to align with the clamped data window.
+    # When the window is clamped near the left/bottom/front boundary,
+    # the MeanMask must be shifted by the same amount so that the mask
+    # center stays aligned with the cell position (i, j, k).
+    i_offset = imin - i + Radiuses[0]
+    j_offset = jmin - j + Radiuses[1]
+    k_offset = kmin - k + Radiuses[2]
+
+    if (sum ( (Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[i_offset:(i_offset+imax-imin), j_offset:(j_offset+jmax-jmin), k_offset:(k_offset+kmax-kmin)]==1) ) > 0):
+        return Cube[imin:imax, jmin:jmax, kmin:kmax][nonzero((Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[i_offset:(i_offset+imax-imin), j_offset:(j_offset+jmax-jmin), k_offset:(k_offset+kmax-kmin)]==1))].mean()
     else:
         return undefined_value
 

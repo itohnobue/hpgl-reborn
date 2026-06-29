@@ -92,8 +92,13 @@ namespace hpgl
 		m_state->m_z = gz / m_ellipsoid[2] + 2;
 
 		m_state->m_cluster_box = rect_3d_t<int>(0, 0, 0, m_state->m_x, m_state->m_y, m_state->m_z);
-		m_state->m_clusters.resize(m_state->m_cluster_box.volume());		
-		for (size_t i = 0; i < m_state->m_cluster_box.volume(); ++i)
+		// Prevent signed integer overflow: cast to size_t before
+		// multiplying three ints (gx/rx+2)*(gy/ry+2)*(gz/rz+2).
+		size_t total_volume = static_cast<size_t>(m_state->m_x)
+		                    * static_cast<size_t>(m_state->m_y)
+		                    * static_cast<size_t>(m_state->m_z);
+		m_state->m_clusters.resize(total_volume);
+		for (size_t i = 0; i < total_volume; ++i)
 		{
 			m_state->m_clusters[i].reset(new cluster_t(m_state->m_limit));
 		}

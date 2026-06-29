@@ -974,6 +974,46 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
 
 
 def load_ind_property(filename, undefined_value, indicator_values, size=None):
+    """Load an indicator (categorical) property from an INC-format file.
+
+    If ``size`` is provided, uses the fast C++ reader with
+    pre-allocated buffers. If ``size`` is None, falls back to a
+    Python-based parser suitable for smaller files.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the INC file (must exist).
+    undefined_value : int
+        Value in the file that marks undefined/uninformed cells.
+    indicator_values : list of int
+        List of expected indicator values in the file. Each value is
+        mapped to an internal category index starting from 0.
+    size : tuple of int or None, optional
+        Grid dimensions ``(nx, ny, nz)``. If None, uses slow parser.
+
+    Returns
+    -------
+    IndProperty
+        Loaded indicator property with data, mask, and indicator_count
+        set to ``len(indicator_values)``.
+
+    Raises
+    ------
+    RuntimeError
+        If the file read fails.
+    ValueError
+        If the file contains indicator values not in ``indicator_values``.
+
+    Notes
+    -----
+    For files larger than ~100 MB, always specify ``size`` to use
+    the fast C++ reader and avoid unbounded memory usage.
+
+    See Also
+    --------
+    load_cont_property : Load continuous property.
+    """
     if size is None:
         logger.warning(
             "load_ind_property: Size is not specified. Using slow Python-based parser "
@@ -1323,6 +1363,45 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 
 @accepts_tuple("prop", 0)
 def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
+    """Perform Median Indicator Kriging (Median IK) on a 3D grid.
+
+    Median IK is an optimized form of indicator kriging for two-category
+    (binary) indicators. It computes a single kriging system rather than
+    one per category, using the median threshold approach.
+
+    Parameters
+    ----------
+    prop : IndProperty
+        Input indicator property with data, mask, and indicator_count.
+        Must have exactly 2 indicator categories.
+    grid : SugarboxGrid
+        Grid definition specifying the output resolution.
+    marginal_probs : tuple of float
+        Marginal probabilities ``(p0, p1)`` for the two indicator
+        categories. ``p1`` should equal ``1 - p0``.
+    radiuses : tuple of int
+        Search radii ``(rx, ry, rz)`` in grid cells.
+    max_neighbours : int
+        Maximum number of neighboring points to use per cell.
+    cov_model : CovarianceModel
+        Covariance model defining spatial correlation.
+
+    Returns
+    -------
+    ContProperty
+        Output property with median IK values at all grid cells.
+
+    Raises
+    ------
+    CriticalValidationError
+        If grid dimensions, radiuses, max_neighbours, or covariance
+        parameters are invalid.
+    ValueError
+        If ``marginal_probs`` does not have exactly 2 elements or
+        any probability is out of range.
+    RuntimeError
+        If the C++ computation produces an error.
+    """
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 

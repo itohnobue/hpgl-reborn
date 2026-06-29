@@ -185,17 +185,18 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
-		// NOTE: LAPACK call within OpenMP parallel region may cause thread
-		// oversubscription with BLAS internal threading. Set MKL_NUM_THREADS=1
-		// or link sequential BLAS for best performance.
+		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
 		// Cholesky decomposition
+		// Backup A before dpotrf_: dpotrf_ corrupts A on failure
+		std::vector<double> A_backup(A);
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
 		// Handle decomposition errors
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			system_solved = false;
+			// Fallback: dpotrf_ corrupted A, restore from backup and try gauss_solve
+			system_solved = gauss_solve(&A_backup[0], &b[0], &weights[0], size);
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 			return system_solved;
 		}
@@ -312,11 +313,14 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
+		// Backup ws.A before dpotrf_: dpotrf_ corrupts A on failure
+		std::vector<double> A_backup(ws.A.begin(), ws.A.begin() + matrix_size);
 		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			system_solved = false;
+			// Fallback: restore A from backup and try gauss_solve
+			system_solved = gauss_solve(&A_backup[0], &ws.b[0], &weights[0], size);
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 			return system_solved;
 		}
@@ -439,6 +443,9 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
+		// Backup A before dpotrf_: dpotrf_ corrupts A on failure
+		std::vector<double> A_backup(A);
+
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
@@ -446,7 +453,32 @@ namespace hpgl
 		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			system_solved = false;
+			// Fallback: dpotrf_ corrupted A, restore from backup.
+			// Solve both RHS (b→sk_weights, ones→ones_result) via gauss_solve.
+			// gauss_solve modifies A in-place, so use a second copy.
+			system_solved = gauss_solve(&A_backup[0], &b[0], &sk_weights[0], size);
+			if (system_solved) {
+				std::vector<double> A_backup2(A_backup);
+				system_solved = gauss_solve(&A_backup2[0], &ones[0], &ones_result[0], size);
+			}
+			// Compute OK weights from SK weights via Lagrange multiplier
+			if (system_solved) {
+				double SumSK = 0, SumOnes = 0;
+				for (int k = 0; k < size; k++) {
+					SumSK += sk_weights[k];
+					SumOnes += ones_result[k];
+				}
+				if (std::abs(SumOnes) < 1e-12) { system_solved = false; }
+				else {
+					double mu = (SumSK - 1) / SumOnes;
+					if (std::abs(mu) > 1e10) { system_solved = false; }
+					else {
+						for (int k = 0; k < size; k++) {
+							weights[k] = sk_weights[k] - mu * ones_result[k];
+						}
+					}
+				}
+			}
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 			return system_solved;
 		}
@@ -619,11 +651,36 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
+		// Backup ws.A before dpotrf_: dpotrf_ corrupts A on failure
+		std::vector<double> A_backup(ws.A.begin(), ws.A.begin() + matrix_size);
 		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
 		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			system_solved = false;
+			// Fallback: restore A from backup. Solve both RHS via gauss_solve.
+			system_solved = gauss_solve(&A_backup[0], &ws.b[0], &ws.sk_weights[0], size);
+			if (system_solved) {
+				std::vector<double> A_backup2(A_backup);
+				system_solved = gauss_solve(&A_backup2[0], &ws.ones[0], &ws.ones_result[0], size);
+			}
+			// Compute OK weights from SK weights via Lagrange multiplier
+			if (system_solved) {
+				double SumSK = 0, SumOnes = 0;
+				for (int k = 0; k < size; k++) {
+					SumSK += ws.sk_weights[k];
+					SumOnes += ws.ones_result[k];
+				}
+				if (std::abs(SumOnes) < 1e-12) { system_solved = false; }
+				else {
+					double mu = (SumSK - 1) / SumOnes;
+					if (std::abs(mu) > 1e10) { system_solved = false; }
+					else {
+						for (int k = 0; k < size; k++) {
+							weights[k] = ws.sk_weights[k] - mu * ws.ones_result[k];
+						}
+					}
+				}
+			}
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 			return system_solved;
 		}
@@ -821,6 +878,9 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
+		// Backup A before dpotrf_: dpotrf_ corrupts A on failure
+		std::vector<double> A_backup(A);
+
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
@@ -828,7 +888,8 @@ namespace hpgl
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			system_solved = false;
+			// Fallback: restore A from backup and try gauss_solve
+			system_solved = gauss_solve(&A_backup[0], &b[0], &weights[0], size);
 			return system_solved;
 		}
 
@@ -959,11 +1020,15 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
+		// Backup ws.A before dpotrf_: dpotrf_ corrupts A on failure
+		std::vector<double> A_backup(ws.A.begin(), ws.A.begin() + matrix_size);
 		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			return false;
+			// Fallback: restore A from backup and try gauss_solve
+			system_solved = gauss_solve(&A_backup[0], &ws.b[0], &weights[0], size);
+			return system_solved;
 		}
 
 		for (size_t i = 0; i < size; i ++)

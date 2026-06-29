@@ -1,5 +1,24 @@
 #ifndef COV_MODEL_H_INCLUDED_IN_HPGL_SDFKSJHKJ234SDF234JSDFIW29834KJNFHDAJK234NK32JNFDSAF234
 #define COV_MODEL_H_INCLUDED_IN_HPGL_SDFKSJHKJ234SDF234JSDFIW29834KJNFHDAJK234NK32JNFDSAF234
+// ====================================================================
+// ROTATION CONVENTION NOTE (HPGL vs GSLIB)
+//
+// HPGL uses ZYX (intrinsic) Euler rotation order when building the
+// anisotropy transform in create_transform():
+//   rotate_z(ang1) → rotate_y(ang2) → rotate_x(ang3)
+// This produces a combined matrix R = R_x * R_y * R_z (applied right-
+// to-left on column vectors in the TNT 1-indexed convention).
+//
+// GSLIB (the industry-standard geostatistics library) uses ZXZ rotation
+// order, which is different. Users porting GSLIB parameter files with
+// anisotropic angles (m_angles) to HPGL MUST convert their angles:
+// the same triplet of angles produces different anisotropy orientation
+// under ZYX vs ZXZ conventions.
+//
+// The scaling matrix applies ranges as:
+//   diag(1, range_x / range_y, range_x / range_z)
+// This matches both GSLIB and standard geostatistics practice.
+// ====================================================================
 
 #include "covariance_param.h"
 #include "hpgl_exception.h"

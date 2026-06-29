@@ -36,12 +36,18 @@ void init_rnd(rnd_state_t & state, long int size, long int seed)
 {
 	const long int MAX_PRIME = get_max_prime();
 
-	// Runtime bounds check: replaces BS_ASSERT (compiled out in release builds)
+	// Upstream validation: the prime table is bounded by MAX_PRIME.
+	// Grid sizes exceeding MAX_PRIME are clamped with an explicit
+	// warning — the LCG generator quality degrades for such large grids
+	// because the modulus (size) exceeds the largest known prime.
 	if (size > MAX_PRIME)
 	{
 		std::ostringstream oss;
-		oss << "Grid size " << size << " exceeds max supported "
-		    << MAX_PRIME << ". Clamping size.";
+		oss << "Grid size " << size << " exceeds the maximum supported "
+		    << "prime " << MAX_PRIME << ". The path random generator "
+		    << "works with a static prime table bounded by MAX_PRIME; "
+		    << "nodes beyond this size cannot be reached by the "
+		    << "generator. Clamping size to " << MAX_PRIME << ".";
 		LOGWARNING(oss.str());
 		size = MAX_PRIME;
 	}

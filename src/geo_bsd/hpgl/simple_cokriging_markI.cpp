@@ -168,7 +168,9 @@ public:
 		: m_cov_model(cov_model)
 	{
 		double cov_at_zero = (*cov_model)(coord_t(0,0,0), coord_t(0,0,0));
-		if (cov_at_zero <= 0)
+		// Guard: d2 must be strictly positive for sqrt().
+		// cov_at_zero must also be positive.
+		if (cov_at_zero <= 0 || d2 <= 0)
 		{
 			m_coef = 0;
 		}
