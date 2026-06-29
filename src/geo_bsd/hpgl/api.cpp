@@ -34,8 +34,9 @@ static void init_cov_params_base(ParamsT & p, const CpT * params)
 			params->m_angles[0],
 			params->m_angles[1],
 			params->m_angles[2]);
-	p.m_sill = params->m_sill;
-	p.m_nugget = params->m_nugget;
+	p.set_sill(params->m_sill);
+	p.set_nugget(params->m_nugget);
+	p.validate();
 }
 
 static void
@@ -449,17 +450,7 @@ HPGL_API void hpgl_ordinary_kriging(
 static void init_sk_params(hpgl_sk_params_t * params, hpgl::sk_params_t & sk_p)
 {
 	using namespace hpgl;
-	sk_p.m_covariance_type = (covariance_type_t) params->m_covariance_type;
-	sk_p.set_ranges(
-			params->m_ranges[0],
-			params->m_ranges[1],
-			params->m_ranges[2]);
-	sk_p.set_angles(
-			params->m_angles[0],
-			params->m_angles[1],
-			params->m_angles[2]);
-	sk_p.m_sill = params->m_sill;
-	sk_p.m_nugget = params->m_nugget;
+	init_cov_params_base(sk_p, params);
 	
 	sk_p.set_radiuses(
 			params->m_radiuses[0],
@@ -846,7 +837,6 @@ hpgl_sis_simulation(
 			ikp,
 			seed,
 			rep,
-			false,
 			simulation_mask !=0 ? simulation_mask->m_data : 0);
 	}
 	catch (const std::exception & ex) { handle_exception(ex); }
@@ -975,9 +965,10 @@ hpgl_simple_cokriging_mark1(
 		np.m_max_neighbours = params->m_max_neighbours;
 
 		covariance_param_t cp;
-		cp.m_nugget = params->m_nugget;
-		cp.m_sill = params->m_sill;
 		cp.m_covariance_type = (covariance_type_t) params->m_covariance_type;
+		cp.set_sill(params->m_sill);
+		cp.set_nugget(params->m_nugget);
+		cp.validate();
 
 		for (int i = 0; i < 3; ++i)
 		{

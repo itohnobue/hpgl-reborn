@@ -58,6 +58,28 @@ void median_ik_for_two_indicators(
 
 	report.start();
 	static const int LP_BATCH_SIZE = 1000;
+
+	// BLAS thread control: prevent oversubscription when BLAS internal
+	// threading combines with OpenMP parallel region threads.
+	// Each OpenMP thread may call LAPACK (dsysv) which can spawn
+	// additional threads if BLAS is configured for multi-threading.
+#if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)
+	extern "C" void mkl_set_num_threads(int);
+	extern "C" int mkl_get_max_threads(void);
+	int _saved_blas_threads = mkl_get_max_threads();
+	mkl_set_num_threads(1);
+#elif defined(__linux__)
+	// OpenBLAS: limit internal threads to 1 so they don't multiply
+	// with OpenMP threads. Declared extern to avoid header dependency.
+	extern "C" void openblas_set_num_threads(int);
+	extern "C" int openblas_get_num_threads(void);
+	int _saved_blas_threads = openblas_get_num_threads();
+	openblas_set_num_threads(1);
+#else
+	// macOS Accelerate / other BLAS: no thread-count API available.
+	// Accelerate manages its own thread pool via GCD and does not
+	// oversubscribe with OpenMP in the same way.
+#endif
 	#pragma omp parallel
 	{
 		int local_lap_count = 0;
@@ -105,6 +127,14 @@ void median_ik_for_two_indicators(
 			}
 		}
 	}
+
+	// Restore BLAS thread count after parallel region completes
+#if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)
+	mkl_set_num_threads(_saved_blas_threads);
+#elif defined(__linux__)
+	openblas_set_num_threads(_saved_blas_threads);
+#endif
+
 	report.stop();
 	std::ostringstream oss;
 	oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";

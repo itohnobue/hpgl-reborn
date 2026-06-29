@@ -21,6 +21,12 @@ namespace hpgl
 
 		void set_angles(double angle1,
 			double angle2, double angle3);
+
+		void set_sill(double sill);
+
+		void set_nugget(double nugget);
+
+		void validate() const;
 	};
 
 

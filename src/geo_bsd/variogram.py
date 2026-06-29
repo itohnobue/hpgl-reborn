@@ -557,8 +557,8 @@ def CalcVariogramFunction(Point1, Point2, Result, Params):
             Values1[i] = Values[i][Point1[:]]
             Values2[i] = Values[i][Point2[:]]
         Variances = float32(Values1 - Values2)**2
-        Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Variances.sum()
-        Result[NumValues + NumValues] += len(Variances)
+        Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Variances.sum(axis=1)
+        Result[NumValues + NumValues] += Variances.shape[1]
         Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues] / 2
     return Result
 

@@ -36,6 +36,12 @@ void do_sis(
 	if (params.m_category_count == 0)
 		return;
 
+	// Defense-in-depth: indicator_index_t is unsigned char (max 255).
+	// category_count > 255 causes infinite wrap-around at line ~102.
+	if (params.m_category_count > 255)
+		throw hpgl_exception("do_sis",
+			"indicator count exceeds indicator_index_t max (255)");
+
 	typedef precalculated_covariances_t cov_t;
 	typedef neighbour_lookup_t<grid_t, cov_t> nl_t;
 	std::vector<cov_t> 							covariances(params.m_category_count);	
@@ -154,7 +160,6 @@ void sequential_indicator_simulation(
 			const ik_params_t & params,
 			int seed,
 			progress_reporter_t & report,
-			bool use_corellogram, // UNUSED!
 			const unsigned char * mask)
 {
 	print_algo_name("Sequential Indicator Simulation");

@@ -118,8 +118,9 @@ namespace hpgl
 			m_params.m_covariance_type = cov_type;
 			m_params.set_ranges(ranges[0], ranges[1], ranges[2]);
 			m_params.set_angles(angles[0], angles[1], angles[2]);
-			m_params.m_sill = sill;
-			m_params.m_nugget = nugget;
+			m_params.set_sill(sill);
+			m_params.set_nugget(nugget);
+			m_params.validate();
 			init_fun();
 			create_transform(m_params.m_ranges, m_params.m_angles, m_transform);
 		}

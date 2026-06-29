@@ -78,7 +78,7 @@ print("SK result:", prop_result1[0])
 prop = (np.float32(prop_val), prop_defined)
 variogram2 = CovarianceModel(type=covariance.exponential, ranges=(5, 1, 1), sill=1)
 
-sgs_params = {"cov_model": variogram2, "cdf_data": prop1, "force_single_thread": True}
+sgs_params = {"cov_model": variogram2, "cdf_data": prop1}
 sgs_result = sgs_simulation(prop, grid, radiuses=(2, 1, 1), max_neighbours=2, seed=3244759, **sgs_params)
 print("SGS result:", sgs_result[0])
 

@@ -138,7 +138,7 @@ krigged_harmonic_data = simple_kriging(prop=prop_initial_harmonic, grid=grid, ra
 
 # Generate a simulated field by performing SGS on initial property (arithmetic and harmonic averaging) with 315 azimuth direction
 variogram2 = CovarianceModel(type=covariance.spherical, ranges=(80, 20, 1), sill=1, angles=(315, 0, 0))
-sgs_params = {"cov_model": variogram2, "radiuses": (160, 40, 1), "max_neighbours": 20, "force_single_thread": True}
+sgs_params = {"cov_model": variogram2, "radiuses": (160, 40, 1), "max_neighbours": 20}
 
 sgs_arithmetic_data = sgs_simulation(prop_initial_arithmetic, grid, seed=5232463, **sgs_params)
 

@@ -39,7 +39,16 @@ namespace hpgl
 
 		if (params.m_kriging_kind == KRIG_SIMPLE)
 		{
-			double mean = 0;
+			double mean;
+			if (params.m_calculate_mean)
+			{
+				bool valid_mean;
+				mean = calc_mean(output, &valid_mean);
+				if (!valid_mean)
+					LOGWARNING("No data to calculate mean. Defaulting to 0.\n");
+			}
+			else
+				mean = params.mean();
 
 			if (mask != nullptr)
 			{

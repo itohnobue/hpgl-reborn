@@ -102,11 +102,12 @@ bool is_in_tunnel(
 	  && templ->m_ellipsoid.m_direction3.m_data[2] == 0.0))
 		return false;
 
-	double ss1 = dot_product(vec, &(templ->m_ellipsoid.m_direction1));
-	double ss2 = dot_product(vec, &(templ->m_ellipsoid.m_direction2));
-	double ss3 = dot_product(vec, &(templ->m_ellipsoid.m_direction3));
+	double ss1 = fabs(dot_product(vec, &(templ->m_ellipsoid.m_direction1)));
+	double ss2 = fabs(dot_product(vec, &(templ->m_ellipsoid.m_direction2)));
+	double ss3 = fabs(dot_product(vec, &(templ->m_ellipsoid.m_direction3)));
 
-	if (templ->m_ellipsoid.m_R2 == 0 || templ->m_ellipsoid.m_R3 == 0)
+	if (templ->m_ellipsoid.m_R2 == 0 ||
+	    templ->m_ellipsoid.m_R3 == 0)
 		return false;
 
 	double s2 = ss2 / templ->m_ellipsoid.m_R2;

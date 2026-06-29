@@ -64,8 +64,9 @@ void init_sgs_params(hpgl_sgs_params_t * params, hpgl::sgs_params_t * params2)
 			params->m_angles[0],
 			params->m_angles[1],
 			params->m_angles[2]);
-	sgs_p.m_sill = params->m_sill;
-	sgs_p.m_nugget = params->m_nugget;
+	sgs_p.set_sill(params->m_sill);
+	sgs_p.set_nugget(params->m_nugget);
+	sgs_p.validate();
 	
 	sgs_p.set_radiuses(
 			params->m_radiuses[0],
@@ -121,8 +122,9 @@ init_sis_params(
 			cp.m_ranges[j] = p->m_ranges[j];
 			cp.m_angles[j] = p->m_angles[j];
 		}
-		cp.m_sill = p->m_sill;
-		cp.m_nugget = p->m_nugget;
+		cp.set_sill(p->m_sill);
+		cp.set_nugget(p->m_nugget);
+		cp.validate();
 		ikp->m_cov_params.push_back(cp);
 		neighbourhood_param_t nbp;
 		nbp.m_radiuses = sugarbox_search_ellipsoid_t(

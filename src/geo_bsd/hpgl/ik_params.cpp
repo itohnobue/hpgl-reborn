@@ -41,8 +41,9 @@ namespace hpgl
 		cov_param.set_angles(angle1, angle2, angle3);
 		cov_param.set_ranges(range1, range2, range3);
 		cov_param.m_covariance_type = covariance_type;
-		cov_param.m_nugget = nugget;
-		cov_param.m_sill = sill;
+		cov_param.set_sill(sill);
+		cov_param.set_nugget(nugget);
+		cov_param.validate();
 		m_cov_params.push_back(cov_param);
 
 		neighbourhood_param_t nb_param;

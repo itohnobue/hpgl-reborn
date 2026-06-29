@@ -187,6 +187,7 @@ namespace hpgl
 	public:
 		typedef T value_type;
 		masked_buffer_3d_t()
+			: m_buffer(0), m_mask(0)
 		{}
 		masked_buffer_3d_t(T * buffer, unsigned char * mask_buffer, const data_shape_t & shape)
 		{

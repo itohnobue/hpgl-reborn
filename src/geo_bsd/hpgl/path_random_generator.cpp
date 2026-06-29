@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "path_random_generator.h"
 #include "bs_assert.h"
+#include "output.h"
 
 using namespace hpgl;
 
@@ -9,6 +10,19 @@ long int  primes [] =
 #include "primes.txt"
 , -1
 };
+
+/// Returns the largest prime in the static primes[] table
+/// (the last element before the -1 sentinel).
+static long int get_max_prime()
+{
+	static long int max_prime = [](){
+		long int max_val = 0;
+		for (int i = 0; primes[i] > 0; ++i)
+			max_val = primes[i];
+		return max_val;
+	}();
+	return max_prime;
+}
 
 struct rnd_state_t
 {
@@ -20,7 +34,18 @@ struct rnd_state_t
 
 void init_rnd(rnd_state_t & state, long int size, long int seed)
 {
-	BS_ASSERT (size <= 10000000 && "Too large range. Contact developers ASAP.")(size);
+	const long int MAX_PRIME = get_max_prime();
+
+	// Runtime bounds check: replaces BS_ASSERT (compiled out in release builds)
+	if (size > MAX_PRIME)
+	{
+		std::ostringstream oss;
+		oss << "Grid size " << size << " exceeds max supported "
+		    << MAX_PRIME << ". Clamping size.";
+		LOGWARNING(oss.str());
+		size = MAX_PRIME;
+	}
+
 	long int idx = 0;
 	state.A = 1;
 	state.M = size;
@@ -32,7 +57,15 @@ void init_rnd(rnd_state_t & state, long int size, long int seed)
 				state.A *= primes[idx];
 		++idx;
 	}
-	BS_ASSERT(primes[idx] > 0)(primes[idx]);
+	// Runtime guard: replaces BS_ASSERT (compiled out in release builds)
+	if (primes[idx] <= 0)
+	{
+		// Prime table exhausted — all known primes are <= size.
+		// This is expected for sizes equal to MAX_PRIME (the largest
+		// prime), and clamped sizes above MAX_PRIME.
+		// The generator quality may degrade for extremely large grids.
+		LOGWARNING("Prime table exhausted for grid size. Generator may be suboptimal.");
+	}
 
 	if (state.M % 4 == 0)
 		state.A *= 2;

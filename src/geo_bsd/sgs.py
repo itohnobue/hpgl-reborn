@@ -106,7 +106,13 @@ Raises:
 -------
 CriticalValidationError
     If any parameter fails validation."""
-    # Validate grid dimensions
+    # Raise on unexpected keyword arguments to catch parameter name typos
+    if params:
+        raise TypeError(
+            f"sgs_simulation() got unexpected keyword arguments: "
+            f"{', '.join(sorted(params.keys()))}"
+        )
+
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 

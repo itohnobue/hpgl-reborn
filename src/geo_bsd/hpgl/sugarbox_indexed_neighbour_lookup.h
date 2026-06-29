@@ -64,8 +64,8 @@ namespace hpgl
 				const covariances_t * cov,
 				const neighbourhood_param_t & nb_param
 				)
-				:	m_nlookup(grid, cov, nb_param), 
-				m_clusterizer(new clusterizer_t(grid, nb_param.m_radiuses, m_nlookup.m_vectors->size() / detail::MAGIC_NUMBER_2)), 
+			:	m_nlookup(grid, cov, nb_param), 
+			m_clusterizer(new clusterizer_t(grid, nb_param.m_radiuses, std::max(m_nlookup.m_vectors->size() / detail::MAGIC_NUMBER_2, static_cast<size_t>(1)))), 
 					m_cov(cov), 
 					m_max_neighbours(nb_param.m_max_neighbours),
 					m_grid(grid)

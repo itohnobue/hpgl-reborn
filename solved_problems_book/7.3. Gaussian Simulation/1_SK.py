@@ -165,7 +165,7 @@ back_cdf_transform(back_krigged_transformed_data[0], props, values, -99)
 
 # Generate a simulated field by performing SGS on transformed property with 315 azimuth direction
 variogram2 = CovarianceModel(type=covariance.spherical, ranges=(80, 20, 1), sill=1, angles=(315, 0, 0))
-sgs_params = {"cov_model": variogram2, "radiuses": (160, 40, 1), "max_neighbours": 20, "force_single_thread": True}
+sgs_params = {"cov_model": variogram2, "radiuses": (160, 40, 1), "max_neighbours": 20}
 sgs_transformed_data = sgs_simulation(prop_transformed, grid, seed=542783, **sgs_params)
 print("SGS_transformed_data result:", sgs_transformed_data[0])
 

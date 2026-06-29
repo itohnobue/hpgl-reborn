@@ -23,7 +23,7 @@ ik_data = [{
             "max_neighbours": 12,
             }]
 
-sis_result = sis_simulation(prop=data, grid=grid, data=ik_data, marginal_probs=(0.8, 0.2), seed=3241347, force_single_thread=True)
+sis_result = sis_simulation(prop=data, grid=grid, data=ik_data, marginal_probs=(0.8, 0.2), seed=3241347)
 
 plt.figure()
 plt.imshow(data[0][:, :, 0], vmin=0, vmax=2)

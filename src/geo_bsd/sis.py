@@ -98,6 +98,13 @@ ValueError
     If marginal probabilities do not sum to 1.0 (non-LVM mode).
 RuntimeError
     If the underlying C++ simulation fails."""
+    # Raise on unexpected keyword arguments to catch parameter name typos
+    if params:
+        raise TypeError(
+            f"sis_simulation() got unexpected keyword arguments: "
+            f"{', '.join(sorted(params.keys()))}"
+        )
+
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 

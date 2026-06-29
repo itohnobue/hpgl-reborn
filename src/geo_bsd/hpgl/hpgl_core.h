@@ -127,7 +127,6 @@ namespace hpgl
 		const ik_params_t& params,
 		int seed,
 		progress_reporter_t& report,
-		bool use_corellogram,
 		const unsigned char* mask = NULL);
 
 	void sequential_indicator_simulation_lvm(
