@@ -27,7 +27,7 @@ void do_sis(
 		indicator_property_array_t & property,
 		const grid_t & grid,
 		const ik_params_t & params,
-		int seed,
+		int64_t seed,
 		const marginal_probs_t & marginal_probs,		
 		progress_reporter_t & reporter,
 		const weight_calculator_t & weight_calculator_sis,
@@ -99,8 +99,15 @@ void do_sis(
 					prob = marginal_probs[idx][node];
 				}
 
+				// Clamp kriged probability to [0,1] before computing the
+				// complement so both probabilities are well-formed.
+				// SK weights are unconstrained — poorly conditioned matrices,
+				// sparse neighbours, or extreme anisotropy can push the
+				// combine() result outside [0,1].
+				if (prob < 0.0) prob = 0.0;
+				else if (prob > 1.0) prob = 1.0;
 				probs.push_back(prob);
-				probs.push_back(1 - prob);
+				probs.push_back(1.0 - prob);
 
 		}
 		else
@@ -121,14 +128,18 @@ void do_sis(
 			}
 		}
 		// Enforce monotonicity and [0,1] bounds on indicator probabilities
-		// before sampling. Mirrors the correct_order_relations() call in
-		// do_indicator_kriging (indicator_kriging.h:156).
-		// NOTE: Only applicable for multi-category (3+) SIS where indicator
-		// probabilities are cumulative [P(0), P(0or1), P(0or1or2), ..., 1.0].
-		// For 2-category SIS, probabilities are complementary [prob, 1-prob],
-		// not cumulative — monotonicity correction would destroy the distribution.
+		// before sampling. Only applicable for multi-category (3+) SIS since
+		// 2-category SIS uses complementary [prob, 1-prob] — monotonicity
+		// correction would destroy the distribution.
 		if (params.m_category_count > 2)
 		{
+			// indicator_array_adapter_t uses exclusive encoding
+			// (== m_value ? 1 : 0); kriged probabilities are per-category
+			// PMF values. Convert to cumulative CDF before order relations
+			// correction, which assumes monotonic [0,1]-bounded values.
+			for (size_t i = 1; i < probs.size(); ++i)
+				probs[i] += probs[i - 1];
+
 			detail::correct_order_relations(probs);
 			// Convert cumulative CDF values to class-level probabilities for
 			// the PMF sampler. probs currently holds [P(Z≤0), P(Z≤1), ..., 1.0];
@@ -158,7 +169,7 @@ void sequential_indicator_simulation(
 			indicator_property_array_t & property,
 			const sugarbox_grid_t & grid,
 			const ik_params_t & params,
-			int seed,
+			int64_t seed,
 			progress_reporter_t & report,
 			const unsigned char * mask)
 {
@@ -184,7 +195,7 @@ void sequential_indicator_simulation_lvm(
 		indicator_property_array_t & property,
 		const sugarbox_grid_t & grid,
 		const ik_params_t & params,
-		int seed,
+		int64_t seed,
 		const mean_t ** mean_data,		
 		progress_reporter_t & report,
 		bool use_corellogram,
@@ -193,6 +204,13 @@ void sequential_indicator_simulation_lvm(
 	print_algo_name("Sequential Indicator Simulation");
 	print_params(params);
 	print_param("LVM", "on");
+
+	if (property.size() != grid.size())
+	{
+		std::ostringstream oss;
+		oss << "Property size '" << property.size() << "' is not equal to grid size '" << grid.size() << "'";
+		throw hpgl_exception("sequential_indicator_simulation_lvm", oss.str());
+	}
 		
 	if(use_corellogram)
 	{

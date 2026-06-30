@@ -84,7 +84,7 @@ namespace hpgl
 
 			double value = ki_result == ki_result_t::KI_SUCCESS
 				? sample(gen, gaussian_cdf_t(mean, variance))
-				: sample(gen, gaussian_cdf_t());		
+				: sample(gen, gaussian_cdf_t(mp[node], 1.0));		
 			
 			property.set_at(node, value);
 			//neighbour_lookup.add_node(node);
@@ -147,7 +147,7 @@ namespace hpgl
 
 			double value = ki_result == KI_SUCCESS 
 				? sample(gen, gaussian_cdf_t(mean, variance))
-				: sample(gen, gaussian_cdf_t());		
+				: sample(gen, gaussian_cdf_t(mp[node], 1.0));		
 			
 			property.set_at(node, value);
 			//neighbour_lookup.add_node(node);

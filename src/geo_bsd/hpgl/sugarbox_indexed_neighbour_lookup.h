@@ -3,6 +3,7 @@
 
 #include "clusterizer.h"
 #include "sugarbox_neighbour_lookup.h"
+#include <array>
 #include <memory>
 
 namespace hpgl
@@ -104,33 +105,59 @@ namespace hpgl
 					}
 				}
 				
-				size_t count = 0;	
 				size_t result_size = //temp_sort_vector.get_them().size();
 					m_max_neighbours > temp_sort_vector.size() ? temp_sort_vector.size() : m_max_neighbours;
 				
-			// Partial sort: only need top result_size entries by covariance
-			// desc_cov_compare sorts descending (highest covariance first)
-			if (result_size < temp_sort_vector.size())
-				std::partial_sort(temp_sort_vector.begin(), temp_sort_vector.begin() + result_size, temp_sort_vector.end(), detail::desc_cov_compare());
-			else
-				std::sort(temp_sort_vector.begin(), temp_sort_vector.end(), detail::desc_cov_compare());
+				// Partial sort: only need top result_size entries by covariance
+				// desc_cov_compare sorts descending (highest covariance first)
+				if (result_size < temp_sort_vector.size())
+					std::partial_sort(temp_sort_vector.begin(), temp_sort_vector.begin() + result_size, temp_sort_vector.end(), detail::desc_cov_compare());
+				else
+					std::sort(temp_sort_vector.begin(), temp_sort_vector.end(), detail::desc_cov_compare());
 
-				
-				
-				indices.resize(result_size);
-				coords.resize(result_size);
+				// Octant diversity enforcement (GSLIB noct equivalent):
+				// After sorting by covariance, ensure at least 1 neighbour per
+				// spatial octant (8 octants in 3D) before filling remaining slots.
+				// This prevents all neighbours from concentrating in one direction
+				// when data is clustered on one side of the estimation point.
+				indices.clear();
+				coords.clear();
+				const size_t max_nb = m_max_neighbours;
 
-				const auto& entries = temp_sort_vector;//temp_sort_vector.get_them();
-
-				for (size_t idx = 0, end_idx = entries.size();
-						idx != end_idx; ++idx)
-				{
-					indices[idx] = entries[idx].index;	
-					coords[idx] = (*m_grid)[entries[idx].index];
-					count++;
-					if (count >= m_max_neighbours)
-						break;
+				// Record the best (highest-covariance) candidate in each octant
+				std::array<int, 8> octant_best;
+				octant_best.fill(-1);
+				for (size_t i = 0; i < temp_sort_vector.size(); ++i) {
+					coord_t c = (*m_grid)[temp_sort_vector[i].index];
+					int oct = (c[0] >= center[0] ? 1 : 0)
+					        | (c[1] >= center[1] ? 2 : 0)
+					        | (c[2] >= center[2] ? 4 : 0);
+					if (octant_best[oct] < 0)
+						octant_best[oct] = static_cast<int>(i);
 				}
+
+				// Pass 1: pick one best candidate from each occupied octant
+				std::vector<bool> chosen(temp_sort_vector.size(), false);
+				for (size_t i = 0; i < temp_sort_vector.size() && indices.size() < max_nb; ++i) {
+					coord_t c = (*m_grid)[temp_sort_vector[i].index];
+					int oct = (c[0] >= center[0] ? 1 : 0)
+					        | (c[1] >= center[1] ? 2 : 0)
+					        | (c[2] >= center[2] ? 4 : 0);
+					if (octant_best[oct] == static_cast<int>(i)) {
+						indices.push_back(temp_sort_vector[i].index);
+						coords.push_back(c);
+						chosen[i] = true;
+					}
+				}
+
+				// Pass 2: fill remaining slots from best-remaining by covariance
+				for (size_t i = 0; i < temp_sort_vector.size() && indices.size() < max_nb; ++i) {
+					if (!chosen[i]) {
+						indices.push_back(temp_sort_vector[i].index);
+						coords.push_back((*m_grid)[temp_sort_vector[i].index]);
+					}
+				}
+
 				if (indices.size() > m_max_neighbours)
 					HPGL_CHECK(false, "find_neighbours_with_clusterizer: indices.size() exceeds max_neighbours");
 			}

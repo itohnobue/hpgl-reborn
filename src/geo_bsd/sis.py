@@ -55,7 +55,7 @@ def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
     return _c_array(_HPGL_IK_PARAMS, indicator_count, ikps)
 
 @accepts_tuple('prop', 0)
-def sis_simulation(prop, grid, data, seed, marginal_probs, use_correlogram=True, mask=None, use_harddata=True, min_neighbours=0, **params):
+def sis_simulation(prop, grid, data, seed, marginal_probs, use_correlogram=True, mask=None, use_harddata=True, **params):
     """Performs Sequential Indicator Simulation (SIS).
 
 Parameters:
@@ -82,8 +82,6 @@ mask : numpy.ndarray or None, optional
 use_harddata : bool, optional
     If ``True``, use source data values for simulation. If ``False``,
     ignore source data values. Default: ``True``.
-min_neighbours : int, optional
-    Minimum number of neighbours required for kriging. Default: ``0``.
 
 Returns:
 --------

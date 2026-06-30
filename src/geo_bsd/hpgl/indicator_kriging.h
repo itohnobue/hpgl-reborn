@@ -28,10 +28,17 @@ namespace hpgl
 
 	namespace detail
 	{
-		// Correct indicator kriging probabilities for order relations
-		// Ensures: 1) Monotonicity P(k) <= P(k+1), 2) Bounds [0,1]
-		// Reference: Deutsch & Journel (1998), Section V.6.3
-		// Iterative averaging: repeat until monotonic to handle cascading violations
+		// Correct indicator kriging probabilities for order relations.
+		// Ensures: 1) Monotonicity P(k) <= P(k+1), 2) Bounds [0,1].
+		//
+		// Algorithm: Iterative pairwise averaging (Deutsch & Journel, 1992,
+		// 1st ed.). This is NOT the GSLIB 2nd ed. (1998) two-pass envelope
+		// (ORDREL.FOR), which does upward fill-forward + downward fill-backward
+		// + average. Both algorithms satisfy monotonicity and [0,1] bounds;
+		// they diverge on inputs with multiple cascading violations.
+		//
+		// Repeat until monotonic to handle cascading violations; 2N passes
+		// guarantees convergence even for alternating patterns.
 		inline void correct_order_relations(std::vector<indicator_probability_t> & probs)
 		{
 			if (probs.empty())
@@ -184,6 +191,13 @@ namespace hpgl
 					}
 					probs.push_back(prob);
 				}
+
+				// indicator_array_adapter_t uses exclusive encoding
+				// (== m_value ? 1 : 0) so kriged probabilities are per-category
+				// PMF values. Convert to cumulative CDF before order relations
+				// correction, which assumes monotonic [0,1]-bounded values.
+				for (size_t i = 1; i < probs.size(); ++i)
+					probs[i] += probs[i - 1];
 
 				// Apply order relations correction to ensure monotonicity and [0,1] bounds
 				correct_order_relations(probs);

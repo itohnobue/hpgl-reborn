@@ -165,7 +165,10 @@ namespace hpgl
 
 		//bool system_solved = gauss_solve(&A[0], &b[0], &weights[0], size);	
 		bool system_solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
-		if (!system_solved) return false;
+		if (!system_solved) {
+			if (calc_variance) variance = -1;
+			return false;
+		}
 		cholesky_solve(&A_L[0], &A_U[0], &b[0], &weights[0], size);
 
 		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
@@ -198,6 +201,19 @@ namespace hpgl
 			// Fallback: dpotrf_ corrupted A, restore from backup and try gauss_solve
 			system_solved = gauss_solve(&A_backup[0], &b[0], &weights[0], size);
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+			// Compute SK variance on the fallback path (mirrors non-fallback
+			// variance block at lines 221-239).  b2 holds original RHS values.
+			if (calc_variance) {
+				if (system_solved) {
+					double cr0 = covariances(center_coord, center_coord);
+					variance = cr0;
+					for (int i = 0; i < size; i++)
+						variance -= weights[i] * b2[i];
+					if (variance < 0) variance = 0;
+				} else {
+					variance = -1;
+				}
+			}
 			return system_solved;
 		}
 
@@ -300,7 +316,10 @@ namespace hpgl
 		ws.A_U.resize(size*size);
 		ws.A_L.resize(size*size);
 		bool system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
-		if (!system_solved) return false;
+		if (!system_solved) {
+			if (calc_variance) variance = -1;
+			return false;
+		}
 		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &weights[0], size);
 		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 #endif
@@ -322,6 +341,19 @@ namespace hpgl
 			// Fallback: restore A from backup and try gauss_solve
 			system_solved = gauss_solve(&A_backup[0], &ws.b[0], &weights[0], size);
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+			// Compute SK variance on the fallback path (mirrors non-fallback
+			// variance block of the ws variant).  ws.b2 holds original RHS values.
+			if (calc_variance) {
+				if (system_solved) {
+					double cr0 = covariances(center_coord, center_coord);
+					variance = cr0;
+					for (int i = 0; i < size; i++)
+						variance -= weights[i] * ws.b2[i];
+					if (variance < 0) variance = 0;
+				} else {
+					variance = -1;
+				}
+			}
 			return system_solved;
 		}
 
@@ -462,6 +494,7 @@ namespace hpgl
 				system_solved = gauss_solve(&A_backup2[0], &ones[0], &ones_result[0], size);
 			}
 			// Compute OK weights from SK weights via Lagrange multiplier
+			double mu = 0.0;  // hoisted for variance computation below
 			if (system_solved) {
 				double SumSK = 0, SumOnes = 0;
 				for (int k = 0; k < size; k++) {
@@ -470,20 +503,36 @@ namespace hpgl
 				}
 				if (std::abs(SumOnes) < 1e-12) { system_solved = false; }
 				else {
-					double mu = (SumSK - 1) / SumOnes;
+					mu = (SumSK - 1) / SumOnes;
 					if (std::abs(mu) > 1e10) { system_solved = false; }
 					else {
 						for (int k = 0; k < size; k++) {
-							weights[k] = sk_weights[k] - mu * ones_result[k];
-						}
+						weights[k] = sk_weights[k] - mu * ones_result[k];
 					}
 				}
 			}
-			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-			return system_solved;
 		}
+		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+		// Compute OK kriging variance on the fallback path (mirrors
+		// the non-fallback variance block at lines 548-567).  mu and
+		// weights are already computed above; b2 holds the original
+		// RHS values needed for the variance formula.
+		if (calc_variance) {
+			if (system_solved) {
+				double cr0 = covariances(center, center);
+				variance = cr0;
+				for (int i = 0; i < size; i++)
+					variance -= weights[i] * b2[i];
+				variance -= mu;
+				if (variance < 0) variance = 0;
+			} else {
+				variance = -1;
+			}
+		}
+		return system_solved;
+	}
 
-		// Solve both RHS vectors in a single dpotrs_ call (nrhs=2).
+	// Solve both RHS vectors in a single dpotrs_ call (nrhs=2).
 		// LAPACK column-major layout: B[0..size-1] = sk_weights RHS,
 		// B[size..2*size-1] = ones RHS. After solve, B holds solutions
 		// in the same layout — halving the triangular solve overhead (~30% OK speedup).
@@ -664,6 +713,7 @@ namespace hpgl
 				system_solved = gauss_solve(&A_backup2[0], &ws.ones[0], &ws.ones_result[0], size);
 			}
 			// Compute OK weights from SK weights via Lagrange multiplier
+			double mu = 0.0;  // hoisted for variance computation below
 			if (system_solved) {
 				double SumSK = 0, SumOnes = 0;
 				for (int k = 0; k < size; k++) {
@@ -672,20 +722,36 @@ namespace hpgl
 				}
 				if (std::abs(SumOnes) < 1e-12) { system_solved = false; }
 				else {
-					double mu = (SumSK - 1) / SumOnes;
+					mu = (SumSK - 1) / SumOnes;
 					if (std::abs(mu) > 1e10) { system_solved = false; }
 					else {
 						for (int k = 0; k < size; k++) {
-							weights[k] = ws.sk_weights[k] - mu * ws.ones_result[k];
-						}
+						weights[k] = ws.sk_weights[k] - mu * ws.ones_result[k];
 					}
 				}
 			}
-			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-			return system_solved;
 		}
+		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
+		// Compute OK kriging variance on the fallback path (mirrors
+		// the non-fallback variance block of the ws variant).  mu and
+		// weights are already computed above; ws.b2 holds the original
+		// RHS values needed for the variance formula.
+		if (calc_variance) {
+			if (system_solved) {
+				double cr0 = covariances(center, center);
+				variance = cr0;
+				for (int i = 0; i < size; i++)
+					variance -= weights[i] * ws.b2[i];
+				variance -= mu;
+				if (variance < 0) variance = 0;
+			} else {
+				variance = -1;
+			}
+		}
+		return system_solved;
+	}
 
-		// Solve both RHS vectors in a single dpotrs_ call (nrhs=2).
+	// Solve both RHS vectors in a single dpotrs_ call (nrhs=2).
 		integer two = 2;
 		ws.B.resize(static_cast<size_t>(size) * 2);
 		for (int i = 0; i < size; ++i)

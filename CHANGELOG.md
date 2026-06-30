@@ -48,7 +48,7 @@ All notable changes to HPGL Reborn.
 - BLAS backend: Replaced CLAPACK with Intel MKL (configurable; OpenBLAS also supported)
 - Removed Boost dependency; replaced `boost::python` bindings with ctypes
 - `sgs_simulation`: added `min_neighbours` parameter, validation on all inputs
-- `sis_simulation`: added `min_neighbours`, `use_regions`, `region_size`; full parameter validation
+- `sis_simulation`: added `min_neighbours`; full parameter validation
 - Covariance model: `nugget ≤ sill` enforced with `CriticalValidationError`
 
 ### Fixed

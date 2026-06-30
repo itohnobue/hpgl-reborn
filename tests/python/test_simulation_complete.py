@@ -26,7 +26,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src" / "geo_bsd"))
 
 try:
-    from geo_bsd.cdf import CdfData, calc_cdf
+    from geo_bsd.cdf import CdfData
     from geo_bsd.geo import ContProperty, CovarianceModel, IndProperty, SugarboxGrid, covariance
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
@@ -267,6 +267,8 @@ class TestSequentialGaussianSimulationBasic:
         )
 
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
 
 # =============================================================================
@@ -554,6 +556,8 @@ class TestSequentialGaussianSimulationMinNeighbours:
         )
 
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
     def test_sgs_min_neighbours_positive(self, sample_property, sample_grid,
                                           sample_covariance_model, sgs_cdf_data_multi):
@@ -570,6 +574,8 @@ class TestSequentialGaussianSimulationMinNeighbours:
         )
 
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
 
 # =============================================================================
@@ -653,12 +659,95 @@ class TestSequentialGaussianSimulationStatistics:
         simulated_values = result.data[result.mask > 0].astype('float64')
         result_var = np.var(simulated_values)
 
-        # Variance should be positive and bounded by (range/2)^2 max possible
+        # Variance should be positive and bounded by 1.5 × (range/2)^2 max possible.
+        # For bounded data, the maximum variance is (range/2)^2 (all values at
+        # extremes). The 1.5× tolerance accounts for float32 precision and small
+        # CDF extrapolation effects without allowing degenerate outputs.
         max_possible_var = (cdf_range / 2.0) ** 2
         assert result_var > 0.0, "SGS result should have non-zero variance"
-        assert result_var < max_possible_var * 4, (
-            f"SGS variance {result_var} exceeds plausible bound {max_possible_var * 4}"
+        assert result_var < max_possible_var * 1.5, (
+            f"SGS variance {result_var} exceeds plausible bound {max_possible_var * 1.5}"
         )
+
+    def test_sgs_result_mean_validation(self, sample_property, sample_grid,
+                                          sample_covariance_model, sgs_cdf_data_multi):
+        """C24: SGS simulated mean should be close to the CDF weighted mean.
+
+        The output mean should approximate the mean of the input CDF distribution
+        since SGS reproduces the target distribution in expectation.
+        """
+        result = sgs_simulation(
+            prop=sample_property,
+            grid=sample_grid,
+            cdf_data=sgs_cdf_data_multi,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=sample_covariance_model,
+            seed=42
+        )
+
+        simulated_values = result.data[result.mask > 0].astype('float64')
+        simulated_mean = np.mean(simulated_values)
+
+        # Expected mean approximated by simple average of CDF values
+        cdf_values = sgs_cdf_data_multi.values.astype('float64')
+        expected_mean_approx = np.mean(cdf_values)
+
+        # Check that simulated mean is within ±25% of expected mean
+        # (generous tolerance for small grid with 10% uninformed cells)
+        rel_error = abs(simulated_mean - expected_mean_approx) / max(expected_mean_approx, 1.0)
+        assert rel_error < 0.25, (
+            f"SGS mean {simulated_mean:.2f} deviates from expected ~{expected_mean_approx:.2f} "
+            f"(relative error {rel_error:.3f})"
+        )
+
+    def test_sgs_result_variogram_structure(self, sample_property, sample_grid,
+                                              sample_covariance_model, sgs_cdf_data_multi):
+        """C24: SGS output must have positive spatial correlation at short lags.
+
+        Verifies that simulated values separated by 1 grid cell (lag 1 in x
+        direction) are more similar than values separated by 4+ grid cells.
+        The spherical model with range 5.0 implies strong correlation at lag 1
+        (C(1) ≈ 0.7 × sill) and near-zero at lag 5.
+        """
+        result = sgs_simulation(
+            prop=sample_property,
+            grid=sample_grid,
+            cdf_data=sgs_cdf_data_multi,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=sample_covariance_model,
+            seed=42
+        )
+
+        # Use only simulated (mask>0) cells
+        sim = result.data.astype('float64')
+        grid = sample_grid
+
+        # Compute variance at lag 1 (adjacent cells in x-direction)
+        # and lag > range (distant cells)
+        diffs_near = []
+        diffs_far = []
+        for x in range(grid.x - 1):
+            for y in range(grid.y):
+                for z in range(grid.z):
+                    if (result.mask[x, y, z] > 0 and result.mask[x + 1, y, z] > 0):
+                        diffs_near.append((sim[x, y, z] - sim[x + 1, y, z]) ** 2)
+                    if x + 5 < grid.x and result.mask[x, y, z] > 0 and result.mask[x + 5, y, z] > 0:
+                        diffs_far.append((sim[x, y, z] - sim[x + 5, y, z]) ** 2)
+
+        if diffs_near and diffs_far:
+            gamma_near = 0.5 * np.mean(diffs_near)  # Experimental γ(lag 1)
+            gamma_far = 0.5 * np.mean(diffs_far)    # Experimental γ(lag 5)
+
+            # The spherical model with sill=1.0, nugget=0.1, range=5.0 predicts:
+            #   γ(h=1) ≈ 0.1 + 0.9 * (1.5*(1/5) - 0.5*(1/5)^3) ≈ 0.1 + 0.267 = 0.367
+            #   γ(h=5) ≈ 0.1 + 0.9 * 1.0 = 1.0
+            # Short-lag variance must be LESS than long-lag variance
+            assert gamma_near < gamma_far, (
+                f"γ(lag 1)={gamma_near:.3f} should be < γ(lag 5)={gamma_far:.3f} "
+                f"for a positively correlated field"
+            )
 
 
 # =============================================================================
@@ -696,6 +785,8 @@ class TestSequentialGaussianSimulationCovariance:
         )
 
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
 
 # =============================================================================
@@ -764,6 +855,8 @@ class TestSequentialIndicatorSimulationBasic:
         )
 
         assert isinstance(result, IndProperty)
+        assert result.data.shape[0] == 500
+        assert np.all(result.data < result.indicator_count)
 
 
 # =============================================================================
@@ -853,6 +946,7 @@ class TestSequentialIndicatorSimulationLVM:
         )
 
         assert isinstance(result, IndProperty)
+        assert np.all(result.data < result.indicator_count)
 
 
 # =============================================================================
@@ -934,35 +1028,42 @@ class TestSequentialIndicatorSimulationMask:
 
 @pytest.mark.hpgl
 class TestSequentialIndicatorSimulationMinNeighbours:
-    """Test SIS min_neighbours parameter"""
+    """Test SIS with various parameter combinations (min_neighbours parameter removed per C22).
 
-    def test_sis_min_neighbours_zero(self, sample_indicator_property, sample_grid,
-                                      sis_data_3indicator):
-        """Test SIS with min_neighbours=0"""
+    The min_neighbours parameter was removed from sis_simulation() because it was
+    never forwarded to the C++ layer. These tests now verify basic SIS execution
+    with the standard parameter set.
+    """
+
+    def test_sis_many_neighbours_3indicator(self, sample_indicator_property, sample_grid,
+                                             sis_data_3indicator):
+        """Test SIS with max_neighbours=12 (was previously min_neighbours=0 test)"""
         result = sis_simulation(
             prop=sample_indicator_property,
             grid=sample_grid,
             data=sis_data_3indicator,
             seed=42,
-            marginal_probs=[0.3, 0.4, 0.3],
-            min_neighbours=0
+            marginal_probs=[0.3, 0.4, 0.3]
         )
 
         assert isinstance(result, IndProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
-    def test_sis_min_neighbours_positive(self, sample_indicator_property, sample_grid,
-                                          sis_data_3indicator):
-        """Test SIS with positive min_neighbours"""
+    def test_sis_with_alt_params(self, sample_indicator_property, sample_grid,
+                                   sis_data_5indicator):
+        """Test SIS with 5-indicator data (was previously min_neighbours=4 test)"""
         result = sis_simulation(
             prop=sample_indicator_property,
             grid=sample_grid,
-            data=sis_data_3indicator,
+            data=sis_data_5indicator,
             seed=42,
-            marginal_probs=[0.3, 0.4, 0.3],
-            min_neighbours=4
+            marginal_probs=[0.2, 0.2, 0.2, 0.2, 0.2]
         )
 
         assert isinstance(result, IndProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
 
 # =============================================================================
@@ -986,6 +1087,7 @@ class TestSequentialIndicatorSimulationUseCorrelogram:
         )
 
         assert isinstance(result, IndProperty)
+        assert np.all(result.data < result.indicator_count)
 
     def test_sis_use_correlogram_false(self, sample_indicator_property, sample_grid,
                                         sis_data_3indicator):
@@ -1000,6 +1102,7 @@ class TestSequentialIndicatorSimulationUseCorrelogram:
         )
 
         assert isinstance(result, IndProperty)
+        assert np.all(result.data < result.indicator_count)
 
 
 # =============================================================================
@@ -1053,6 +1156,33 @@ class TestSequentialIndicatorSimulationStatistics:
         assert np.all(unique_values < 3)
         assert np.all(unique_values >= 0)
 
+    def test_sis_indicator_proportions(self, sample_indicator_property, sample_grid,
+                                         sis_data_3indicator):
+        """C24: SIS indicator proportions should approximately match marginal_probs.
+
+        The simulated indicator distribution should be close to the target
+        marginal probabilities [0.3, 0.4, 0.3] within ±0.15 tolerance
+        (generous for a 10×10×5 grid with 10% uninformed cells).
+        """
+        result = sis_simulation(
+            prop=sample_indicator_property,
+            grid=sample_grid,
+            data=sis_data_3indicator,
+            seed=42,
+            marginal_probs=[0.3, 0.4, 0.3]
+        )
+
+        simulated = result.data[result.mask > 0]
+        n = len(simulated)
+        target_probs = [0.3, 0.4, 0.3]
+
+        for i, target in enumerate(target_probs):
+            actual_prop = np.sum(simulated == i) / n
+            assert abs(actual_prop - target) < 0.15, (
+                f"Indicator {i}: proportion {actual_prop:.3f} deviates from "
+                f"target {target:.3f} by more than 0.15"
+            )
+
 
 # =============================================================================
 # SIS - Covariance Model Tests
@@ -1092,6 +1222,7 @@ class TestSequentialIndicatorSimulationCovariance:
         )
 
         assert isinstance(result, IndProperty)
+        assert np.all(result.data < result.indicator_count)
 
 
 # =============================================================================
@@ -1189,6 +1320,8 @@ class TestSimulationEdgeCases:
         )
 
         assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isinf(result.data.astype('float64')))
 
     def test_sis_with_small_grid(self):
         """Test SIS with minimal grid size"""
@@ -1208,7 +1341,7 @@ class TestSimulationEdgeCases:
             ),
             'radiuses': (2, 2, 1),
             'max_neighbours': 4
-        }]
+        }] * 2  # 2 indicator categories
 
         prop = IndProperty(data, mask, 2)
         result = sis_simulation(
@@ -1220,72 +1353,7 @@ class TestSimulationEdgeCases:
         )
 
         assert isinstance(result, IndProperty)
-
-
-# =============================================================================
-# SGS/SIS Advanced Parameter Tests (F097)
-# =============================================================================
-
-@pytest.mark.hpgl
-class TestSGSAdvancedParams:
-    """Test SGS parameters: use_regions, region_size, force_single_thread, force_parallel"""
-
-    @pytest.mark.skip(reason="use_regions feature not implemented in Python bindings")
-    def test_sgs_use_regions(self, sample_property, sample_grid,
-                              sample_covariance_model, sgs_cdf_data_multi):
-        """Test SGS with use_regions=True (planned feature, not yet implemented)"""
-        pass
-
-    @pytest.mark.skip(reason="use_regions/region_size features not implemented in Python bindings")
-    def test_sgs_region_size(self, sample_property, sample_grid,
-                              sample_covariance_model, sgs_cdf_data_multi):
-        """Test SGS with explicit region_size (planned feature, not yet implemented)"""
-        pass
-
-    @pytest.mark.skip(reason="force_single_thread/force_parallel features not implemented in Python bindings")
-    def test_sgs_force_single_thread(self, sample_property, sample_grid,
-                                      sample_covariance_model, sgs_cdf_data_multi):
-        """Test SGS with force_single_thread=True (planned feature, not yet implemented)"""
-        pass
-
-    @pytest.mark.skip(reason="force_single_thread/force_parallel features not implemented in Python bindings")
-    def test_sgs_force_parallel(self, sample_property, sample_grid,
-                                 sample_covariance_model, sgs_cdf_data_multi):
-        """Test SGS with force_parallel=True — would verify correctness against serial.
-        Planned feature, not yet implemented in Python bindings.
-        """
-        pass
-
-
-@pytest.mark.hpgl
-class TestSISAdvancedParams:
-    """Test SIS parameters: use_regions, region_size, force_single_thread, force_parallel"""
-
-    @pytest.mark.skip(reason="use_regions feature not implemented in Python bindings")
-    def test_sis_use_regions(self, sample_indicator_property, sample_grid,
-                              sis_data_3indicator):
-        """Test SIS with use_regions=True (planned feature, not yet implemented)"""
-        pass
-
-    @pytest.mark.skip(reason="use_regions/region_size features not implemented in Python bindings")
-    def test_sis_region_size(self, sample_indicator_property, sample_grid,
-                              sis_data_3indicator):
-        """Test SIS with explicit region_size (planned feature, not yet implemented)"""
-        pass
-
-    @pytest.mark.skip(reason="force_single_thread/force_parallel features not implemented in Python bindings")
-    def test_sis_force_single_thread(self, sample_indicator_property, sample_grid,
-                                      sis_data_3indicator):
-        """Test SIS with force_single_thread=True (planned feature, not yet implemented)"""
-        pass
-
-    @pytest.mark.skip(reason="force_single_thread/force_parallel features not implemented in Python bindings")
-    def test_sis_force_parallel(self, sample_indicator_property, sample_grid,
-                                 sis_data_3indicator):
-        """Test SIS with force_parallel=True — would verify correctness against serial.
-        Planned feature, not yet implemented in Python bindings.
-        """
-        pass
+        assert np.all(result.data < result.indicator_count)
 
 
 if __name__ == '__main__':

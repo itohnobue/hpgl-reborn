@@ -1422,6 +1422,14 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     for i, p in enumerate(marginal_probs):
         ParameterValidator.validate_probability(p, f"marginal_probs[{i}]")
 
+    # Validate indicator_count must be exactly 2
+    # The C API (hpgl_median_ik) hardcodes indicator_count=2 with an
+    # interleaved data layout; other counts would read wrong cells.
+    if prop.indicator_count != 2:
+        raise ValueError(
+            f"median_ik: indicator_count must be 2, got {prop.indicator_count}"
+        )
+
     out_prop = _clone_prop(prop)
 
     miksp = _HPGL_MEDIAN_IK_PARAMS(
@@ -1759,13 +1767,13 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
         )
     prop = prop_dict[prop_name]
     informed_array = numpy.zeros(prop.shape, dtype=numpy.uint8)
-    # Use tolerance-based comparison for float undefined_value handling.
-    # np.isclose correctly returns False for NaN cells, avoiding false
-    # positives when NaN sentinels are used.
+    # Use exact equality for undefined_value comparison to match
+    # the C++ fast reader and _load_prop_cont_slow parser behavior.
+    # NaN sentinels are handled separately since NaN != NaN.
     if numpy.isnan(undefined_value):
         uninformed = numpy.isnan(prop)
     else:
-        uninformed = numpy.isclose(prop, undefined_value)
+        uninformed = prop == undefined_value
     informed_array = numpy.where(uninformed, 0, 1).astype(numpy.uint8)
     return (prop_dict[prop_name], informed_array)
 

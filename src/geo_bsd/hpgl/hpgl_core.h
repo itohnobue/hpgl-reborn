@@ -125,7 +125,7 @@ namespace hpgl
 		indicator_property_array_t& property,
 		const sugarbox_grid_t& grid,
 		const ik_params_t& params,
-		int seed,
+		int64_t seed,
 		progress_reporter_t& report,
 		const unsigned char* mask = NULL);
 
@@ -133,7 +133,7 @@ namespace hpgl
 		indicator_property_array_t& property,
 		const sugarbox_grid_t& grid,
 		const ik_params_t& params,
-		int seed,
+		int64_t seed,
 		const mean_t** mean_data,
 		progress_reporter_t& report,
 		bool use_corellogram,

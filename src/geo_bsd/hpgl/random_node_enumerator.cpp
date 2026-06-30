@@ -23,7 +23,7 @@ namespace hpgl
 		}
 	}
 
-	random_path_generator_t::random_path_generator_t(size_t size, int seed)
+	random_path_generator_t::random_path_generator_t(size_t size, int64_t seed)
 		: m_path_gen(validate_path_gen_size(size), seed),
 		m_counter(0),
 		m_size(size),

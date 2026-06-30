@@ -292,7 +292,7 @@ hpgl_sis_simulation(
 		hpgl_ind_masked_array_t * data,
 		hpgl_ik_params_t * params,
 		int indicator_count,
-		int seed,
+		int64_t seed,
 		hpgl_ubyte_array_t * simulation_mask);
 
 HPGL_API void
@@ -301,7 +301,7 @@ hpgl_sis_simulation_lvm(
 		hpgl_ik_params_t * params,
 		hpgl_float_array_t * mean_data,
 		int indicator_count,
-		int seed,
+		int64_t seed,
                 hpgl_ubyte_array_t * simulation_mask,
 		int use_correlograms);
 

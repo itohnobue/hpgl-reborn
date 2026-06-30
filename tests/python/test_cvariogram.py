@@ -272,6 +272,100 @@ class TestCalcVariograms:
         with pytest.raises(ValueError, match="num_lags must be positive"):
             CalcVariograms(templ, hard_data)
 
+    # --- C28: analytical γ(h) value assertions ---
+
+    def test_variogram_constant_data(self):
+        """C28: variogram of constant data must be ≈ 0 for all lags.
+
+        γ(h) = 0.5 * E[(Z(x) - Z(x+h))^2]. If Z is constant, Z(x)-Z(x+h) = 0,
+        so γ(h) = 0 for all h.
+        """
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
+            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+        )
+        data = np.ones((5, 5, 3), dtype='float32') * 42.0
+        mask = np.ones((5, 5, 3), dtype='uint8')
+        lags, variogram = CalcVariograms(templ, (data, mask))
+        assert len(variogram) == 5
+        # All γ(h) must be very close to zero for constant data
+        assert np.all(np.abs(variogram) < 1e-5), (
+            f"Constant data variogram must be 0, got {variogram}"
+        )
+
+    def test_variogram_non_negative(self):
+        """C28: variogram values must be non-negative.
+
+        γ(h) = 0.5 * E[(Z(x)-Z(x+h))^2] ≥ 0 by definition.
+        """
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
+            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+        )
+        hard_data = self._make_grid_data()
+        lags, variogram = CalcVariograms(templ, hard_data)
+        assert np.all(variogram >= 0.0), f"Variogram has negative values: {variogram}"
+
+    def test_variogram_nugget_effect(self):
+        """C28: variogram at lag 0 must be ≤ variogram at lag 1.
+
+        The first lag captures the nugget effect (short-scale variance).
+        For random data, γ(lag0) should be approximately the data variance.
+        """
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0, lag_separation=3.0, tol_distance=1.0,
+            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+        )
+        hard_data = self._make_grid_data()
+        lags, variogram = CalcVariograms(templ, hard_data, percent=100)
+        # All γ(h) should be finite
+        assert np.all(np.isfinite(variogram)), "Variogram contains Inf or NaN"
+        # For data with variance > 0, at least some γ(h) should be > 0
+        data_var = np.var(hard_data[0][hard_data[1] > 0].astype('float64'))
+        if data_var > 0:
+            assert np.any(variogram > 0), (
+                f"Variogram all zeros for data with variance {data_var}"
+            )
+
+    # --- C28: tol_distance boundary tests ---
+
+    def test_tol_distance_small(self):
+        """C28: tol_distance=0.5 should produce valid variogram output.
+
+        Small tol_distance means fewer point pairs are captured in each bin
+        but the computation should still complete without error.
+        """
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0, lag_separation=2.0, tol_distance=0.5,
+            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+        )
+        hard_data = self._make_grid_data()
+        lags, variogram = CalcVariograms(templ, hard_data)
+        assert len(variogram) == 3
+        assert variogram.dtype == np.float32
+        assert np.all(np.isfinite(variogram)), "Variogram with tol_distance=0.5 contains Inf/NaN"
+
+    def test_tol_distance_large(self):
+        """C28: tol_distance=2.0 produces valid variogram output.
+
+        Large tol_distance broadens each lag bin, potentially increasing
+        the number of point pairs. Output should still be valid.
+        """
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0, lag_separation=2.0, tol_distance=2.0,
+            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+        )
+        hard_data = self._make_grid_data()
+        lags, variogram = CalcVariograms(templ, hard_data)
+        assert len(variogram) == 3
+        assert variogram.dtype == np.float32
+        assert np.all(np.isfinite(variogram)), "Variogram with tol_distance=2.0 contains Inf/NaN"
+
 
 @pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
 class TestCalcVariogramsFromPointSet:

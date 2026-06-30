@@ -34,31 +34,22 @@ start:
 	}
 	if (line_size == 0)
 		goto start;
-	if (!isalpha(static_cast<unsigned char>(line[0])))
-	{
-		// Skiping line — consume any continuation of a long non-alpha line
-		while (line_size == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n')
-		{
-			if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
-				break;
-			line_size = strlen(line);
-		}
+	// Accept any non-whitespace-starting line as property name.
+	// The writer (property_writer_t) accepts any string — the reader
+	// must match. Skip lines starting with whitespace (e.g., blank
+	// lines with leading spaces/tabs not caught by the empty check above).
+	if (isspace(static_cast<unsigned char>(line[0])))
 		goto start;
-	}
-	else
+	prop_name = line;
+	// Handle continuation for excessively long property names
+	while (line_size == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n')
 	{
-		// Finally line starting with letter
-		prop_name = line;
-		// Handle continuation for excessively long property names
-		while (line_size == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n')
-		{
-			if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
-				break;
-			line_size = strlen(line);
-			if (line_size > 0 && line[line_size - 1] == '\n')
-				line[--line_size] = '\0';
-			prop_name += line;
-		}
+		if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
+			break;
+		line_size = strlen(line);
+		if (line_size > 0 && line[line_size - 1] == '\n')
+			line[--line_size] = '\0';
+		prop_name += line;
 	}
 }
 
@@ -67,7 +58,6 @@ void load_doubles_into_vector(FILE * file, std::vector<T> & data)
 {
 	char buffer[256];
 	float value;
-	int skipped_count = 0;
 	const size_t MAX_ELEMENTS = 100ULL * 1024ULL * 1024ULL; // 100M elements
 	while (fscanf(file, "%255s", buffer) == 1)
 	{
@@ -97,35 +87,29 @@ void load_doubles_into_vector(FILE * file, std::vector<T> & data)
 		{
 			break;
 		}
-		else
+
+		// Element-count bound (M18 fix)
+		if (data.size() >= MAX_ELEMENTS)
+			throw hpgl_exception("load_doubles_into_vector",
+				"Element count exceeds maximum allowed (100M).");
+
+		// Throw immediately on unparseable tokens — matching
+		// load_floats_into_vector behavior in read_inc_file.cpp.
+		if (sscanf(buffer, "%f", &value) != 1)
 		{
-			// Element-count bound (M18 fix)
-			if (data.size() >= MAX_ELEMENTS)
-				throw hpgl_exception("load_doubles_into_vector",
-					"Element count exceeds maximum allowed (100M).");
-
-			// M17: count skipped (unparseable) tokens
-			if (sscanf(buffer, "%f", &value) != 1)
-			{
-				++skipped_count;
-				continue;
-			}
-			// M21: reject non-finite values (NaN, Inf) — mirroring
-			// load_floats_into_vector in read_inc_file.cpp
-			if (!std::isfinite(value))
-			{
-				++skipped_count;
-				continue;
-			}
-			data.push_back(value);
+			std::ostringstream oss;
+			oss << "Error parsing '" << buffer << "' string at token " << data.size();
+			throw hpgl_exception("load_doubles_into_vector", oss.str());
 		}
-	}
-
-	if (skipped_count > 0)
-	{
-		std::ostringstream oss;
-		oss << "Warning: " << skipped_count << " unparseable token(s) skipped during file load.";
-		throw hpgl_exception("load_doubles_into_vector", oss.str());
+		// Reject non-finite values (NaN, Inf) — mirroring
+		// load_floats_into_vector in read_inc_file.cpp
+		if (!std::isfinite(value))
+		{
+			std::ostringstream oss;
+			oss << "Non-finite value (NaN or Inf) at token " << data.size();
+			throw hpgl_exception("load_doubles_into_vector", oss.str());
+		}
+		data.push_back(value);
 	}
 }
 

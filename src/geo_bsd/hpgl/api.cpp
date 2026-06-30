@@ -290,14 +290,16 @@ void init_remap_table(unsigned char * values, int values_count, int indicator_co
 	}
 	else
 	{
-		if (values_count > 0)
-		{
-			std::ostringstream oss;
-			oss << "Warning: Given " << values_count << " values for " << indicator_count << " indicators. Ignoring values. Using [0, 1, 2 ..]\n";
-			LOGWARNING(oss.str());
-		}
-		for (int i = 0; i < indicator_count; ++i)
-			remap_table.push_back(i);
+		// Throw when caller provides remap values but fewer than
+		// indicator_count — discarding caller data silently would
+		// produce wrong output. The two callers (write_inc_file_byte,
+		// write_gslib_byte_property) catch std::exception and return
+		// error codes to the caller.
+		std::ostringstream oss;
+		oss << "Mismatch: " << values_count << " remap values provided for "
+		    << indicator_count << " indicators. Expected " << indicator_count
+		    << " values (one per indicator).";
+		throw hpgl::hpgl_exception("init_remap_table", oss.str());
 	}
 }
 
@@ -586,6 +588,8 @@ HPGL_API void hpgl_lvm_kriging(
 
 	int size = get_shape_volume(input_data_shape);
 	validate_shape_volume_or_throw(size, "lvm_kriging input");
+	int out_size = get_shape_volume(output_data_shape);
+	validate_shape_volume_or_throw(out_size, "lvm_kriging output");
 	cont_property_array_t input_prop(input_data, input_mask, size);
 	sugarbox_grid_t grid;
 	init_grid(grid, input_data_shape);
@@ -600,7 +604,7 @@ HPGL_API void hpgl_lvm_kriging(
 
 	ok_p.m_max_neighbours = params->m_max_neighbours;
 
-	cont_property_array_t out_prop(output_data, output_mask, size);
+	cont_property_array_t out_prop(output_data, output_mask, out_size);
 	lvm_kriging(input_prop, mean_data, grid, ok_p, out_prop);
 	}
 	catch (const std::exception & ex) { handle_exception(ex); }
@@ -772,6 +776,13 @@ HPGL_API void hpgl_median_ik(
 	mik_p.m_marginal_probs[0] = params->m_marginal_probs[0];
 	mik_p.m_marginal_probs[1] = params->m_marginal_probs[1];
 
+	// median_ik requires exactly 2 indicators — the data layout is
+	// interleaved and median_ik_for_two_indicators reads every other byte.
+	// A mismatched indicator_count would read wrong cells.
+	if (in_data->m_indicator_count != 2)
+		throw hpgl_exception("hpgl_median_ik",
+			"indicator_count must be 2 (median IK is defined for binary indicators)");
+
 	indicator_property_array_t in_prop(
 			in_data->m_data,
 			in_data->m_mask,
@@ -792,7 +803,7 @@ hpgl_sis_simulation(
 		hpgl_ind_masked_array_t * data,
 		hpgl_ik_params_t * params,
 		int indicator_count,
-		int seed,
+		int64_t seed,
 		hpgl_ubyte_array_t * simulation_mask)
 {
 	try
@@ -848,7 +859,7 @@ hpgl_sis_simulation_lvm(
 		hpgl_ik_params_t * params,
 		hpgl_float_array_t * mean_data,
 		int indicator_count,
-		int seed,
+		int64_t seed,
 		hpgl_ubyte_array_t * simulation_mask,
 		int use_correlograms)
 {

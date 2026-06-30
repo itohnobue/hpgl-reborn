@@ -18,7 +18,7 @@ namespace hpgl
 		bool m_eop;
 		node_index_t m_first_index;
 	public:
-		random_path_generator_t(size_t size, int seed);		
+		random_path_generator_t(size_t size, int64_t seed);		
 		bool end_of_path();
 		node_index_t get_next();
 		size_t get_next(size_t count, std::vector<node_index_t> & indices);

@@ -455,7 +455,7 @@ _hpgl_so.hpgl_sis_simulation.argtypes = [
     C.POINTER(_HPGL_IND_MASKED_ARRAY),
     C.POINTER(_HPGL_IK_PARAMS),
     C.c_int,
-    C.c_int,
+    C.c_int64,
     C.POINTER(_HPGL_UBYTE_ARRAY)]
 
 _hpgl_so.hpgl_sis_simulation_lvm.restype = None
@@ -464,7 +464,7 @@ _hpgl_so.hpgl_sis_simulation_lvm.argtypes = [
     C.POINTER(_HPGL_IK_PARAMS),
     C.POINTER(_HPGL_FLOAT_ARRAY),
     C.c_int,
-    C.c_int,
+    C.c_int64,
     C.POINTER(_HPGL_UBYTE_ARRAY),
     C.c_int
     ]

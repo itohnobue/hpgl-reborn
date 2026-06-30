@@ -10,6 +10,12 @@ namespace hpgl
 		HPGL_CHECK(A != nullptr && B != nullptr && X != nullptr, "gauss_solve: null pointer argument");
 		HPGL_CHECK(size > 0, "gauss_solve: invalid size");
 
+		// Save original A and B for residual quality check after solve.
+		// A and B are modified in-place during elimination; the originals
+		// are needed to compute ||Ax - b|| after back-substitution.
+		std::vector<double> A_orig(A, A + size * size);
+		std::vector<double> B_orig(B, B + size);
+
 		std::vector<int> flags(size, 0);
 		std::vector<int> order(size, 0);
 		for (int i = 0; i < size; ++i)
@@ -71,6 +77,33 @@ namespace hpgl
 			{
 				X[i] -= A[row * size + j] * X[j];
 			}
+		}
+
+		// Residual quality check: compute ||Ax - b||_inf using the original
+		// (unmodified) matrix and RHS.  On the Cholesky-failure fallback path
+		// the matrix may be ill-conditioned; Gaussian elimination without
+		// pivoting can silently lose significant digits.  The residual norm
+		// catches degraded solutions before they propagate as kriging weights.
+		{
+			double max_residual = 0.0;
+			double data_scale = 1.0;
+			for (int i = 0; i < size; ++i) {
+				double ax = 0.0;
+				for (int j = 0; j < size; ++j)
+					ax += A_orig[i * size + j] * X[j];
+				double res = std::abs(ax - B_orig[i]);
+				if (res > max_residual) max_residual = res;
+				// Track magnitude of original data for relative tolerance
+				for (int j = 0; j < size; ++j)
+					data_scale = std::max(data_scale, std::abs(A_orig[i * size + j]));
+				data_scale = std::max(data_scale, std::abs(B_orig[i]));
+			}
+			// sqrt(eps) * size ≈ 1.5e-8 * n: tolerance for acceptable round-off.
+			// Residuals exceeding this indicate the solution lost significant
+			// digits and should not be trusted.
+			double tol = std::sqrt(std::numeric_limits<double>::epsilon()) * data_scale * size;
+			if (max_residual > tol)
+				return false;
 		}
 
 		return true;
