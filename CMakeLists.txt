@@ -39,7 +39,14 @@ else()
 endif()
 
 # Compiler warning flags (set per-target via target_compile_options)
-# NOTE: Both CMake and MSVC vcxproj now use /W3 (Level3) for consistency.
+# NOTE: Both CMake and MSVC vcxproj suppress warnings at /W3 level but the
+# suppression sets are intentionally different per build system:
+#   CMake (MSVC): /wd4100 /wd4127 /wd4514 /wd4710 /wd4820
+#   vcxproj:      4003;4244;4267;4018
+# The CMake MSVC set targets pedantic warnings from C++ standards conformance
+# checks in generic template code. The vcxproj set targets warnings from MSVC's
+# own static analysis that don't apply to HPGL's specific code patterns.
+# These sets are maintained independently — sync is not automatic.
 if(MSVC)
     set(HPGL_COMPILE_WARNINGS /W3 /wd4100 /wd4127 /wd4514 /wd4710 /wd4820)
 else()
@@ -56,6 +63,11 @@ option(HPGL_BUILD_PYTHON "Build Python bindings" ON)
 option(HPGL_BUILD_TESTS "Build tests" OFF)
 option(HPGL_USE_OPENMP "Enable OpenMP parallelization" ON)
 option(HPGL_USE_MKL "Use Intel MKL instead of OpenBLAS" OFF)
+
+# BLAS vendor selection (only used when HPGL_USE_MKL=OFF).
+# Set to pin a specific vendor: OpenBLAS, Intel10_64lp, Apple, etc.
+# Leave empty to let CMake auto-detect.
+set(BLA_VENDOR "" CACHE STRING "BLAS vendor to use (OpenBLAS, Intel10_64lp, Apple, etc.)")
 
 # Export compile commands for IDEs
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -88,11 +100,44 @@ if(HPGL_USE_MKL)
         message(FATAL_ERROR "HPGL_USE_MKL is ON but Intel MKL not found")
     endif()
 else()
+    if(BLA_VENDOR)
+        set(BLA_VENDOR "${BLA_VENDOR}" CACHE STRING "" FORCE)
+    endif()
     find_package(BLAS QUIET)
     find_package(LAPACK QUIET)
     if(BLAS_FOUND AND LAPACK_FOUND)
         message(STATUS "BLAS libraries: ${BLAS_LIBRARIES}")
         message(STATUS "LAPACK libraries: ${LAPACK_LIBRARIES}")
+        # Post-find vendor consistency: extract vendor names from found libraries
+        # and warn if BLAS and LAPACK appear to come from different providers.
+        set(_blas_vendor "")
+        set(_lapack_vendor "")
+        if(BLAS_LIBRARIES)
+            list(GET BLAS_LIBRARIES 0 _blas_first)
+        endif()
+        if(LAPACK_LIBRARIES)
+            list(GET LAPACK_LIBRARIES 0 _lapack_first)
+        endif()
+        if(_blas_first AND EXISTS "${_blas_first}")
+            get_filename_component(_blas_name "${_blas_first}" NAME_WE)
+            string(REGEX REPLACE "^lib" "" _blas_name "${_blas_name}")
+            set(_blas_vendor "${_blas_name}")
+        elseif(BLA_VENDOR)
+            set(_blas_vendor "${BLA_VENDOR}")
+        endif()
+        if(_lapack_first AND EXISTS "${_lapack_first}")
+            get_filename_component(_lapack_name "${_lapack_first}" NAME_WE)
+            string(REGEX REPLACE "^lib" "" _lapack_name "${_lapack_name}")
+            set(_lapack_vendor "${_lapack_name}")
+        elseif(BLA_VENDOR)
+            set(_lapack_vendor "${BLA_VENDOR}")
+        endif()
+        if(_blas_vendor AND _lapack_vendor AND NOT _blas_vendor MATCHES "${_lapack_vendor}" AND NOT _lapack_vendor MATCHES "${_blas_vendor}")
+            message(WARNING "BLAS and LAPACK appear to come from different vendors: "
+                            "BLAS=${_blas_vendor}, LAPACK=${_lapack_vendor}. "
+                            "Mixed-vendor BLAS/LAPACK can cause ABI mismatches. "
+                            "Set -DBLA_VENDOR=<vendor> to pin a specific provider.")
+        endif()
     else()
         message(FATAL_ERROR "BLAS/LAPACK not found - one of these libraries is required. "
                             "Install BLAS/LAPACK packages for your platform or set HPGL_USE_MKL=ON.")
@@ -132,6 +177,8 @@ add_library(hpgl::core ALIAS hpgl_core)
 # Ensure consistent output name across platforms (Python bindings expect "hpgl")
 set_target_properties(hpgl_core PROPERTIES
     OUTPUT_NAME "hpgl"
+    VERSION "${PROJECT_VERSION}"
+    SOVERSION "${PROJECT_VERSION_MAJOR}"
 )
 
 # Compiler warning flags applied at target scope
@@ -157,6 +204,35 @@ endif()
 # MKL compile definition (after target creation)
 if(HPGL_USE_MKL AND MKL_FOUND)
     target_compile_definitions(hpgl_core PRIVATE HPGL_USE_MKL USE_INTEL_MKL)
+endif()
+
+# RPATH configuration: embed BLAS/LAPACK library paths so that the built
+# hpgl shared library can locate them at runtime without LD_LIBRARY_PATH.
+# Only extracts directory paths from concrete library file names (skips
+# -l flags and CMake interface targets).
+set(_hpgl_rpath_dirs "")
+function(_hpgl_collect_rpath_dirs lib_list)
+    foreach(_lib ${lib_list})
+        if("${_lib}" MATCHES "^-l" OR "${_lib}" MATCHES "^(optimized|debug)$")
+            continue()
+        endif()
+        get_filename_component(_lib_dir "${_lib}" DIRECTORY)
+        if(_lib_dir AND NOT _lib_dir STREQUAL "")
+            list(APPEND _hpgl_rpath_dirs "${_lib_dir}")
+        endif()
+    endforeach()
+    if(_hpgl_rpath_dirs)
+        list(REMOVE_DUPLICATES _hpgl_rpath_dirs)
+        set(_hpgl_rpath_dirs "${_hpgl_rpath_dirs}" PARENT_SCOPE)
+    endif()
+endfunction()
+_hpgl_collect_rpath_dirs("${BLAS_LIBRARIES}")
+_hpgl_collect_rpath_dirs("${LAPACK_LIBRARIES}")
+if(_hpgl_rpath_dirs)
+    set_target_properties(hpgl_core PROPERTIES
+        BUILD_RPATH "${_hpgl_rpath_dirs}"
+        INSTALL_RPATH "${_hpgl_rpath_dirs}"
+    )
 endif()
 
 # Platform-specific settings

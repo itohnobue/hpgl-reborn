@@ -106,7 +106,7 @@ def sis_data_2indicator():
 def sis_data_3indicator():
     """SIS data for 3-indicator case"""
     data = []
-    for i in range(3):
+    for _i in range(3):
         data.append({
             'cov_model': CovarianceModel(
                 type=covariance.spherical,
@@ -125,7 +125,7 @@ def sis_data_3indicator():
 def sis_data_5indicator():
     """SIS data for 5-indicator case"""
     data = []
-    for i in range(5):
+    for _i in range(5):
         data.append({
             'cov_model': CovarianceModel(
                 type=covariance.exponential,
@@ -1200,7 +1200,7 @@ class TestSequentialIndicatorSimulationCovariance:
     def test_sis_different_covariance_types(self, sample_indicator_property, sample_grid, cov_type):
         """Test SIS with different covariance types"""
         sis_data = []
-        for i in range(3):
+        for _i in range(3):
             sis_data.append({
                 'cov_model': CovarianceModel(
                     type=cov_type,

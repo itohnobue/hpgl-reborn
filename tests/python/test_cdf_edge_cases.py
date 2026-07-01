@@ -174,6 +174,22 @@ class TestCalcCdfEdgeCases:
         assert cdf.values.size >= 1
         assert np.all(np.diff(cdf.values) >= 0)
 
+    def test_all_nan_informed_raises(self):
+        """calc_cdf raises ValueError when all informed values are NaN."""
+        prop = _make_prop([np.nan, np.nan, np.nan, np.nan],
+                          grid_shape=(2, 2, 1))
+        with pytest.raises(ValueError, match="no informed values after filtering NaN"):
+            calc_cdf(prop)
+
+    def test_mixed_nan_and_finite(self):
+        """calc_cdf filters NaN values and computes CDF from finite remainder."""
+        prop = _make_prop([np.nan, 5.0, np.nan, 15.0],
+                          grid_shape=(2, 2, 1))
+        cdf = calc_cdf(prop)
+        assert cdf.values.size == 2
+        np.testing.assert_array_almost_equal(cdf.values, [5.0, 15.0])
+        np.testing.assert_array_almost_equal(cdf.probs, [0.5, 1.0], decimal=5)
+
 
 @pytest.mark.hpgl
 class TestCdfDataCreation:
@@ -192,3 +208,13 @@ class TestCdfDataCreation:
         cdf = CdfData([5.0], [1.0])
         assert cdf.values[0] == 5.0
         assert cdf.probs[0] == 1.0
+
+    def test_length_mismatch_raises(self):
+        """CdfData raises ValueError when values and probs have mismatched lengths."""
+        with pytest.raises(ValueError, match="values length.*must match.*probs length"):
+            CdfData([1.0, 2.0, 3.0], [0.5, 1.0])
+
+    def test_length_mismatch_empty_vs_nonempty(self):
+        """CdfData raises ValueError when one array is empty and the other is not."""
+        with pytest.raises(ValueError):
+            CdfData([1.0, 2.0], [])

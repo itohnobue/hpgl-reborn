@@ -735,11 +735,14 @@ class TestRotationAnisotropy:
         ranges=(100,50,30), angles=(30,45,60), neighbor (3,4,2), target (0,0,0).
         Spherical sill=1.0, nugget=0.0.
 
-        The HPGL C++ code uses internal ZYX rotation via:
-        t = scale * ((rotate_x * rotate_y) * rotate_z)
+        HPGL uses transposed ZYX rotation matrices (per cov_model.h):
+          Rz_hpgl(a) = [[c, s, 0], [-s, c, 0], [0, 0, 1]]
+          Ry_hpgl(a) = [[c, 0, -s], [0, 1, 0], [s, 0, c]]
+          Rx_hpgl(a) = [[1, 0, 0], [0, c, s], [0, -s, c]]
+          t = scale * (Rx_hpgl @ Ry_hpgl @ Rz_hpgl)
 
-        This test documents the actual HPGL convention output as a regression
-        reference. The weight should be positive and less than 1.0.
+        This test validates HPGL output against an independent numpy
+        implementation of the same transposed-matrix convention.
         """
         ranges = (100.0, 50.0, 30.0)
         angles = (30.0, 45.0, 60.0)
@@ -756,13 +759,42 @@ class TestRotationAnisotropy:
         assert 0.0 < weights[0] <= 1.0, (
             "Weight must be in (0, 1] for spherical with no nugget"
         )
-        # Regression reference: weight should be close to what HPGL returns
-        # For the given parameters the actual value is approximately 0.844
-        assert weights[0] > 0.7, (
-            f"Weight should be > 0.7 for this configuration, got {weights[0]}"
-        )
-        assert weights[0] < 0.95, (
-            f"Weight should be < 0.95 for this configuration, got {weights[0]}"
+
+        # Independent mathematical validation using HPGL's transposed matrices
+        a0, a1, a2 = np.radians(angles)  # angles = (azimuth, dip, plunge)
+        Rz = np.array([
+            [np.cos(a0), np.sin(a0), 0],
+            [-np.sin(a0), np.cos(a0), 0],
+            [0, 0, 1],
+        ])
+        Ry = np.array([
+            [np.cos(a1), 0, -np.sin(a1)],
+            [0, 1, 0],
+            [np.sin(a1), 0, np.cos(a1)],
+        ])
+        Rx = np.array([
+            [1, 0, 0],
+            [0, np.cos(a2), np.sin(a2)],
+            [0, -np.sin(a2), np.cos(a2)],
+        ])
+        R = Rx @ Ry @ Rz
+        neighbor = np.array([3.0, 4.0, 2.0])
+        rotated = R @ neighbor
+        scaled = np.array([
+            rotated[0] / ranges[0],
+            rotated[1] / ranges[1],
+            rotated[2] / ranges[2],
+        ])
+        h_eff = np.sqrt(np.sum(scaled ** 2))
+
+        # Spherical covariance: C(h) = 1 - 1.5*h + 0.5*h^3  for h <= 1
+        assert h_eff <= 1.0, f"Effective distance {h_eff:.4f} should be <= 1"
+        expected_weight = 1.0 - 1.5 * h_eff + 0.5 * h_eff ** 3
+
+        np.testing.assert_allclose(
+            weights[0], expected_weight, rtol=1e-4, atol=1e-5,
+            err_msg=f"Rotation mismatch: HPGL={weights[0]:.6f}, "
+                    f"independent math={expected_weight:.6f}, h_eff={h_eff:.6f}"
         )
 
     def test_rot_convention_single_axis_only(self):
@@ -800,6 +832,213 @@ class TestRotationAnisotropy:
         # With rotation, the effective scaled distance should differ
         # Both should be valid (finite, non-NaN)
         assert np.isfinite(w_no_rot[0]) and np.isfinite(w_rot[0])
+
+    def test_rot_zyx_convention_independent_verification(self):
+        """ROT-T5: Verify ZYX convention independently.
+
+        Cov_model.h:6-10 documents HPGL's ZYX (intrinsic) Euler rotation:
+          t = scale * (Rx * Ry * Rz)
+        where Rz rotates by angles[0], Ry by angles[1], Rx by angles[2],
+        and scale = diag(1, rx/ry, rx/rz).
+
+        This test independently builds the same rotation+scale matrices using
+        numpy, computes the effective distance, then the analytical covariance,
+        and compares against HPGL's simple_kriging_weights output.
+        """
+        from math import cos, radians, sin
+
+        def hpgl_rotate_z(angle_deg):
+            a = radians(angle_deg)
+            return np.array([
+                [cos(a),  sin(a), 0],
+                [-sin(a), cos(a), 0],
+                [0,       0,      1],
+            ])
+
+        def hpgl_rotate_y(angle_deg):
+            a = radians(angle_deg)
+            return np.array([
+                [cos(a), 0, -sin(a)],
+                [0,      1, 0],
+                [sin(a), 0, cos(a)],
+            ])
+
+        def hpgl_rotate_x(angle_deg):
+            a = radians(angle_deg)
+            return np.array([
+                [1, 0,       0],
+                [0, cos(a),  sin(a)],
+                [0, -sin(a), cos(a)],
+            ])
+
+        def hpgl_effective_distance(ranges, angles, vec):
+            """Compute h_eff the way HPGL does: ||scale * (Rx * Ry * Rz) * vec||."""
+            rx, ry, rz = ranges
+            Rz = hpgl_rotate_z(angles[0])
+            Ry = hpgl_rotate_y(angles[1])
+            Rx = hpgl_rotate_x(angles[2])
+            # Combined rotation (ZYX intrinsic): R = Rx * Ry * Rz
+            R = Rx @ Ry @ Rz
+            # Rotate the displacement vector
+            v_rot = R @ vec
+            # Scale
+            scale = np.array([1.0, rx / ry, rx / rz])
+            v_scaled = v_rot * scale
+            return np.sqrt(np.sum(v_scaled ** 2))
+
+        def spherical_cov(h, sill, nugget, range_val):
+            """Analytical spherical covariance: C(h)."""
+            if h < 0.0001:
+                return sill
+            if h > range_val:
+                return 0.0
+            x = h / range_val
+            return max(0.0, (sill - nugget) * (1.0 - 1.5 * x + 0.5 * x ** 3))
+
+        # Test with non-trivial anisotropic ranges and all three angles
+        ranges = (100.0, 50.0, 30.0)
+        angles = (30.0, 45.0, 60.0)
+        displacement = np.array([3.0, 4.0, 2.0])
+
+        # Compute expected effective distance using independent math
+        h_eff = hpgl_effective_distance(ranges, angles, displacement)
+        expected_cov = spherical_cov(h_eff, sill=1.0, nugget=0.0, range_val=ranges[0])
+        expected_weight = expected_cov
+
+        # Get HPGL's weight
+        weights = simple_kriging_weights(
+            (0, 0, 0),
+            np.array([displacement[0]], dtype='float32'),
+            np.array([displacement[1]], dtype='float32'),
+            np.array([displacement[2]], dtype='float32'),
+            ranges=ranges, angles=angles, sill=1.0,
+            cov_type=covariance.spherical, nugget=0.0,
+        )
+
+        np.testing.assert_allclose(
+            weights[0], expected_weight, rtol=1e-4, atol=1e-5,
+            err_msg=f"ZYX convention mismatch: HPGL={weights[0]:.8f}, "
+                    f"independent={expected_weight:.8f} (h_eff={h_eff:.6f})"
+        )
+
+        # Second test case: just azimuth, anisotropic ranges
+        ranges2 = (20.0, 10.0, 10.0)
+        angles2 = (45.0, 0.0, 0.0)
+        displacement2 = np.array([3.5355, 3.5355, 0.0])
+
+        h_eff2 = hpgl_effective_distance(ranges2, angles2, displacement2)
+        expected_cov2 = spherical_cov(h_eff2, sill=1.0, nugget=0.0, range_val=ranges2[0])
+        expected_weight2 = expected_cov2
+
+        weights2 = simple_kriging_weights(
+            (0, 0, 0),
+            np.array([displacement2[0]], dtype='float32'),
+            np.array([displacement2[1]], dtype='float32'),
+            np.array([displacement2[2]], dtype='float32'),
+            ranges=ranges2, angles=angles2, sill=1.0,
+            cov_type=covariance.spherical, nugget=0.0,
+        )
+
+        np.testing.assert_allclose(
+            weights2[0], expected_weight2, rtol=1e-4, atol=1e-5,
+            err_msg=f"ZYX convention mismatch (azimuth only): "
+                    f"HPGL={weights2[0]:.8f}, independent={expected_weight2:.8f}"
+        )
+
+        # Third test case: dip only
+        ranges3 = (10.0, 10.0, 5.0)
+        angles3 = (0.0, 30.0, 0.0)
+        displacement3 = np.array([0.0, 0.0, 5.0])
+
+        h_eff3 = hpgl_effective_distance(ranges3, angles3, displacement3)
+        expected_cov3 = spherical_cov(h_eff3, sill=1.0, nugget=0.0, range_val=ranges3[0])
+        expected_weight3 = expected_cov3
+
+        weights3 = simple_kriging_weights(
+            (0, 0, 0),
+            np.array([displacement3[0]], dtype='float32'),
+            np.array([displacement3[1]], dtype='float32'),
+            np.array([displacement3[2]], dtype='float32'),
+            ranges=ranges3, angles=angles3, sill=1.0,
+            cov_type=covariance.spherical, nugget=0.0,
+        )
+
+        np.testing.assert_allclose(
+            weights3[0], expected_weight3, rtol=1e-4, atol=1e-5,
+            err_msg=f"ZYX convention mismatch (dip only): "
+                    f"HPGL={weights3[0]:.8f}, independent={expected_weight3:.8f}"
+        )
+
+    def test_rot_zyx_not_zxz(self):
+        """ROT-T6: Verify HPGL is ZYX (not ZXZ as GSLIB uses).
+
+        Under ZXZ convention, the same angles would produce markedly different
+        effective distances for certain displacement directions. This test
+        verifies that HPGL's output matches the ZYX calculation and does NOT
+        match a ZXZ calculation.
+        """
+        from math import cos, radians, sin
+
+        def make_rz(angle_deg):
+            a = radians(angle_deg)
+            return np.array([
+                [cos(a),  sin(a), 0],
+                [-sin(a), cos(a), 0],
+                [0, 0, 1],
+            ])
+
+        def make_rx(angle_deg):
+            a = radians(angle_deg)
+            return np.array([
+                [1, 0, 0],
+                [0, cos(a),  sin(a)],
+                [0, -sin(a), cos(a)],
+            ])
+
+        def zxz_effective_distance(ranges, angles, vec):
+            """ZXZ (GSLIB) convention: R = Rz2 * Rx * Rz1."""
+            rx, ry, rz = ranges
+            Rz1 = make_rz(angles[0])
+            Rx = make_rx(angles[1])
+            Rz2 = make_rz(angles[2])
+            R = Rz2 @ Rx @ Rz1
+            v_rot = R @ vec
+            scale = np.array([1.0, rx / ry, rx / rz])
+            v_scaled = v_rot * scale
+            return np.sqrt(np.sum(v_scaled ** 2))
+
+        def spherical_cov(h, sill, nugget, range_val):
+            if h < 0.0001:
+                return sill
+            if h > range_val:
+                return 0.0
+            x = h / range_val
+            return max(0.0, (sill - nugget) * (1.0 - 1.5 * x + 0.5 * x ** 3))
+
+        # Use all three angles non-zero so ZYX vs ZXZ diverge
+        ranges = (100.0, 50.0, 30.0)
+        angles = (30.0, 45.0, 60.0)
+        displacement = np.array([3.0, 4.0, 2.0])
+
+        weights = simple_kriging_weights(
+            (0, 0, 0),
+            np.array([displacement[0]], dtype='float32'),
+            np.array([displacement[1]], dtype='float32'),
+            np.array([displacement[2]], dtype='float32'),
+            ranges=ranges, angles=angles, sill=1.0,
+            cov_type=covariance.spherical, nugget=0.0,
+        )
+
+        # ZXZ effective distance (GSLIB convention — should NOT match)
+        h_eff_zxz = zxz_effective_distance(ranges, angles, displacement)
+        zxz_cov = spherical_cov(h_eff_zxz, sill=1.0, nugget=0.0, range_val=ranges[0])
+        zxz_weight = zxz_cov
+
+        # HPGL weight should differ from ZXZ
+        assert not np.isclose(weights[0], zxz_weight, rtol=5e-2), (
+            f"HPGL weight {weights[0]:.8f} accidentally matches ZXZ weight {zxz_weight:.8f} "
+            f"— this would suggest HPGL uses ZXZ, not ZYX"
+        )
 
 
 # =============================================================================

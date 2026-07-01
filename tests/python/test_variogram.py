@@ -143,7 +143,7 @@ class TestIsInTunnel:
         )
         V = np.array([[5, 0, 0], [1, 1, 1]])
         result = _IsInTunnel(templ, V)
-        assert np.all(result == False)
+        assert not np.any(result)
 
     def test_zero_r3_returns_all_false(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=0)
@@ -153,7 +153,7 @@ class TestIsInTunnel:
         )
         V = np.array([[5, 0, 0], [1, 1, 1]])
         result = _IsInTunnel(templ, V)
-        assert np.all(result == False)
+        assert not np.any(result)
 
     def test_zero_r2_r3_no_crash(self):
         ell = TVEllipsoid(R1=10, R2=0, R3=0)
@@ -163,7 +163,7 @@ class TestIsInTunnel:
         )
         V = np.array([[5, 0, 0]])
         result = _IsInTunnel(templ, V)
-        assert result[0] == False
+        assert not result[0]
 
     def test_along_direction1_2d(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
@@ -173,7 +173,7 @@ class TestIsInTunnel:
         )
         V = np.array([[5, 0, 0]])
         result = _IsInTunnel(templ, V)
-        assert result[0] == True
+        assert result[0]
 
     def test_perpendicular_outside_tunnel_2d(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
@@ -183,7 +183,7 @@ class TestIsInTunnel:
         )
         V = np.array([[0, 10, 0]])
         result = _IsInTunnel(templ, V)
-        assert result[0] == False
+        assert not result[0]
 
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
@@ -313,14 +313,14 @@ class TestCalcLagsAreas:
         templ = _make_template(ell)
         result = _CalcLagsAreas(templ)
         assert len(result) == 5
-        I, J, K, LagIndexes, LagDistance = result
+        i_arr, j_arr, k_arr, LagIndexes, LagDistance = result
 
     def test_lag_indexes_within_range(self):
         """Lag indexes are within [0, NumLags)."""
         from geo_bsd.variogram import _CalcLagsAreas
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=4)
-        I, J, K, LagIndexes, LagDistance = _CalcLagsAreas(templ)
+        i_arr, j_arr, k_arr, LagIndexes, LagDistance = _CalcLagsAreas(templ)
         assert LagIndexes.min() >= 0
         assert LagIndexes.max() <= 3  # 0-indexed, < num_lags
 
@@ -329,9 +329,9 @@ class TestCalcLagsAreas:
         from geo_bsd.variogram import _CalcLagsAreas
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=3)
-        I, J, K, LagIndexes, LagDistance = _CalcLagsAreas(templ)
-        n = len(I)
-        assert n == len(J) == len(K) == len(LagIndexes)
+        i_arr, j_arr, k_arr, LagIndexes, LagDistance = _CalcLagsAreas(templ)
+        n = len(i_arr)
+        assert n == len(j_arr) == len(k_arr) == len(LagIndexes)
         assert n > 0, "Should have at least one lag point"
 
     def test_lag_distances_correct_order(self):
@@ -339,7 +339,7 @@ class TestCalcLagsAreas:
         from geo_bsd.variogram import _CalcLagsAreas
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=5, lag_sep=3.0)
-        I, J, K, LagIndexes, LagDistance = _CalcLagsAreas(templ)
+        i_arr, j_arr, k_arr, LagIndexes, LagDistance = _CalcLagsAreas(templ)
         expected = np.array([0, 3, 6, 9, 12])
         np.testing.assert_array_equal(LagDistance, expected)
 
@@ -348,18 +348,18 @@ class TestCalcLagsAreas:
         from geo_bsd.variogram import _CalcLagsAreas
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=3)
-        I, J, K, _, _ = _CalcLagsAreas(templ)
-        assert I.dtype == np.int32 or I.dtype == np.int64
-        assert J.dtype == np.int32 or J.dtype == np.int64
-        assert K.dtype == np.int32 or K.dtype == np.int64
+        i_arr, j_arr, k_arr, _, _ = _CalcLagsAreas(templ)
+        assert i_arr.dtype == np.int32 or i_arr.dtype == np.int64
+        assert j_arr.dtype == np.int32 or j_arr.dtype == np.int64
+        assert k_arr.dtype == np.int32 or k_arr.dtype == np.int64
 
     def test_zero_radii_returns_empty_arrays(self):
         """Zero R2/R3 produces empty lag area arrays."""
         from geo_bsd.variogram import _CalcLagsAreas
         ell = _make_ellipsoid(r1=10, r2=0, r3=0)
         templ = _make_template(ell, num_lags=3)
-        I, J, K, LagIndexes, _ = _CalcLagsAreas(templ)
-        assert len(I) == 0 and len(J) == 0 and len(K) == 0
+        i_arr, j_arr, k_arr, LagIndexes, _ = _CalcLagsAreas(templ)
+        assert len(i_arr) == 0 and len(j_arr) == 0 and len(k_arr) == 0
 
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
@@ -416,7 +416,6 @@ class TestVariogramCoreFunctions:
         soft = [np.array([10.0, 20.0, 30.0], dtype='float32')]
         params = {"HardData": values, "SoftData": soft}
         result = CalcCovarianceFunction(None, None, None, params)
-        n_vals = len(values)
 
         p1 = np.int64(0)
         p2 = np.int64(1)
@@ -585,3 +584,81 @@ class TestCubeScan:
         result, lag_dist = CubeScan(templ, mask, self._trivial_fn, None)
         assert result is not None
         assert len(lag_dist) == templ.NumLags
+
+
+# =============================================================================
+# NaN/Inf Input Tests for Variogram Core Functions (F-093)
+# =============================================================================
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestVariogramNaNInfHandling:
+    """Tests for NaN/Inf injection in variogram core functions."""
+
+    # ---- CalcVariogramFunction NaN/Inf ----
+
+    def test_calc_variogram_nan_in_harddata(self):
+        """CalcVariogramFunction with NaN in HardData propagates NaN to result."""
+        from geo_bsd.variogram import CalcVariogramFunction
+        values = [np.array([np.nan, 2.0, 3.0], dtype='float32')]
+        params = {"HardData": values}
+        # Initialize: Result=None creates zeros
+        result = CalcVariogramFunction(None, None, None, params)
+        # Compute with the NaN-containing data
+        result = CalcVariogramFunction([0], [1], result, params)
+        # NaN should propagate through the computation
+        # (1.5 should produce NaN_32 - 2.0 in squared = NaN)
+        assert np.any(np.isnan(result))
+
+    def test_calc_variogram_inf_in_harddata(self):
+        """CalcVariogramFunction with Inf in HardData propagates Inf to result."""
+        from geo_bsd.variogram import CalcVariogramFunction
+        values = [np.array([np.inf, 2.0, 3.0], dtype='float32')]
+        params = {"HardData": values}
+        result = CalcVariogramFunction(None, None, None, params)
+        result = CalcVariogramFunction([0], [1], result, params)
+        # Inf should propagate
+        assert np.any(np.isinf(result)) or np.any(np.isnan(result))
+
+    # ---- CalcCovarianceFunction NaN/Inf ----
+
+    def test_calc_covariance_nan_in_data(self):
+        """CalcCovarianceFunction with NaN in HardData or SoftData propagates NaN."""
+        from geo_bsd.variogram import CalcCovarianceFunction
+        values = [np.array([np.nan, 2.0, 3.0], dtype='float32')]
+        soft = [np.array([1.0, 2.0, 3.0], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcCovarianceFunction(None, None, None, params)
+        result = CalcCovarianceFunction(np.int64(0), np.int64(1), result, params)
+        assert np.any(np.isnan(result))
+
+    def test_calc_covariance_inf_in_data(self):
+        """CalcCovarianceFunction with Inf in HardData propagates Inf."""
+        from geo_bsd.variogram import CalcCovarianceFunction
+        values = [np.array([np.inf, 2.0, 3.0], dtype='float32')]
+        soft = [np.array([1.0, 2.0, 3.0], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcCovarianceFunction(None, None, None, params)
+        result = CalcCovarianceFunction(np.int64(0), np.int64(1), result, params)
+        assert np.any(np.isinf(result)) or np.any(np.isnan(result))
+
+    # ---- CalcIndCorrelationFunction NaN/Inf ----
+
+    def test_calc_ind_correlation_nan_in_data(self):
+        """CalcIndCorrelationFunction with NaN in HardData propagates NaN."""
+        from geo_bsd.variogram import CalcIndCorrelationFunction
+        values = [np.array([np.nan, 1.0, 0.0], dtype='float32')]
+        soft = [np.array([0.5, 0.5, 0.5], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcIndCorrelationFunction(None, None, None, params)
+        result = CalcIndCorrelationFunction(np.int64(0), np.int64(1), result, params)
+        assert np.any(np.isnan(result))
+
+    def test_calc_ind_correlation_inf_in_data(self):
+        """CalcIndCorrelationFunction with Inf in HardData propagates Inf."""
+        from geo_bsd.variogram import CalcIndCorrelationFunction
+        values = [np.array([np.inf, 1.0, 0.0], dtype='float32')]
+        soft = [np.array([0.5, 0.5, 0.5], dtype='float32')]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcIndCorrelationFunction(None, None, None, params)
+        result = CalcIndCorrelationFunction(np.int64(0), np.int64(1), result, params)
+        assert np.any(np.isinf(result)) or np.any(np.isnan(result))

@@ -17,9 +17,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 # Check if HPGL is available
 try:
     # Import modules individually to avoid __init__.py triggering
-    # geo.py syntax errors in unrelated modules
-    from geo_bsd.geo import ContProperty as _ContProperty
-    HPGL_AVAILABLE = True
+    # geo.py syntax errors in unrelated modules.
+    # Use importlib to avoid unused-import lint warnings.
+    import importlib.util
+    _spec = importlib.util.find_spec("geo_bsd.geo")
+    HPGL_AVAILABLE = _spec is not None
 except (ImportError, SyntaxError, IndentationError, OSError):
     HPGL_AVAILABLE = False
 

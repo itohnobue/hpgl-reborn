@@ -82,7 +82,6 @@ try:
         calc_mean,
         covariance,
         ordinary_kriging,
-        simple_kriging,
     )
     from geo_bsd.sgs import sgs_simulation
 except (ImportError, OSError):
@@ -118,7 +117,7 @@ class TestPerformance:
                              max_neighbours=12, cov_model=cov_model)
 
         start = time.time()
-        result = ordinary_kriging(
+        _ = ordinary_kriging(
             prop=prop,
             grid=grid,
             radiuses=(5, 5, 3),
@@ -152,7 +151,7 @@ class TestPerformance:
                              max_neighbours=12, cov_model=cov_model)
 
         start = time.time()
-        result = ordinary_kriging(
+        _ = ordinary_kriging(
             prop=prop,
             grid=grid,
             radiuses=(10, 10, 5),
@@ -187,7 +186,7 @@ class TestPerformance:
                           cov_model=cov_model, seed=42)
 
         start = time.time()
-        result = sgs_simulation(
+        _ = sgs_simulation(
             prop=prop,
             grid=grid,
             cdf_data=cdf_data,
@@ -221,7 +220,7 @@ class TestPerformance:
         timings = {}
         for max_neighbours in [4, 8, 12, 16]:
             start = time.time()
-            result = ordinary_kriging(
+            _ = ordinary_kriging(
                 prop=prop,
                 grid=grid,
                 radiuses=(5, 5, 3),
@@ -259,7 +258,7 @@ class TestPerformance:
             )
 
             start = time.time()
-            result = ordinary_kriging(
+            _ = ordinary_kriging(
                 prop=prop,
                 grid=grid,
                 radiuses=(5, 5, 3),
@@ -284,7 +283,7 @@ def test_mean_calculation_performance():
     prop = ContProperty(large_data, large_mask)
 
     start = time.time()
-    mean_val = calc_mean(prop)
+    _ = calc_mean(prop)
     elapsed = time.time() - start
 
     print(f"Mean calculation on 100k elements: {elapsed:.6f}s")

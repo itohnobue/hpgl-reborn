@@ -25,13 +25,9 @@ try:
         CovarianceModel,
         IndProperty,
         SugarboxGrid,
-        _c_array,
-        _create_hpgl_shape,
         calc_mean,
         covariance,
-        indicator_kriging,
         ordinary_kriging,
-        simple_kriging,
     )
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation
@@ -596,10 +592,19 @@ class TestDataEdgeCases:
                 cov_model=cov_model
             )
             # If it doesn't raise, check result for NaN propagation
-            # NaN in input may produce NaN in output (expected for C operations)
             result.fix_shape(grid)
-            # Document current behavior
             assert result.data.shape == (5, 5, 2)
+            # NaN in input may propagate to output (C operations on NaN produce NaN).
+            # Verify that some valid output was produced alongside any NaN cells.
+            nan_mask = np.isnan(result.data)
+            if np.any(nan_mask):
+                # NaN propagation is expected — verify non-NaN cells also exist
+                assert not np.all(nan_mask), (
+                    "All output cells are NaN — kriging produced no valid results"
+                )
+            else:
+                # No NaN propagation — all output is clean
+                pass
         except (RuntimeError, ValueError, FloatingPointError):
             # Raising an error is also valid behavior
             pass
@@ -794,7 +799,7 @@ class TestParameterValidation:
 
     def test_negative_sill(self):
         """Test with negative sill value - should raise error"""
-        with pytest.raises((ValueError, RuntimeError, Exception)):
+        with pytest.raises(CriticalValidationError):
             CovarianceModel(
                 type=covariance.spherical,
                 ranges=(5.0, 5.0, 3.0),
@@ -805,7 +810,7 @@ class TestParameterValidation:
 
     def test_nugget_greater_than_sill(self):
         """Test CovarianceModel with nugget > sill - should raise error"""
-        with pytest.raises(Exception):
+        with pytest.raises(CriticalValidationError):
             CovarianceModel(
                 type=covariance.spherical,
                 ranges=(5.0, 5.0, 3.0),
@@ -847,7 +852,7 @@ class TestParameterValidation:
 
         # Should raise error for size mismatch when calling fix_shape or kriging
         # The exact error type may vary - we accept RuntimeError or ValueError
-        with pytest.raises((RuntimeError, ValueError, Exception)):
+        with pytest.raises((RuntimeError, ValueError)):
             prop.fix_shape(grid)
             ordinary_kriging(
                 prop=prop,
@@ -859,7 +864,6 @@ class TestParameterValidation:
 
     def test_wrong_data_type_int_instead_of_float(self):
         """Test with integer data instead of float32"""
-        grid = SugarboxGrid(x=10, y=10, z=5)
         # Int data should be converted or raise error
         data = np.array([1, 2, 3, 4, 5] * 100, dtype='int32')  # 500 values
         mask = np.ones(500, dtype='uint8')
@@ -995,7 +999,6 @@ class TestPropertyEdgeCases:
 
     def test_single_indicator_indicator_count_1(self):
         """Test indicator property with single indicator"""
-        grid = SugarboxGrid(x=10, y=10, z=5)
         data = np.zeros(500, dtype='uint8')  # All indicator 0
         mask = np.ones(500, dtype='uint8')
         prop = IndProperty(data, mask, indicator_count=1)
@@ -1005,7 +1008,6 @@ class TestPropertyEdgeCases:
 
     def test_many_indicators_indicator_count_10(self):
         """Test indicator property with many indicators"""
-        grid = SugarboxGrid(x=10, y=10, z=5)
         data = np.random.randint(0, 10, 500, dtype='uint8')
         mask = np.ones(500, dtype='uint8')
         prop = IndProperty(data, mask, indicator_count=10)
@@ -1035,13 +1037,17 @@ class TestPropertyEdgeCases:
         data = np.ones(100, dtype='float32')
         mask = np.ones(50, dtype='uint8')  # Different size
 
-        # Should handle mismatch
+        # ContProperty does not validate shape consistency between data and
+        # mask (unlike IndProperty which does). This test documents the current
+        # behavior: the constructor accepts mismatched shapes.
         try:
             prop = ContProperty(data, mask)
-            # If it doesn't raise, shapes should match after processing
-            assert prop.data.shape == prop.mask.shape
-        except (ValueError, RuntimeError, AssertionError):
-            # Expected to fail
+            # Constructor accepted mismatched shapes — verify it didn't crash
+            assert prop is not None
+            assert prop.data is not None
+            assert prop.mask is not None
+        except (ValueError, RuntimeError):
+            # Raising an error for mismatch is also acceptable behavior
             pass
 
 
@@ -1291,7 +1297,7 @@ class TestSimulationEdgeCases:
 
         # Setup IK data
         ik_data = []
-        for i in range(3):
+        for _i in range(3):
             ik_data.append({
                 'cov_model': CovarianceModel(
                     type=covariance.spherical,
@@ -1784,20 +1790,11 @@ class TestErrorHandling:
 
     def test_error_raised_on_invalid_covariance(self):
         """HIGH: Verify validation catches invalid covariance parameters before C++ call."""
-        import numpy as np
-
         from geo_bsd.geo import (
-            ContProperty,
             CovarianceModel,
-            SugarboxGrid,
             covariance,
         )
         from geo_bsd.validation import CriticalValidationError, ValidationError
-
-        grid = SugarboxGrid(x=5, y=5, z=3)
-        data = np.random.rand(75).astype('float32') * 100
-        mask = np.ones(75, dtype='uint8')
-        prop = ContProperty(data, mask)
 
         # CovarianceModel constructor validates parameters (nugget > sill is blocked)
         # This test verifies defense-in-depth: validator prevents bad data from reaching C++

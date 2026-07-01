@@ -1,5 +1,28 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+r"""Low-level ctypes wrappers for the HPGL C shared library (libhpgl).
+
+This module defines the ctypes structures and function prototypes for
+all HPGL C API functions.  It is consumed by :mod:`geo_bsd.geo` which
+provides the user-facing Python API.
+
+.. note::
+
+   **Kriging variance is not exposed through the Python API.**
+
+   All HPGL C API wrappers use ``restype = None`` (void return).  The
+   C++ kriging functions write the kriging variance to an internal
+   field on the kriging output type, but the C API boundary does not
+   include a variance-returning function, and no Python wrapper
+   exposes kriging variance (see ``test_regression_v150.py:136-138``
+   for the self-documented gap).
+
+   If kriging variance access is needed from Python, the C API would
+   need a new function (e.g. ``hpgl_get_kriging_variance``) that
+   returns the per-cell variance as a float array, and a corresponding
+   wrapper would be added here.
+
+"""
 import ctypes as C
 import hashlib
 import logging

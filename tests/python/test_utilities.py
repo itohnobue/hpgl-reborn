@@ -28,19 +28,17 @@ try:
         append_mask,
         calc_mean,
         covariance,
+        get_gslib_property,
         get_thread_num,
         load_cont_property,
         load_ind_property,
         ordinary_kriging,
-        read_inc_file_byte,
         read_inc_file_float,
         set_output_handler,
         set_progress_handler,
         set_thread_num,
-        simple_kriging_weights,
         write_gslib_property,
         write_property,
-        get_gslib_property,
     )
 except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability

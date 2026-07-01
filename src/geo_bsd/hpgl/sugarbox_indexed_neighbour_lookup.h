@@ -16,6 +16,7 @@ namespace hpgl
 		{
 			node_index_t index;
 			double cov_value;
+			sugarbox_location_t coord;  // cached grid coordinate (avoids redundant operator[] calls)
 			bool operator<(const entry_t & e)const
 			{
 					return cov_value < e.cov_value;
@@ -83,23 +84,26 @@ namespace hpgl
 			else
 			{
 				indices.clear();
-				std::vector<node_index_t> ncandidates;
+				thread_local std::vector<node_index_t> ncandidates;
+				ncandidates.clear();
 				coord_t center = (*m_grid)[node];
 				node_coord = coord_t(center[0], center[1], center[2]);
 
 				m_clusterizer->get_nearby_harddata(node, ncandidates);
 
-				std::vector<detail::entry_t> temp_sort_vector;
+				thread_local std::vector<detail::entry_t> temp_sort_vector;
+				temp_sort_vector.clear();
 				//top_only_container_t<entry_t> temp_sort_vector(params.m_max_neighbours);
 
 				double threshold = (*m_cov)(center, center) / 100;
 				
 				for (size_t idx = 0, end_idx = ncandidates.size();	idx != end_idx; ++idx)
 				{
-					double covar = (*m_cov)(center, (*m_grid)[ncandidates[idx]]);
+					coord_t c = (*m_grid)[ncandidates[idx]];
+					double covar = (*m_cov)(center, c);
 					if (covar > threshold)
 					{
-						detail::entry_t entry = { ncandidates[idx], covar };
+						detail::entry_t entry = { ncandidates[idx], covar, c };
 						temp_sort_vector.push_back(entry);
 						//temp_sort_vector.add(entry);
 					}
@@ -128,7 +132,7 @@ namespace hpgl
 				std::array<int, 8> octant_best;
 				octant_best.fill(-1);
 				for (size_t i = 0; i < temp_sort_vector.size(); ++i) {
-					coord_t c = (*m_grid)[temp_sort_vector[i].index];
+					const coord_t & c = temp_sort_vector[i].coord;
 					int oct = (c[0] >= center[0] ? 1 : 0)
 					        | (c[1] >= center[1] ? 2 : 0)
 					        | (c[2] >= center[2] ? 4 : 0);
@@ -139,7 +143,7 @@ namespace hpgl
 				// Pass 1: pick one best candidate from each occupied octant
 				std::vector<bool> chosen(temp_sort_vector.size(), false);
 				for (size_t i = 0; i < temp_sort_vector.size() && indices.size() < max_nb; ++i) {
-					coord_t c = (*m_grid)[temp_sort_vector[i].index];
+					const coord_t & c = temp_sort_vector[i].coord;
 					int oct = (c[0] >= center[0] ? 1 : 0)
 					        | (c[1] >= center[1] ? 2 : 0)
 					        | (c[2] >= center[2] ? 4 : 0);
@@ -154,7 +158,7 @@ namespace hpgl
 				for (size_t i = 0; i < temp_sort_vector.size() && indices.size() < max_nb; ++i) {
 					if (!chosen[i]) {
 						indices.push_back(temp_sort_vector[i].index);
-						coords.push_back((*m_grid)[temp_sort_vector[i].index]);
+						coords.push_back(temp_sort_vector[i].coord);
 					}
 				}
 

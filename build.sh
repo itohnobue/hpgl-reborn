@@ -105,11 +105,15 @@ echo ""
 # ---------------------------------------------------------------------------
 if [[ -n "$USE_PRESET" ]]; then
     # --- Preset-based build ---
+    # NOTE: Do NOT pass -DCMAKE_BUILD_TYPE here — the preset's cacheVariables
+    # control the build type. Passing a CLI -D override would silently replace
+    # the preset's value and cause e.g. './build.sh --preset debug' to build
+    # as Release (the BUILD_CONFIG default).
     echo "Configuring via preset '$USE_PRESET'..."
-    cmake --preset "$USE_PRESET" -DCMAKE_BUILD_TYPE="$BUILD_CONFIG"
+    cmake --preset "$USE_PRESET"
 
     echo "Building via preset '$USE_PRESET'..."
-    cmake --build --preset "$USE_PRESET" --parallel "$NPROC" --config "$BUILD_CONFIG"
+    cmake --build --preset "$USE_PRESET" --parallel "$NPROC"
 else
     # --- Standard CMake build ---
     BUILD_DIR="${SCRIPT_DIR}/build/$(echo "$BUILD_CONFIG" | tr '[:upper:]' '[:lower:]')"
@@ -121,6 +125,7 @@ else
         -B "$BUILD_DIR"
         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG"
         -DHPGL_BUILD_PYTHON=ON
+        -DHPGL_BUILD_TESTS=ON
         -DHPGL_USE_OPENMP=ON
         -DHPGL_USE_MKL=OFF
     )
@@ -191,3 +196,24 @@ echo ""
 echo "========================================"
 echo "Build completed successfully!"
 echo "========================================"
+echo ""
+
+# Post-build smoke test: verify the native library loads via Python.
+# Use uv if available (project standard), fall back to system python.
+echo "Smoke test: verifying library load..."
+SMOKE_CMD="import sys; sys.path.insert(0, '${RUNTIME_DIR}/..'); from geo_bsd import hpgl_wrap; print('  hpgl shared library loaded successfully')"
+if command -v uv &>/dev/null; then
+    if uv run python -c "$SMOKE_CMD" 2>/dev/null; then
+        echo "  Smoke test: PASSED"
+    else
+        echo "  WARNING: Smoke test failed — library may not load at runtime."
+        echo "  Check that all dependencies are installed and LD_LIBRARY_PATH is set."
+    fi
+else
+    if python3 -c "$SMOKE_CMD" 2>/dev/null || python -c "$SMOKE_CMD" 2>/dev/null; then
+        echo "  Smoke test: PASSED"
+    else
+        echo "  WARNING: Smoke test failed — library may not load at runtime."
+        echo "  Check that all dependencies are installed and LD_LIBRARY_PATH is set."
+    fi
+fi

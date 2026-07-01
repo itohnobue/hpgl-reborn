@@ -21,7 +21,6 @@ try:
         indicator_kriging,
         load_cont_property,
         ordinary_kriging,
-        simple_kriging,
         write_property,
     )
     from geo_bsd.sgs import sgs_simulation
@@ -177,7 +176,6 @@ class TestIOIntegration:
 
     def test_property_roundtrip(self, tmp_path):
         """Test writing and reading properties"""
-        grid = SugarboxGrid(x=10, y=10, z=5)
         data = np.arange(500, dtype='float32') % 100
         mask = np.ones(500, dtype='uint8')
         prop = ContProperty(data, mask)

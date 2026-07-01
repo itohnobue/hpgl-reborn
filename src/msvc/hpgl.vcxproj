@@ -91,11 +91,17 @@
     <IntDir>$(SolutionDir)\temp\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
     <TargetName>hpgl</TargetName>
   </PropertyGroup>
+  <!-- NOTE: The warning suppression set below (4003;4244;4267;4018) differs -->
+  <!-- intentionally from CMakeLists.txt's MSVC set (/wd4100 /wd4127 /wd4514 -->
+  <!-- /wd4710 /wd4820). The CMake set targets pedantic C++ standards -->
+  <!-- conformance warnings from generic template code. The vcxproj set -->
+  <!-- targets MSVC static-analysis warnings not applicable to HPGL. -->
+  <!-- These sets are maintained independently — sync is not automatic. -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BS_EXPORTING_PLUGIN;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
@@ -116,7 +122,7 @@
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;WIN32;GSTL_NOWARNING;NOMINMAX;HPGL_ENABLE_WARNINGS;HPGL_DLL;HPGL_EXPORTS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BS_EXPORTING_PLUGIN;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <OpenMPSupport>true</OpenMPSupport>
@@ -137,7 +143,7 @@
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BS_EXPORTING_PLUGIN;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <OpenMPSupport>true</OpenMPSupport>
@@ -166,7 +172,7 @@
       <Optimization>MaxSpeed</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <AdditionalIncludeDirectories>$(ProjectDir)..\tnt_126;$(SolutionDir)geo_bsd\hpgl;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>BS_PROPERTY_ARRAY_EXPORTS;BS_PROPERTY_SERVER_EXPORTS;BS_GSTL_EXPORTS;BS_EXPORTING_PLUGIN;GSTL_NOWARNING;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>BS_EXPORTING_PLUGIN;NDEBUG;WIN32;NOMINMAX;HPGL_DLL;HPGL_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <OpenMPSupport>true</OpenMPSupport>

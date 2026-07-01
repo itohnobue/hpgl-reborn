@@ -30,7 +30,6 @@ try:
         SugarboxGrid,
         covariance,
         ordinary_kriging,
-        simple_kriging,
     )
     from geo_bsd.sgs import sgs_simulation
 except (ImportError, OSError):
@@ -152,8 +151,16 @@ class TestMemoryLeaks:
         mask = np.ones(1000, dtype='uint8')
         prop = ContProperty(data, mask)
 
-        # Create weak reference
+        # Verify property was created correctly
+        assert prop.data.shape == (1000,), "ContProperty data should have 1000 elements"
+        assert prop.mask.shape == (1000,), "ContProperty mask should have 1000 elements"
+        assert prop.data.dtype == np.float32, "ContProperty data should be float32"
+        assert prop.mask.dtype == np.uint8, "ContProperty mask should be uint8"
+
+        # Create weak reference and verify it resolves while prop is alive
         ref = weakref.ref(prop)
+        assert ref() is prop, "Weak reference should resolve while object is alive"
+
         del prop
         gc.collect()
 

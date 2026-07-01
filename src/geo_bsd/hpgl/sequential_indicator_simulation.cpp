@@ -60,6 +60,8 @@ void do_sis(
 	mt_random_generator_t gen(seed);
 	reporter.start();
 
+	kriging_ws_t<indicator_value_t, sugarbox_location_t> ws;
+
 	if(params.m_category_count == 2)
 	{
 		write("Only 2 indicators found, Median SIS will be performed.");
@@ -84,15 +86,15 @@ void do_sis(
 		std::vector<indicator_probability_t> probs;		
 
 		// median SIS
-		if(params.m_category_count == 2)
+			if(params.m_category_count == 2)
 		{
 				int idx = 0;
 
 				double prob;
 				
-				ki_result_t ki_result = kriging_interpolation(
+				ki_result_t ki_result = kriging_interpolation_ws(
 					ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(property), 
-					node, covariances[idx], marginal_probs[idx], nblookups[idx], weight_calculator_sis, prob);
+					node, covariances[idx], marginal_probs[idx], nblookups[idx], weight_calculator_sis, prob, ws);
 
 				if (ki_result != ki_result_t::KI_SUCCESS)
 				{
@@ -116,9 +118,9 @@ void do_sis(
 			{
 				double prob;
 				
-				ki_result_t ki_result = kriging_interpolation(
+				ki_result_t ki_result = kriging_interpolation_ws(
 					ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(property), 
-					node, covariances[idx], marginal_probs[idx], nblookups[idx], weight_calculator_sis, prob);
+					node, covariances[idx], marginal_probs[idx], nblookups[idx], weight_calculator_sis, prob, ws);
 
 				if (ki_result != ki_result_t::KI_SUCCESS)
 				{

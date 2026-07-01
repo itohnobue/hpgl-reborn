@@ -46,6 +46,10 @@
         static_assert(sizeof(integer) == 8, "ILP64 LAPACK requires 64-bit integer type");
     #else
         // Default LP64 interface - use 32-bit integers
+        // No ILP64 macro was defined. If you are linking against an ILP64 BLAS
+        // (e.g. OpenBLAS with USE_64BITINT=1), define OPENBLAS_USE64BITINT or
+        // a similar macro to activate the ILP64 code path above.
+        #pragma message("HPGL: using LP64 BLAS (32-bit Fortran integers). If linking against ILP64 BLAS, define OPENBLAS_USE64BITINT or BLAS64 at compile time.")
         typedef int lapack_int;
         typedef int integer;
 

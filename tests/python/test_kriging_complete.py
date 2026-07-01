@@ -716,7 +716,7 @@ class TestIndicatorKriging:
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
 
-        for i in range(3):
+        for _i in range(3):
             ik_data.append({
                 'cov_model': CovarianceModel(
                     type=covariance.spherical,
@@ -751,7 +751,7 @@ class TestIndicatorKriging:
             ik_data = []
             marginal_probs = [0.3, 0.4, 0.3]
 
-            for i in range(3):
+            for _i in range(3):
                 ik_data.append({
                     'cov_model': CovarianceModel(
                         type=cov_type,
@@ -779,7 +779,7 @@ class TestIndicatorKriging:
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
 
-        for i in range(3):
+        for _i in range(3):
             ik_data.append({
                 'cov_model': CovarianceModel(
                     type=covariance.spherical,
@@ -808,7 +808,7 @@ class TestIndicatorKriging:
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
 
-        for i in range(3):
+        for _i in range(3):
             ik_data.append({
                 'cov_model': CovarianceModel(
                     type=covariance.spherical,
@@ -843,7 +843,7 @@ class TestIndicatorKriging:
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
 
-        for i in range(3):
+        for _i in range(3):
             ik_data.append({
                 'cov_model': CovarianceModel(
                     type=covariance.spherical,
@@ -871,7 +871,7 @@ class TestIndicatorKriging:
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
 
-        for i in range(3):
+        for _i in range(3):
             ik_data.append({
                 'cov_model': CovarianceModel(
                     type=covariance.spherical,
@@ -1608,7 +1608,7 @@ class TestSimpleKrigingWeights:
             )
             # If it succeeds, verify it returns an array
             assert isinstance(weights, np.ndarray)
-        except Exception:
+        except RuntimeError:
             pass  # Expected: singular matrix
 
     def test_weights_various_ranges(self, neighbor_points):

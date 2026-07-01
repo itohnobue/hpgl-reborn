@@ -1014,23 +1014,28 @@ def load_ind_property(filename, undefined_value, indicator_values, size=None):
     --------
     load_cont_property : Load continuous property.
     """
+    # Validate filename for security
+    safe_path = PathValidator.validate_filepath_in_basedir(
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
+    )
+
     if size is None:
         logger.warning(
             "load_ind_property: Size is not specified. Using slow Python-based parser "
             "that loads entire file into memory unbounded. For large files (>100MB) "
             "specify size to use the fast C++ reader which uses pre-allocated buffers."
         )
-        return _load_prop_ind_slow(filename, undefined_value, indicator_values)
+        return _load_prop_ind_slow(safe_path, undefined_value, indicator_values)
     else:
         try:
-            return read_inc_file_byte(filename, undefined_value, size, indicator_values)
+            return read_inc_file_byte(safe_path, undefined_value, size, indicator_values)
         except RuntimeError as e:
             logger.warning(
                 "load_ind_property: Fast C++ reader failed, falling back to slow "
                 "Python parser. C++ error: %s",
                 e,
             )
-            return _load_prop_ind_slow(filename, undefined_value, indicator_values)
+            return _load_prop_ind_slow(safe_path, undefined_value, indicator_values)
 
 
 def set_thread_num(num):
@@ -1152,7 +1157,7 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
         cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
     )
 
-    out_prop = _clone_prop(prop)
+    out_prop = _empty_clone(prop)
 
     okp = _HPGL_OK_PARAMS(
         covariance_type=cov_model.type,
@@ -1233,7 +1238,7 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
             f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
         )
 
-    out_prop = _clone_prop(prop)
+    out_prop = _empty_clone(prop)
 
     skp = _HPGL_SK_PARAMS(
         covariance_type=cov_model.type,
@@ -1331,7 +1336,7 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
             f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
         )
 
-    out_prop = _clone_prop(prop)
+    out_prop = _empty_clone(prop)
 
     okp = _HPGL_OK_PARAMS(
         covariance_type=cov_model.type,
@@ -1430,7 +1435,7 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
             f"median_ik: indicator_count must be 2, got {prop.indicator_count}"
         )
 
-    out_prop = _clone_prop(prop)
+    out_prop = _empty_clone(prop)
 
     miksp = _HPGL_MEDIAN_IK_PARAMS(
         covariance_type=cov_model.type,
@@ -1507,7 +1512,7 @@ def indicator_kriging(prop, grid, data, marginal_probs):
             data[0]["max_neighbours"],
             data[0]["cov_model"],
         )
-    out_prop = _clone_prop(prop)
+    out_prop = _empty_clone(prop)
     with _hpgl_error_guard("indicator_kriging"):
         _hpgl_so.hpgl_indicator_kriging(
             C.byref(_create_hpgl_ind_masked_array(prop, grid)),
@@ -1565,7 +1570,7 @@ def simple_cokriging_markI(
             f"({grid.x}x{grid.y}x{grid.z})"
         )
 
-    out_prop = _clone_prop(prop)
+    out_prop = _empty_clone(prop)
 
     with _hpgl_error_guard("simple_cokriging_markI"):
         _hpgl_so.hpgl_simple_cokriging_mark1(
@@ -1624,7 +1629,7 @@ def simple_cokriging_markII(
         cm = d["cov_model"]
         ParameterValidator.validate_covariance_parameters(cm.sill, cm.nugget, cm.ranges, cm.angles)
 
-    out_prop = _clone_prop(primary_data["data"])
+    out_prop = _empty_clone(primary_data["data"])
 
     pcp = primary_data["cov_model"]
     scp = secondary_data["cov_model"]

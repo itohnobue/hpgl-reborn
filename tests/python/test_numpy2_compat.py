@@ -15,14 +15,8 @@ os.environ['PATH'] = str(Path(__file__).parent.parent.parent / "src" / "geo_bsd"
 try:
     from geo_bsd.geo import (
         ContProperty,
-        CovarianceModel,
         IndProperty,
-        SugarboxGrid,
-        _create_hpgl_float_array,
-        _create_hpgl_ubyte_array,
         _require_cont_data,
-        _require_ind_data,
-        covariance,
     )
 except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
@@ -35,7 +29,8 @@ class TestNumPy2Compatibility:
     def test_numpy_version(self):
         """Log NumPy version for testing"""
         print(f"NumPy version: {np.__version__}")
-        assert np.__version__ >= "1.24", "NumPy 1.24+ required"
+        version_tuple = tuple(int(x) for x in np.__version__.split('.')[:2])
+        assert version_tuple >= (1, 24), f"NumPy 1.24+ required, got {np.__version__}"
 
     def test_array_creation_float32(self):
         """Test float32 array creation (NumPy 2.0 compatible)"""

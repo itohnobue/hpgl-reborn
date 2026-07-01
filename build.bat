@@ -111,7 +111,7 @@ echo.
 
 REM Build with MSBuild (using x64 version for better performance)
 echo Building hpgl.vcxproj...
-"%MSBUILD_PATH%" "%SolutionDir%hpgl.vcxproj" /p:Configuration=%BUILD_CONFIG% /p:Platform=%BUILD_PLATFORM% /p:PlatformToolset=%PLATFORM_TOOLSET% /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%" /nologo
+"%MSBUILD_PATH%" "%SolutionDir%hpgl.vcxproj" /p:Configuration=%BUILD_CONFIG% /p:Platform=%BUILD_PLATFORM% /p:PlatformToolset=%PLATFORM_TOOLSET% /p:UseMKL=true /t:Rebuild /v:minimal /fl /flp:"LogFile=%LogFile%" /nologo
 if %ERRORLEVEL% NEQ 0 goto :build_failed
 
 echo.
@@ -213,5 +213,14 @@ if exist "%~dp0src\geo_bsd\_cvariogram.dll" (
 )
 echo.
 echo Build log: %LogFile%
+echo.
+echo Smoke test: verifying library load...
+uv run python -c "import sys; sys.path.insert(0, r'%~dp0src'); from geo_bsd import hpgl_wrap; print('  hpgl shared library loaded successfully')" >nul 2>&1
+if !ERRORLEVEL! EQU 0 (
+    echo   Smoke test: PASSED
+) else (
+    echo   WARNING: Smoke test failed -- library may not load at runtime.
+    echo   Check that Python dependencies are installed and MKL DLLs are in PATH.
+)
 endlocal
 exit /b 0

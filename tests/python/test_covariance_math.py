@@ -353,3 +353,269 @@ class TestCrossModelProperties:
         np.testing.assert_allclose(C_sph, 0.0, atol=COV_ATOL)
         assert C_exp > 0, "Exponential should be >0 at h=range"
         assert C_gau > 0, "Gaussian should be >0 at h=range"
+
+
+# =============================================================================
+# Covariance Matrix Positive-Definiteness Tests (M-T12)
+# =============================================================================
+
+def _spherical_cov_py(h, sill, nugget, range_val):
+    """Analytical spherical covariance: C(h) in Python."""
+    if h < 1e-4:
+        return sill
+    if h > range_val:
+        return 0.0
+    x = h / range_val
+    return max(0.0, (sill - nugget) * (1.0 - 1.5 * x + 0.5 * x ** 3))
+
+
+def _exponential_cov_py(h, sill, nugget, range_val):
+    """Analytical exponential covariance: C(h) in Python."""
+    if h < 1e-4:
+        return sill
+    return (sill - nugget) * np.exp(-3.0 * h / range_val)
+
+
+def _gaussian_cov_py(h, sill, nugget, range_val):
+    """Analytical Gaussian covariance: C(h) in Python."""
+    if h < 1e-4:
+        return sill
+    return (sill - nugget) * np.exp(-3.0 * (h / range_val) ** 2)
+
+
+def _build_covariance_matrix(points, cov_func, sill, nugget, ranges):
+    """Build a covariance matrix K where K_ij = C(h_ij).
+
+    Parameters
+    ----------
+    points : numpy.ndarray, shape (n, 3)
+        Coordinates of n points.
+    cov_func : callable
+        Covariance function C(h, sill, nugget, range_val).
+    sill : float
+    nugget : float
+    ranges : tuple (rx, ry, rz)
+        Anisotropic ranges. For isotropic case use equal values.
+
+    Returns
+    -------
+    K : numpy.ndarray, shape (n, n)
+        Covariance matrix.
+    """
+    rx, ry, rz = ranges
+    n = len(points)
+    K = np.zeros((n, n), dtype=np.float64)
+    for i in range(n):
+        for j in range(n):
+            dx = points[i, 0] - points[j, 0]
+            dy = points[i, 1] - points[j, 1]
+            dz = points[i, 2] - points[j, 2]
+            # Anisotropic effective distance: h_eff for zero rotation
+            h_eff = np.sqrt((dx / rx) ** 2 + (dy / ry) ** 2 + (dz / rz) ** 2) * rx
+            K[i, j] = cov_func(h_eff, sill, nugget, rx)
+    return K
+
+
+def _is_positive_definite(K):
+    """Check if matrix K is positive-definite via Cholesky decomposition."""
+    try:
+        np.linalg.cholesky(K)
+        return True
+    except np.linalg.LinAlgError:
+        return False
+
+
+@pytest.mark.hpgl
+class TestCovarianceMatrixPositiveDefinite:
+    """Verify covariance matrices are positive-definite for various models."""
+
+    @staticmethod
+    def _generate_random_points(n, seed=42):
+        rng = np.random.default_rng(seed)
+        return rng.uniform(0, 100, size=(n, 3))
+
+    def test_spherical_isotropic_pd(self):
+        """PD-1: Spherical isotropic covariance matrix is positive-definite."""
+        points = self._generate_random_points(10)
+        K = _build_covariance_matrix(points, _spherical_cov_py,
+                                      sill=1.0, nugget=0.1, ranges=(20.0, 20.0, 20.0))
+        assert _is_positive_definite(K), "Spherical isotropic matrix should be PD"
+
+    def test_exponential_isotropic_pd(self):
+        """PD-2: Exponential isotropic covariance matrix is positive-definite."""
+        points = self._generate_random_points(10)
+        K = _build_covariance_matrix(points, _exponential_cov_py,
+                                      sill=1.0, nugget=0.1, ranges=(20.0, 20.0, 20.0))
+        assert _is_positive_definite(K), "Exponential isotropic matrix should be PD"
+
+    def test_gaussian_isotropic_pd(self):
+        """PD-3: Gaussian isotropic covariance matrix is positive-definite."""
+        points = self._generate_random_points(10)
+        K = _build_covariance_matrix(points, _gaussian_cov_py,
+                                      sill=1.0, nugget=0.1, ranges=(20.0, 20.0, 20.0))
+        assert _is_positive_definite(K), "Gaussian isotropic matrix should be PD"
+
+    def test_spherical_anisotropic_pd(self):
+        """PD-4: Spherical anisotropic covariance matrix is positive-definite."""
+        points = self._generate_random_points(10)
+        K = _build_covariance_matrix(points, _spherical_cov_py,
+                                      sill=1.0, nugget=0.1, ranges=(30.0, 15.0, 10.0))
+        assert _is_positive_definite(K), "Spherical anisotropic matrix should be PD"
+
+    def test_all_models_zero_nugget_pd(self):
+        """PD-5: Covariance matrices with zero nugget are still PD for
+        distinct points (nugget=0 may be singular for coincident points but
+        with random distinct points it should be PD)."""
+        points = self._generate_random_points(8, seed=99)
+        for cov_func, name in [
+            (_spherical_cov_py, "spherical"),
+            (_exponential_cov_py, "exponential"),
+            (_gaussian_cov_py, "gaussian"),
+        ]:
+            K = _build_covariance_matrix(points, cov_func,
+                                          sill=1.0, nugget=0.0, ranges=(20.0, 20.0, 20.0))
+            assert _is_positive_definite(K), f"{name} zero-nugget matrix should be PD"
+
+    def test_all_models_large_nugget_pd(self):
+        """PD-6: Covariance matrices with large nugget are strongly PD."""
+        points = self._generate_random_points(5, seed=7)
+        for cov_func, name in [
+            (_spherical_cov_py, "spherical"),
+            (_exponential_cov_py, "exponential"),
+            (_gaussian_cov_py, "gaussian"),
+        ]:
+            K = _build_covariance_matrix(points, cov_func,
+                                          sill=2.0, nugget=0.9, ranges=(10.0, 10.0, 10.0))
+            assert _is_positive_definite(K), f"{name} large-nugget matrix should be PD"
+
+    def test_eigenvalues_all_positive(self):
+        """PD-7: All eigenvalues of covariance matrices are positive."""
+        points = self._generate_random_points(12, seed=123)
+        for cov_func, name, ranges in [
+            (_spherical_cov_py, "spherical", (25.0, 25.0, 25.0)),
+            (_exponential_cov_py, "exponential", (25.0, 25.0, 25.0)),
+            (_gaussian_cov_py, "gaussian", (25.0, 25.0, 25.0)),
+            (_spherical_cov_py, "spherical-ani", (40.0, 20.0, 10.0)),
+        ]:
+            K = _build_covariance_matrix(points, cov_func,
+                                          sill=1.0, nugget=0.05, ranges=ranges)
+            eigenvalues = np.linalg.eigvalsh(K)
+            assert np.all(eigenvalues > 0), (
+                f"{name}: all eigenvalues must be positive, min={eigenvalues.min():.2e}"
+            )
+
+
+# =============================================================================
+# HPGL C++ Covariance Matrix PD Tests (F7-06)
+# =============================================================================
+
+def _build_covariance_matrix_hpgl(points, sill, nugget, cov_type, ranges):
+    """Build a covariance matrix K_ij = C(h_ij) using HPGL's C++ covariance code.
+
+    Calls simple_kriging_weights() (C++ via HPGL) for each pair of points
+    to compute C(h_ij). This exercises HPGL's actual covariance implementation,
+    not pure Python formulas.
+
+    Parameters
+    ----------
+    points : numpy.ndarray, shape (n, 3)
+        Coordinates of n points.
+    sill : float
+    nugget : float
+    cov_type : int
+        HPGL covariance type constant (covariance.spherical, etc.).
+    ranges : tuple (rx, ry, rz)
+
+    Returns
+    -------
+    K : numpy.ndarray, shape (n, n)
+        Covariance matrix built from HPGL C++ covariance values.
+    """
+    n = len(points)
+    K = np.zeros((n, n), dtype=np.float64)
+    for i in range(n):
+        for j in range(i, n):
+            dx = points[i, 0] - points[j, 0]
+            dy = points[i, 1] - points[j, 1]
+            dz = points[i, 2] - points[j, 2]
+            h = float(np.sqrt(dx * dx + dy * dy + dz * dz))
+            C = compute_covariance_from_sk_weight(sill, nugget, cov_type, ranges, h)
+            K[i, j] = C
+            K[j, i] = C
+    return K
+
+
+@pytest.mark.hpgl
+class TestCovarianceMatrixPositiveDefiniteHPGL:
+    """Verify covariance matrices from HPGL's C++ implementation are PD."""
+
+    @staticmethod
+    def _generate_random_points(n, seed=42):
+        rng = np.random.default_rng(seed)
+        return rng.uniform(0, 100, size=(n, 3))
+
+    def test_spherical_hpgl_pd(self):
+        """PD-H1: Spherical covariance matrix via HPGL C++ is positive-definite."""
+        points = self._generate_random_points(10)
+        K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.1,
+                                           cov_type=covariance.spherical,
+                                           ranges=(20.0, 20.0, 20.0))
+        assert _is_positive_definite(K), "Spherical HPGL matrix should be PD"
+
+    def test_exponential_hpgl_pd(self):
+        """PD-H2: Exponential covariance matrix via HPGL C++ is positive-definite."""
+        points = self._generate_random_points(10)
+        K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.1,
+                                           cov_type=covariance.exponential,
+                                           ranges=(20.0, 20.0, 20.0))
+        assert _is_positive_definite(K), "Exponential HPGL matrix should be PD"
+
+    def test_gaussian_hpgl_pd(self):
+        """PD-H3: Gaussian covariance matrix via HPGL C++ is positive-definite."""
+        points = self._generate_random_points(10)
+        K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.1,
+                                           cov_type=covariance.gaussian,
+                                           ranges=(20.0, 20.0, 20.0))
+        assert _is_positive_definite(K), "Gaussian HPGL matrix should be PD"
+
+    def test_all_models_hpgl_zero_nugget_pd(self):
+        """PD-H4: HPGL covariance matrices with zero nugget are still PD."""
+        points = self._generate_random_points(8, seed=99)
+        for cov_type, name in [
+            (covariance.spherical, "spherical"),
+            (covariance.exponential, "exponential"),
+            (covariance.gaussian, "gaussian"),
+        ]:
+            K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.0,
+                                               cov_type=cov_type,
+                                               ranges=(20.0, 20.0, 20.0))
+            assert _is_positive_definite(K), f"{name} HPGL zero-nugget matrix should be PD"
+
+    def test_all_models_hpgl_large_nugget_pd(self):
+        """PD-H5: HPGL covariance matrices with large nugget are strongly PD."""
+        points = self._generate_random_points(5, seed=7)
+        for cov_type, name in [
+            (covariance.spherical, "spherical"),
+            (covariance.exponential, "exponential"),
+            (covariance.gaussian, "gaussian"),
+        ]:
+            K = _build_covariance_matrix_hpgl(points, sill=2.0, nugget=0.9,
+                                               cov_type=cov_type,
+                                               ranges=(10.0, 10.0, 10.0))
+            assert _is_positive_definite(K), f"{name} HPGL large-nugget matrix should be PD"
+
+    def test_hpgl_eigenvalues_all_positive(self):
+        """PD-H6: All eigenvalues of HPGL covariance matrices are positive."""
+        points = self._generate_random_points(12, seed=123)
+        for cov_type, name in [
+            (covariance.spherical, "spherical"),
+            (covariance.exponential, "exponential"),
+            (covariance.gaussian, "gaussian"),
+        ]:
+            K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.05,
+                                               cov_type=cov_type,
+                                               ranges=(25.0, 25.0, 25.0))
+            eigenvalues = np.linalg.eigvalsh(K)
+            assert np.all(eigenvalues > 0), (
+                f"{name} HPGL: all eigenvalues must be positive, min={eigenvalues.min():.2e}"
+            )

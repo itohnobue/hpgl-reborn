@@ -36,7 +36,6 @@ try:
         simple_cokriging_markI,
         simple_cokriging_markII,
         simple_kriging,
-        write_property,
     )
     from geo_bsd.sgs import sgs_simulation
     from geo_bsd.sis import sis_simulation

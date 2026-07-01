@@ -20,20 +20,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
-    from geo_bsd.cdf import CdfData, calc_cdf
+    from geo_bsd.cdf import CdfData
     from geo_bsd.geo import (
         ContProperty,
         CovarianceModel,
-        IndProperty,
         SugarboxGrid,
         covariance,
         ordinary_kriging,
         simple_cokriging_markI,
-        simple_kriging,
         simple_kriging_weights,
     )
     from geo_bsd.sgs import sgs_simulation
-    from geo_bsd.sis import sis_simulation
 except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 

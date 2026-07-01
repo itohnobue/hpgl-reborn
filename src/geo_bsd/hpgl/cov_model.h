@@ -9,11 +9,12 @@
 // This produces a combined matrix R = R_x * R_y * R_z (applied right-
 // to-left on column vectors in the TNT 1-indexed convention).
 //
-// GSLIB (the industry-standard geostatistics library) uses ZXZ rotation
-// order, which is different. Users porting GSLIB parameter files with
-// anisotropic angles (m_angles) to HPGL MUST convert their angles:
-// the same triplet of angles produces different anisotropy orientation
-// under ZYX vs ZXZ conventions.
+// GSLIB (the industry-standard geostatistics library) uses ZXY rotation
+// order (azimuth about Z, dip about X', plunge about Y''), which is
+// different. Users porting GSLIB parameter files with anisotropic angles
+// (m_angles) to HPGL MUST convert their angles: the same triplet of
+// angles produces different anisotropy orientation under ZYX vs ZXY
+// conventions.
 //
 // The scaling matrix applies ranges as:
 //   diag(1, range_x / range_y, range_x / range_z)

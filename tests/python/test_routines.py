@@ -506,8 +506,6 @@ class TestMovingAverage3D:
         """MovingAverage3D output values are finite."""
         cube, mask = _make_cube_mask(nx=4, ny=4, nz=2)
         result = MovingAverage3D((cube, mask), (1, 1, 1), -999.0, GetCubicalMask)
-        # Cells with neighbors should be finite (not undefined_value)
-        has_neighbors = mask == 1
         # Some cells at edges may have no neighbors, but center ones should
         assert np.any(np.isfinite(result))
 

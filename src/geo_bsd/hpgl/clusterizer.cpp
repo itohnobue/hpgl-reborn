@@ -97,6 +97,13 @@ namespace hpgl
 		size_t total_volume = static_cast<size_t>(m_state->m_x)
 		                    * static_cast<size_t>(m_state->m_y)
 		                    * static_cast<size_t>(m_state->m_z);
+		// Sanity check: a cluster grid larger than 1 billion cells is
+		// almost certainly a configuration error (grid_extent / radius
+		// would be unreasonably large) and would exhaust memory.
+		// Typical grids are 50-500 cells per dimension (~125K–125M).
+		if (total_volume > 1'000'000'000)
+			throw hpgl_exception("clusterizer_t::clusterizer_t",
+				"Cluster grid volume exceeds 1 billion cells — check grid dimensions and search radii.");
 		m_state->m_clusters.resize(total_volume);
 		for (size_t i = 0; i < total_volume; ++i)
 		{
@@ -157,7 +164,10 @@ namespace hpgl
 		int cy = loc[1] / m_ellipsoid[1];
 		int cz = loc[2] / m_ellipsoid[2];
 
+		// Pre-compute total capacity to avoid chain reallocations.
+		// At most 27 clusters (3×3×3 neighbour box), each capped at m_limit.
 		neighbours.clear();
+		neighbours.reserve(27 * m_state->m_limit);
 
 		for (int k = cz - 1; k <= cz + 1; ++k)
 			for (int j = cy - 1; j	<= cy + 1; ++j)
@@ -169,7 +179,6 @@ namespace hpgl
 					if (m_state->m_clusters[cluster_idx]->limit_exceeded())
 						{ fprintf(stderr, "HPGL FATAL: clusterizer_t: cluster limit exceeded\n"); abort(); }
 					const std::vector<node_index_t> & nodes = m_state->m_clusters[cluster_idx]->nodes();
-					neighbours.reserve(neighbours.size() + nodes.size());	
 					std::copy(nodes.begin(), nodes.end(), std::back_inserter(neighbours));					
 				}
 				}

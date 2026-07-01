@@ -62,6 +62,7 @@ namespace hpgl
 		progress_reporter_t report(property.size());	
 		report.start();
 		node_index_t node;
+		kriging_ws_t<cont_value_t, sugarbox_location_t> ws;
 		for (node_index_t counter = 0, counter_end = property.size(); counter < counter_end; ++counter, report.next_lap())		
 		{
 			node = path_gen.next();
@@ -75,12 +76,12 @@ namespace hpgl
 			if (mask[node] != 1)
 				continue;
 
-			double variance;						
+			double variance = 0.0;						
 			sugarbox_location_t loc = grid[node];			
 
-			cont_value_t mean;
-			ki_result_t ki_result = kriging_interpolation(property, is_informed_predicate_t<cont_property_array_t>(property), node, pcov, mp, 
-				neighbour_lookup, weight_calculator_sgs, mean, variance);			
+			cont_value_t mean = 0.0f;
+			ki_result_t ki_result = kriging_interpolation_ws(property, is_informed_predicate_t<cont_property_array_t>(property), node, pcov, mp, 
+				neighbour_lookup, weight_calculator_sgs, mean, variance, ws);			
 
 			double value = ki_result == ki_result_t::KI_SUCCESS
 				? sample(gen, gaussian_cdf_t(mean, variance))
@@ -132,18 +133,19 @@ namespace hpgl
 		progress_reporter_t report(points_indexes.size());	
 		report.start();
 		node_index_t node;
+		kriging_ws_t<cont_value_t, sugarbox_location_t> ws;
 		for (node_index_t counter = 0, counter_end = points_indexes.size(); counter < counter_end; ++counter)		
 		{
 			node = points_indexes[path_gen.next()];
 			if(property.is_informed(node)) 
 				continue;
 
-			double variance;						
+			double variance = 0.0;						
 			sugarbox_location_t loc = grid[node];			
 
-			cont_value_t mean;
-			ki_result_t ki_result = kriging_interpolation(property, is_informed_predicate_t<cont_property_array_t>(property), node, pcov, mp, 
-				neighbour_lookup, weight_calculator_sgs, mean, variance);			
+			cont_value_t mean = 0.0f;
+			ki_result_t ki_result = kriging_interpolation_ws(property, is_informed_predicate_t<cont_property_array_t>(property), node, pcov, mp, 
+				neighbour_lookup, weight_calculator_sgs, mean, variance, ws);			
 
 			double value = ki_result == KI_SUCCESS 
 				? sample(gen, gaussian_cdf_t(mean, variance))
