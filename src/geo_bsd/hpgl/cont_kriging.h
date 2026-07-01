@@ -57,6 +57,7 @@ namespace hpgl
 		double sum = 0;
 		stats.m_points_calculated = 0;
 		stats.m_points_without_neighbours = 0;
+		stats.m_points_singularity = 0;
 		stats.m_mean = 0;				
 				
 		typedef indexed_neighbour_lookup_t<grid_t, covariances_t> nl_t;
@@ -76,6 +77,7 @@ namespace hpgl
 		node_index_t idx_end = input_property.size();
 		unsigned long points_calculated = 0;
 		unsigned long points_without_neighbours = 0;
+		unsigned long points_singularity = 0;
 		unsigned long points_processed = 0;
 		static const int LP_BATCH_SIZE = 1000;
 
@@ -107,7 +109,7 @@ namespace hpgl
 		// all node iterations via resize() (allocation-free after first use).
 		kriging_ws_t<value_t, coord_t> ws;
 		int local_lap_count = 0;
-		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_processed) reduction(+: sum) 
+		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_singularity) reduction(+: points_processed) reduction(+: sum) 
 		for(node_index_t idx = 0; idx < idx_end; ++idx)	
 		{	
 			if (!input_property.is_informed(idx))
@@ -131,6 +133,7 @@ namespace hpgl
 					}
 					break;
 				case ki_result_t::KI_SINGULARITY:
+					++points_singularity;
 					if (fh == kriging_failure_handling::mean_on_failure)
 					{
 						output_property.set_at(idx, means[idx]);
@@ -178,6 +181,7 @@ namespace hpgl
 		report.stop();
 		stats.m_points_calculated = points_calculated;
 		stats.m_points_without_neighbours = points_without_neighbours;
+		stats.m_points_singularity = points_singularity;
 		stats.m_mean = points_processed > 0 ? sum / points_processed : 0;
 		stats.m_speed_nps = report.iterations_per_second();
 		{

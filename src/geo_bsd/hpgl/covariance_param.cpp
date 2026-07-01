@@ -42,8 +42,8 @@ namespace hpgl
 
 	void covariance_param_t::set_sill(double sill)
 	{
-		if (!std::isfinite(sill) || sill < 0.0)
-			throw hpgl_exception("covariance_param_t::set_sill", "sill must be >= 0 and finite");
+		if (!std::isfinite(sill) || sill <= 0.0)
+			throw hpgl_exception("covariance_param_t::set_sill", "sill must be > 0 and finite");
 		m_sill = sill;
 	}
 
@@ -58,8 +58,8 @@ namespace hpgl
 
 	void covariance_param_t::validate() const
 	{
-		if (!std::isfinite(m_sill) || m_sill < 0.0)
-			throw hpgl_exception("covariance_param_t::validate", "sill must be >= 0 and finite");
+		if (!std::isfinite(m_sill) || m_sill <= 0.0)
+			throw hpgl_exception("covariance_param_t::validate", "sill must be > 0 and finite");
 		if (!std::isfinite(m_nugget) || m_nugget < 0.0)
 			throw hpgl_exception("covariance_param_t::validate", "nugget must be >= 0 and finite");
 		if (m_nugget > m_sill)

@@ -158,6 +158,39 @@ class TestPathValidator:
         result = PathValidator.validate_write_filepath(str(f))
         assert os.path.basename(result) == "output.inc"
 
+    # ---- validate_filepath_in_basedir (F-144) ----
+
+    def test_validate_filepath_in_basedir_inside_passes(self, tmp_path):
+        """File inside basedir passes basedir containment check."""
+        basedir = tmp_path / "allowed"
+        basedir.mkdir()
+        testfile = basedir / "data.txt"
+        testfile.write_text("test")
+        result = PathValidator.validate_filepath_in_basedir(
+            str(testfile), str(basedir), must_exist=True
+        )
+        assert os.path.abspath(result) == os.path.abspath(str(testfile))
+
+    def test_validate_filepath_in_basedir_outside_raises(self, tmp_path):
+        """File outside basedir raises CriticalValidationError."""
+        basedir = tmp_path / "allowed"
+        basedir.mkdir()
+        outside_file = tmp_path / "outside.txt"
+        outside_file.write_text("test")
+        with pytest.raises(CriticalValidationError, match="outside"):
+            PathValidator.validate_filepath_in_basedir(
+                str(outside_file), str(basedir), must_exist=True
+            )
+
+    def test_validate_filepath_in_basedir_nonexistent_inside_passes(self, tmp_path):
+        """Non-existent file inside basedir passes when must_exist=False."""
+        basedir = tmp_path / "allowed"
+        basedir.mkdir()
+        result = PathValidator.validate_filepath_in_basedir(
+            str(basedir / "new.txt"), str(basedir), must_exist=False
+        )
+        assert os.path.basename(result) == "new.txt"
+
 
 # =============================================================================
 # GridValidator Tests
@@ -224,6 +257,25 @@ class TestGridValidator:
         with pytest.raises(CriticalValidationError):
             GridValidator.validate_array_dtype(arr, np.float32)
 
+    # ---- Empty array edge cases (F-145) ----
+
+    def test_empty_array_size_mismatch_raises(self):
+        """Empty array with non-zero grid raises CriticalValidationError."""
+        arr = np.array([], dtype='float32')
+        with pytest.raises(CriticalValidationError):
+            GridValidator.validate_array_size(arr, (1, 1, 1))  # 0 != 1
+
+    def test_empty_array_dtype_passes(self):
+        """Empty array with matching dtype passes dtype validation."""
+        arr = np.array([], dtype='float32')
+        GridValidator.validate_array_dtype(arr, np.float32)
+
+    def test_empty_array_dtype_mismatch_raises(self):
+        """Empty array with wrong dtype raises error."""
+        arr = np.array([], dtype='float64')
+        with pytest.raises(CriticalValidationError):
+            GridValidator.validate_array_dtype(arr, np.float32)
+
 
 # =============================================================================
 # ParameterValidator Tests
@@ -265,6 +317,23 @@ class TestParameterValidator:
         too_big = ValidationConstants.MAX_RADIUS + 1.0
         with pytest.raises(CriticalValidationError):
             ParameterValidator.validate_radius(too_big)
+
+    # ---- Wrong-length radius tuple (F-147) ----
+
+    def test_radius_wrong_length_2_elements_raises(self):
+        """2-element radius tuple raises CriticalValidationError."""
+        with pytest.raises(CriticalValidationError):
+            ParameterValidator.validate_radius((1.0, 2.0))
+
+    def test_radius_wrong_length_4_elements_raises(self):
+        """4-element radius tuple raises CriticalValidationError."""
+        with pytest.raises(CriticalValidationError):
+            ParameterValidator.validate_radius((1.0, 2.0, 3.0, 4.0))
+
+    def test_radius_wrong_type_raises(self):
+        """String radius raises CriticalValidationError."""
+        with pytest.raises(CriticalValidationError):
+            ParameterValidator.validate_radius("not_a_number")
 
     # ---- Max Neighbors ----
 
@@ -356,6 +425,22 @@ class TestParameterValidator:
         with pytest.raises(CriticalValidationError):
             ParameterValidator.validate_covariance_parameters(
                 sill=1.0, nugget=0.1, angles=(float("nan"), 0.0, 0.0)
+            )
+
+    # ---- Inf angle validation (F-146) ----
+
+    def test_inf_angle_raises(self):
+        """Inf angle raises CriticalValidationError."""
+        with pytest.raises(CriticalValidationError):
+            ParameterValidator.validate_covariance_parameters(
+                sill=1.0, nugget=0.1, angles=(float("inf"), 0.0, 0.0)
+            )
+
+    def test_inf_nugget_raises(self):
+        """Inf nugget raises (documented coverage of Inf path in covariance validation)."""
+        with pytest.raises(CriticalValidationError):
+            ParameterValidator.validate_covariance_parameters(
+                sill=1.0, nugget=float("inf")
             )
 
     # ---- Probability ----
@@ -526,23 +611,63 @@ class TestDecorators:
         assert callable(validate_file_params)
 
     def test_validate_grid_params_decorator_applies(self):
-        """validate_grid_params can wrap a function."""
+        """validate_grid_params actually validates grid dimensions (F-148).
+
+        The decorator inspects args/kwargs for an object with x/y/z attributes
+        and calls GridValidator.validate_grid_dimensions on them.
+        """
+
+        class FakeGrid:
+            def __init__(self, x, y, z):
+                self.x = x
+                self.y = y
+                self.z = z
+
         @validate_grid_params
         def dummy_func(grid=None, **kwargs):
             return grid
 
-        # Should not raise for a well-formed call (no actual grid needed)
-        assert True  # Decorator loaded successfully
+        # Valid grid: passes through the decorator
+        valid_grid = FakeGrid(10, 10, 5)
+        result = dummy_func(grid=valid_grid)
+        assert result is valid_grid
 
-    def test_validate_file_params_decorator(self):
-        """validate_file_params with None filename doesn't crash."""
+        # Invalid grid (negative dimension): decorator raises
+        invalid_grid = FakeGrid(-1, 10, 5)
+        with pytest.raises(CriticalValidationError):
+            dummy_func(grid=invalid_grid)
+
+    def test_validate_file_params_decorator_none_skip(self):
+        """validate_file_params with None filename skips validation."""
         @validate_file_params
         def dummy_func(filename=None, **kwargs):
             return filename
 
-        # filename=None skips validation, should not raise
         result = dummy_func(filename=None)
         assert result is None
+
+    def test_validate_file_params_decorator_valid_file(self, tmp_path):
+        """validate_file_params with existing file passes validation (F-149)."""
+        testfile = tmp_path / "valid.txt"
+        testfile.write_text("data")
+
+        @validate_file_params
+        def dummy_func(filename=None, **kwargs):
+            return filename
+
+        result = dummy_func(filename=str(testfile))
+        assert os.path.abspath(result) == os.path.abspath(str(testfile))
+
+    def test_validate_file_params_decorator_nonexistent_raises(self, tmp_path):
+        """validate_file_params with non-existent file raises (F-149)."""
+        nonexistent = tmp_path / "missing.txt"
+
+        @validate_file_params
+        def dummy_func(filename=None, **kwargs):
+            return filename
+
+        with pytest.raises(CriticalValidationError):
+            dummy_func(filename=str(nonexistent))
 
 
 if __name__ == '__main__':

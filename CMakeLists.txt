@@ -188,9 +188,13 @@ target_include_directories(hpgl_core
     PRIVATE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/hpgl>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/tnt_126>
     PUBLIC
         $<INSTALL_INTERFACE:include>
+)
+# TNT is a third-party numeric library — use SYSTEM to suppress warnings
+target_include_directories(hpgl_core SYSTEM
+    PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/tnt_126>
 )
 
 # BLAS/LAPACK: PUBLIC for MKL (consumers need the MKL target), PRIVATE otherwise
@@ -336,6 +340,16 @@ if(HPGL_BUILD_VARIOGRAM)
         target_link_options(hpgl_variogram PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:-Wl,-z,relro,-z,now>)
         target_link_options(hpgl_variogram PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:-Wl,-z,noexecstack>)
         target_compile_definitions(hpgl_variogram PRIVATE $<$<AND:$<NOT:$<CONFIG:Debug>>,$<NOT:$<PLATFORM_ID:Darwin>>>:_GLIBCXX_ASSERTIONS>)
+    endif()
+
+    # OpenMP support for cvariogram module
+    # The variogram computation contains an O(n²) double loop in
+    # calc_variograms_from_point_set that benefits from parallelization.
+    if(HPGL_USE_OPENMP AND OpenMP_FOUND)
+        target_link_libraries(hpgl_variogram PUBLIC OpenMP::OpenMP_CXX)
+        target_compile_options(hpgl_variogram PUBLIC
+            $<$<COMPILE_LANGUAGE:CXX>:${OpenMP_CXX_FLAGS}>
+        )
     endif()
 endif()
 

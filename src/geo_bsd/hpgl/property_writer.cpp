@@ -39,7 +39,10 @@ namespace hpgl
 				oss << "Can't open file '" << filename << "'.";
 				throw hpgl_exception("open_file_checked", oss.str());
 			}
-			return file_t(f, fclose);
+			return file_t(f, [](FILE* fp) {
+				if (fclose(fp) != 0)
+					fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");
+			});
 		}
 
 		void write_property_cont(

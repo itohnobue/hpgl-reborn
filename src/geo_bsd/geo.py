@@ -610,6 +610,7 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
                     element_count += 1
                 else:
                     unknown_values.add(val)
+                    element_count += 1
 
     if skipped_parse > 0:
         logger.warning(

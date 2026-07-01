@@ -21,7 +21,7 @@ namespace hpgl
 
 	struct no_mask_t
 	{
-		int operator[](node_index_t node)const
+		int operator[](node_index_t /*node*/)const
 		{
 			return 1;
 		}

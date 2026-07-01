@@ -113,35 +113,51 @@ def CubesFromVPCs(VPCs, NX, NY):
 def Cubes2PointSet(CubesDictionary, Mask):
     NX, NY, NZ = list(CubesDictionary.values())[0].shape
     grid_i, grid_j = mgrid[0:NX, 0:NY]
-    PointSet = {'X':zeros(0, dtype=int32), 'Y':zeros(0, dtype=int32), 'Z':zeros(0, dtype=int32)}
-    for Key in CubesDictionary.keys():
-        PointSet[Key] = zeros(0, dtype=int32)
 
+    total = int(Mask.sum())
+
+    PointSet = {
+        'X': zeros(total, dtype=int32),
+        'Y': zeros(total, dtype=int32),
+        'Z': zeros(total, dtype=int32),
+    }
+    for Key in CubesDictionary.keys():
+        PointSet[Key] = zeros(total, dtype=int32)
+
+    offset = 0
     for k in range(NZ):
         Slice = Mask[:, :, k].astype(bool)
-        PointSet['X'] = append(PointSet['X'], grid_i[Slice])
-        PointSet['Y'] = append(PointSet['Y'], grid_j[Slice])
-        PointSet['Z'] = append(PointSet['Z'], k * ones(Slice.sum(0).sum(0), dtype=int32))
+        n = Slice.sum()
+        PointSet['X'][offset:offset + n] = grid_i[Slice]
+        PointSet['Y'][offset:offset + n] = grid_j[Slice]
+        PointSet['Z'][offset:offset + n] = k * ones(n, dtype=int32)
         for Key in CubesDictionary.keys():
             DataSlice = CubesDictionary[Key][:, :, k]
-            PointSet[Key] = append(PointSet[Key], DataSlice[Slice])
+            PointSet[Key][offset:offset + n] = DataSlice[Slice]
+        offset += n
 
     return PointSet
 
 def Cube2PointSet(Cube, Mask):
     NX, NY, NZ = Cube.shape
     grid_i, grid_j = mgrid[0:NX, 0:NY]
-    X = zeros(0, dtype=int32)
-    Y = zeros(0, dtype=int32)
-    Z = zeros(0, dtype=int32)
-    Property = zeros(0, dtype=int32)
+
+    total = int(Mask.sum())
+    X = zeros(total, dtype=int32)
+    Y = zeros(total, dtype=int32)
+    Z = zeros(total, dtype=int32)
+    Property = zeros(total, dtype=int32)
+
+    offset = 0
     for k in range(NZ):
         Slice = Mask[:, :, k].astype(bool)
-        X = append(X, grid_i[Slice])
-        Y = append(Y, grid_j[Slice])
-        Z = append(Z, k * ones(Slice.sum(0).sum(0), dtype=int32))
+        n = Slice.sum()
+        X[offset:offset + n] = grid_i[Slice]
+        Y[offset:offset + n] = grid_j[Slice]
+        Z[offset:offset + n] = k * ones(n, dtype=int32)
         DataSlice = Cube[:, :, k]
-        Property = append(Property, DataSlice[Slice])
+        Property[offset:offset + n] = DataSlice[Slice]
+        offset += n
     return X, Y, Z, Property
 
 def PointSet2Cube(X, Y, Z, Property, Cube):
@@ -273,18 +289,17 @@ def GetCubicalMask(Radiuses):
     return MeanMask
 
 def GetEllipseMask(Radiuses):
-    MeanMask = zeros( (Radiuses[0]*2, Radiuses[1]*2, Radiuses[2]*2), dtype = uint8)
-    MeanMask = require(MeanMask, requirements = 'F')
+    rx, ry, rz = Radiuses
+    x0, y0, z0 = rx, ry, rz
 
-    x0 = Radiuses[0]
-    y0 = Radiuses[1]
-    z0 = Radiuses[2]
+    a, b, c = mgrid[0:rx * 2, 0:ry * 2, 0:rz * 2]
+    ellipsoid_eq = ((a - x0) ** 2 / (rx ** 2) +
+                    (b - y0) ** 2 / (ry ** 2) +
+                    (c - z0) ** 2 / (rz ** 2)) <= 1
 
-    for a in range(Radiuses[0]*2):
-        for b in range(Radiuses[1]*2):
-            for c in range(Radiuses[2]*2):
-                if ( ((a-x0)**2 / float32(Radiuses[0]**2)) + ((b-y0)**2 / float32(Radiuses[1]**2)) + ((c-z0)**2 / float32(Radiuses[2]**2)) <= 1):
-                    MeanMask[a,b,c] = 1
+    MeanMask = zeros((rx * 2, ry * 2, rz * 2), dtype=uint8)
+    MeanMask = require(MeanMask, requirements='F')
+    MeanMask[ellipsoid_eq] = 1
     return MeanMask
 
 def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):

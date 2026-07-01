@@ -43,9 +43,9 @@ namespace hpgl
 			//normalize row
 			double coef = A[row * size + i];
 
-			if (std::abs(coef) < std::numeric_limits<double>::epsilon())
+			if (!std::isfinite(coef) || std::abs(coef) < std::numeric_limits<double>::epsilon())
 			{
-				return false; // Coefficient is too close to zero
+				return false; // Coefficient is NaN, Inf, or too close to zero
 			}
 
 			for (int j = i; j < size; ++j)
@@ -130,13 +130,14 @@ namespace hpgl
 							V -= (A_U[k*size + i] * A_U[k * size + i]);
 						}
 
-					if (V < std::numeric_limits<double>::epsilon())
-					{
-						return false;
-					}
+				// isfinite guard: NaN bypasses `V < epsilon` (NaN < X is always false).
+				if (!std::isfinite(V) || V < std::numeric_limits<double>::epsilon())
+				{
+					return false;
+				}
 
-						A_L[i*size + i] = sqrt(V);
-						A_U[i*size + i] = sqrt(V);
+					A_L[i*size + i] = sqrt(V);
+					A_U[i*size + i] = sqrt(V);
 				}
 				else
 				{
@@ -174,13 +175,15 @@ namespace hpgl
 				X_R[i] -= A_L[i * size + j] * X_R[j];
 			}
 
-			if (std::abs(A_L[i * size + i]) < std::numeric_limits<double>::epsilon())
+			// isfinite guard: NaN bypasses epsilon check
+			double al = A_L[i * size + i];
+			if (!std::isfinite(al) || std::abs(al) < std::numeric_limits<double>::epsilon())
 			{
 				X_R[i] = 0.0;
 			}
 			else
 			{
-				X_R[i] /= A_L[i * size + i];
+				X_R[i] /= al;
 			}
 		}
 
@@ -192,13 +195,15 @@ namespace hpgl
 				X[i] -= A_U[i * size + j] * X[j];
 			}
 
-			if (std::abs(A_U[i * size + i]) < std::numeric_limits<double>::epsilon())
+			// isfinite guard: NaN bypasses epsilon check
+			double au = A_U[i * size + i];
+			if (!std::isfinite(au) || std::abs(au) < std::numeric_limits<double>::epsilon())
 			{
 				X[i] = 0.0;
 			}
 			else
 			{
-				X[i] /= A_U[i * size + i];
+				X[i] /= au;
 			}
 		}
     }

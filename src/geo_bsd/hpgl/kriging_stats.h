@@ -7,6 +7,7 @@ namespace hpgl
 	{
 		unsigned long m_points_calculated;
 		unsigned long m_points_without_neighbours;
+		unsigned long m_points_singularity;
 		double m_mean;
 		double m_speed_nps;
 	};

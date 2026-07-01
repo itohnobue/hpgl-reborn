@@ -48,7 +48,7 @@ void do_sis(
 	std::vector<nl_t> 							nblookups;
 	std::vector<indicator_array_adapter_t> 		ind_props;
 
-	for (int i = 0; i < params.m_category_count; ++i)
+	for (size_t i = 0; i < params.m_category_count; ++i)
 	{		
 		covariances[i].init(cov_model_t(params.m_cov_params[i]), params.m_radiuses[i]);
 		nblookups.push_back(nl_t(&grid, &covariances[i], params.m_nb_params[i]));
@@ -61,6 +61,10 @@ void do_sis(
 	reporter.start();
 
 	kriging_ws_t<indicator_value_t, sugarbox_location_t> ws;
+
+	// Pre-allocated probs vector: reused across all node iterations
+	// via clear() to avoid 1M+ heap allocations in the hot loop.
+	std::vector<indicator_probability_t> probs;
 
 	if(params.m_category_count == 2)
 	{
@@ -83,7 +87,7 @@ void do_sis(
 		if (mask[node] != 1)
 			continue;
 
-		std::vector<indicator_probability_t> probs;		
+		probs.clear();
 
 		// median SIS
 			if(params.m_category_count == 2)
@@ -158,7 +162,7 @@ void do_sis(
 
 struct no_mask_t
 {
-	int operator[](node_index_t index)const
+	int operator[](node_index_t /*index*/)const
 	{
 		return 1;
 	}

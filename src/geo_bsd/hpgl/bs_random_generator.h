@@ -11,12 +11,13 @@ namespace hpgl
 		std::mt19937 gen;
 	public:
 		mt_random_generator_t(){};
-		mt_random_generator_t(long int seed)
-			: gen(static_cast<std::mt19937::result_type>(seed))
-		{}
-		void seed(long int seed);
+		mt_random_generator_t(int64_t seed)
+		{ seed_from_int64(seed); }
+		void seed(int64_t seed);
 		long int operator() (long int N);
 		double operator()();
+	private:
+		void seed_from_int64(int64_t seed);
 	};
 }
 

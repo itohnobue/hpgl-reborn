@@ -24,7 +24,7 @@ void stack_layers(
 
 	std::vector<double> cumulative_k(nx*ny, 0.0);
 
-	for(int layer = 0; layer < thick_layers.size(); layer++)
+	for(size_t layer = 0; layer < thick_layers.size(); layer++)
 	{
 		for(int i = 0; i < nx; i++)
 		{

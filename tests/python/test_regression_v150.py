@@ -514,7 +514,7 @@ class TestSGSNormalization:
         prop = ContProperty(data, mask)
 
         cdf_values = np.linspace(0, 100, 10, dtype='float32')
-        cdf_probs = np.linspace(0.1, 1.0, 10, dtype='float32')
+        cdf_probs = np.linspace(0.0, 1.0, 10, dtype='float32')
         cdf_data = CdfData(cdf_values, cdf_probs)
 
         cov = CovarianceModel(
@@ -531,9 +531,16 @@ class TestSGSNormalization:
             kriging_type="sk"
         )
 
-        # Output should not be degenerate (not all same value)
-        assert np.std(result.data[result.mask > 0]) > 0.0, \
-            "SGS output should have non-zero variance"
+        # Verify normalization preserves the input data mean approximately
+        input_masked = data[mask > 0]
+        output_masked = result.data[result.mask > 0].astype('float64')
+        input_mean = np.mean(input_masked)
+        output_mean = np.mean(output_masked)
+        # Normalization should preserve mean within a reasonable tolerance
+        # of half the input standard deviation (generous for small sample)
+        tolerance = max(np.std(input_masked) * 0.5, 10.0)
+        assert abs(output_mean - input_mean) < tolerance, \
+            f"SGS normalization should preserve mean: input={input_mean:.1f}, output={output_mean:.1f}"
 
     def test_sgs_without_cdf_still_produces_valid_output(self):
         """SGS without CDF (raw Gaussian) produces valid output."""

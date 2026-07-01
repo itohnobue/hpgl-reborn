@@ -76,7 +76,7 @@ namespace hpgl
 
 	std::ostream & operator<<(std::ostream&s, const ik_params_t & p)
 	{
-		for (int i = 0; i < p.m_category_count; ++i)
+		for (size_t i = 0; i < p.m_category_count; ++i)
 		{
 			s 
 				<< "\t\tCovariance type: " << (int)p.m_covariances[i] << "\n"

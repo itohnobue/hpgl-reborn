@@ -23,8 +23,6 @@ namespace hpgl
 		using neighbourhood_param_t::set_radiuses;
 
 		double m_marginal_prob;
-	private:
-		unsigned short m_value;
 	};
 }
 

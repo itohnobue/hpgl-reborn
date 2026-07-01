@@ -42,6 +42,9 @@ start:
 		goto start;
 	prop_name = line;
 	// Handle continuation for excessively long property names
+	// Cap total length to prevent unbounded memory exhaustion (M59 fix)
+	const size_t MAX_PROP_NAME_LENGTH = 1024;
+	size_t total_len = line_size;
 	while (line_size == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n')
 	{
 		if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
@@ -49,6 +52,10 @@ start:
 		line_size = strlen(line);
 		if (line_size > 0 && line[line_size - 1] == '\n')
 			line[--line_size] = '\0';
+		total_len += line_size;
+		if (total_len > MAX_PROP_NAME_LENGTH)
+			throw hpgl_exception("read_prop_name", 
+				"Property name exceeds maximum length (1024).");
 		prop_name += line;
 	}
 }
@@ -111,6 +118,10 @@ void load_doubles_into_vector(FILE * file, std::vector<T> & data)
 		}
 		data.push_back(value);
 	}
+	// Check for I/O error after loop exit — fscanf returning < 1 due to
+	// a read error is indistinguishable from normal EOF without this.
+	if (ferror(file))
+		throw hpgl_exception("load_doubles_into_vector", "I/O error reading file.");
 }
 
 void load_variable_mean_from_file(

@@ -352,50 +352,39 @@ class ParameterValidator:
         Raises:
             CriticalValidationError: If radius is invalid
         """
-        # Track if input was integer to preserve type
-        is_int_input = isinstance(radius, int) or (
-            isinstance(radius, (tuple, list)) and
-            len(radius) == 3 and
-            all(isinstance(r, int) for r in radius)
-        )
-
         if isinstance(radius, (int, float)):
-            rx = ry = rz = float(radius) if not isinstance(radius, int) else float(radius)
+            vals = [float(radius)] * 3
         elif isinstance(radius, (tuple, list)) and len(radius) == 3:
-            rx, ry, rz = map(float, radius)
+            vals = list(map(float, radius))
         else:
             raise CriticalValidationError(
                 f"Radius must be a number or tuple of 3 numbers, got {type(radius)}",
                 name
             )
 
-        for i, r in enumerate((rx, ry, rz)):
+        for i, r in enumerate(vals):
             if numpy.isnan(r) or numpy.isinf(r):
                 raise CriticalValidationError(
                     f"{name}[{i}] is NaN or infinite",
                     name
                 )
-
-        # Convert back to int if input was int and values are whole numbers
-        if is_int_input:
-            rx = int(rx) if rx.is_integer() else rx
-            ry = int(ry) if ry.is_integer() else ry
-            rz = int(rz) if rz.is_integer() else rz
-
-        for i, r in enumerate((rx, ry, rz)):
-            r_val = float(r)
-            if r_val < ValidationConstants.MIN_RADIUS:
+            if r < ValidationConstants.MIN_RADIUS:
                 raise CriticalValidationError(
                     f"{name}[{i}] = {r} is less than minimum {ValidationConstants.MIN_RADIUS}",
                     name
                 )
-            if r_val > ValidationConstants.MAX_RADIUS:
+            if r > ValidationConstants.MAX_RADIUS:
                 raise CriticalValidationError(
                     f"{name}[{i}] = {r} exceeds maximum {ValidationConstants.MAX_RADIUS}",
                     name
                 )
+            if not float(r).is_integer():
+                raise CriticalValidationError(
+                    f"{name}[{i}] = {r} is not an integer (radius must be a whole number of grid cells)",
+                    name
+                )
 
-        return (rx, ry, rz)
+        return (int(vals[0]), int(vals[1]), int(vals[2]))
 
     @staticmethod
     def validate_max_neighbors(max_neighbors: int) -> None:

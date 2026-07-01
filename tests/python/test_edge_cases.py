@@ -738,6 +738,8 @@ class TestParameterValidation:
 
         With zero sill, the covariance matrix is nugget-only. This is a boundary
         condition that must not crash and must produce finite output.
+        The current behavior: kriging succeeds but all cells remain uninformed
+        since the covariance between any two points is zero (no neighbors found).
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)

@@ -259,6 +259,9 @@ def _safe_load_library(lib_name: str, ref_file: str):
                 raise ValueError(
                     f"Library path {resolved_lib} is outside allowed directory {lib_dir}"
                 ) from err
+            except OSError:
+                # Wrong architecture or incompatible library — try next path
+                continue
 
     # If not found, try the original load_library behavior as fallback
     # but wrap it with additional validation

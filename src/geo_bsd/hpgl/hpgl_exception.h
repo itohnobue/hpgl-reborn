@@ -14,7 +14,7 @@ namespace hpgl
 	public:
 		hpgl_exception(const std::string & a_where, const std::string & what);
 
-		virtual const char* what()const noexcept
+		const char* what()const noexcept override
 		{
 			return m_message.c_str();
 		}

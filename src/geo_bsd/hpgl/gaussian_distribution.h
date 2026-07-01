@@ -28,6 +28,12 @@ namespace hpgl
 
 		inline double operator()(double x)const
 		{
+			// Guard against degenerate (zero-variance) CDF.
+			// When m_var == 0 the distribution is a step function:
+			// P(X <= x) = 1 if x >= mean, 0 otherwise.
+			if (m_var == 0.0)
+				return (x >= m_mean) ? 1.0 : 0.0;
+
 			double p = 0.2316419;
 			double b[] = {0.319381530, -0.356563782, 1.781477937, -1.821255978, 1.330274429};
 			double sx = (x - m_mean) / sqrt(m_var);
@@ -58,6 +64,11 @@ namespace hpgl
 		//   preserving accuracy for practical probability ranges
 		inline double inverse(double p)const
 		{
+			// Guard against degenerate (zero-variance) distribution.
+			// All quantiles map to the mean.
+			if (m_var == 0.0)
+				return m_mean;
+
 			// Input validation: p must be in (0, 1)
 			if (p <= 0.0 || p >= 1.0)
 			{

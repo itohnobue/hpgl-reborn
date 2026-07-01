@@ -84,7 +84,7 @@ namespace hpgl
 						m_covariances[static_cast<size_t>(index)] = cov(c1, c2);
 					}
 			m_box = rect_3d_t<int>(-rx, -ry, -rz, rx, ry, rz);
-			if (m_box.volume_inclusive() != size) { fprintf(stderr, "HPGL FATAL: precalculated_covariance: box volume mismatch\n"); abort(); }
+			if (static_cast<size_t>(m_box.volume_inclusive()) != size) { fprintf(stderr, "HPGL FATAL: precalculated_covariance: box volume mismatch\n"); abort(); }
 		}
 
 		template<typename coord_t>

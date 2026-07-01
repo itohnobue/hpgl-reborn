@@ -23,7 +23,7 @@ static void build_shuffled_path(std::vector<int> & path, int size, int64_t seed)
 		throw hpgl_exception("path_random_generator_t", oss.str());
 	}
 
-	mt_random_generator_t gen(static_cast<long int>(seed));
+	mt_random_generator_t gen(seed);
 	path.resize(size);
 
 	std::vector<std::pair<double, int> > pairs;

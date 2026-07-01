@@ -146,10 +146,11 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
     prop1_flat = prop1.data.ravel(order='K')
     tk_flat = tk_prop.data.ravel(order='K')
-    for i in range(prop.data.size):
-        if (prop1_flat[i] >= tk_flat[i]):
-            prop1_flat[i] = 1
-        elif (prop1_flat[i] < tk_flat[i]):
-            prop1_flat[i] = 0
+    # Vectorized thresholding. IEEE 754 NaN fails both >= and <, so
+    # NaN passes through to the ~mask branch and becomes 0 — this
+    # fixes the old for-loop which silently preserved NaN unchanged.
+    mask = prop1_flat >= tk_flat
+    prop1_flat[mask] = 1
+    prop1_flat[~mask] = 0
     logger.info("Done.")
     return prop1

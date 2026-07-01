@@ -41,9 +41,6 @@ namespace hpgl
 		int m_xradius = area[0];
 		int m_yradius = area[1];
 		int m_zradius = area[2];
-		int m_xdiameter = (m_xradius * 2 + 1);
-		int m_ydiameter = (m_yradius * 2 + 1);
-		int m_zdiameter = (m_zradius * 2 + 1);
 
 		for (int z = -m_zradius; z <= m_zradius; ++z)
 		{

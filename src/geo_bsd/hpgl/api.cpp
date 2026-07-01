@@ -209,13 +209,23 @@ HPGL_API int hpgl_read_inc_file_byte(
 		{
 			if (mask[i] != 0)
 			{
+				unsigned char original_value = data[i];
+				bool mapped = false;
 				for (int j = 0; j < values_count; ++j)
 				{
-					if (data[i] == values[j])
+					if (original_value == values[j])
 					{
 						data[i] = j;
+						mapped = true;
 						break;
 					}
+				}
+				if (!mapped)
+				{
+					std::ostringstream oss;
+					oss << "Unmapped byte value " << static_cast<int>(original_value)
+					    << " at index " << i;
+					throw hpgl::hpgl_exception("hpgl_read_inc_file_byte", oss.str());
 				}
 			}
 		}
@@ -590,6 +600,19 @@ HPGL_API void hpgl_lvm_kriging(
 	validate_shape_volume_or_throw(size, "lvm_kriging input");
 	int out_size = get_shape_volume(output_data_shape);
 	validate_shape_volume_or_throw(out_size, "lvm_kriging output");
+	
+	// Validate means array size matches grid volume to prevent OOB read
+	// in subtract_means / add_means (lvm_utils.h)
+	int mean_size = get_shape_volume(mean_data_shape);
+	validate_shape_volume_or_throw(mean_size, "lvm_kriging means");
+	if (mean_size != size)
+	{
+		std::ostringstream oss;
+		oss << "lvm_kriging: means volume (" << mean_size
+		    << ") != input volume (" << size << ")";
+		throw hpgl_exception("hpgl_lvm_kriging", oss.str());
+	}
+
 	cont_property_array_t input_prop(input_data, input_mask, size);
 	sugarbox_grid_t grid;
 	init_grid(grid, input_data_shape);
@@ -725,6 +748,19 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	{
 		throw hpgl_exception("hpgl_sgs_lvm_simulation", "Null means data pointer");
 	}
+	
+	// Validate means shape volume matches grid volume to prevent OOB read
+	// in sequential_gaussian_simulation_lvm (mean_data_vec.assign at line 109)
+	int mean_vol = get_shape_volume(&(means->m_shape));
+	validate_shape_volume_or_throw(mean_vol, "sgs_lvm_simulation means");
+	if (mean_vol != size)
+	{
+		std::ostringstream oss;
+		oss << "sgs_lvm_simulation: means volume (" << mean_vol
+		    << ") != grid volume (" << size << ")";
+		throw hpgl_exception("hpgl_sgs_lvm_simulation", oss.str());
+	}
+
 	sgs_p.m_lvm = means->m_data;
 	sgs_p.m_mean_kind = mean_kind_t::e_mean_varying;
 
@@ -981,11 +1017,17 @@ hpgl_simple_cokriging_mark1(
 		cp.set_nugget(params->m_nugget);
 		cp.validate();
 
+		cp.set_ranges(
+				params->m_ranges[0],
+				params->m_ranges[1],
+				params->m_ranges[2]);
+		cp.set_angles(
+				params->m_angles[0],
+				params->m_angles[1],
+				params->m_angles[2]);
 		for (int i = 0; i < 3; ++i)
 		{
 			np.m_radiuses[i] = params->m_radiuses[i];
-			cp.m_ranges[i] = params->m_ranges[i];
-			cp.m_angles[i] = params->m_angles[i];
 		}
 
 		sugarbox_grid_t grid;

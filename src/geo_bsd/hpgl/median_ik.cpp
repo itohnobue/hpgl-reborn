@@ -84,7 +84,7 @@ void median_ik_for_two_indicators(
 	{
 		int local_lap_count = 0;
 		#pragma omp for schedule(dynamic)
-		for (node_index_t idx = 0; idx < prop_size; ++idx)
+		for (size_t idx = 0; idx < prop_size; ++idx)
 		{
 			double prob;
 			indicator_index_t ind_index;

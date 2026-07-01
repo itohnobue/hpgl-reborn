@@ -80,7 +80,7 @@ namespace hpgl
 		void create_precalucated_cov_models(const ik_params_t & params, std::vector<cov_t> & result)
 		{
 			result.resize(params.m_category_count);
-			for (int i = 0; i < params.m_category_count; ++i)
+			for (size_t i = 0; i < params.m_category_count; ++i)
 			{
 				result[i].init(cov_model_t(params.m_cov_params[i]), params.m_radiuses[i]);
 			}
@@ -126,7 +126,7 @@ namespace hpgl
 		typedef indexed_neighbour_lookup_t<grid_t, cov_t> nl_t;
 		std::vector<nl_t> nblookups;
 
-		for (int i = 0; i < params.m_category_count; ++i)
+		for (size_t i = 0; i < params.m_category_count; ++i)
 		{			
 			nblookups.push_back(nl_t(&grid, &covariances[i], params.m_nb_params[i]));
 		}	
@@ -136,7 +136,7 @@ namespace hpgl
 		typedef typename nl_t::coord_t coord_t;
 
 		std::vector<indicator_array_adapter_t> ind_props;
-		for (int i = 0; i < params.m_category_count; ++i)
+		for (size_t i = 0; i < params.m_category_count; ++i)
 		{
 			ind_props.push_back(indicator_array_adapter_t(&input_property, i));
 		}
@@ -176,10 +176,10 @@ namespace hpgl
 			// kriging_interpolation_ws call — same memory, zero heap churn.
 			kriging_ws_t<indicator_value_t, coord_t> ws;
 			#pragma omp for schedule(dynamic)
-			for (node_index_t node_idx = 0;	node_idx < size; ++node_idx)
+			for (size_t node_idx = 0; node_idx < size; ++node_idx)
 			{
 				probs.clear();
-				for (int idx = 0; idx < params.m_category_count; ++idx)
+				for (size_t idx = 0; idx < params.m_category_count; ++idx)
 				{
 					indicator_probability_t prob;
 

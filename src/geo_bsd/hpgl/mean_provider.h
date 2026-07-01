@@ -8,7 +8,7 @@ namespace hpgl
 	class no_mean_t
 	{
 	public:				
-		inline double operator[](node_index_t index)const
+		inline double operator[](node_index_t /*index*/)const
 		{
 			return 0;
 		}

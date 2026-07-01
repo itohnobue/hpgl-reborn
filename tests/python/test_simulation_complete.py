@@ -413,6 +413,25 @@ class TestSequentialGaussianSimulationLVM:
         assert isinstance(result, ContProperty)
         assert result.data.shape == sample_property.data.shape
         assert not np.any(np.isnan(result.data.astype('float64')))
+        # F-131: Verify LVM mean parameter influences the simulation.
+        # With a spatially varying mean, the result should differ from the
+        # same run with auto-computed mean — proving the mean parameter is used.
+        result_no_lvm = sgs_simulation(
+            prop=sample_property,
+            grid=sample_grid,
+            cdf_data=sgs_cdf_data_multi,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=sample_covariance_model,
+            seed=42,
+            mean=None,
+        )
+        # LVM and auto-mean results must differ (mean parameter IS used)
+        assert not np.allclose(result.data.astype('float64'),
+                               result_no_lvm.data.astype('float64'),
+                               rtol=1e-4, atol=1e-4), (
+            "LVM mean should produce different result than auto-computed mean"
+        )
 
     def test_sgs_with_scalar_mean(self, sample_property, sample_grid,
                                    sample_covariance_model, sgs_cdf_data_multi):
@@ -430,6 +449,17 @@ class TestSequentialGaussianSimulationLVM:
 
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype('float64')))
+        # F-131: Verify scalar mean parameter influences result.
+        # The output mean should be closer to the configured mean (50.0) than
+        # to a very different mean (e.g. 0.0).
+        simulated_values = result.data[result.mask > 0].astype('float64')
+        simulated_mean = np.mean(simulated_values)
+        # With mean=50.0, the result should not gravitate toward 0
+        assert abs(simulated_mean - 50.0) < abs(simulated_mean - 0.0), (
+            f"SGS mean=50.0: result mean {simulated_mean:.2f} should be closer "
+            f"to 50.0 than 0.0"
+        )
+        assert not np.all(result.data == 0), "SGS scalar mean: result should not be all-zeros"
 
     def test_sgs_with_mean_none(self, sample_property, sample_grid,
                                   sample_covariance_model, sgs_cdf_data_multi):
@@ -447,6 +477,15 @@ class TestSequentialGaussianSimulationLVM:
 
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype('float64')))
+        # F-131: Auto-computed mean should produce result with mean near data mean
+        data_mean = np.mean(sample_property.data[sample_property.mask == 1].astype('float64'))
+        simulated_values = result.data[result.mask > 0].astype('float64')
+        simulated_mean = np.mean(simulated_values)
+        # Result mean should be within 30% of data mean (SGS reproduces target mean)
+        assert abs(simulated_mean - data_mean) < max(abs(data_mean) * 0.3, 15.0), (
+            f"mean=None: result mean {simulated_mean:.2f} deviates from "
+            f"data mean {data_mean:.2f} by more than 30%"
+        )
 
 
 # =============================================================================
@@ -531,6 +570,17 @@ class TestSequentialGaussianSimulationMask:
         assert isinstance(result, ContProperty)
         # Check that result shape matches input
         assert result.data.shape == sample_property.data.shape
+        # F-132: Verify mask actually controls simulation — simulated values
+        # should exist in masked region and input data should NOT be
+        # naively copied to masked region (verifies mask is not ignored).
+        mask_3d = simulation_mask.reshape((sample_grid.x, sample_grid.y, sample_grid.z), order='F')
+        sim_data = result.data.astype('float64')
+        # Cells where mask=1 should have finite simulated values
+        masked_cells = sim_data[mask_3d == 1]
+        assert len(masked_cells) > 0, "Mask should select cells for simulation"
+        assert np.all(np.isfinite(masked_cells)), "Simulated cells must be finite"
+        # Simulated values should not be all identical (simulation produces variability)
+        assert np.std(masked_cells) > 0, "Simulated values should not be uniform"
 
 
 # =============================================================================
@@ -1354,6 +1404,62 @@ class TestSimulationEdgeCases:
 
         assert isinstance(result, IndProperty)
         assert np.all(result.data < result.indicator_count)
+
+    # F-133: SGS kriging failure test (variance ≤ 0 fallback)
+    def test_sgs_kriging_failure_coincident_data(self):
+        """F-133: SGS with coincident conditioning data and nugget=0 triggers kriging
+        failure (variance ≤ 0) and must fall back gracefully.
+
+        When conditioning data are at the same location with nugget=0, the
+        kriging variance drops to zero. The code must produce finite output
+        (not NaN, Inf, or extreme values like 9e5). According to the geostatistics
+        research, the correct fallback is drawing from N(0,1) — the result must
+        be bounded and finite.
+        """
+        data = np.array([5.0, 5.0, 5.0, 5.0], dtype='float32')
+        mask = np.array([1, 1, 1, 1], dtype='uint8')
+        grid = SugarboxGrid(x=2, y=2, z=1)
+
+        prop = ContProperty(data, mask)
+
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(2.0, 2.0, 2.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.0  # Zero nugget + coincident data → zero variance
+        )
+
+        cdf_data = CdfData(
+            values=np.array([0.0, 10.0], dtype='float32'),
+            probs=np.array([0.0, 1.0], dtype='float32')
+        )
+
+        result = sgs_simulation(
+            prop=prop,
+            grid=grid,
+            cdf_data=cdf_data,
+            radiuses=(3, 3, 3),
+            max_neighbours=4,
+            cov_model=cov_model,
+            seed=42,
+        )
+
+        assert isinstance(result, ContProperty)
+        assert not np.any(np.isnan(result.data.astype('float64'))), (
+            "SGS kriging failure: result should not contain NaN"
+        )
+        assert not np.any(np.isinf(result.data.astype('float64'))), (
+            "SGS kriging failure: result should not contain Inf"
+        )
+        # Fallback should produce values in the normal-score range, not explode
+        result_flat = result.data.astype('float64').flatten()
+        assert np.all(np.abs(result_flat) < 10.0), (
+            f"SGS kriging failure: result values {result_flat} should be bounded "
+            f"(expected N(0,1) fallback, not extreme values)"
+        )
+        # Result should not be all-zeros either
+        assert not np.all(result.data == 0), "SGS kriging failure: should produce non-zero values"
 
 
 if __name__ == '__main__':

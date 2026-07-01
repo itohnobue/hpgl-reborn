@@ -218,7 +218,7 @@ namespace hpgl
 		}
 
 		// Solve
-		for (size_t i = 0; i < size; i ++)
+		for (size_t i = 0; i < static_cast<size_t>(size); i ++)
 			weights[i] = b[i];
 
 		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
@@ -357,7 +357,7 @@ namespace hpgl
 			return system_solved;
 		}
 
-		for (size_t i = 0; i < size; i ++)
+		for (size_t i = 0; i < static_cast<size_t>(size); i ++)
 			weights[i] = ws.b[i];
 
 		dpotrs_(&matrix_type, &size_lap, &b_size, &ws.A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
@@ -471,7 +471,6 @@ namespace hpgl
 		integer info_dec = 100;
 		integer info_solve = 100;
 		integer size_lap = size;
-		integer b_size = 1;
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
@@ -908,13 +907,14 @@ namespace hpgl
 		}
 
 
-		//build invariant
+		//build invariant (exploit symmetry: C(i,j) = C(j,i))
 		for (int i = 0; i < size; ++i)
 		{
-			for (int j = 0; j < size; ++j)
+			for (int j = i; j < size; ++j)
 			{
 				A[i * size + j] =
 					cov(coords[i], coords[j]) * (sigmas[i] * sigmas[j]);
+				A[j * size + i] = A[i * size + j];
 			}
 			b[i] = cov(coords[i], center) * (sigmas[i] * sigmac);
 		}
@@ -1057,13 +1057,14 @@ namespace hpgl
 			ws.sigmas[i] = sqrt(meani * (1-meani));
 		}
 
-		//build invariant
+		//build invariant (exploit symmetry: C(i,j) = C(j,i))
 		for (int i = 0; i < size; ++i)
 		{
-			for (int j = 0; j < size; ++j)
+			for (int j = i; j < size; ++j)
 			{
 				ws.A[i * size + j] =
 					cov(coords[i], coords[j]) * (ws.sigmas[i] * ws.sigmas[j]);
+				ws.A[j * size + i] = ws.A[i * size + j];
 			}
 			ws.b[i] = cov(coords[i], center) * (ws.sigmas[i] * sigmac);
 		}
@@ -1097,7 +1098,7 @@ namespace hpgl
 			return system_solved;
 		}
 
-		for (size_t i = 0; i < size; i ++)
+		for (size_t i = 0; i < static_cast<size_t>(size); i ++)
 			weights[i] = ws.b[i];
 
 		dpotrs_(&matrix_type, &size_lap, &b_size, &ws.A[0],  &size_lap, &weights[0], &size_lap, &info_solve );

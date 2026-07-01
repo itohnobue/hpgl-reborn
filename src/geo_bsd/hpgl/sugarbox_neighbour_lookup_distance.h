@@ -45,7 +45,7 @@ namespace hpgl
 			{
 				sugarbox_location_t point = center + *vec; //vectors[idx];
 				int index = grid.get_index(point);
-				//if (index >= 0)
+				if (index >= 0)
 				{		
 					if (pred(index)) 
 					{

@@ -61,7 +61,6 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "pytest-benchmark>=4.0",
     "scipy>=1.10",
     "sphinx>=7.0",
     "sphinx-rtd-theme>=1.3",
@@ -74,7 +73,6 @@ dev = [
 test = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "pytest-benchmark>=4.0",
     "scipy>=1.10",
 ]
 
@@ -186,13 +184,17 @@ before-all = "brew install openblas libomp cmake && export OpenMP_ROOT=$(brew --
 
 [tool.cibuildwheel.windows]
 # Build for x64 only
-# NOTE: Windows CI requires BLAS/LAPACK pre-installed (MKL or alternative).
-# cibuildwheel itself does not install MKL. On GitHub Actions, set up MKL via:
-#   - choco install intel-mkl (or)
-#   - OneAPI installer with MKL component
-# Without a BLAS library, CMake configuration will fail during wheel build.
-# If using a self-hosted runner, ensure MKL_ROOT is set before cibuildwheel runs.
 archs = ["AMD64"]
+before-all = "choco install -y openblas || (echo 'WARNING: OpenBLAS not installed via Chocolatey. Ensure BLAS/LAPACK is available (MKL or OpenBLAS) or wheel build will fail.' && exit 0)"
+environment = { BLA_VENDOR = "OpenBLAS" }
+# NOTE: The before-all command installs OpenBLAS via Chocolatey (available on
+# GitHub Actions Windows runners). If Chocolatey is unavailable or OpenBLAS
+# installation fails, the build will still proceed but CMake will fail with
+# a clear error when it cannot find BLAS/LAPACK.
+# Alternative approaches for non-GitHub-Actions Windows environments:
+#   - Install Intel MKL via OneAPI installer beforehand
+#   - Use a self-hosted runner with MKL_ROOT set
+#   - Install OpenBLAS via vcpkg before invoking cibuildwheel
 
 [tool.pytest.ini_options]
 minversion = "7.0"

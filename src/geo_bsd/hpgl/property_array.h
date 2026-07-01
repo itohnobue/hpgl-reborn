@@ -125,7 +125,7 @@ namespace hpgl
 	typedef std::shared_ptr<cont_property_array_t> sp_double_property_array_t;
 	typedef std::shared_ptr<indicator_property_array_t> sp_byte_property_array_t;
 
-	inline const int indicator_count(const indicator_property_array_t & prop)
+	inline int indicator_count(const indicator_property_array_t & prop)
 	{
 		return prop.m_indicator_count;
 	}

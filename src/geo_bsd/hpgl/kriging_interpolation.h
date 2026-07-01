@@ -24,7 +24,7 @@ namespace hpgl
 		template<typename covariances_t, typename means_t, typename coord_t>
 		bool operator()(
 			const coord_t & center,
-			mean_t center_mean,
+			mean_t /*center_mean*/,
 			const std::vector<coord_t> & coords,
 			const means_t &,
 			const covariances_t & covariances,
@@ -46,7 +46,7 @@ namespace hpgl
 
 		template<typename covariances_t, typename means_t, typename coord_t>
 		bool operator()(const coord_t & center, 
-			mean_t center_mean,
+			mean_t /*center_mean*/,
 			const std::vector<coord_t> & coords,
 			const means_t &,
 			const covariances_t & covariances,
@@ -58,7 +58,7 @@ namespace hpgl
 		// Workspace-aware overloads — pass ws to sk_kriging_weights_3_ws
 		template<typename covariances_t, typename means_t, typename coord_t>
 		bool operator()(const coord_t & center,
-			mean_t center_mean,
+			mean_t /*center_mean*/,
 			const std::vector<coord_t> & coords,
 			const means_t &,
 			const covariances_t & covariances,
@@ -71,7 +71,7 @@ namespace hpgl
 
 		template<typename covariances_t, typename means_t, typename coord_t>
 		bool operator()(const coord_t & center,
-			mean_t center_mean,
+			mean_t /*center_mean*/,
 			const std::vector<coord_t> & coords,
 			const means_t &,
 			const covariances_t & covariances,
@@ -94,9 +94,9 @@ namespace hpgl
 
 		template<typename means_t>
 		inline bool second_stage(
-						  std::vector<kriging_weight_t> & weights,
-						  const mean_t center_mean,
-						  const means_t & means)const
+						  std::vector<kriging_weight_t> & /*weights*/,
+						  const mean_t /*center_mean*/,
+						  const means_t & /*means*/)const
 		{
 			return true;
 		}
@@ -119,7 +119,7 @@ namespace hpgl
 		template<typename covariances_t, typename means_t, typename coord_t>
 		bool operator()(
 			const coord_t & center,
-			mean_t center_mean,
+			mean_t /*center_mean*/,
 			const std::vector<coord_t> & coords,
 			const means_t &,
 			const covariances_t & covariances,
@@ -140,7 +140,7 @@ namespace hpgl
 
 		template<typename covariances_t, typename means_t, typename coord_t>
 		bool operator()(const coord_t & center, 
-			mean_t center_mean,
+			mean_t /*center_mean*/,
 			const std::vector<coord_t> & coords,
 			const means_t &,
 			const covariances_t & covariances,
@@ -152,7 +152,7 @@ namespace hpgl
 		// Workspace-aware overloads — pass ws to ok_kriging_weights_3_ws
 		template<typename covariances_t, typename means_t, typename coord_t>
 		bool operator()(const coord_t & center,
-			mean_t center_mean,
+			mean_t /*center_mean*/,
 			const std::vector<coord_t> & coords,
 			const means_t &,
 			const covariances_t & covariances,
@@ -165,7 +165,7 @@ namespace hpgl
 
 		template<typename covariances_t, typename means_t, typename coord_t>
 		bool operator()(const coord_t & center,
-			mean_t center_mean,
+			mean_t /*center_mean*/,
 			const std::vector<coord_t> & coords,
 			const means_t &,
 			const covariances_t & covariances,
@@ -449,7 +449,6 @@ namespace hpgl
 		)
 	{
 		typedef typename values_t::value_type value_t;
-		typedef typename neighbourhood_lookup_t::coord_t coord_t;
 
 		nl.find(index, defineds, ws.node_coord, ws.indices, ws.coords);
 		if (ws.indices.size() <= 0)
@@ -492,7 +491,6 @@ namespace hpgl
 		)
 	{
 		typedef typename values_t::value_type value_t;
-		typedef typename neighbourhood_lookup_t::coord_t coord_t;
 
 		nl.find(index, defineds, ws.node_coord, ws.indices, ws.coords);
 		if (ws.indices.size() <= 0)

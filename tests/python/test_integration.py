@@ -57,6 +57,12 @@ class TestWorkflowIntegration:
             cov_model=cov_model
         )
 
+        # Data integrity: kriged output has no NaN/Inf
+        assert isinstance(kriged, ContProperty)
+        assert not np.any(np.isnan(kriged.data.astype('float64')))
+        assert not np.any(np.isinf(kriged.data.astype('float64')))
+        assert kriged.data.shape == (500,)
+
         # Use kriged result for simulation
         cdf_data = CdfData(
             np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype='float32'),
@@ -74,6 +80,10 @@ class TestWorkflowIntegration:
         )
 
         assert isinstance(sim_result, ContProperty)
+        # Data integrity: simulation output is finite
+        sim_f64 = sim_result.data.astype('float64')
+        assert np.all(np.isfinite(sim_f64)), "SGS output must have all finite values"
+        assert np.any(sim_f64 != 0), "SGS output must not be all zeros"
 
     def test_multiple_realizations_workflow(self):
         """Test creating multiple realizations"""
@@ -114,6 +124,14 @@ class TestWorkflowIntegration:
         # Each realization should be different
         for i in range(1, 3):
             assert not np.array_equal(realizations[0].data, realizations[i].data)
+        # Data integrity: all values finite, reasonable range
+        for i, r in enumerate(realizations):
+            r_f64 = r.data.astype('float64')
+            assert np.all(np.isfinite(r_f64)), f"Realization {i} has non-finite values"
+            assert np.std(r_f64) > 0.0, f"Realization {i} has zero variance"
+            # Values should be within the CDF range [0, 100] with tolerance
+            assert np.min(r_f64) >= -1.0, f"Realization {i} below CDF minimum"
+            assert np.max(r_f64) <= 101.0, f"Realization {i} above CDF maximum"
 
     def test_sgs_modifies_input_property_in_place(self):
         """Test SGS modifies the input property array in-place (side-effect).
@@ -253,6 +271,10 @@ class TestMultiStageWorkflows:
         assert kriged.data.shape == (500,)
         assert not np.any(np.isnan(kriged.data.astype('float64')))
         assert not np.any(np.isinf(kriged.data.astype('float64')))
+        # Data integrity: kriged values should be within reasonable range
+        kriged_f64 = kriged.data.astype('float64')
+        assert np.std(kriged_f64) > 0.0, "Kriged output must have non-zero variance"
+        assert np.min(kriged_f64) >= -50.0, "Kriged values must not be far below zero"
 
     def test_indicator_kriging_to_sis_chain(self):
         """Run indicator_kriging, then use results for sis_simulation.
@@ -308,6 +330,18 @@ class TestMultiStageWorkflows:
         assert isinstance(sis_result, IndProperty)
         assert sis_result.indicator_count == 3
         assert sis_result.data.shape == ik_result.data.shape
+        # Data integrity: SIS output has valid indicator categories
+        sis_data = sis_result.data.astype('uint8')
+        assert np.all(sis_data < 3), "SIS indicator values must be within category count"
+        # Verify category distribution is reasonable (roughly matches marginal probs)
+        category_counts = [int(np.sum(sis_data == c)) for c in range(3)]
+        total = sum(category_counts)
+        for c in range(3):
+            observed = category_counts[c] / total
+            expected = marginal_probs[c]
+            # Allow generous 0.15 tolerance for small sample randomness
+            assert abs(observed - expected) < 0.20, \
+                f"Category {c}: observed proportion {observed:.2f} too far from expected {expected:.2f}"
 
 
 if __name__ == '__main__':
