@@ -14,6 +14,7 @@ try:
         _CalcSearchTemplateWindow,
         _IsInTunnel,
     )
+
     VARIOM_AVAILABLE = True
 except ImportError:
     VARIOM_AVAILABLE = False
@@ -91,8 +92,7 @@ class TestTVVariogramSearchTemplate:
     def test_creation(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=10, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=10, Ellipsoid=ell
         )
         assert templ.LagWidth == 1.0
         assert templ.LagSeparation == 2.0
@@ -104,31 +104,32 @@ class TestTVVariogramSearchTemplate:
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         with pytest.raises(ValueError, match="NumLags .* exceeds maximum"):
             TVVariogramSearchTemplate(
-                LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-                NumLags=20000, Ellipsoid=ell
+                LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=20000, Ellipsoid=ell
             )
 
     def test_first_lag_distance_default(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=10, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=10, Ellipsoid=ell
         )
         assert templ.FirstLagDistance == 0
 
     def test_first_lag_distance_custom(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=10, Ellipsoid=ell, FirstLagDistance=5.0
+            LagWidth=1.0,
+            LagSeparation=2.0,
+            TolDistance=1.0,
+            NumLags=10,
+            Ellipsoid=ell,
+            FirstLagDistance=5.0,
         )
         assert templ.FirstLagDistance == 5.0
 
     def test_ellipsoid_reference(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=10, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=10, Ellipsoid=ell
         )
         assert templ.Ellipsoid is ell
 
@@ -138,8 +139,7 @@ class TestIsInTunnel:
     def test_zero_r2_returns_all_false(self):
         ell = TVEllipsoid(R1=10, R2=0, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         V = np.array([[5, 0, 0], [1, 1, 1]])
         result = _IsInTunnel(templ, V)
@@ -148,8 +148,7 @@ class TestIsInTunnel:
     def test_zero_r3_returns_all_false(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=0)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         V = np.array([[5, 0, 0], [1, 1, 1]])
         result = _IsInTunnel(templ, V)
@@ -158,8 +157,7 @@ class TestIsInTunnel:
     def test_zero_r2_r3_no_crash(self):
         ell = TVEllipsoid(R1=10, R2=0, R3=0)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         V = np.array([[5, 0, 0]])
         result = _IsInTunnel(templ, V)
@@ -168,8 +166,7 @@ class TestIsInTunnel:
     def test_along_direction1_2d(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         V = np.array([[5, 0, 0]])
         result = _IsInTunnel(templ, V)
@@ -178,8 +175,7 @@ class TestIsInTunnel:
     def test_perpendicular_outside_tunnel_2d(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         V = np.array([[0, 10, 0]])
         result = _IsInTunnel(templ, V)
@@ -191,8 +187,7 @@ class TestCalcSearchTemplateWindow:
     def test_returns_six_values(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         result = _CalcSearchTemplateWindow(templ)
         assert len(result) == 6
@@ -200,8 +195,7 @@ class TestCalcSearchTemplateWindow:
     def test_identity_directions_reasonable_bounds(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         min_i, min_j, min_k, max_i, max_j, max_k = _CalcSearchTemplateWindow(templ)
         assert max_i > min_i
@@ -211,12 +205,10 @@ class TestCalcSearchTemplateWindow:
     def test_larger_num_lags_increases_bounds(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ5 = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         templ20 = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=20, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=20, Ellipsoid=ell
         )
         r5 = _CalcSearchTemplateWindow(templ5)
         r20 = _CalcSearchTemplateWindow(templ20)
@@ -225,8 +217,7 @@ class TestCalcSearchTemplateWindow:
     def test_zero_r2_r3_no_crash(self):
         ell = TVEllipsoid(R1=10, R2=0, R3=0)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         result = _CalcSearchTemplateWindow(templ)
         assert len(result) == 6
@@ -237,8 +228,7 @@ class TestCalcLagDistances:
     def test_returns_four_arrays(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         result = _CalcLagDistances(templ)
         assert len(result) == 4
@@ -246,8 +236,7 @@ class TestCalcLagDistances:
     def test_lag_distances_correct(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=3.0, TolDistance=1.0,
-            NumLags=4, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=3.0, TolDistance=1.0, NumLags=4, Ellipsoid=ell
         )
         indexes, distances, starts, ends = _CalcLagDistances(templ)
         expected_distances = np.array([0, 3, 6, 9])
@@ -256,8 +245,7 @@ class TestCalcLagDistances:
     def test_lag_start_end_surround_distance(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=2.0, LagSeparation=4.0, TolDistance=1.0,
-            NumLags=3, Ellipsoid=ell
+            LagWidth=2.0, LagSeparation=4.0, TolDistance=1.0, NumLags=3, Ellipsoid=ell
         )
         indexes, distances, starts, ends = _CalcLagDistances(templ)
         for i in range(3):
@@ -268,8 +256,12 @@ class TestCalcLagDistances:
     def test_first_lag_distance_offset(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=3, Ellipsoid=ell, FirstLagDistance=5.0
+            LagWidth=1.0,
+            LagSeparation=2.0,
+            TolDistance=1.0,
+            NumLags=3,
+            Ellipsoid=ell,
+            FirstLagDistance=5.0,
         )
         indexes, distances, starts, ends = _CalcLagDistances(templ)
         expected = np.array([5, 7, 9])
@@ -278,8 +270,7 @@ class TestCalcLagDistances:
     def test_indexes_sequential(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0,
-            NumLags=5, Ellipsoid=ell
+            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
         )
         indexes, _, _, _ = _CalcLagDistances(templ)
         np.testing.assert_array_equal(indexes, np.arange(5))
@@ -289,6 +280,7 @@ class TestCalcLagDistances:
 # Core Computation Function Tests (Q2 fix — previously untested)
 # =============================================================================
 
+
 def _make_ellipsoid(r1=10, r2=5, r3=3):
     """Helper to create a TVEllipsoid with typical parameters."""
     return TVEllipsoid(R1=r1, R2=r2, R3=r3)
@@ -297,8 +289,11 @@ def _make_ellipsoid(r1=10, r2=5, r3=3):
 def _make_template(ell, num_lags=5, lag_width=1.0, lag_sep=2.0, tol_dist=1.0):
     """Helper to create a TVVariogramSearchTemplate."""
     return TVVariogramSearchTemplate(
-        LagWidth=lag_width, LagSeparation=lag_sep,
-        TolDistance=tol_dist, NumLags=num_lags, Ellipsoid=ell
+        LagWidth=lag_width,
+        LagSeparation=lag_sep,
+        TolDistance=tol_dist,
+        NumLags=num_lags,
+        Ellipsoid=ell,
     )
 
 
@@ -309,6 +304,7 @@ class TestCalcLagsAreas:
     def test_returns_five_values(self):
         """_CalcLagsAreas returns I, J, K, LagIndexes, LagDistance."""
         from geo_bsd.variogram import _CalcLagsAreas
+
         ell = _make_ellipsoid()
         templ = _make_template(ell)
         result = _CalcLagsAreas(templ)
@@ -318,6 +314,7 @@ class TestCalcLagsAreas:
     def test_lag_indexes_within_range(self):
         """Lag indexes are within [0, NumLags)."""
         from geo_bsd.variogram import _CalcLagsAreas
+
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=4)
         i_arr, j_arr, k_arr, LagIndexes, LagDistance = _CalcLagsAreas(templ)
@@ -327,6 +324,7 @@ class TestCalcLagsAreas:
     def test_output_arrays_same_size(self):
         """I, J, K, LagIndexes have same length."""
         from geo_bsd.variogram import _CalcLagsAreas
+
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=3)
         i_arr, j_arr, k_arr, LagIndexes, LagDistance = _CalcLagsAreas(templ)
@@ -337,6 +335,7 @@ class TestCalcLagsAreas:
     def test_lag_distances_correct_order(self):
         """LagDistance values are increasing."""
         from geo_bsd.variogram import _CalcLagsAreas
+
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=5, lag_sep=3.0)
         i_arr, j_arr, k_arr, LagIndexes, LagDistance = _CalcLagsAreas(templ)
@@ -346,6 +345,7 @@ class TestCalcLagsAreas:
     def test_all_coordinates_are_integers(self):
         """I, J, K are integer arrays."""
         from geo_bsd.variogram import _CalcLagsAreas
+
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=3)
         i_arr, j_arr, k_arr, _, _ = _CalcLagsAreas(templ)
@@ -356,6 +356,7 @@ class TestCalcLagsAreas:
     def test_zero_radii_returns_empty_arrays(self):
         """Zero R2/R3 produces empty lag area arrays."""
         from geo_bsd.variogram import _CalcLagsAreas
+
         ell = _make_ellipsoid(r1=10, r2=0, r3=0)
         templ = _make_template(ell, num_lags=3)
         i_arr, j_arr, k_arr, LagIndexes, _ = _CalcLagsAreas(templ)
@@ -371,8 +372,9 @@ class TestVariogramCoreFunctions:
     def test_calc_variogram_initializes_result(self):
         """CalcVariogramFunction initializes result on first call (Result=None)."""
         from geo_bsd.variogram import CalcVariogramFunction
+
         # Point1=None, Point2=None triggers initialization path (Result is None)
-        params = {"HardData": [np.array([1.0, 2.0, 3.0], dtype='float32')]}
+        params = {"HardData": [np.array([1.0, 2.0, 3.0], dtype="float32")]}
         result = CalcVariogramFunction(None, None, None, params)
         assert result is not None
         num_vals = len(params["HardData"])
@@ -382,7 +384,8 @@ class TestVariogramCoreFunctions:
     def test_calc_variogram_identity(self):
         """CalcVariogramFunction with identical points gives zero variance."""
         from geo_bsd.variogram import CalcVariogramFunction
-        values = [np.array([10.0, 20.0, 30.0, 40.0], dtype='float32')]
+
+        values = [np.array([10.0, 20.0, 30.0, 40.0], dtype="float32")]
         params = {"HardData": values}
         # Initialization: Result=None creates zeros
         result = CalcVariogramFunction(None, None, None, params)
@@ -401,8 +404,9 @@ class TestVariogramCoreFunctions:
     def test_calc_covariance_initializes_result(self):
         """CalcCovarianceFunction initializes result on first call."""
         from geo_bsd.variogram import CalcCovarianceFunction
-        values = [np.array([1.0, 2.0, 3.0], dtype='float32')]
-        soft = [np.array([0.5, 1.5, 2.5], dtype='float32')]
+
+        values = [np.array([1.0, 2.0, 3.0], dtype="float32")]
+        soft = [np.array([0.5, 1.5, 2.5], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcCovarianceFunction(None, None, None, params)
         assert result is not None
@@ -412,8 +416,9 @@ class TestVariogramCoreFunctions:
     def test_calc_covariance_computes_values(self):
         """CalcCovarianceFunction computes covariance between point pairs."""
         from geo_bsd.variogram import CalcCovarianceFunction
-        values = [np.array([10.0, 20.0, 30.0], dtype='float32')]
-        soft = [np.array([10.0, 20.0, 30.0], dtype='float32')]
+
+        values = [np.array([10.0, 20.0, 30.0], dtype="float32")]
+        soft = [np.array([10.0, 20.0, 30.0], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcCovarianceFunction(None, None, None, params)
 
@@ -425,8 +430,9 @@ class TestVariogramCoreFunctions:
     def test_calc_covariance_list_args(self):
         """CalcCovarianceFunction handles list-type point args (PointSetScanContStyle path)."""
         from geo_bsd.variogram import CalcCovarianceFunction
-        values = [np.array([10.0, 20.0, 30.0], dtype='float32')]
-        soft = [np.array([10.0, 20.0, 30.0], dtype='float32')]
+
+        values = [np.array([10.0, 20.0, 30.0], dtype="float32")]
+        soft = [np.array([10.0, 20.0, 30.0], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcCovarianceFunction(None, None, None, params)
         # Pass lists like PointSetScanContStyle does: [i], [j]
@@ -438,8 +444,9 @@ class TestVariogramCoreFunctions:
     def test_calc_ind_correlation_initializes_result(self):
         """CalcIndCorrelationFunction initializes result on first call."""
         from geo_bsd.variogram import CalcIndCorrelationFunction
-        values = [np.array([1.0, 0.0], dtype='float32')]
-        soft = [np.array([0.5, 0.5], dtype='float32')]
+
+        values = [np.array([1.0, 0.0], dtype="float32")]
+        soft = [np.array([0.5, 0.5], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcIndCorrelationFunction(None, None, None, params)
         assert result is not None
@@ -449,9 +456,10 @@ class TestVariogramCoreFunctions:
     def test_calc_ind_correlation_div_zero_guard(self):
         """CalcIndCorrelationFunction handles soft data with value 0 or 1."""
         from geo_bsd.variogram import CalcIndCorrelationFunction
+
         # Soft data 0 or 1 causes denom=0 → guarded to 1.0
-        values = [np.array([0.0, 1.0, 0.0], dtype='float32')]
-        soft = [np.array([0.0, 0.0, 1.0], dtype='float32')]
+        values = [np.array([0.0, 1.0, 0.0], dtype="float32")]
+        soft = [np.array([0.0, 0.0, 1.0], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcIndCorrelationFunction(None, None, None, params)
         p1 = np.int64(0)
@@ -462,8 +470,9 @@ class TestVariogramCoreFunctions:
     def test_calc_ind_correlation_list_args(self):
         """CalcIndCorrelationFunction handles list-type point args (PointSetScanContStyle path)."""
         from geo_bsd.variogram import CalcIndCorrelationFunction
-        values = [np.array([10.0, 20.0, 30.0], dtype='float32')]
-        soft = [np.array([10.0, 20.0, 30.0], dtype='float32')]
+
+        values = [np.array([10.0, 20.0, 30.0], dtype="float32")]
+        soft = [np.array([10.0, 20.0, 30.0], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcIndCorrelationFunction(None, None, None, params)
         # Pass lists like PointSetScanContStyle does: [i], [j]
@@ -487,12 +496,13 @@ class TestPointSetScanContStyle:
     def test_scans_with_function_completes(self):
         """PointSetScanContStyle with a trivial function returns result."""
         from geo_bsd.variogram import PointSetScanContStyle
+
         ell = _make_ellipsoid(r1=20, r2=10, r3=5)
         templ = _make_template(ell, num_lags=3, lag_width=2.0, lag_sep=5.0)
         point_set = {
-            "X": np.array([0, 1, 2], dtype='int32'),
-            "Y": np.array([0, 0, 0], dtype='int32'),
-            "Z": np.array([0, 0, 0], dtype='int32'),
+            "X": np.array([0, 1, 2], dtype="int32"),
+            "Y": np.array([0, 0, 0], dtype="int32"),
+            "Z": np.array([0, 0, 0], dtype="int32"),
         }
         result, lag_dist = PointSetScanContStyle(templ, point_set, self._trivial_fn, None)
         assert result is not None
@@ -502,12 +512,13 @@ class TestPointSetScanContStyle:
     def test_scan_with_empty_pointset_completes(self):
         """PointSetScanContStyle with empty point set doesn't crash."""
         from geo_bsd.variogram import PointSetScanContStyle
+
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=3)
         point_set = {
-            "X": np.array([], dtype='int32'),
-            "Y": np.array([], dtype='int32'),
-            "Z": np.array([], dtype='int32'),
+            "X": np.array([], dtype="int32"),
+            "Y": np.array([], dtype="int32"),
+            "Z": np.array([], dtype="int32"),
         }
         result, lag_dist = PointSetScanContStyle(templ, point_set, self._trivial_fn, None)
         assert lag_dist is not None
@@ -527,12 +538,13 @@ class TestPointSetScanGridStyle:
     def test_scan_with_function_completes(self):
         """PointSetScanGridStyle with a trivial function returns result."""
         from geo_bsd.variogram import PointSetScanGridStyle
+
         ell = _make_ellipsoid(r1=20, r2=10, r3=5)
         templ = _make_template(ell, num_lags=3, lag_width=2.0, lag_sep=5.0)
         xyz = (
-            np.array([0, 5, 10], dtype='int32'),
-            np.array([0, 0, 0], dtype='int32'),
-            np.array([0, 0, 0], dtype='int32'),
+            np.array([0, 5, 10], dtype="int32"),
+            np.array([0, 0, 0], dtype="int32"),
+            np.array([0, 0, 0], dtype="int32"),
         )
         result, lag_dist = PointSetScanGridStyle(templ, xyz, self._trivial_fn, None)
         assert result is not None
@@ -542,12 +554,13 @@ class TestPointSetScanGridStyle:
     def test_scan_with_empty_points_completes(self):
         """PointSetScanGridStyle with empty arrays doesn't crash."""
         from geo_bsd.variogram import PointSetScanGridStyle
+
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=3)
         xyz = (
-            np.array([], dtype='int32'),
-            np.array([], dtype='int32'),
-            np.array([], dtype='int32'),
+            np.array([], dtype="int32"),
+            np.array([], dtype="int32"),
+            np.array([], dtype="int32"),
         )
         result, lag_dist = PointSetScanGridStyle(templ, xyz, self._trivial_fn, None)
         assert lag_dist is not None
@@ -567,10 +580,11 @@ class TestCubeScan:
     def test_cube_scan_with_function_completes(self):
         """CubeScan with a small mask returns result."""
         from geo_bsd.variogram import CubeScan
+
         ell = _make_ellipsoid(r1=10, r2=5, r3=3)
         # Use lag_sep small enough that all lag offsets fit within mask
         templ = _make_template(ell, num_lags=2, lag_width=1.0, lag_sep=1.0)
-        mask = np.ones((10, 10, 5), dtype='uint8')
+        mask = np.ones((10, 10, 5), dtype="uint8")
         result, lag_dist = CubeScan(templ, mask, self._trivial_fn, None)
         assert result is not None
         assert len(lag_dist) == templ.NumLags
@@ -578,9 +592,10 @@ class TestCubeScan:
     def test_cube_scan_with_zero_mask_completes(self):
         """CubeScan with a mask of all zeros doesn't crash."""
         from geo_bsd.variogram import CubeScan
+
         ell = _make_ellipsoid()
         templ = _make_template(ell, num_lags=3)
-        mask = np.zeros((5, 5, 3), dtype='uint8')
+        mask = np.zeros((5, 5, 3), dtype="uint8")
         result, lag_dist = CubeScan(templ, mask, self._trivial_fn, None)
         assert result is not None
         assert len(lag_dist) == templ.NumLags
@@ -589,6 +604,7 @@ class TestCubeScan:
 # =============================================================================
 # NaN/Inf Input Tests for Variogram Core Functions (F-093)
 # =============================================================================
+
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
 class TestVariogramNaNInfHandling:
@@ -599,7 +615,8 @@ class TestVariogramNaNInfHandling:
     def test_calc_variogram_nan_in_harddata(self):
         """CalcVariogramFunction with NaN in HardData propagates NaN to result."""
         from geo_bsd.variogram import CalcVariogramFunction
-        values = [np.array([np.nan, 2.0, 3.0], dtype='float32')]
+
+        values = [np.array([np.nan, 2.0, 3.0], dtype="float32")]
         params = {"HardData": values}
         # Initialize: Result=None creates zeros
         result = CalcVariogramFunction(None, None, None, params)
@@ -612,7 +629,8 @@ class TestVariogramNaNInfHandling:
     def test_calc_variogram_inf_in_harddata(self):
         """CalcVariogramFunction with Inf in HardData propagates Inf to result."""
         from geo_bsd.variogram import CalcVariogramFunction
-        values = [np.array([np.inf, 2.0, 3.0], dtype='float32')]
+
+        values = [np.array([np.inf, 2.0, 3.0], dtype="float32")]
         params = {"HardData": values}
         result = CalcVariogramFunction(None, None, None, params)
         result = CalcVariogramFunction([0], [1], result, params)
@@ -624,8 +642,9 @@ class TestVariogramNaNInfHandling:
     def test_calc_covariance_nan_in_data(self):
         """CalcCovarianceFunction with NaN in HardData or SoftData propagates NaN."""
         from geo_bsd.variogram import CalcCovarianceFunction
-        values = [np.array([np.nan, 2.0, 3.0], dtype='float32')]
-        soft = [np.array([1.0, 2.0, 3.0], dtype='float32')]
+
+        values = [np.array([np.nan, 2.0, 3.0], dtype="float32")]
+        soft = [np.array([1.0, 2.0, 3.0], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcCovarianceFunction(None, None, None, params)
         result = CalcCovarianceFunction(np.int64(0), np.int64(1), result, params)
@@ -634,8 +653,9 @@ class TestVariogramNaNInfHandling:
     def test_calc_covariance_inf_in_data(self):
         """CalcCovarianceFunction with Inf in HardData propagates Inf."""
         from geo_bsd.variogram import CalcCovarianceFunction
-        values = [np.array([np.inf, 2.0, 3.0], dtype='float32')]
-        soft = [np.array([1.0, 2.0, 3.0], dtype='float32')]
+
+        values = [np.array([np.inf, 2.0, 3.0], dtype="float32")]
+        soft = [np.array([1.0, 2.0, 3.0], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcCovarianceFunction(None, None, None, params)
         result = CalcCovarianceFunction(np.int64(0), np.int64(1), result, params)
@@ -646,8 +666,9 @@ class TestVariogramNaNInfHandling:
     def test_calc_ind_correlation_nan_in_data(self):
         """CalcIndCorrelationFunction with NaN in HardData propagates NaN."""
         from geo_bsd.variogram import CalcIndCorrelationFunction
-        values = [np.array([np.nan, 1.0, 0.0], dtype='float32')]
-        soft = [np.array([0.5, 0.5, 0.5], dtype='float32')]
+
+        values = [np.array([np.nan, 1.0, 0.0], dtype="float32")]
+        soft = [np.array([0.5, 0.5, 0.5], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcIndCorrelationFunction(None, None, None, params)
         result = CalcIndCorrelationFunction(np.int64(0), np.int64(1), result, params)
@@ -656,8 +677,9 @@ class TestVariogramNaNInfHandling:
     def test_calc_ind_correlation_inf_in_data(self):
         """CalcIndCorrelationFunction with Inf in HardData propagates Inf."""
         from geo_bsd.variogram import CalcIndCorrelationFunction
-        values = [np.array([np.inf, 1.0, 0.0], dtype='float32')]
-        soft = [np.array([0.5, 0.5, 0.5], dtype='float32')]
+
+        values = [np.array([np.inf, 1.0, 0.0], dtype="float32")]
+        soft = [np.array([0.5, 0.5, 0.5], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
         result = CalcIndCorrelationFunction(None, None, None, params)
         result = CalcIndCorrelationFunction(np.int64(0), np.int64(1), result, params)
@@ -676,15 +698,20 @@ class TestVariogramNaNInfHandling:
         This verifies the C++ path and Python wrapper are consistent.
         """
         from geo_bsd.cvariogram import CalcVariograms, Ellipsoid, VariogramSearchTemplate
+
         # Create a small 3D constant array (variance = 0 → gamma = 0 everywhere)
         nx, ny, nz = 10, 10, 5
-        data = np.ones((nx, ny, nz), dtype='float32') * 42.0
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        data = np.ones((nx, ny, nz), dtype="float32") * 42.0
+        mask = np.ones((nx, ny, nz), dtype="uint8")
 
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         lag_borders, variogram = CalcVariograms(templ, [data, mask])
         # For constant data, variogram should be zero at all lags
@@ -699,15 +726,20 @@ class TestVariogramNaNInfHandling:
         (spatial correlation decays with distance).
         """
         from geo_bsd.cvariogram import CalcVariograms, Ellipsoid, VariogramSearchTemplate
+
         nx, ny, nz = 20, 20, 10
         rng = np.random.RandomState(42)
-        data = rng.rand(nx, ny, nz).astype('float32') * 100
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        data = rng.rand(nx, ny, nz).astype("float32") * 100
+        mask = np.ones((nx, ny, nz), dtype="uint8")
 
         ell = Ellipsoid(R1=15, R2=10, R3=5, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=3.0, tol_distance=1.0,
-            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=3.0,
+            tol_distance=1.0,
+            num_lags=5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         lag_borders, variogram = CalcVariograms(templ, [data, mask])
         # Variogram must be non-negative

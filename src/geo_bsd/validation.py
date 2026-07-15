@@ -17,12 +17,13 @@ from functools import wraps
 import numpy
 
 # Configure validation logger
-validation_logger = logging.getLogger('hpgl.validation')
+validation_logger = logging.getLogger("hpgl.validation")
 
 
 # ============================================================================
 # Validation Constants
 # ============================================================================
+
 
 class ValidationConstants:
     """Constants for validation limits"""
@@ -69,8 +70,10 @@ class ValidationConstants:
 # Validation Exceptions
 # ============================================================================
 
+
 class ValidationError(Exception):
     """Base class for validation errors"""
+
     def __init__(self, message: str, parameter_name: str = "", severity: str = "error"):
         self.message = message
         self.parameter_name = parameter_name
@@ -83,12 +86,14 @@ class ValidationError(Exception):
 
 class CriticalValidationError(ValidationError):
     """Critical validation error that prevents operation"""
+
     def __init__(self, message: str, parameter_name: str = ""):
         super().__init__(message, parameter_name, "critical")
 
 
 class ValidationWarning(ValidationError):
     """Validation warning that doesn't prevent operation"""
+
     def __init__(self, message: str, parameter_name: str = ""):
         super().__init__(message, parameter_name, "warning")
 
@@ -96,6 +101,7 @@ class ValidationWarning(ValidationError):
 # ============================================================================
 # Path Validation
 # ============================================================================
+
 
 class PathValidator:
     """Validates file paths to prevent directory traversal attacks"""
@@ -106,7 +112,7 @@ class PathValidator:
         must_exist: bool = False,
         allow_directories: bool = False,
         allowed_extensions: list[str] | None = None,
-        basedir: str | pathlib.Path | None = None
+        basedir: str | pathlib.Path | None = None,
     ) -> str:
         """
         Validates and sanitizes file paths to prevent directory traversal attacks.
@@ -137,11 +143,10 @@ class PathValidator:
         # Split the original path string by the OS separator to detect bare '..'
         # even without trailing slashes.
         path_str = str(filename)
-        parts = path_str.replace('\\', '/').split('/')
-        if '..' in parts:
+        parts = path_str.replace("\\", "/").split("/")
+        if ".." in parts:
             raise CriticalValidationError(
-                f"Path traversal detected in filename: {filename}",
-                "filename"
+                f"Path traversal detected in filename: {filename}", "filename"
             )
 
         # Resolve to absolute path and normalize (removes ../ segments)
@@ -149,18 +154,12 @@ class PathValidator:
             resolved_path = path.resolve(strict=must_exist)
         except (OSError, RuntimeError) as e:
             if must_exist:
-                raise CriticalValidationError(
-                    f"File does not exist: {filename}",
-                    "filename"
-                ) from e
+                raise CriticalValidationError(f"File does not exist: {filename}", "filename") from e
             # For non-existent files, resolve without strict check
             try:
                 resolved_path = path.resolve()
             except (OSError, RuntimeError, ValueError) as e2:
-                raise CriticalValidationError(
-                    f"Invalid path: {filename}",
-                    "filename"
-                ) from e2
+                raise CriticalValidationError(f"Invalid path: {filename}", "filename") from e2
 
         # If basedir is specified, verify the resolved path is within it.
         # This prevents symlink-based escapes (e.g., /tmp/link → /etc).
@@ -170,9 +169,8 @@ class PathValidator:
                 resolved_path.relative_to(basedir_resolved)
             except ValueError as err:
                 raise CriticalValidationError(
-                    f"Path {resolved_path} is outside allowed base directory "
-                    f"{basedir_resolved}",
-                    "filename"
+                    f"Path {resolved_path} is outside allowed base directory {basedir_resolved}",
+                    "filename",
                 ) from err
 
         # Check extension if specified
@@ -181,7 +179,7 @@ class PathValidator:
                 raise CriticalValidationError(
                     f"File extension '{resolved_path.suffix}' not allowed. "
                     f"Allowed extensions: {allowed_extensions}",
-                    "filename"
+                    "filename",
                 )
 
         return str(resolved_path)
@@ -200,18 +198,14 @@ class PathValidator:
         Raises:
             CriticalValidationError: If path is invalid
         """
-        return PathValidator.validate_filepath(
-            filename,
-            must_exist=False,
-            allow_directories=False
-        )
+        return PathValidator.validate_filepath(filename, must_exist=False, allow_directories=False)
 
     @staticmethod
     def validate_filepath_in_basedir(
         filename: str | pathlib.Path,
         basedir: str | pathlib.Path,
         must_exist: bool = False,
-        allowed_extensions: list[str] | None = None
+        allowed_extensions: list[str] | None = None,
     ) -> str:
         """
         Validates filepath with a REQUIRED basedir containment check.
@@ -237,13 +231,14 @@ class PathValidator:
             must_exist=must_exist,
             allow_directories=False,
             allowed_extensions=allowed_extensions,
-            basedir=basedir
+            basedir=basedir,
         )
 
 
 # ============================================================================
 # Grid and Array Validation
 # ============================================================================
+
 
 class GridValidator:
     """Validates grid dimensions and array sizes"""
@@ -265,21 +260,21 @@ class GridValidator:
             raise CriticalValidationError(
                 f"Grid X dimension {x} outside valid range "
                 f"[{ValidationConstants.MIN_GRID_DIMENSION}, {ValidationConstants.MAX_GRID_DIMENSION}]",
-                "grid_x"
+                "grid_x",
             )
 
         if y < ValidationConstants.MIN_GRID_DIMENSION or y > ValidationConstants.MAX_GRID_DIMENSION:
             raise CriticalValidationError(
                 f"Grid Y dimension {y} outside valid range "
                 f"[{ValidationConstants.MIN_GRID_DIMENSION}, {ValidationConstants.MAX_GRID_DIMENSION}]",
-                "grid_y"
+                "grid_y",
             )
 
         if z < ValidationConstants.MIN_GRID_DIMENSION or z > ValidationConstants.MAX_GRID_DIMENSION:
             raise CriticalValidationError(
                 f"Grid Z dimension {z} outside valid range "
                 f"[{ValidationConstants.MIN_GRID_DIMENSION}, {ValidationConstants.MAX_GRID_DIMENSION}]",
-                "grid_z"
+                "grid_z",
             )
 
         # Check total grid size
@@ -287,7 +282,7 @@ class GridValidator:
         if total_size > ValidationConstants.MAX_GRID_SIZE:
             raise CriticalValidationError(
                 f"Total grid size {total_size} exceeds maximum of {ValidationConstants.MAX_GRID_SIZE}",
-                "grid_size"
+                "grid_size",
             )
 
     @staticmethod
@@ -307,8 +302,7 @@ class GridValidator:
 
         if actual_size != expected_size:
             raise CriticalValidationError(
-                f"Array size {actual_size} does not match grid size {expected_size}",
-                "array_size"
+                f"Array size {actual_size} does not match grid size {expected_size}", "array_size"
             )
 
     @staticmethod
@@ -325,8 +319,7 @@ class GridValidator:
         """
         if array.dtype != expected_dtype:
             raise CriticalValidationError(
-                f"Array has dtype {array.dtype}, expected {expected_dtype}",
-                "array_dtype"
+                f"Array has dtype {array.dtype}, expected {expected_dtype}", "array_dtype"
             )
 
 
@@ -334,11 +327,14 @@ class GridValidator:
 # Parameter Validation
 # ============================================================================
 
+
 class ParameterValidator:
     """Validates numerical parameters for geostatistical operations"""
 
     @staticmethod
-    def validate_radius(radius: float | int | tuple, name: str = "radius") -> tuple[float, float, float]:
+    def validate_radius(
+        radius: float | int | tuple, name: str = "radius"
+    ) -> tuple[float, float, float]:
         """
         Validates radius parameters.
 
@@ -358,30 +354,24 @@ class ParameterValidator:
             vals = list(map(float, radius))
         else:
             raise CriticalValidationError(
-                f"Radius must be a number or tuple of 3 numbers, got {type(radius)}",
-                name
+                f"Radius must be a number or tuple of 3 numbers, got {type(radius)}", name
             )
 
         for i, r in enumerate(vals):
             if numpy.isnan(r) or numpy.isinf(r):
-                raise CriticalValidationError(
-                    f"{name}[{i}] is NaN or infinite",
-                    name
-                )
+                raise CriticalValidationError(f"{name}[{i}] is NaN or infinite", name)
             if r < ValidationConstants.MIN_RADIUS:
                 raise CriticalValidationError(
-                    f"{name}[{i}] = {r} is less than minimum {ValidationConstants.MIN_RADIUS}",
-                    name
+                    f"{name}[{i}] = {r} is less than minimum {ValidationConstants.MIN_RADIUS}", name
                 )
             if r > ValidationConstants.MAX_RADIUS:
                 raise CriticalValidationError(
-                    f"{name}[{i}] = {r} exceeds maximum {ValidationConstants.MAX_RADIUS}",
-                    name
+                    f"{name}[{i}] = {r} exceeds maximum {ValidationConstants.MAX_RADIUS}", name
                 )
             if not float(r).is_integer():
                 raise CriticalValidationError(
                     f"{name}[{i}] = {r} is not an integer (radius must be a whole number of grid cells)",
-                    name
+                    name,
                 )
 
         return (int(vals[0]), int(vals[1]), int(vals[2]))
@@ -401,14 +391,14 @@ class ParameterValidator:
         if max_neighbors < ValidationConstants.MIN_NEIGHBORS:
             raise CriticalValidationError(
                 f"Max neighbors {max_neighbors} is less than minimum {ValidationConstants.MIN_NEIGHBORS}",
-                "max_neighbors"
+                "max_neighbors",
             )
 
         if max_neighbors > ValidationConstants.MAX_NEIGHBORS:
             warnings.warn(
                 f"Max neighbors {max_neighbors} exceeds recommended maximum {ValidationConstants.MAX_NEIGHBORS}. "
                 "Performance may be degraded.",
-                stacklevel=2
+                stacklevel=2,
             )
 
     @staticmethod
@@ -426,21 +416,17 @@ class ParameterValidator:
         if min_neighbors > max_neighbors:
             raise CriticalValidationError(
                 f"Min neighbors {min_neighbors} exceeds max neighbors {max_neighbors}",
-                "min_neighbors"
+                "min_neighbors",
             )
 
         if min_neighbors < 0:
             raise CriticalValidationError(
-                f"Min neighbors {min_neighbors} is negative",
-                "min_neighbors"
+                f"Min neighbors {min_neighbors} is negative", "min_neighbors"
             )
 
     @staticmethod
     def validate_covariance_parameters(
-        sill: float,
-        nugget: float,
-        ranges: tuple | None = None,
-        angles: tuple | None = None
+        sill: float, nugget: float, ranges: tuple | None = None, angles: tuple | None = None
     ) -> None:
         """
         Validates covariance model parameters.
@@ -460,14 +446,12 @@ class ParameterValidator:
 
         if sill < ValidationConstants.MIN_SILL:
             raise CriticalValidationError(
-                f"Sill {sill} is less than minimum {ValidationConstants.MIN_SILL}",
-                "sill"
+                f"Sill {sill} is less than minimum {ValidationConstants.MIN_SILL}", "sill"
             )
 
         if sill > ValidationConstants.MAX_SILL:
             raise CriticalValidationError(
-                f"Sill {sill} exceeds maximum {ValidationConstants.MAX_SILL}",
-                "sill"
+                f"Sill {sill} exceeds maximum {ValidationConstants.MAX_SILL}", "sill"
             )
 
         # Validate nugget
@@ -476,62 +460,51 @@ class ParameterValidator:
 
         if nugget < ValidationConstants.MIN_NUGGET:
             raise CriticalValidationError(
-                f"Nugget {nugget} is less than minimum {ValidationConstants.MIN_NUGGET}",
-                "nugget"
+                f"Nugget {nugget} is less than minimum {ValidationConstants.MIN_NUGGET}", "nugget"
             )
 
         if nugget > ValidationConstants.MAX_NUGGET:
             raise CriticalValidationError(
-                f"Nugget {nugget} exceeds maximum {ValidationConstants.MAX_NUGGET}",
-                "nugget"
+                f"Nugget {nugget} exceeds maximum {ValidationConstants.MAX_NUGGET}", "nugget"
             )
 
         # Critical: Nugget should not exceed sill
         if nugget > sill:
             raise CriticalValidationError(
-                f"Nugget {nugget} exceeds sill {sill} (nugget must be <= sill)",
-                "nugget"
+                f"Nugget {nugget} exceeds sill {sill} (nugget must be <= sill)", "nugget"
             )
 
         # Validate ranges if provided
         if ranges is not None:
             if len(ranges) != 3:
                 raise CriticalValidationError(
-                    f"Ranges must have 3 values, got {len(ranges)}",
-                    "ranges"
+                    f"Ranges must have 3 values, got {len(ranges)}", "ranges"
                 )
 
             for i, r in enumerate(ranges):
                 if numpy.isnan(r) or numpy.isinf(r):
-                    raise CriticalValidationError(
-                        f"Range[{i}] is NaN or infinite",
-                        "ranges"
-                    )
+                    raise CriticalValidationError(f"Range[{i}] is NaN or infinite", "ranges")
                 if r < ValidationConstants.MIN_RANGE:
                     raise CriticalValidationError(
                         f"Range[{i}] = {r} is less than minimum {ValidationConstants.MIN_RANGE}",
-                        "ranges"
+                        "ranges",
                     )
                 if r > ValidationConstants.MAX_RANGE:
                     raise CriticalValidationError(
                         f"Range[{i}] = {r} exceeds maximum {ValidationConstants.MAX_RANGE}",
-                        "ranges"
+                        "ranges",
                     )
 
         # Validate angles if provided
         if angles is not None:
             if len(angles) != 3:
                 raise CriticalValidationError(
-                    f"Angles must have 3 values, got {len(angles)}",
-                    "angles"
+                    f"Angles must have 3 values, got {len(angles)}", "angles"
                 )
 
             for i, a in enumerate(angles):
                 if numpy.isnan(a) or numpy.isinf(a):
-                    raise CriticalValidationError(
-                        f"Angle[{i}] is NaN or infinite",
-                        "angles"
-                    )
+                    raise CriticalValidationError(f"Angle[{i}] is NaN or infinite", "angles")
                 # Warn if angle is outside typical range
                 if a < ValidationConstants.MIN_ANGLE or a > ValidationConstants.MAX_ANGLE:
                     validation_logger.warning(
@@ -558,7 +531,7 @@ class ParameterValidator:
             raise CriticalValidationError(
                 f"{name} = {prob} outside valid range "
                 f"[{ValidationConstants.MIN_PROBABILITY}, {ValidationConstants.MAX_PROBABILITY}]",
-                name
+                name,
             )
 
     @staticmethod
@@ -581,7 +554,7 @@ class ParameterValidator:
         if diff > ValidationConstants.PROBABILITY_SUM_TOLERANCE:
             raise CriticalValidationError(
                 f"Probabilities sum to {prob_sum}, expected 1.0 (difference: {diff})",
-                "probabilities"
+                "probabilities",
             )
 
     @staticmethod
@@ -611,14 +584,13 @@ class ParameterValidator:
         """
         if count <= 0:
             raise CriticalValidationError(
-                f"Indicator count must be positive, got {count}",
-                "indicator_count"
+                f"Indicator count must be positive, got {count}", "indicator_count"
             )
 
         if count > ValidationConstants.MAX_INDICATORS:
             raise CriticalValidationError(
                 f"Indicator count {count} exceeds maximum {ValidationConstants.MAX_INDICATORS}",
-                "indicator_count"
+                "indicator_count",
             )
 
     @staticmethod
@@ -634,21 +606,15 @@ class ParameterValidator:
             CriticalValidationError: If coefficient is out of range or invalid
         """
         import math
+
         if not isinstance(coef, (int, float)):
             raise CriticalValidationError(
-                f"{name} must be a number, got {type(coef).__name__}",
-                name
+                f"{name} must be a number, got {type(coef).__name__}", name
             )
         if math.isnan(coef) or math.isinf(coef):
-            raise CriticalValidationError(
-                f"{name} must be finite, got {coef}",
-                name
-            )
+            raise CriticalValidationError(f"{name} must be finite, got {coef}", name)
         if coef < -1.0 or coef > 1.0:
-            raise CriticalValidationError(
-                f"{name} must be in [-1, 1] range, got {coef}",
-                name
-            )
+            raise CriticalValidationError(f"{name} must be in [-1, 1] range, got {coef}", name)
 
     @staticmethod
     def validate_variance(variance, name: str = "variance") -> None:
@@ -663,39 +629,35 @@ class ParameterValidator:
             CriticalValidationError: If variance is negative or invalid
         """
         import math
+
         if not isinstance(variance, (int, float)):
             raise CriticalValidationError(
-                f"{name} must be a number, got {type(variance).__name__}",
-                name
+                f"{name} must be a number, got {type(variance).__name__}", name
             )
         if math.isnan(variance) or math.isinf(variance):
-            raise CriticalValidationError(
-                f"{name} must be finite, got {variance}",
-                name
-            )
+            raise CriticalValidationError(f"{name} must be finite, got {variance}", name)
         if variance < 0:
-            raise CriticalValidationError(
-                f"{name} must be non-negative, got {variance}",
-                name
-            )
+            raise CriticalValidationError(f"{name} must be non-negative, got {variance}", name)
 
 
 # ============================================================================
 # Decorators for Function Validation
 # ============================================================================
 
+
 def validate_grid_params(func):
     """Decorator to validate grid parameters"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         # Find grid parameter
         grid = None
-        if 'grid' in kwargs:
-            grid = kwargs['grid']
+        if "grid" in kwargs:
+            grid = kwargs["grid"]
         else:
             # Try to find grid in positional arguments
             for arg in args:
-                if hasattr(arg, 'x') and hasattr(arg, 'y') and hasattr(arg, 'z'):
+                if hasattr(arg, "x") and hasattr(arg, "y") and hasattr(arg, "z"):
                     grid = arg
                     break
 
@@ -703,73 +665,78 @@ def validate_grid_params(func):
             GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
         return func(*args, **kwargs)
+
     return wrapper
 
 
 def validate_kriging_params(func):
     """Decorator to validate kriging parameters"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         # Validate radiuses if provided
-        if 'radiuses' in kwargs:
-            ParameterValidator.validate_radius(kwargs['radiuses'], 'radiuses')
+        if "radiuses" in kwargs:
+            ParameterValidator.validate_radius(kwargs["radiuses"], "radiuses")
 
         # Validate max_neighbours if provided
-        if 'max_neighbours' in kwargs or 'max_neighbors' in kwargs:
-            max_neigh = kwargs.get('max_neighbours', kwargs.get('max_neighbors'))
+        if "max_neighbours" in kwargs or "max_neighbors" in kwargs:
+            max_neigh = kwargs.get("max_neighbours", kwargs.get("max_neighbors"))
             if max_neigh is not None:
                 ParameterValidator.validate_max_neighbors(max_neigh)
 
         # Validate covariance model if provided
-        if 'cov_model' in kwargs:
-            cov_model = kwargs['cov_model']
+        if "cov_model" in kwargs:
+            cov_model = kwargs["cov_model"]
             ParameterValidator.validate_covariance_parameters(
-                cov_model.sill,
-                cov_model.nugget,
-                cov_model.ranges,
-                cov_model.angles
+                cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
             )
 
         return func(*args, **kwargs)
+
     return wrapper
 
 
 def validate_simulation_params(func):
     """Decorator to validate simulation parameters"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         # Validate seed if provided
-        if 'seed' in kwargs:
-            ParameterValidator.validate_seed(kwargs['seed'])
+        if "seed" in kwargs:
+            ParameterValidator.validate_seed(kwargs["seed"])
 
         # Validate min_neighbours if provided
-        if 'min_neighbours' in kwargs or 'min_neighbors' in kwargs:
-            min_neigh = kwargs.get('min_neighbours', kwargs.get('min_neighbors'))
-            max_neigh = kwargs.get('max_neighbours', kwargs.get('max_neighbors', 12))
+        if "min_neighbours" in kwargs or "min_neighbors" in kwargs:
+            min_neigh = kwargs.get("min_neighbours", kwargs.get("min_neighbors"))
+            max_neigh = kwargs.get("max_neighbours", kwargs.get("max_neighbors", 12))
             if min_neigh is not None:
                 ParameterValidator.validate_min_neighbors(min_neigh, max_neigh)
 
         return func(*args, **kwargs)
+
     return wrapper
 
 
 def validate_file_params(func):
     """Decorator to validate file parameters"""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         # Validate filename for reading
-        if 'filename' in kwargs:
-            filename = kwargs['filename']
+        if "filename" in kwargs:
+            filename = kwargs["filename"]
             if filename is not None:
                 PathValidator.validate_filepath(filename, must_exist=True)
 
         return func(*args, **kwargs)
+
     return wrapper
 
 
 # ============================================================================
 # Validation Context Manager
 # ============================================================================
+
 
 class ValidationContext:
     """
@@ -800,7 +767,9 @@ class ValidationContext:
                 raise
             self.errors.append(e)
 
-    def validate_radius(self, radius: float | int | tuple, name: str = "radius") -> tuple[float, float, float]:
+    def validate_radius(
+        self, radius: float | int | tuple, name: str = "radius"
+    ) -> tuple[float, float, float]:
         """Validate radius and record results"""
         try:
             return ParameterValidator.validate_radius(radius, name)
@@ -815,25 +784,22 @@ class ValidationContext:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None and self.errors and not self.strict:
-            raise CriticalValidationError(
-                f"Validation failed with {len(self.errors)} error(s)",
-                ""
-            )
+            raise CriticalValidationError(f"Validation failed with {len(self.errors)} error(s)", "")
         return False
 
 
 # Export all public classes and functions
 __all__ = [
-    'ValidationConstants',
-    'ValidationError',
-    'CriticalValidationError',
-    'ValidationWarning',
-    'PathValidator',
-    'GridValidator',
-    'ParameterValidator',
-    'validate_grid_params',
-    'validate_kriging_params',
-    'validate_simulation_params',
-    'validate_file_params',
-    'ValidationContext',
+    "ValidationConstants",
+    "ValidationError",
+    "CriticalValidationError",
+    "ValidationWarning",
+    "PathValidator",
+    "GridValidator",
+    "ParameterValidator",
+    "validate_grid_params",
+    "validate_kriging_params",
+    "validate_simulation_params",
+    "validate_file_params",
+    "ValidationContext",
 ]

@@ -9,6 +9,7 @@ namespace hpgl
 		stream << "Statistics: \n"
 			<< "\tNodes: " << stats.m_points_calculated
 			<< "\n\tNodes with empty neighbourhood: " << stats.m_points_without_neighbours
+			<< "\n\tNodes with singular matrix: " << stats.m_points_singularity
 			<< "\n\tMean: " << stats.m_mean
 			<< "\n\tCalculation performance: " << stats.m_speed_nps
 			<< std::endl;

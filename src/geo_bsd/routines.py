@@ -5,7 +5,6 @@ import os
 import numpy
 import numpy.ma as ma
 from numpy import (
-    append,
     column_stack,
     copy,
     float32,
@@ -50,11 +49,13 @@ def CalcMean(Cube, Mask):
     CubeMasked = ma.masked_array(Cube, Mask == 0)
     return CubeMasked.mean()
 
+
 def CalcMarginalProbsIndicator(Cube, Mask, Indicators):
     Result = zeros(len(Indicators))
     for i in range(len(Indicators)):
         Result.flat[i] = CalcMean(Cube == Indicators[i], Mask)
     return Result
+
 
 def CalcVPC(Cube, Mask, MarginalMean):
     """Compute the Vertical Proportion Curve (VPC) for a 3D property.
@@ -89,6 +90,7 @@ def CalcVPC(Cube, Mask, MarginalMean):
 
     return Result
 
+
 def CalcVPCsIndicator(Cube, Mask, Indicators, MarginalProbs):
     Result = []
     for i in range(len(Indicators)):
@@ -97,11 +99,13 @@ def CalcVPCsIndicator(Cube, Mask, Indicators, MarginalProbs):
 
     return Result
 
+
 def CubeFromVPC(VPC, NX, NY):
     NZ = len(VPC)
     VPC = reshape(VPC, (1, 1, NZ))
-    Cube = repeat(repeat(VPC, NX, axis = 0), NY, axis = 1)
+    Cube = repeat(repeat(VPC, NX, axis=0), NY, axis=1)
     return float32(Cube)
+
 
 def CubesFromVPCs(VPCs, NX, NY):
     Cubes = []
@@ -110,6 +114,7 @@ def CubesFromVPCs(VPCs, NX, NY):
         Cubes.append(Cube)
     return Cubes
 
+
 def Cubes2PointSet(CubesDictionary, Mask):
     NX, NY, NZ = list(CubesDictionary.values())[0].shape
     grid_i, grid_j = mgrid[0:NX, 0:NY]
@@ -117,26 +122,27 @@ def Cubes2PointSet(CubesDictionary, Mask):
     total = int(Mask.sum())
 
     PointSet = {
-        'X': zeros(total, dtype=int32),
-        'Y': zeros(total, dtype=int32),
-        'Z': zeros(total, dtype=int32),
+        "X": zeros(total, dtype=int32),
+        "Y": zeros(total, dtype=int32),
+        "Z": zeros(total, dtype=int32),
     }
     for Key in CubesDictionary.keys():
-        PointSet[Key] = zeros(total, dtype=int32)
+        PointSet[Key] = zeros(total, dtype=CubesDictionary[Key].dtype)
 
     offset = 0
     for k in range(NZ):
         Slice = Mask[:, :, k].astype(bool)
         n = Slice.sum()
-        PointSet['X'][offset:offset + n] = grid_i[Slice]
-        PointSet['Y'][offset:offset + n] = grid_j[Slice]
-        PointSet['Z'][offset:offset + n] = k * ones(n, dtype=int32)
+        PointSet["X"][offset : offset + n] = grid_i[Slice]
+        PointSet["Y"][offset : offset + n] = grid_j[Slice]
+        PointSet["Z"][offset : offset + n] = k * ones(n, dtype=int32)
         for Key in CubesDictionary.keys():
             DataSlice = CubesDictionary[Key][:, :, k]
-            PointSet[Key][offset:offset + n] = DataSlice[Slice]
+            PointSet[Key][offset : offset + n] = DataSlice[Slice]
         offset += n
 
     return PointSet
+
 
 def Cube2PointSet(Cube, Mask):
     NX, NY, NZ = Cube.shape
@@ -146,28 +152,37 @@ def Cube2PointSet(Cube, Mask):
     X = zeros(total, dtype=int32)
     Y = zeros(total, dtype=int32)
     Z = zeros(total, dtype=int32)
-    Property = zeros(total, dtype=int32)
+    Property = zeros(total, dtype=Cube.dtype)
 
     offset = 0
     for k in range(NZ):
         Slice = Mask[:, :, k].astype(bool)
         n = Slice.sum()
-        X[offset:offset + n] = grid_i[Slice]
-        Y[offset:offset + n] = grid_j[Slice]
-        Z[offset:offset + n] = k * ones(n, dtype=int32)
+        X[offset : offset + n] = grid_i[Slice]
+        Y[offset : offset + n] = grid_j[Slice]
+        Z[offset : offset + n] = k * ones(n, dtype=int32)
         DataSlice = Cube[:, :, k]
-        Property[offset:offset + n] = DataSlice[Slice]
+        Property[offset : offset + n] = DataSlice[Slice]
         offset += n
     return X, Y, Z, Property
+
 
 def PointSet2Cube(X, Y, Z, Property, Cube):
     NX, NY, NZ = Cube.shape
     Mask = zeros(Cube.shape)
     for Ind in range(len(X.flat)):
-        if (0 <= X[Ind]) & (X[Ind] < NX) & (0 <= Y[Ind]) & (Y[Ind] < NY) & (0 <= Z[Ind]) & (Z[Ind] < NZ):
+        if (
+            (0 <= X[Ind])
+            & (X[Ind] < NX)
+            & (0 <= Y[Ind])
+            & (Y[Ind] < NY)
+            & (0 <= Z[Ind])
+            & (Z[Ind] < NZ)
+        ):
             Cube[X[Ind], Y[Ind], Z[Ind]] = Property[Ind]
             Mask[X[Ind], Y[Ind], Z[Ind]] = 1
     return Cube, Mask == 1
+
 
 def SaveGSLIBPointSet(PointSet, FileName, Caption):
     """Write scattered point data to a file in GSLIB format.
@@ -199,7 +214,8 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBPointSet: FileName must be a non-empty string")
     safe_path = PathValidator.validate_filepath_in_basedir(
-        FileName, basedir=os.path.dirname(os.path.abspath(FileName)))
+        FileName, basedir=os.path.dirname(os.path.abspath(FileName))
+    )
 
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
@@ -207,25 +223,28 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
         lens = numpy.append(lens, len(PointSet[Key].flat))
 
     if sum(lens - lens[0]) != 0:
-        raise RuntimeError("SaveGSLIBPointSet: All properties in GSLIB dictionary must have equal size")
+        raise RuntimeError(
+            "SaveGSLIBPointSet: All properties in GSLIB dictionary must have equal size"
+        )
 
-    with open(safe_path, "w", encoding='utf-8') as f:
+    with open(safe_path, "w", encoding="utf-8") as f:
         # 1. Caption
-        f.write(Caption + '\n')
+        f.write(Caption + "\n")
 
         # 2. Number of properties in file
-        f.write(str(len(PointSet)) + '\n')
+        f.write(str(len(PointSet)) + "\n")
 
         # 3. Properties names
         for Key in PointSet.keys():
-            f.write(Key + '\n')
+            f.write(Key + "\n")
 
         MegaPointSet = zeros((int(lens[0]), 0))
         for Key in PointSet.keys():
             MegaPointSet = column_stack((MegaPointSet, PointSet[Key]))
         savetxt(f, MegaPointSet)
 
-def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
+
+def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g"):
     """Write 3D grid properties to a file in GSLIB format.
 
     Same header structure as ``SaveGSLIBPointSet``, but flattens 3D
@@ -241,7 +260,7 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
     Caption : str
         One-line description written to the file header.
     Format : str, optional
-        NumPy ``savetxt`` format string (default ``"%d"``).
+        NumPy ``savetxt`` format string (default ``"%g"``).
 
     Raises
     ------
@@ -257,7 +276,8 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBCubes: FileName must be a non-empty string")
     safe_path = PathValidator.validate_filepath_in_basedir(
-        FileName, basedir=os.path.dirname(os.path.abspath(FileName)))
+        FileName, basedir=os.path.dirname(os.path.abspath(FileName))
+    )
 
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
@@ -265,53 +285,58 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format = "%d"):
         lens = numpy.append(lens, len(CubesDictionary[Key].flat))
 
     if sum(lens - lens[0]) != 0:
-        raise RuntimeError("SaveGSLIBCubes: All properties in GSLIB dictionary must have equal size")
+        raise RuntimeError(
+            "SaveGSLIBCubes: All properties in GSLIB dictionary must have equal size"
+        )
 
-    with open(safe_path, "w", encoding='utf-8') as f:
+    with open(safe_path, "w", encoding="utf-8") as f:
         # 1. Caption
-        f.write(Caption + '\n')
+        f.write(Caption + "\n")
 
         # 2. Number of properties in file
-        f.write(str(len(CubesDictionary)) + '\n')
+        f.write(str(len(CubesDictionary)) + "\n")
 
         # 3. Properties names
         for Key in CubesDictionary.keys():
-            f.write(Key + '\n')
+            f.write(Key + "\n")
 
         MegaCube = zeros((int(lens[0]), 0))
         for Key in CubesDictionary.keys():
-            MegaCube = column_stack((MegaCube, CubesDictionary[Key].copy().swapaxes(0, 2).swapaxes(1, 2).flat))
+            MegaCube = column_stack((MegaCube, CubesDictionary[Key].copy().swapaxes(0, 2).flat))
         savetxt(f, MegaCube, Format)
 
+
 def GetCubicalMask(Radiuses):
-    MeanMask = ones( (Radiuses[0]*2, Radiuses[1]*2, Radiuses[2]*2), dtype = uint8)
-    MeanMask = require(MeanMask, requirements = 'F')
+    MeanMask = ones((Radiuses[0] * 2, Radiuses[1] * 2, Radiuses[2] * 2), dtype=uint8)
+    MeanMask = require(MeanMask, requirements="F")
     return MeanMask
+
 
 def GetEllipseMask(Radiuses):
     rx, ry, rz = Radiuses
     x0, y0, z0 = rx, ry, rz
 
-    a, b, c = mgrid[0:rx * 2, 0:ry * 2, 0:rz * 2]
-    ellipsoid_eq = ((a - x0) ** 2 / (rx ** 2) +
-                    (b - y0) ** 2 / (ry ** 2) +
-                    (c - z0) ** 2 / (rz ** 2)) <= 1
+    a, b, c = mgrid[0 : rx * 2, 0 : ry * 2, 0 : rz * 2]
+    ellipsoid_eq = (
+        (a - x0) ** 2 / (rx**2) + (b - y0) ** 2 / (ry**2) + (c - z0) ** 2 / (rz**2)
+    ) <= 1
 
     MeanMask = zeros((rx * 2, ry * 2, rz * 2), dtype=uint8)
-    MeanMask = require(MeanMask, requirements='F')
+    MeanMask = require(MeanMask, requirements="F")
     MeanMask[ellipsoid_eq] = 1
     return MeanMask
 
+
 def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):
     i, j, k = coords
-    imin = i-Radiuses[0]
-    imax = i+Radiuses[0]
+    imin = i - Radiuses[0]
+    imax = i + Radiuses[0]
 
-    jmin = j-Radiuses[1]
-    jmax = j+Radiuses[1]
+    jmin = j - Radiuses[1]
+    jmax = j + Radiuses[1]
 
-    kmin = k-Radiuses[2]
-    kmax = k+Radiuses[2]
+    kmin = k - Radiuses[2]
+    kmax = k + Radiuses[2]
 
     if imin < 0:
         imin = 0
@@ -335,8 +360,33 @@ def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):
     j_offset = jmin - j + Radiuses[1]
     k_offset = kmin - k + Radiuses[2]
 
-    if (sum ( (Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[i_offset:(i_offset+imax-imin), j_offset:(j_offset+jmax-jmin), k_offset:(k_offset+kmax-kmin)]==1) ) > 0):
-        return Cube[imin:imax, jmin:jmax, kmin:kmax][nonzero((Mask[imin:imax, jmin:jmax, kmin:kmax]==1) & (MeanMask[i_offset:(i_offset+imax-imin), j_offset:(j_offset+jmax-jmin), k_offset:(k_offset+kmax-kmin)]==1))].mean()
+    if (
+        sum(
+            (Mask[imin:imax, jmin:jmax, kmin:kmax] == 1)
+            & (
+                MeanMask[
+                    i_offset : (i_offset + imax - imin),
+                    j_offset : (j_offset + jmax - jmin),
+                    k_offset : (k_offset + kmax - kmin),
+                ]
+                == 1
+            )
+        )
+        > 0
+    ):
+        return Cube[imin:imax, jmin:jmax, kmin:kmax][
+            nonzero(
+                (Mask[imin:imax, jmin:jmax, kmin:kmax] == 1)
+                & (
+                    MeanMask[
+                        i_offset : (i_offset + imax - imin),
+                        j_offset : (j_offset + jmax - jmin),
+                        k_offset : (k_offset + kmax - kmin),
+                    ]
+                    == 1
+                )
+            )
+        ].mean()
     else:
         return undefined_value
 
@@ -349,9 +399,12 @@ def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
     for i in range(Cube.shape[0]):
         for j in range(Cube.shape[1]):
             for k in range(Cube.shape[2]):
-                MACube[i,j,k] = MeanCalc(Cube, Mask, Radiuses, MeanMask, (i,j,k), undefined_value)
+                MACube[i, j, k] = MeanCalc(
+                    Cube, Mask, Radiuses, MeanMask, (i, j, k), undefined_value
+                )
 
     return MACube
+
 
 def LoadGslibFile(filename, property_size):
     """Load a GSLIB-format file into a dictionary of 3D property arrays.
@@ -390,15 +443,29 @@ def LoadGslibFile(filename, property_size):
     if not filename or not isinstance(filename, str):
         raise ValueError("LoadGslibFile: filename must be a non-empty string")
 
+    # Validate property_size dimensions
+    if not isinstance(property_size, tuple) or len(property_size) != 3:
+        raise ValueError(
+            f"LoadGslibFile: property_size must be a tuple of 3 ints, "
+            f"got {type(property_size).__name__} with len={len(property_size) if isinstance(property_size, tuple) else 'N/A'}"
+        )
+    nx, ny, nz = property_size
+    if not all(isinstance(d, (int, numpy.integer)) and d > 0 for d in (nx, ny, nz)):
+        raise ValueError(
+            f"LoadGslibFile: property_size dimensions must be positive integers, "
+            f"got ({nx}, {ny}, {nz})"
+        )
+
     # Validate filepath for security (path traversal prevention, exists check)
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True)
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
+    )
 
     result = {}
     list_prop = []
     points = []
 
-    with open(safe_path, encoding='utf-8') as f:
+    with open(safe_path, encoding="utf-8") as f:
         f.readline()  # Skip caption line
         num_p = int(f.readline())
 
@@ -417,23 +484,42 @@ def LoadGslibFile(filename, property_size):
             list_prop.append(str(f.readline().strip()))
 
         for i in range(len(list_prop)):
-            result[list_prop[i]] = zeros(property_size[0]*property_size[1]*property_size[2])
+            result[list_prop[i]] = zeros(property_size[0] * property_size[1] * property_size[2])
 
         index = zeros(len(list_prop), dtype=int)
 
+        grid_size = nx * ny * nz
         for line in f:
+            # Skip blank lines (whitespace-only)
+            if not line.strip():
+                continue
             points = line.split()
-            for j in range(len(points)):
+            # Validate token count matches expected property count per line
+            if len(points) != num_p:
+                raise RuntimeError(
+                    f"LoadGslibFile: expected {num_p} values per data line, "
+                    f"got {len(points)} tokens in line: {line.strip()!r}"
+                )
+            for j in range(num_p):
                 if index[j] >= len(result[list_prop[j]]):
                     raise RuntimeError(
                         f"LoadGslibFile: too many values for property '{list_prop[j]}'. "
-                        f"Expected {property_size[0]*property_size[1]*property_size[2]} elements "
+                        f"Expected {grid_size} elements "
                         f"(grid {property_size}), got more."
                     )
                 result[list_prop[j]][index[j]] = float64(points[j])
                 index[j] += 1
 
+    # Validate that all properties received the expected number of values
+    for j, key in enumerate(list_prop):
+        if index[j] != grid_size:
+            raise RuntimeError(
+                f"LoadGslibFile: property '{key}' has {index[j]} values, "
+                f"expected {grid_size} (grid {property_size}). "
+                f"File may be truncated or corrupted."
+            )
+
     for dkey in result.keys():
-        result[dkey] = result[dkey].reshape(property_size)
+        result[dkey] = result[dkey].reshape(property_size, order="F")
 
     return result

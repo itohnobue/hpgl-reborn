@@ -6,6 +6,7 @@ context manager. These tests exercise edge cases documented in the
 adversarial review findings (Q4) including boundary values for
 MAX_GRID_SIZE, MIN_SILL, PROBABILITY_SUM_TOLERANCE, etc.
 """
+
 import os
 import sys
 from builtins import UserWarning
@@ -31,6 +32,7 @@ try:
         validate_kriging_params,
         validate_simulation_params,
     )
+
     VALIDATION_AVAILABLE = True
 except (ImportError, SyntaxError, IndentationError):
     VALIDATION_AVAILABLE = False
@@ -39,6 +41,7 @@ except (ImportError, SyntaxError, IndentationError):
 # =============================================================================
 # ValidationConstants Tests
 # =============================================================================
+
 
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestValidationConstants:
@@ -74,6 +77,7 @@ class TestValidationConstants:
 # ValidationError / CriticalValidationError Tests
 # =============================================================================
 
+
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestValidationErrors:
     """Test validation exception hierarchy."""
@@ -106,6 +110,7 @@ class TestValidationErrors:
 # =============================================================================
 # PathValidator Tests
 # =============================================================================
+
 
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestPathValidator:
@@ -196,6 +201,7 @@ class TestPathValidator:
 # GridValidator Tests
 # =============================================================================
 
+
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestGridValidator:
     """Test grid dimension validation."""
@@ -237,23 +243,23 @@ class TestGridValidator:
 
     def test_array_size_validation(self):
         """Array size matches grid dimensions passes."""
-        arr = np.zeros(6, dtype='float32')
+        arr = np.zeros(6, dtype="float32")
         GridValidator.validate_array_size(arr, (2, 3, 1))
 
     def test_array_size_mismatch_raises(self):
         """Array size mismatch raises."""
-        arr = np.zeros(10, dtype='float32')
+        arr = np.zeros(10, dtype="float32")
         with pytest.raises(CriticalValidationError):
             GridValidator.validate_array_size(arr, (3, 3, 1))  # 9 != 10
 
     def test_array_dtype_validation(self):
         """Array dtype validation works."""
-        arr = np.zeros(10, dtype='float32')
+        arr = np.zeros(10, dtype="float32")
         GridValidator.validate_array_dtype(arr, np.float32)
 
     def test_array_dtype_mismatch_raises(self):
         """Wrong array dtype raises error."""
-        arr = np.zeros(10, dtype='float64')
+        arr = np.zeros(10, dtype="float64")
         with pytest.raises(CriticalValidationError):
             GridValidator.validate_array_dtype(arr, np.float32)
 
@@ -261,18 +267,18 @@ class TestGridValidator:
 
     def test_empty_array_size_mismatch_raises(self):
         """Empty array with non-zero grid raises CriticalValidationError."""
-        arr = np.array([], dtype='float32')
+        arr = np.array([], dtype="float32")
         with pytest.raises(CriticalValidationError):
             GridValidator.validate_array_size(arr, (1, 1, 1))  # 0 != 1
 
     def test_empty_array_dtype_passes(self):
         """Empty array with matching dtype passes dtype validation."""
-        arr = np.array([], dtype='float32')
+        arr = np.array([], dtype="float32")
         GridValidator.validate_array_dtype(arr, np.float32)
 
     def test_empty_array_dtype_mismatch_raises(self):
         """Empty array with wrong dtype raises error."""
-        arr = np.array([], dtype='float64')
+        arr = np.array([], dtype="float64")
         with pytest.raises(CriticalValidationError):
             GridValidator.validate_array_dtype(arr, np.float32)
 
@@ -280,6 +286,7 @@ class TestGridValidator:
 # =============================================================================
 # ParameterValidator Tests
 # =============================================================================
+
 
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestParameterValidator:
@@ -439,9 +446,7 @@ class TestParameterValidator:
     def test_inf_nugget_raises(self):
         """Inf nugget raises (documented coverage of Inf path in covariance validation)."""
         with pytest.raises(CriticalValidationError):
-            ParameterValidator.validate_covariance_parameters(
-                sill=1.0, nugget=float("inf")
-            )
+            ParameterValidator.validate_covariance_parameters(sill=1.0, nugget=float("inf"))
 
     # ---- Probability ----
 
@@ -564,6 +569,7 @@ class TestParameterValidator:
 # ValidationContext Tests
 # =============================================================================
 
+
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestValidationContext:
     """Test the ValidationContext context manager."""
@@ -598,6 +604,7 @@ class TestValidationContext:
 # =============================================================================
 # Decorator Tests (basic import/functionality check)
 # =============================================================================
+
 
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestDecorators:
@@ -639,6 +646,7 @@ class TestDecorators:
 
     def test_validate_file_params_decorator_none_skip(self):
         """validate_file_params with None filename skips validation."""
+
         @validate_file_params
         def dummy_func(filename=None, **kwargs):
             return filename
@@ -670,5 +678,5 @@ class TestDecorators:
             dummy_func(filename=str(nonexistent))
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

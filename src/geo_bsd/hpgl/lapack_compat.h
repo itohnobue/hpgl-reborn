@@ -26,8 +26,7 @@
     // Linux/macOS: Standard LAPACK
     // Try to detect ILP64 at compile time via common macros
     #if defined(OPENBLAS_USE64BITINT) || defined(ACCELERATE_LAPACK_ILP64) || \
-        defined(BLAS64) || defined(LAPACK_ILP64) || defined(MKL_ILP64) || \
-        (defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__)))
+        defined(BLAS64) || defined(LAPACK_ILP64) || defined(MKL_ILP64)
         // ILP64 interface detected - use 64-bit integers
         #include <cstdint>
         typedef int64_t lapack_int;

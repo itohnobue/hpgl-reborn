@@ -39,6 +39,7 @@ class TestHPGLWrapContract:
             ("data_strides", C.c_int * 3),
             ("mask_strides", C.c_int * 3),
         ]
+
         # Verify we can construct a compatible struct manually
         class ContPropertyArgStruct(C.Structure):
             _fields_ = fields
@@ -59,6 +60,7 @@ class TestHPGLWrapContract:
             ("data_strides", C.c_int * 3),
             ("mask_strides", C.c_int * 3),
         ]
+
         class IndPropertyArgStruct(C.Structure):
             _fields_ = fields
 
@@ -73,11 +75,12 @@ class TestHPGLWrapContract:
         # By default, CDLL functions have no argtypes/restype set
         # The hpgl_wrap module explicitly sets these
         # A meaningful check: verify we understand the convention
-        assert hasattr(C, 'CDLL'), "ctypes CDLL must be available"
+        assert hasattr(C, "CDLL"), "ctypes CDLL must be available"
 
     def test_safe_load_library_error_handling(self):
         """F-123: _safe_load_library handles missing library gracefully."""
         from geo_bsd.hpgl_wrap import _safe_load_library
+
         # Try to load a non-existent library — must raise an error
         with pytest.raises((ImportError, OSError)):
             _safe_load_library("nonexistent_library_xyz", __file__)
@@ -85,7 +88,8 @@ class TestHPGLWrapContract:
     def test_error_local_thread_safe(self):
         """F-123: Thread-local error storage exists in geo.py (ctypes FFI layer)."""
         from geo_bsd import geo
-        assert hasattr(geo, '_error_local'), (
+
+        assert hasattr(geo, "_error_local"), (
             "geo._error_local must exist for thread-safe error tracking"
         )
         assert isinstance(geo._error_local, threading.local), (
@@ -95,7 +99,8 @@ class TestHPGLWrapContract:
     def test_hpgl_call_lock_exists(self):
         """F-123: Global call lock exists in geo.py for cross-thread safety."""
         from geo_bsd import geo
-        assert hasattr(geo, '_hpgl_call_lock'), (
+
+        assert hasattr(geo, "_hpgl_call_lock"), (
             "geo._hpgl_call_lock must exist for serializing C++ calls"
         )
         assert isinstance(geo._hpgl_call_lock, type(threading.Lock())), (
@@ -112,9 +117,7 @@ class TestCVariogramContract:
             from geo_bsd import cvariogram
         except ImportError:
             pytest.skip("cvariogram module not available")
-        assert hasattr(cvariogram, '_cvar_error_local'), (
-            "cvariogram._cvar_error_local must exist"
-        )
+        assert hasattr(cvariogram, "_cvar_error_local"), "cvariogram._cvar_error_local must exist"
         assert isinstance(cvariogram._cvar_error_local, threading.local), (
             "_cvar_error_local must be threading.local"
         )
@@ -125,9 +128,7 @@ class TestCVariogramContract:
             from geo_bsd import cvariogram
         except ImportError:
             pytest.skip("cvariogram module not available")
-        assert hasattr(cvariogram, '_cvar_call_lock'), (
-            "cvariogram._cvar_call_lock must exist"
-        )
+        assert hasattr(cvariogram, "_cvar_call_lock"), "cvariogram._cvar_call_lock must exist"
         assert isinstance(cvariogram._cvar_call_lock, type(threading.Lock())), (
             "_cvar_call_lock must be a threading.Lock"
         )
@@ -138,7 +139,7 @@ class TestCVariogramContract:
             from geo_bsd import cvariogram
         except ImportError:
             pytest.skip("cvariogram module not available")
-        assert hasattr(cvariogram, 'MAX_NUM_LAGS'), "MAX_NUM_LAGS must be defined"
+        assert hasattr(cvariogram, "MAX_NUM_LAGS"), "MAX_NUM_LAGS must be defined"
         assert cvariogram.MAX_NUM_LAGS > 0, "MAX_NUM_LAGS must be positive"
         assert cvariogram.MAX_NUM_LAGS == 10000, (
             f"MAX_NUM_LAGS should be 10000, got {cvariogram.MAX_NUM_LAGS}"
@@ -150,7 +151,7 @@ class TestCVariogramContract:
             from geo_bsd import cvariogram
         except ImportError:
             pytest.skip("cvariogram module not available")
-        assert hasattr(cvariogram, 'MAX_POINT_SET_SIZE'), "MAX_POINT_SET_SIZE must be defined"
+        assert hasattr(cvariogram, "MAX_POINT_SET_SIZE"), "MAX_POINT_SET_SIZE must be defined"
         assert cvariogram.MAX_POINT_SET_SIZE > 0, "MAX_POINT_SET_SIZE must be positive"
 
 
@@ -159,14 +160,14 @@ class TestCtypesTypeMapping:
 
     def test_float32_maps_to_c_float(self):
         """numpy float32 ↔ ctypes c_float."""
-        arr = np.array([1.0], dtype='float32')
+        arr = np.array([1.0], dtype="float32")
         ptr = arr.ctypes.data_as(C.POINTER(C.c_float))
         assert ptr is not None
         assert ptr.contents.value == pytest.approx(1.0)
 
     def test_uint8_maps_to_c_ubyte(self):
         """numpy uint8 ↔ ctypes c_ubyte."""
-        arr = np.array([1], dtype='uint8')
+        arr = np.array([1], dtype="uint8")
         ptr = arr.ctypes.data_as(C.POINTER(C.c_ubyte))
         assert ptr is not None
         assert ptr.contents.value == 1
@@ -189,7 +190,7 @@ class TestCtypesTypeMapping:
 
     def test_pointer_type_compatibility(self):
         """C.POINTER(C.c_float) is compatible with numpy float32."""
-        arr = np.array([1.0, 2.0, 3.0], dtype='float32')
+        arr = np.array([1.0, 2.0, 3.0], dtype="float32")
         ptr_type = C.POINTER(C.c_float)
         ptr = arr.ctypes.data_as(ptr_type)
         assert isinstance(ptr, ptr_type)
@@ -198,7 +199,7 @@ class TestCtypesTypeMapping:
         """F-123: strides for Fortran-order arrays are computed correctly."""
         # 3D Fortran-order array: strides = (1, nx, nx*ny)
         nx, ny, nz = 10, 20, 5
-        arr = np.zeros((nx, ny, nz), dtype='float32', order='F')
+        arr = np.zeros((nx, ny, nz), dtype="float32", order="F")
         strides = arr.strides  # in bytes
         # For F-order: strides[0]=4, strides[1]=4*nx, strides[2]=4*nx*ny
         assert strides[0] == 4, f"F-order stride[0] should be 4 bytes, got {strides[0]}"
@@ -234,5 +235,5 @@ class TestValidationContract:
         assert isinstance(exc, Exception)
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

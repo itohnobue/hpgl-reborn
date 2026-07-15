@@ -8,6 +8,7 @@ Tests cover:
 - I/O functions: load/write properties in INC and GSLib formats
 - Utility functions: append_mask
 """
+
 import sys
 from pathlib import Path
 
@@ -48,14 +49,15 @@ except (ImportError, OSError):
 # Calculation Function Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestCalcMean:
     """Test calc_mean function for calculating mean of properties"""
 
     def test_calc_mean_basic(self):
         """Test basic mean calculation with known values"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
-        mask = np.array([1, 1, 1, 1, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.array([1, 1, 1, 1, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         result = calc_mean(prop)
@@ -63,8 +65,8 @@ class TestCalcMean:
 
     def test_calc_mean_with_masked_values(self):
         """Test mean calculation ignores uninformed (masked) values"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
-        mask = np.array([1, 0, 1, 0, 1], dtype='uint8')  # Mask 2 and 4
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.array([1, 0, 1, 0, 1], dtype="uint8")  # Mask 2 and 4
         prop = ContProperty(data, mask)
 
         result = calc_mean(prop)
@@ -73,8 +75,8 @@ class TestCalcMean:
 
     def test_calc_mean_all_masked(self):
         """Test mean calculation when all values are masked"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.array([0, 0, 0], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.array([0, 0, 0], dtype="uint8")
         prop = ContProperty(data, mask)
 
         # Should raise ValueError for all-masked property
@@ -83,8 +85,8 @@ class TestCalcMean:
 
     def test_calc_mean_single_value(self):
         """Test mean calculation with single informed value"""
-        data = np.array([42.0], dtype='float32')
-        mask = np.array([1], dtype='uint8')
+        data = np.array([42.0], dtype="float32")
+        mask = np.array([1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         result = calc_mean(prop)
@@ -94,8 +96,8 @@ class TestCalcMean:
         """Test mean calculation with large array"""
         np.random.seed(42)
         size = 10000
-        data = np.random.rand(size).astype('float32') * 100
-        mask = np.ones(size, dtype='uint8')
+        data = np.random.rand(size).astype("float32") * 100
+        mask = np.ones(size, dtype="uint8")
         prop = ContProperty(data, mask)
 
         result = calc_mean(prop)
@@ -104,16 +106,16 @@ class TestCalcMean:
 
     def test_calc_mean_with_tuple_input(self):
         """Test calc_mean accepts tuple input (data, mask)"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
-        mask = np.array([1, 1, 1, 1, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.array([1, 1, 1, 1, 1], dtype="uint8")
 
         result = calc_mean((data, mask))
         assert result == pytest.approx(3.0)
 
     def test_calc_mean_3d_property(self):
         """Test mean calculation with 3D property"""
-        data = np.arange(27, dtype='float32').reshape((3, 3, 3), order='F')
-        mask = np.ones((3, 3, 3), dtype='uint8')
+        data = np.arange(27, dtype="float32").reshape((3, 3, 3), order="F")
+        mask = np.ones((3, 3, 3), dtype="uint8")
         prop = ContProperty(data, mask)
 
         result = calc_mean(prop)
@@ -127,10 +129,9 @@ class TestCalcCdf:
 
     def test_calc_cdf_basic(self):
         """Test basic CDF calculation"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
-        mask = np.ones(5, dtype='uint8')
-        prop = ContProperty(data.reshape((5, 1, 1), order='F'),
-                           mask.reshape((5, 1, 1), order='F'))
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.ones(5, dtype="uint8")
+        prop = ContProperty(data.reshape((5, 1, 1), order="F"), mask.reshape((5, 1, 1), order="F"))
 
         result = calc_cdf(prop)
 
@@ -144,10 +145,9 @@ class TestCalcCdf:
 
     def test_calc_cdf_with_duplicates(self):
         """Test CDF with duplicate values"""
-        data = np.array([1.0, 2.0, 2.0, 3.0, 3.0, 3.0], dtype='float32')
-        mask = np.ones(6, dtype='uint8')
-        prop = ContProperty(data.reshape((6, 1, 1), order='F'),
-                           mask.reshape((6, 1, 1), order='F'))
+        data = np.array([1.0, 2.0, 2.0, 3.0, 3.0, 3.0], dtype="float32")
+        mask = np.ones(6, dtype="uint8")
+        prop = ContProperty(data.reshape((6, 1, 1), order="F"), mask.reshape((6, 1, 1), order="F"))
 
         result = calc_cdf(prop)
 
@@ -158,10 +158,9 @@ class TestCalcCdf:
 
     def test_calc_cdf_with_masked_values(self):
         """Test CDF calculation ignores masked values"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
-        mask = np.array([1, 0, 1, 0, 1], dtype='uint8')
-        prop = ContProperty(data.reshape((5, 1, 1), order='F'),
-                           mask.reshape((5, 1, 1), order='F'))
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.array([1, 0, 1, 0, 1], dtype="uint8")
+        prop = ContProperty(data.reshape((5, 1, 1), order="F"), mask.reshape((5, 1, 1), order="F"))
 
         result = calc_cdf(prop)
 
@@ -172,10 +171,9 @@ class TestCalcCdf:
 
     def test_calc_cdf_uniform_distribution(self):
         """Test CDF with uniform distribution"""
-        data = np.array([5.0, 5.0, 5.0, 5.0], dtype='float32')
-        mask = np.ones(4, dtype='uint8')
-        prop = ContProperty(data.reshape((4, 1, 1), order='F'),
-                           mask.reshape((4, 1, 1), order='F'))
+        data = np.array([5.0, 5.0, 5.0, 5.0], dtype="float32")
+        mask = np.ones(4, dtype="uint8")
+        prop = ContProperty(data.reshape((4, 1, 1), order="F"), mask.reshape((4, 1, 1), order="F"))
 
         result = calc_cdf(prop)
 
@@ -184,10 +182,9 @@ class TestCalcCdf:
 
     def test_calc_cdf_all_masked(self):
         """Test CDF when all values are masked raises ValueError"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.zeros((3, 1, 1), dtype='uint8')
-        prop = ContProperty(data.reshape((3, 1, 1), order='F'),
-                           mask.reshape((3, 1, 1), order='F'))
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.zeros((3, 1, 1), dtype="uint8")
+        prop = ContProperty(data.reshape((3, 1, 1), order="F"), mask.reshape((3, 1, 1), order="F"))
 
         with pytest.raises(ValueError, match="no informed values"):
             calc_cdf(prop)
@@ -195,10 +192,11 @@ class TestCalcCdf:
     def test_calc_cdf_monotonic_probabilities(self):
         """Test that CDF probabilities are monotonically increasing"""
         np.random.seed(42)
-        data = np.random.rand(100).astype('float32') * 100
-        mask = np.ones(100, dtype='uint8')
-        prop = ContProperty(data.reshape((100, 1, 1), order='F'),
-                           mask.reshape((100, 1, 1), order='F'))
+        data = np.random.rand(100).astype("float32") * 100
+        mask = np.ones(100, dtype="uint8")
+        prop = ContProperty(
+            data.reshape((100, 1, 1), order="F"), mask.reshape((100, 1, 1), order="F")
+        )
 
         result = calc_cdf(prop)
 
@@ -209,10 +207,11 @@ class TestCalcCdf:
     def test_calc_cdf_final_probability(self):
         """Test that final CDF probability is 1.0"""
         np.random.seed(42)
-        data = np.random.rand(50).astype('float32') * 100
-        mask = np.ones(50, dtype='uint8')
-        prop = ContProperty(data.reshape((50, 1, 1), order='F'),
-                           mask.reshape((50, 1, 1), order='F'))
+        data = np.random.rand(50).astype("float32") * 100
+        mask = np.ones(50, dtype="uint8")
+        prop = ContProperty(
+            data.reshape((50, 1, 1), order="F"), mask.reshape((50, 1, 1), order="F")
+        )
 
         result = calc_cdf(prop)
 
@@ -224,6 +223,7 @@ class TestCalcCdf:
 # =============================================================================
 # Thread Management Tests
 # =============================================================================
+
 
 def _omp_available():
     """Check if OpenMP is available by testing set/get thread round-trip.
@@ -293,6 +293,7 @@ class TestThreadManagement:
 # Callback Handler Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestCallbackHandlers:
     """Test output and progress callback handlers"""
@@ -319,21 +320,14 @@ class TestCallbackHandlers:
         np.random.seed(42)
         grid = SugarboxGrid(x=5, y=5, z=3)
         size = grid.x * grid.y * grid.z
-        data = np.random.rand(size).astype('float32') * 100
-        mask = np.ones(size, dtype='uint8')
+        data = np.random.rand(size).astype("float32") * 100
+        mask = np.ones(size, dtype="uint8")
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(5.0, 5.0, 3.0),
-            sill=1.0,
-            nugget=0.1
+            type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
         )
         ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(3, 3, 1),
-            max_neighbours=8,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(3, 3, 1), max_neighbours=8, cov_model=cov_model
         )
 
         # Verify handler was invoked by the HPGL operation
@@ -369,21 +363,14 @@ class TestCallbackHandlers:
         np.random.seed(42)
         grid = SugarboxGrid(x=5, y=5, z=3)
         size = grid.x * grid.y * grid.z
-        data = np.random.rand(size).astype('float32') * 100
-        mask = np.ones(size, dtype='uint8')
+        data = np.random.rand(size).astype("float32") * 100
+        mask = np.ones(size, dtype="uint8")
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(5.0, 5.0, 3.0),
-            sill=1.0,
-            nugget=0.1
+            type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
         )
         ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(3, 3, 1),
-            max_neighbours=8,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(3, 3, 1), max_neighbours=8, cov_model=cov_model
         )
 
         # Verify handler was invoked by the HPGL operation
@@ -402,6 +389,7 @@ class TestCallbackHandlers:
 
     def test_handler_signature(self):
         """Test that handlers accept correct signatures"""
+
         # Output handler: (message, param) -> int
         def output_handler(msg, param):
             # msg is c_char_p (bytes or None)
@@ -424,6 +412,7 @@ class TestCallbackHandlers:
 # I/O Function Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestIOContinuousProperty:
     """Test I/O functions for continuous properties"""
@@ -431,8 +420,8 @@ class TestIOContinuousProperty:
     def test_write_read_property_round_trip(self, tmp_path):
         """Test write then read produces same data"""
         # Create test data
-        data = np.array([1.5, 2.5, 3.5, -99.0, 5.5], dtype='float32')
-        mask = np.array([1, 1, 1, 0, 1], dtype='uint8')
+        data = np.array([1.5, 2.5, 3.5, -99.0, 5.5], dtype="float32")
+        mask = np.array([1, 1, 1, 0, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         # Write to file
@@ -448,17 +437,14 @@ class TestIOContinuousProperty:
 
         # Check informed values match
         informed_mask = prop.mask == 1
-        np.testing.assert_array_almost_equal(
-            loaded.data[informed_mask],
-            prop.data[informed_mask]
-        )
+        np.testing.assert_array_almost_equal(loaded.data[informed_mask], prop.data[informed_mask])
 
     def test_write_read_gslib_property_round_trip(self, tmp_path):
         """Test GSLib write creates valid file"""
         # Note: GSLib format written by write_gslib_property cannot be read back
         # by the INC reader. This test just verifies the write creates a valid file.
-        data = np.array([10.0, 20.0, 30.0, -999.0, 50.0], dtype='float32')
-        mask = np.array([1, 1, 1, 0, 1], dtype='uint8')
+        data = np.array([10.0, 20.0, 30.0, -999.0, 50.0], dtype="float32")
+        mask = np.array([1, 1, 1, 0, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "test_gslib.dat")
@@ -478,8 +464,8 @@ class TestIOContinuousProperty:
     def test_read_inc_file_float_with_size(self, tmp_path):
         """Test reading INC file with specified size"""
         # Write a file using write_property, then read it back with size
-        data = np.array([1.0, 2.0, 3.0, 4.0, -99.0, 6.0], dtype='float32')
-        mask = np.array([1, 1, 1, 1, 0, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0, 4.0, -99.0, 6.0], dtype="float32")
+        mask = np.array([1, 1, 1, 1, 0, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "test_manual.inc")
@@ -498,8 +484,8 @@ class TestIOContinuousProperty:
 
     def test_write_property_creates_file(self, tmp_path):
         """Test that write_property creates a valid file"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "created_file.inc")
@@ -510,8 +496,8 @@ class TestIOContinuousProperty:
 
     def test_write_read_3d_property(self, tmp_path):
         """Test write/read for 3D property"""
-        data = np.arange(27, dtype='float32').reshape((3, 3, 3), order='F')
-        mask = np.ones((3, 3, 3), dtype='uint8')
+        data = np.arange(27, dtype="float32").reshape((3, 3, 3), order="F")
+        mask = np.ones((3, 3, 3), dtype="uint8")
         mask[1, 1, 1] = 0  # Mask center value
         prop = ContProperty(data, mask)
 
@@ -537,8 +523,8 @@ class TestIOIndicatorProperty:
 
     def test_write_read_indicator_property_round_trip(self, tmp_path):
         """Test write then read for indicator property"""
-        data = np.array([0, 1, 2, 0, 1], dtype='uint8')
-        mask = np.array([1, 1, 1, 1, 0], dtype='uint8')
+        data = np.array([0, 1, 2, 0, 1], dtype="uint8")
+        mask = np.array([1, 1, 1, 1, 0], dtype="uint8")
         indicator_values = [10, 20, 30]  # Original values
         prop = IndProperty(data, mask, 3)
 
@@ -555,7 +541,7 @@ class TestIOIndicatorProperty:
         # Create a simple file that the slow loader can parse
         # Values must be in indicator_values or be the undefined value
         filename = str(tmp_path / "test_byte.inc")
-        with open(filename, 'w') as f:
+        with open(filename, "w") as f:
             f.write("test_byte\n")
             f.write("10 20 30\n")  # All valid indicator values
             f.write("10 255 20\n")  # 255 is undefined
@@ -573,8 +559,8 @@ class TestIOIndicatorProperty:
 
     def test_write_gslib_indicator_property(self, tmp_path):
         """Test writing indicator property in GSLib format"""
-        data = np.array([0, 1, 0, 1, 0], dtype='uint8')
-        mask = np.ones(5, dtype='uint8')
+        data = np.array([0, 1, 0, 1, 0], dtype="uint8")
+        mask = np.ones(5, dtype="uint8")
         indicator_values = [1, 2]
         prop = IndProperty(data, mask, 2)
 
@@ -587,8 +573,8 @@ class TestIOIndicatorProperty:
     def test_indicator_values_mapping(self, tmp_path):
         """Test that indicator values are correctly mapped"""
         # Create data with mapped values
-        data = np.array([0, 1, 2, 0, 1, 2], dtype='uint8')
-        mask = np.ones(6, dtype='uint8')
+        data = np.array([0, 1, 2, 0, 1, 2], dtype="uint8")
+        mask = np.ones(6, dtype="uint8")
         indicator_values = [100, 200, 250]  # Use valid uint8 values (max 255)
         prop = IndProperty(data, mask, 3)
 
@@ -607,8 +593,8 @@ class TestUndefinedValueHandling:
 
     def test_undefined_value_masking_continuous(self, tmp_path):
         """Test that undefined values are correctly masked"""
-        data = np.array([1.0, -99.0, 3.0, -99.0, 5.0], dtype='float32')
-        mask = np.ones(5, dtype='uint8')
+        data = np.array([1.0, -99.0, 3.0, -99.0, 5.0], dtype="float32")
+        mask = np.ones(5, dtype="uint8")
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "undefined_test.inc")
@@ -623,8 +609,8 @@ class TestUndefinedValueHandling:
 
     def test_undefined_value_masking_indicator(self, tmp_path):
         """Test undefined value masking for indicators"""
-        data = np.array([0, 1, 0, 1], dtype='uint8')
-        mask = np.ones(4, dtype='uint8')
+        data = np.array([0, 1, 0, 1], dtype="uint8")
+        mask = np.ones(4, dtype="uint8")
         indicator_values = [1, 2]
         prop = IndProperty(data, mask, 2)
 
@@ -640,17 +626,18 @@ class TestUndefinedValueHandling:
 # Utility Function Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestAppendMask:
     """Test append_mask utility function"""
 
     def test_append_mask_basic(self):
         """Test basic mask append operation"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
-        mask = np.array([1, 1, 1, 1, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.array([1, 1, 1, 1, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
-        additional_mask = np.array([1, 0, 1, 0, 1], dtype='uint8')
+        additional_mask = np.array([1, 0, 1, 0, 1], dtype="uint8")
 
         # Store original data for comparison
         original_data = prop.data.copy()
@@ -665,11 +652,11 @@ class TestAppendMask:
 
     def test_append_mask_all_zeros(self):
         """Test append_mask with all-zero mask"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
-        additional_mask = np.array([0, 0, 0], dtype='uint8')
+        additional_mask = np.array([0, 0, 0], dtype="uint8")
 
         append_mask(prop, additional_mask)
 
@@ -678,12 +665,12 @@ class TestAppendMask:
 
     def test_append_mask_all_ones(self):
         """Test append_mask with all-one mask"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
         original_data = prop.data.copy()
-        additional_mask = np.array([1, 1, 1], dtype='uint8')
+        additional_mask = np.array([1, 1, 1], dtype="uint8")
 
         append_mask(prop, additional_mask)
 
@@ -692,11 +679,11 @@ class TestAppendMask:
 
     def test_append_mask_with_tuple_input(self):
         """Test append_mask accepts property as tuple"""
-        data = np.array([1.0, 2.0, 3.0, 4.0], dtype='float32')
-        mask = np.ones(4, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0, 4.0], dtype="float32")
+        mask = np.ones(4, dtype="uint8")
 
         # Pass as tuple
-        append_mask((data, mask), np.array([1, 0, 1, 0], dtype='uint8'))
+        append_mask((data, mask), np.array([1, 0, 1, 0], dtype="uint8"))
 
         # Check data was modified
         assert data[1] == pytest.approx(-99.0)
@@ -704,11 +691,11 @@ class TestAppendMask:
 
     def test_append_mask_3d_property(self):
         """Test append_mask on 3D property"""
-        data = np.arange(8, dtype='float32').reshape((2, 2, 2), order='F')
-        mask = np.ones((2, 2, 2), dtype='uint8')
+        data = np.arange(8, dtype="float32").reshape((2, 2, 2), order="F")
+        mask = np.ones((2, 2, 2), dtype="uint8")
         prop = ContProperty(data, mask)
 
-        additional_mask = np.zeros((2, 2, 2), dtype='uint8')
+        additional_mask = np.zeros((2, 2, 2), dtype="uint8")
         additional_mask[0, 0, 0] = 1  # Keep first value
 
         append_mask(prop, additional_mask)
@@ -721,6 +708,7 @@ class TestAppendMask:
 # File Format Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestFileFormats:
     """Test different file format handling"""
@@ -728,7 +716,7 @@ class TestFileFormats:
     def test_inc_format_with_comments(self, tmp_path):
         """Test INC file with comment lines"""
         filename = str(tmp_path / "comments.inc")
-        with open(filename, 'w') as f:
+        with open(filename, "w") as f:
             f.write("-- This is a comment\n")
             f.write("1.0 2.0 3.0\n")
             f.write("-- Another comment\n")
@@ -741,8 +729,8 @@ class TestFileFormats:
 
     def test_gslib_format_header(self, tmp_path):
         """Test GSLib format with property name"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "gslib_with_name.dat")
@@ -755,12 +743,12 @@ class TestFileFormats:
 
     def test_multiple_properties_same_file(self, tmp_path):
         """Test handling multiple properties in same directory"""
-        data1 = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask1 = np.ones(3, dtype='uint8')
+        data1 = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask1 = np.ones(3, dtype="uint8")
         prop1 = ContProperty(data1, mask1)
 
-        data2 = np.array([4.0, 5.0, 6.0], dtype='float32')
-        mask2 = np.ones(3, dtype='uint8')
+        data2 = np.array([4.0, 5.0, 6.0], dtype="float32")
+        mask2 = np.ones(3, dtype="uint8")
         prop2 = ContProperty(data2, mask2)
 
         filename1 = str(tmp_path / "prop1.inc")
@@ -780,14 +768,15 @@ class TestFileFormats:
 # Edge Cases and Error Handling
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestEdgeCases:
     """Test edge cases and error handling"""
 
     def test_empty_property_calc_mean(self):
         """Test calc_mean with minimal property"""
-        data = np.array([1.0], dtype='float32')
-        mask = np.array([1], dtype='uint8')
+        data = np.array([1.0], dtype="float32")
+        mask = np.array([1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         result = calc_mean(prop)
@@ -795,8 +784,8 @@ class TestEdgeCases:
 
     def test_large_undefined_value(self, tmp_path):
         """Test with large undefined value"""
-        data = np.array([1.0, -1e10, 3.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1.0, -1e10, 3.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "large_undef.inc")
@@ -807,8 +796,8 @@ class TestEdgeCases:
 
     def test_negative_values_in_data(self, tmp_path):
         """Test handling of negative values"""
-        data = np.array([-1.0, -2.0, -3.0, -99.0], dtype='float32')
-        mask = np.ones(4, dtype='uint8')
+        data = np.array([-1.0, -2.0, -3.0, -99.0], dtype="float32")
+        mask = np.ones(4, dtype="uint8")
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "negative.inc")
@@ -823,8 +812,8 @@ class TestEdgeCases:
 
     def test_very_small_values(self, tmp_path):
         """Test handling of very small values"""
-        data = np.array([1e-10, 1e-5, 1e-3], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1e-10, 1e-5, 1e-3], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "small.inc")
@@ -837,8 +826,8 @@ class TestEdgeCases:
 
     def test_alternative_undefined_values(self, tmp_path):
         """Test different undefined value conventions"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
         # Test with -999 (common alternative)
@@ -853,6 +842,7 @@ class TestEdgeCases:
 # Performance Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestPerformanceUtilities:
     """Performance-related tests for utility functions"""
@@ -861,8 +851,8 @@ class TestPerformanceUtilities:
         """Test calc_mean performance with large dataset"""
         np.random.seed(42)
         size = 100000
-        data = np.random.rand(size).astype('float32')
-        mask = np.ones(size, dtype='uint8')
+        data = np.random.rand(size).astype("float32")
+        mask = np.ones(size, dtype="uint8")
         prop = ContProperty(data, mask)
 
         result = calc_mean(prop)
@@ -875,10 +865,11 @@ class TestPerformanceUtilities:
         np.random.seed(42)
         # Use smaller size for CDF as it's O(n^2) in worst case
         size = 1000
-        data = np.random.rand(size).astype('float32') * 100
-        mask = np.ones(size, dtype='uint8')
-        prop = ContProperty(data.reshape((size, 1, 1), order='F'),
-                           mask.reshape((size, 1, 1), order='F'))
+        data = np.random.rand(size).astype("float32") * 100
+        mask = np.ones(size, dtype="uint8")
+        prop = ContProperty(
+            data.reshape((size, 1, 1), order="F"), mask.reshape((size, 1, 1), order="F")
+        )
 
         result = calc_cdf(prop)
 
@@ -893,14 +884,15 @@ class TestPerformanceUtilities:
 # I/O Error Path Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestWritePropertyErrorPaths:
     """Test error paths in write_property and write_gslib_property."""
 
     def test_write_property_invalid_indicator_values_type(self, tmp_path):
         """write_property raises TypeError when indicator_values is not a list."""
-        data = np.array([0, 1, 0], dtype='uint8')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([0, 1, 0], dtype="uint8")
+        mask = np.ones(3, dtype="uint8")
         prop = IndProperty(data, mask, 2)
         filename = str(tmp_path / "test.inc")
 
@@ -909,8 +901,8 @@ class TestWritePropertyErrorPaths:
 
     def test_write_gslib_property_invalid_indicator_values_type(self, tmp_path):
         """write_gslib_property raises TypeError when indicator_values is not a list."""
-        data = np.array([0, 1, 0], dtype='uint8')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([0, 1, 0], dtype="uint8")
+        mask = np.ones(3, dtype="uint8")
         prop = IndProperty(data, mask, 2)
         filename = str(tmp_path / "test.dat")
 
@@ -919,8 +911,8 @@ class TestWritePropertyErrorPaths:
 
     def test_write_property_none_indicator_values(self, tmp_path):
         """write_property with indicator_values=None defaults to empty list (no error)."""
-        data = np.array([0, 1, 0], dtype='uint8')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([0, 1, 0], dtype="uint8")
+        mask = np.ones(3, dtype="uint8")
         prop = IndProperty(data, mask, 2)
         filename = str(tmp_path / "test.inc")
 
@@ -933,13 +925,14 @@ class TestWritePropertyErrorPaths:
 # get_gslib_property Tests (H3)
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestGetGslibProperty:
     """Tests for get_gslib_property function (geo.py:1628-1666)."""
 
     def test_happy_path_returns_correct_masked_array(self):
         """get_gslib_property returns (property_array, mask_array) with correct values."""
-        data = np.array([1.0, 2.0, 3.0, -99.0], dtype='float32')
+        data = np.array([1.0, 2.0, 3.0, -99.0], dtype="float32")
         prop_dict = {"my_prop": data}
         result = get_gslib_property(prop_dict, "my_prop", -99.0)
         assert isinstance(result, tuple)
@@ -955,7 +948,7 @@ class TestGetGslibProperty:
 
     def test_nan_undefined_value(self):
         """get_gslib_property correctly handles NaN as undefined_value."""
-        data = np.array([1.0, np.nan, 3.0], dtype='float32')
+        data = np.array([1.0, np.nan, 3.0], dtype="float32")
         prop_dict = {"prop": data}
         result = get_gslib_property(prop_dict, "prop", np.nan)
         prop_array, mask_array = result
@@ -965,7 +958,7 @@ class TestGetGslibProperty:
 
     def test_finite_undefined_value(self):
         """get_gslib_property correctly handles a finite float as undefined_value."""
-        data = np.array([10.0, -999.0, 30.0], dtype='float32')
+        data = np.array([10.0, -999.0, 30.0], dtype="float32")
         prop_dict = {"prop": data}
         result = get_gslib_property(prop_dict, "prop", -999.0)
         prop_array, mask_array = result
@@ -975,7 +968,7 @@ class TestGetGslibProperty:
 
     def test_mask_correctness_all_informed(self):
         """Mask is all-ones when no values match undefined_value."""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
         prop_dict = {"prop": data}
         result = get_gslib_property(prop_dict, "prop", -99.0)
         prop_array, mask_array = result
@@ -983,7 +976,7 @@ class TestGetGslibProperty:
 
     def test_mask_correctness_all_undefined(self):
         """Mask is all-zeros when all values match undefined_value."""
-        data = np.array([-99.0, -99.0, -99.0], dtype='float32')
+        data = np.array([-99.0, -99.0, -99.0], dtype="float32")
         prop_dict = {"prop": data}
         result = get_gslib_property(prop_dict, "prop", -99.0)
         prop_array, mask_array = result
@@ -996,16 +989,16 @@ class TestGetGslibProperty:
 
     def test_missing_key_raises_keyerror(self):
         """get_gslib_property raises KeyError when prop_name not in prop_dict."""
-        prop_dict = {"other_prop": np.array([1.0], dtype='float32')}
+        prop_dict = {"other_prop": np.array([1.0], dtype="float32")}
         with pytest.raises(KeyError):
             get_gslib_property(prop_dict, "missing_prop", -99.0)
 
     def test_non_string_prop_name_raises(self):
         """get_gslib_property raises KeyError (or TypeError) for non-string prop_name."""
-        prop_dict = {"my_prop": np.array([1.0], dtype='float32')}
+        prop_dict = {"my_prop": np.array([1.0], dtype="float32")}
         with pytest.raises((KeyError, TypeError)):
             get_gslib_property(prop_dict, 123, -99.0)
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

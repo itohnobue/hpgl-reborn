@@ -9,6 +9,7 @@ Legacy tests are marked with @pytest.mark.legacy
 Tests use data files restored from git history where available,
 and synthetic data where original files were never committed.
 """
+
 import sys
 from pathlib import Path
 
@@ -46,6 +47,7 @@ except (ImportError, OSError):
         spherical = 0
         exponential = 1
         gaussian = 2
+
     covariance = _DummyCovarianceTypes()
 
 # Grid dimensions used by the "big" test dataset (166x141x20)
@@ -71,11 +73,12 @@ def _load_ind(name, indicators):
 # Tests Using Restored Data Files (from git history)
 # ============================================================================
 
+
 @pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
-    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC",
 )
 def test_big_ok_kriging_legacy():
     """
@@ -88,23 +91,16 @@ def test_big_ok_kriging_legacy():
     grid = SugarboxGrid(*BIG_GRID)
 
     cov_model = CovarianceModel(
-        type=covariance.exponential,
-        ranges=(10.0, 10.0, 10.0),
-        sill=1.0,
-        nugget=0.0
+        type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=1.0, nugget=0.0
     )
 
     result = ordinary_kriging(
-        prop=prop_cont,
-        grid=grid,
-        radiuses=(20, 20, 20),
-        max_neighbours=12,
-        cov_model=cov_model
+        prop=prop_cont, grid=grid, radiuses=(20, 20, 20), max_neighbours=12, cov_model=cov_model
     )
 
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
-    assert not np.any(np.isnan(result.data.astype('float64')))
+    assert not np.any(np.isnan(result.data.astype("float64")))
     # Some uninformed cells should now be informed
     assert np.sum(result.mask) > np.sum(prop_cont.mask)
 
@@ -113,7 +109,7 @@ def test_big_ok_kriging_legacy():
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
-    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC",
 )
 def test_big_sk_kriging_legacy():
     """
@@ -125,10 +121,7 @@ def test_big_sk_kriging_legacy():
     grid = SugarboxGrid(*BIG_GRID)
 
     cov_model = CovarianceModel(
-        type=covariance.exponential,
-        ranges=(10.0, 10.0, 10.0),
-        sill=1.0,
-        nugget=0.0
+        type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=1.0, nugget=0.0
     )
 
     result = simple_kriging(
@@ -137,19 +130,19 @@ def test_big_sk_kriging_legacy():
         radiuses=(20, 20, 20),
         max_neighbours=12,
         cov_model=cov_model,
-        mean=1.6
+        mean=1.6,
     )
 
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
-    assert not np.any(np.isnan(result.data.astype('float64')))
+    assert not np.any(np.isnan(result.data.astype("float64")))
 
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
-    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC",
 )
 def test_big_lvm_kriging_legacy():
     """
@@ -165,13 +158,10 @@ def test_big_lvm_kriging_legacy():
     # Generate mean data as spatially smooth version of the property
     # (original used a separate file with mean ~0.487)
     mean_value = calc_mean(prop_cont)
-    mean_data = np.full(BIG_SIZE, mean_value, dtype='float32')
+    mean_data = np.full(BIG_SIZE, mean_value, dtype="float32")
 
     cov_model = CovarianceModel(
-        type=covariance.exponential,
-        ranges=(10.0, 10.0, 10.0),
-        sill=1.0,
-        nugget=0.0
+        type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=1.0, nugget=0.0
     )
 
     result = lvm_kriging(
@@ -180,19 +170,19 @@ def test_big_lvm_kriging_legacy():
         mean_data=mean_data,
         radiuses=(20, 20, 20),
         max_neighbours=12,
-        cov_model=cov_model
+        cov_model=cov_model,
     )
 
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
-    assert not np.any(np.isnan(result.data.astype('float64')))
+    assert not np.any(np.isnan(result.data.astype("float64")))
 
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_160_141_20.INC"),
-    reason="Test data file not found: BIG_SOFT_DATA_160_141_20.INC"
+    reason="Test data file not found: BIG_SOFT_DATA_160_141_20.INC",
 )
 def test_big_ik_legacy():
     """
@@ -205,31 +195,23 @@ def test_big_ik_legacy():
     grid = SugarboxGrid(*BIG_GRID)
 
     cov_model = CovarianceModel(
-        type=covariance.exponential,
-        ranges=(10.0, 10.0, 10.0),
-        sill=1.0,
-        nugget=0.0
+        type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=1.0, nugget=0.0
     )
 
     ik_data = [
         {
-            'cov_model': cov_model,
-            'radiuses': (20, 20, 20),
-            'max_neighbours': 12,
+            "cov_model": cov_model,
+            "radiuses": (20, 20, 20),
+            "max_neighbours": 12,
         },
         {
-            'cov_model': cov_model,
-            'radiuses': (20, 20, 20),
-            'max_neighbours': 12,
-        }
+            "cov_model": cov_model,
+            "radiuses": (20, 20, 20),
+            "max_neighbours": 12,
+        },
     ]
 
-    result = indicator_kriging(
-        prop=ik_prop,
-        grid=grid,
-        data=ik_data,
-        marginal_probs=(0.8, 0.2)
-    )
+    result = indicator_kriging(prop=ik_prop, grid=grid, data=ik_data, marginal_probs=(0.8, 0.2))
 
     assert isinstance(result, IndProperty)
     assert result.data.size == BIG_SIZE
@@ -247,51 +229,44 @@ def test_big_multi_ik_legacy():
     """
     grid = SugarboxGrid(x=20, y=20, z=10)
     np.random.seed(42)
-    data = np.random.randint(0, 4, 4000, dtype='uint8')
-    mask = np.ones(4000, dtype='uint8')
+    data = np.random.randint(0, 4, 4000, dtype="uint8")
+    mask = np.ones(4000, dtype="uint8")
     mask[::20] = 0
     prop = IndProperty(data, mask, 4)
 
     ik_data = [
         {
-            'cov_model': CovarianceModel(
-                type=covariance.spherical,
-                ranges=(4.0, 4.0, 4.0), sill=0.25, nugget=0.0
+            "cov_model": CovarianceModel(
+                type=covariance.spherical, ranges=(4.0, 4.0, 4.0), sill=0.25, nugget=0.0
             ),
-            'radiuses': (20, 20, 20),
-            'max_neighbours': 12,
+            "radiuses": (20, 20, 20),
+            "max_neighbours": 12,
         },
         {
-            'cov_model': CovarianceModel(
-                type=covariance.spherical,
-                ranges=(6.0, 6.0, 6.0), sill=0.25, nugget=0.0
+            "cov_model": CovarianceModel(
+                type=covariance.spherical, ranges=(6.0, 6.0, 6.0), sill=0.25, nugget=0.0
             ),
-            'radiuses': (20, 20, 20),
-            'max_neighbours': 12,
+            "radiuses": (20, 20, 20),
+            "max_neighbours": 12,
         },
         {
-            'cov_model': CovarianceModel(
-                type=covariance.spherical,
-                ranges=(2.0, 2.0, 2.0), sill=0.25, nugget=0.0
+            "cov_model": CovarianceModel(
+                type=covariance.spherical, ranges=(2.0, 2.0, 2.0), sill=0.25, nugget=0.0
             ),
-            'radiuses': (20, 20, 20),
-            'max_neighbours': 12,
+            "radiuses": (20, 20, 20),
+            "max_neighbours": 12,
         },
         {
-            'cov_model': CovarianceModel(
-                type=covariance.spherical,
-                ranges=(10.0, 10.0, 10.0), sill=0.25, nugget=0.0
+            "cov_model": CovarianceModel(
+                type=covariance.spherical, ranges=(10.0, 10.0, 10.0), sill=0.25, nugget=0.0
             ),
-            'radiuses': (20, 20, 20),
-            'max_neighbours': 12,
+            "radiuses": (20, 20, 20),
+            "max_neighbours": 12,
         },
     ]
 
     result = indicator_kriging(
-        prop=prop,
-        grid=grid,
-        data=ik_data,
-        marginal_probs=[0.24, 0.235, 0.34, 0.18]
+        prop=prop, grid=grid, data=ik_data, marginal_probs=[0.24, 0.235, 0.34, 0.18]
     )
 
     assert isinstance(result, IndProperty)
@@ -302,7 +277,7 @@ def test_big_multi_ik_legacy():
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
-    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC",
 )
 def test_big_sgs_sk_legacy():
     """
@@ -314,10 +289,7 @@ def test_big_sgs_sk_legacy():
     grid = SugarboxGrid(*BIG_GRID)
 
     cov_model = CovarianceModel(
-        type=covariance.exponential,
-        ranges=(10.0, 10.0, 10.0),
-        sill=0.4,
-        nugget=0.0
+        type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=0.4, nugget=0.0
     )
 
     # calc_cdf needs 3D-shaped data
@@ -331,19 +303,19 @@ def test_big_sgs_sk_legacy():
         radiuses=(20, 20, 20),
         max_neighbours=12,
         cov_model=cov_model,
-        seed=3439275
+        seed=3439275,
     )
 
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
-    assert not np.any(np.isnan(result.data.astype('float64')))
+    assert not np.any(np.isnan(result.data.astype("float64")))
 
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_160_141_20.INC"),
-    reason="Test data file not found: BIG_SOFT_DATA_160_141_20.INC"
+    reason="Test data file not found: BIG_SOFT_DATA_160_141_20.INC",
 )
 def test_big_sis_legacy():
     """
@@ -356,31 +328,24 @@ def test_big_sis_legacy():
     grid = SugarboxGrid(*BIG_GRID)
 
     cov_model = CovarianceModel(
-        type=covariance.exponential,
-        ranges=(10.0, 10.0, 10.0),
-        sill=1.0,
-        nugget=0.0
+        type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=1.0, nugget=0.0
     )
 
     sis_data = [
         {
-            'cov_model': cov_model,
-            'radiuses': (20, 20, 20),
-            'max_neighbours': 12,
+            "cov_model": cov_model,
+            "radiuses": (20, 20, 20),
+            "max_neighbours": 12,
         },
         {
-            'cov_model': cov_model,
-            'radiuses': (20, 20, 20),
-            'max_neighbours': 12,
-        }
+            "cov_model": cov_model,
+            "radiuses": (20, 20, 20),
+            "max_neighbours": 12,
+        },
     ]
 
     result = sis_simulation(
-        prop=ik_prop,
-        grid=grid,
-        data=sis_data,
-        seed=3241347,
-        marginal_probs=(0.8, 0.2)
+        prop=ik_prop, grid=grid, data=sis_data, seed=3241347, marginal_probs=(0.8, 0.2)
     )
 
     assert isinstance(result, IndProperty)
@@ -392,7 +357,7 @@ def test_big_sis_legacy():
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
-    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC",
 )
 def test_simple_cokriging_mark1_legacy():
     """
@@ -409,18 +374,15 @@ def test_simple_cokriging_mark1_legacy():
     primary_mean = calc_mean(prop_cont)
     sec_data_arr = np.where(
         prop_cont.mask == 1,
-        prop_cont.data * 0.97 + np.random.randn(BIG_SIZE).astype('float32') * 0.5,
-        -99.0
-    ).astype('float32')
+        prop_cont.data * 0.97 + np.random.randn(BIG_SIZE).astype("float32") * 0.5,
+        -99.0,
+    ).astype("float32")
     sec_mask = prop_cont.mask.copy()
     sec_data = ContProperty(sec_data_arr, sec_mask)
     secondary_mean = calc_mean(sec_data)
 
     cov_model = CovarianceModel(
-        type=covariance.exponential,
-        ranges=(10.0, 10.0, 10.0),
-        sill=1.0,
-        nugget=0.0
+        type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=1.0, nugget=0.0
     )
 
     result = simple_cokriging_markI(
@@ -433,19 +395,19 @@ def test_simple_cokriging_mark1_legacy():
         correlation_coef=0.97,
         radiuses=(20, 20, 20),
         max_neighbours=12,
-        cov_model=cov_model
+        cov_model=cov_model,
     )
 
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
-    assert not np.any(np.isnan(result.data.astype('float64')))
+    assert not np.any(np.isnan(result.data.astype("float64")))
 
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
-    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC"
+    reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC",
 )
 def test_simple_cokriging_mark2_legacy():
     """
@@ -462,47 +424,44 @@ def test_simple_cokriging_mark2_legacy():
     primary_mean = calc_mean(prop_cont)
     sec_data_arr = np.where(
         prop_cont.mask == 1,
-        prop_cont.data * 0.97 + np.random.randn(BIG_SIZE).astype('float32') * 0.5,
-        -99.0
-    ).astype('float32')
+        prop_cont.data * 0.97 + np.random.randn(BIG_SIZE).astype("float32") * 0.5,
+        -99.0,
+    ).astype("float32")
     sec_mask = prop_cont.mask.copy()
     sec_data = ContProperty(sec_data_arr, sec_mask)
     secondary_mean = calc_mean(sec_data)
 
     cov_model = CovarianceModel(
-        type=covariance.exponential,
-        ranges=(10.0, 10.0, 10.0),
-        sill=1.0,
-        nugget=0.0
+        type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=1.0, nugget=0.0
     )
 
     result = simple_cokriging_markII(
         grid=grid,
         primary_data={
-            'data': prop_cont,
-            'mean': primary_mean,
-            'cov_model': cov_model,
+            "data": prop_cont,
+            "mean": primary_mean,
+            "cov_model": cov_model,
         },
         secondary_data={
-            'data': sec_data,
-            'mean': secondary_mean,
-            'cov_model': cov_model,
+            "data": sec_data,
+            "mean": secondary_mean,
+            "cov_model": cov_model,
         },
         correlation_coef=0.97,
         radiuses=(20, 20, 20),
-        max_neighbours=12
+        max_neighbours=12,
     )
 
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
-    assert not np.any(np.isnan(result.data.astype('float64')))
+    assert not np.any(np.isnan(result.data.astype("float64")))
 
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
 @pytest.mark.skipif(
     not _has_data_file("NEW_TEST_PROP_01.INC"),
-    reason="Test data file not found: NEW_TEST_PROP_01.INC"
+    reason="Test data file not found: NEW_TEST_PROP_01.INC",
 )
 def test_vpc_small_legacy():
     """
@@ -514,14 +473,11 @@ def test_vpc_small_legacy():
     from geo_bsd.routines import CalcVPCsIndicator
 
     grid_dims = (55, 52, 1)
-    ik_prop = load_ind_property(
-        str(TEST_DATA_DIR / "NEW_TEST_PROP_01.INC"),
-        -99, [0, 1], grid_dims
-    )
+    ik_prop = load_ind_property(str(TEST_DATA_DIR / "NEW_TEST_PROP_01.INC"), -99, [0, 1], grid_dims)
 
     # Reshape data to 3D for VPC calculation
-    cube = ik_prop.data.reshape(grid_dims, order='F')
-    mask = ik_prop.mask.reshape(grid_dims, order='F')
+    cube = ik_prop.data.reshape(grid_dims, order="F")
+    mask = ik_prop.mask.reshape(grid_dims, order="F")
 
     vpcs = CalcVPCsIndicator(cube, mask, [0, 1], [0.8, 0.2])
 
@@ -544,38 +500,31 @@ def test_sis_on_empty_data_legacy():
     np.random.seed(42)
 
     # Create very sparse indicator data (~1% informed)
-    data = np.random.randint(0, 2, BIG_SIZE, dtype='uint8')
-    mask = np.zeros(BIG_SIZE, dtype='uint8')
+    data = np.random.randint(0, 2, BIG_SIZE, dtype="uint8")
+    mask = np.zeros(BIG_SIZE, dtype="uint8")
     sparse_indices = np.random.choice(BIG_SIZE, BIG_SIZE // 100, replace=False)
     mask[sparse_indices] = 1
     prop = IndProperty(data, mask, 2)
 
     cov_model = CovarianceModel(
-        type=covariance.spherical,
-        ranges=(10.0, 10.0, 10.0),
-        sill=0.4,
-        nugget=0.0
+        type=covariance.spherical, ranges=(10.0, 10.0, 10.0), sill=0.4, nugget=0.0
     )
 
     sis_data = [
         {
-            'cov_model': cov_model,
-            'radiuses': (10, 10, 10),
-            'max_neighbours': 12,
+            "cov_model": cov_model,
+            "radiuses": (10, 10, 10),
+            "max_neighbours": 12,
         },
         {
-            'cov_model': cov_model,
-            'radiuses': (10, 10, 10),
-            'max_neighbours': 12,
-        }
+            "cov_model": cov_model,
+            "radiuses": (10, 10, 10),
+            "max_neighbours": 12,
+        },
     ]
 
     result = sis_simulation(
-        prop=prop,
-        grid=grid,
-        data=sis_data,
-        seed=3241347,
-        marginal_probs=(0.9, 0.1)
+        prop=prop, grid=grid, data=sis_data, seed=3241347, marginal_probs=(0.9, 0.1)
     )
 
     assert isinstance(result, IndProperty)
@@ -597,23 +546,20 @@ def test_sgs_on_empty_data_legacy():
     np.random.seed(42)
 
     # Create very sparse continuous data (~1% informed)
-    data = np.random.rand(BIG_SIZE).astype('float32') * 100
-    mask = np.zeros(BIG_SIZE, dtype='uint8')
+    data = np.random.rand(BIG_SIZE).astype("float32") * 100
+    mask = np.zeros(BIG_SIZE, dtype="uint8")
     sparse_indices = np.random.choice(BIG_SIZE, BIG_SIZE // 100, replace=False)
     mask[sparse_indices] = 1
     prop = ContProperty(data, mask)
 
     cov_model = CovarianceModel(
-        type=covariance.exponential,
-        ranges=(10.0, 10.0, 10.0),
-        sill=0.4,
-        nugget=0.0
+        type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=0.4, nugget=0.0
     )
 
     # Build CDF from the sparse informed data
     informed = data[mask == 1]
     sorted_vals = np.sort(informed)
-    probs = np.linspace(0, 1, len(sorted_vals)).astype('float32')
+    probs = np.linspace(0, 1, len(sorted_vals)).astype("float32")
     cdf_data = CdfData(sorted_vals, probs)
 
     result = sgs_simulation(
@@ -623,17 +569,18 @@ def test_sgs_on_empty_data_legacy():
         radiuses=(20, 20, 20),
         max_neighbours=12,
         cov_model=cov_model,
-        seed=3439275
+        seed=3439275,
     )
 
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
-    assert not np.any(np.isnan(result.data.astype('float64')))
+    assert not np.any(np.isnan(result.data.astype("float64")))
 
 
 # ============================================================================
 # Tests Implemented with Synthetic Data
 # ============================================================================
+
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
@@ -651,8 +598,8 @@ class TestAnisotropicCovariance:
         """
         grid = SugarboxGrid(x=20, y=20, z=10)
         np.random.seed(42)
-        data = np.random.rand(4000).astype('float32') * 3.4  # centered around mean=1.7
-        mask = np.ones(4000, dtype='uint8')
+        data = np.random.rand(4000).astype("float32") * 3.4  # centered around mean=1.7
+        mask = np.ones(4000, dtype="uint8")
         # Make some values uninformed
         mask[::20] = 0
         prop = ContProperty(data, mask)
@@ -662,7 +609,7 @@ class TestAnisotropicCovariance:
             ranges=(20.0, 10.0, 5.0),
             angles=(40.0, 50.0, 90.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = simple_kriging(
@@ -671,14 +618,14 @@ class TestAnisotropicCovariance:
             radiuses=(100, 100, 100),
             max_neighbours=12,
             cov_model=cov_model,
-            mean=1.7
+            mean=1.7,
         )
 
         assert isinstance(result, ContProperty)
         assert result.data.shape == prop.data.shape
         # Check results are reasonable (not all zeros, no NaN)
         assert not np.all(result.data == 0)
-        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isnan(result.data.astype("float64")))
 
 
 @pytest.mark.hpgl
@@ -686,11 +633,14 @@ class TestAnisotropicCovariance:
 class TestDifferentCovarianceTypes:
     """Tests for different covariance types - migrated from test_compare.py"""
 
-    @pytest.mark.parametrize("cov_type_name,cov_type", [
-        ("exponential", covariance.exponential),
-        ("gaussian", covariance.gaussian),
-        ("spherical", covariance.spherical),
-    ])
+    @pytest.mark.parametrize(
+        "cov_type_name,cov_type",
+        [
+            ("exponential", covariance.exponential),
+            ("gaussian", covariance.gaussian),
+            ("spherical", covariance.spherical),
+        ],
+    )
     def test_sk_with_different_covariance_types(self, cov_type_name, cov_type):
         """
         Test SK with different covariance types - migrated from test_compare.py
@@ -702,17 +652,12 @@ class TestDifferentCovarianceTypes:
         """
         grid = SugarboxGrid(x=15, y=15, z=10)
         np.random.seed(42)
-        data = np.random.rand(2250).astype('float32') * 3.2
-        mask = np.ones(2250, dtype='uint8')
+        data = np.random.rand(2250).astype("float32") * 3.2
+        mask = np.ones(2250, dtype="uint8")
         mask[::15] = 0
         prop = ContProperty(data, mask)
 
-        cov_model = CovarianceModel(
-            type=cov_type,
-            ranges=(10.0, 10.0, 10.0),
-            sill=1.0,
-            nugget=0.0
-        )
+        cov_model = CovarianceModel(type=cov_type, ranges=(10.0, 10.0, 10.0), sill=1.0, nugget=0.0)
 
         result = simple_kriging(
             prop=prop,
@@ -720,12 +665,12 @@ class TestDifferentCovarianceTypes:
             radiuses=(20, 20, 20),
             max_neighbours=12,
             cov_model=cov_model,
-            mean=1.6
+            mean=1.6,
         )
 
         assert isinstance(result, ContProperty)
         assert not np.all(result.data == 0)
-        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isnan(result.data.astype("float64")))
 
     def test_sk_with_nugget(self):
         """
@@ -735,8 +680,8 @@ class TestDifferentCovarianceTypes:
         """
         grid = SugarboxGrid(x=15, y=15, z=10)
         np.random.seed(42)
-        data = np.random.rand(2250).astype('float32') * 3.2
-        mask = np.ones(2250, dtype='uint8')
+        data = np.random.rand(2250).astype("float32") * 3.2
+        mask = np.ones(2250, dtype="uint8")
         mask[::15] = 0
         prop = ContProperty(data, mask)
 
@@ -744,7 +689,7 @@ class TestDifferentCovarianceTypes:
             type=covariance.exponential,
             ranges=(10.0, 10.0, 10.0),
             sill=1.0,
-            nugget=0.5  # Significant nugget effect
+            nugget=0.5,  # Significant nugget effect
         )
 
         result = simple_kriging(
@@ -753,11 +698,11 @@ class TestDifferentCovarianceTypes:
             radiuses=(20, 20, 20),
             max_neighbours=12,
             cov_model=cov_model,
-            mean=1.6
+            mean=1.6,
         )
 
         assert isinstance(result, ContProperty)
-        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isnan(result.data.astype("float64")))
 
 
 @pytest.mark.hpgl
@@ -774,8 +719,8 @@ class TestMaskedSimulation:
         """
         grid = SugarboxGrid(x=55, y=52, z=1)
         np.random.seed(42)
-        data = np.random.rand(2860).astype('float32') * 100
-        mask = np.ones(2860, dtype='uint8')
+        data = np.random.rand(2860).astype("float32") * 100
+        mask = np.ones(2860, dtype="uint8")
         # Make alternating pattern mask like original test
         for i in range(2860):
             mask[i] = i % 2
@@ -783,19 +728,16 @@ class TestMaskedSimulation:
         prop = ContProperty(data, mask)
 
         cov_model = CovarianceModel(
-            type=covariance.exponential,
-            ranges=(10.0, 10.0, 10.0),
-            sill=0.4,
-            nugget=0.0
+            type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=0.4, nugget=0.0
         )
 
         cdf_data = CdfData(
-            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype='float32'),
-            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
+            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype="float32"),
+            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32"),
         )
 
         # Create mask array (0 = skip, 1 = process)
-        process_mask = np.ones(2860, dtype='uint8')
+        process_mask = np.ones(2860, dtype="uint8")
         for i in range(2860):
             process_mask[i] = i % 2
 
@@ -807,7 +749,7 @@ class TestMaskedSimulation:
             max_neighbours=12,
             cov_model=cov_model,
             seed=3439275,
-            mask=process_mask
+            mask=process_mask,
         )
 
         assert isinstance(result, ContProperty)
@@ -829,63 +771,47 @@ class TestMultiCategoryIndicator:
         grid = SugarboxGrid(x=20, y=20, z=10)
         np.random.seed(42)
         # 4 categories: 0, 1, 2, 3
-        data = np.random.randint(0, 4, 4000, dtype='uint8')
-        mask = np.ones(4000, dtype='uint8')
+        data = np.random.randint(0, 4, 4000, dtype="uint8")
+        mask = np.ones(4000, dtype="uint8")
         mask[::20] = 0
         prop = IndProperty(data, mask, 4)
 
         # Different covariance for each category
         sis_data = [
             {
-                'cov_model': CovarianceModel(
-                    type=covariance.spherical,
-                    ranges=(4.0, 4.0, 4.0),
-                    sill=0.25,
-                    nugget=0.0
+                "cov_model": CovarianceModel(
+                    type=covariance.spherical, ranges=(4.0, 4.0, 4.0), sill=0.25, nugget=0.0
                 ),
-                'radiuses': (20, 20, 20),
-                'max_neighbours': 12
+                "radiuses": (20, 20, 20),
+                "max_neighbours": 12,
             },
             {
-                'cov_model': CovarianceModel(
-                    type=covariance.spherical,
-                    ranges=(6.0, 6.0, 6.0),
-                    sill=0.25,
-                    nugget=0.0
+                "cov_model": CovarianceModel(
+                    type=covariance.spherical, ranges=(6.0, 6.0, 6.0), sill=0.25, nugget=0.0
                 ),
-                'radiuses': (20, 20, 20),
-                'max_neighbours': 12
+                "radiuses": (20, 20, 20),
+                "max_neighbours": 12,
             },
             {
-                'cov_model': CovarianceModel(
-                    type=covariance.spherical,
-                    ranges=(2.0, 2.0, 2.0),
-                    sill=0.25,
-                    nugget=0.0
+                "cov_model": CovarianceModel(
+                    type=covariance.spherical, ranges=(2.0, 2.0, 2.0), sill=0.25, nugget=0.0
                 ),
-                'radiuses': (20, 20, 20),
-                'max_neighbours': 12
+                "radiuses": (20, 20, 20),
+                "max_neighbours": 12,
             },
             {
-                'cov_model': CovarianceModel(
-                    type=covariance.spherical,
-                    ranges=(10.0, 10.0, 10.0),
-                    sill=0.25,
-                    nugget=0.0
+                "cov_model": CovarianceModel(
+                    type=covariance.spherical, ranges=(10.0, 10.0, 10.0), sill=0.25, nugget=0.0
                 ),
-                'radiuses': (20, 20, 20),
-                'max_neighbours': 12
-            }
+                "radiuses": (20, 20, 20),
+                "max_neighbours": 12,
+            },
         ]
 
         marginal_probs = [0.24, 0.235, 0.34, 0.18]
 
         result = sis_simulation(
-            prop=prop,
-            grid=grid,
-            data=sis_data,
-            seed=3241347,
-            marginal_probs=marginal_probs
+            prop=prop, grid=grid, data=sis_data, seed=3241347, marginal_probs=marginal_probs
         )
 
         assert isinstance(result, IndProperty)
@@ -906,22 +832,19 @@ class TestSGSReproducibility:
         """
         grid = SugarboxGrid(x=20, y=20, z=5)
         np.random.seed(42)
-        data = np.random.rand(2000).astype('float32') * 100
-        mask = np.ones(2000, dtype='uint8')
+        data = np.random.rand(2000).astype("float32") * 100
+        mask = np.ones(2000, dtype="uint8")
         mask[::10] = 0
         prop1 = ContProperty(data.copy(), mask.copy())
         prop2 = ContProperty(data.copy(), mask.copy())
 
         cov_model = CovarianceModel(
-            type=covariance.exponential,
-            ranges=(10.0, 10.0, 10.0),
-            sill=0.4,
-            nugget=0.0
+            type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=0.4, nugget=0.0
         )
 
         cdf_data = CdfData(
-            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype='float32'),
-            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
+            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype="float32"),
+            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32"),
         )
 
         result1 = sgs_simulation(
@@ -931,7 +854,7 @@ class TestSGSReproducibility:
             radiuses=(20, 20, 20),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=3439275
+            seed=3439275,
         )
 
         result2 = sgs_simulation(
@@ -941,7 +864,7 @@ class TestSGSReproducibility:
             radiuses=(20, 20, 20),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=3439275
+            seed=3439275,
         )
 
         # Same seed should produce same results
@@ -953,22 +876,19 @@ class TestSGSReproducibility:
         """
         grid = SugarboxGrid(x=20, y=20, z=5)
         np.random.seed(42)
-        data = np.random.rand(2000).astype('float32') * 100
-        mask = np.ones(2000, dtype='uint8')
+        data = np.random.rand(2000).astype("float32") * 100
+        mask = np.ones(2000, dtype="uint8")
         mask[::10] = 0
         prop1 = ContProperty(data.copy(), mask.copy())
         prop2 = ContProperty(data.copy(), mask.copy())
 
         cov_model = CovarianceModel(
-            type=covariance.exponential,
-            ranges=(10.0, 10.0, 10.0),
-            sill=0.4,
-            nugget=0.0
+            type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=0.4, nugget=0.0
         )
 
         cdf_data = CdfData(
-            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype='float32'),
-            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
+            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype="float32"),
+            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32"),
         )
 
         result1 = sgs_simulation(
@@ -978,7 +898,7 @@ class TestSGSReproducibility:
             radiuses=(20, 20, 20),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=3439275
+            seed=3439275,
         )
 
         result2 = sgs_simulation(
@@ -988,7 +908,7 @@ class TestSGSReproducibility:
             radiuses=(20, 20, 20),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=24193421  # Different seed
+            seed=24193421,  # Different seed
         )
 
         # Different seeds should produce different results
@@ -1009,18 +929,15 @@ class TestEdgeCases:
         """
         grid = SugarboxGrid(x=50, y=50, z=20)
         np.random.seed(42)
-        data = np.random.rand(50000).astype('float32') * 100
-        mask = np.zeros(50000, dtype='uint8')  # All uninformed initially
+        data = np.random.rand(50000).astype("float32") * 100
+        mask = np.zeros(50000, dtype="uint8")  # All uninformed initially
         # Only inform 1% of nodes
         sparse_indices = np.random.choice(50000, 500, replace=False)
         mask[sparse_indices] = 1
         prop = ContProperty(data, mask)
 
         cov_model = CovarianceModel(
-            type=covariance.exponential,
-            ranges=(10.0, 10.0, 10.0),
-            sill=0.4,
-            nugget=0.0
+            type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=0.4, nugget=0.0
         )
 
         result = simple_kriging(
@@ -1029,13 +946,13 @@ class TestEdgeCases:
             radiuses=(10, 10, 10),  # Smaller search radius
             max_neighbours=12,
             cov_model=cov_model,
-            mean=50.0
+            mean=50.0,
         )
 
         assert isinstance(result, ContProperty)
         # With sparse data, many nodes may still be uninformed
         # but result should be valid where estimated
-        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isnan(result.data.astype("float64")))
 
     def test_simulation_with_very_sparse_data(self):
         """
@@ -1043,23 +960,20 @@ class TestEdgeCases:
         """
         grid = SugarboxGrid(x=30, y=30, z=10)
         np.random.seed(42)
-        data = np.random.rand(9000).astype('float32') * 100
-        mask = np.zeros(9000, dtype='uint8')
+        data = np.random.rand(9000).astype("float32") * 100
+        mask = np.zeros(9000, dtype="uint8")
         # Only inform 2% of nodes
         sparse_indices = np.random.choice(9000, 180, replace=False)
         mask[sparse_indices] = 1
         prop = ContProperty(data, mask)
 
         cov_model = CovarianceModel(
-            type=covariance.exponential,
-            ranges=(10.0, 10.0, 10.0),
-            sill=0.4,
-            nugget=0.0
+            type=covariance.exponential, ranges=(10.0, 10.0, 10.0), sill=0.4, nugget=0.0
         )
 
         cdf_data = CdfData(
-            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype='float32'),
-            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
+            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype="float32"),
+            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32"),
         )
 
         result = sgs_simulation(
@@ -1069,11 +983,11 @@ class TestEdgeCases:
             radiuses=(20, 20, 20),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=3439275
+            seed=3439275,
         )
 
         assert isinstance(result, ContProperty)
-        assert not np.any(np.isnan(result.data.astype('float64')))
+        assert not np.any(np.isnan(result.data.astype("float64")))
 
 
 @pytest.mark.hpgl
@@ -1096,16 +1010,13 @@ class TestSGSSeedVariations:
         """
         grid = SugarboxGrid(x=15, y=15, z=5)
         np.random.seed(42)
-        data = np.random.rand(1125).astype('float32') * 100
-        mask = np.ones(1125, dtype='uint8')
+        data = np.random.rand(1125).astype("float32") * 100
+        mask = np.ones(1125, dtype="uint8")
         mask[::10] = 0
         prop = ContProperty(data, mask)
 
         cov_model = CovarianceModel(
-            type=covariance.exponential,
-            ranges=(5.0, 5.0, 5.0),
-            sill=1.0,
-            nugget=0.0
+            type=covariance.exponential, ranges=(5.0, 5.0, 5.0), sill=1.0, nugget=0.0
         )
 
         # Get SK estimate
@@ -1115,17 +1026,17 @@ class TestSGSSeedVariations:
             radiuses=(10, 10, 10),
             max_neighbours=12,
             cov_model=cov_model,
-            mean=None
+            mean=None,
         )
 
         cdf_data = CdfData(
-            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype='float32'),
-            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
+            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype="float32"),
+            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32"),
         )
 
         # Run multiple SGS realizations (100 for statistical convergence)
         n_realizations = 100
-        sum_array = np.zeros(sk_result.data.size, dtype='float32')
+        sum_array = np.zeros(sk_result.data.size, dtype="float32")
 
         for i in range(n_realizations):
             # Need fresh input for each realization
@@ -1137,20 +1048,20 @@ class TestSGSSeedVariations:
                 radiuses=(10, 10, 10),
                 max_neighbours=12,
                 cov_model=cov_model,
-                seed=int(100000 + i * 99991)
+                seed=int(100000 + i * 99991),
             )
-            sum_array += sgs_result.data.flatten(order='F')
+            sum_array += sgs_result.data.flatten(order="F")
 
         # Calculate average
         average = sum_array / n_realizations
 
         # Check that average is reasonably close to SK estimate
         # With 100 realizations, convergence should be tighter
-        mean_diff = np.mean(np.abs(average - sk_result.data.flatten(order='F')))
+        mean_diff = np.mean(np.abs(average - sk_result.data.flatten(order="F")))
 
         # The difference should be small with 100 realizations (tighter than original 50.0)
         assert mean_diff < 1.0, f"Mean difference {mean_diff} too large"
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v', '-m', 'legacy'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "-m", "legacy"])

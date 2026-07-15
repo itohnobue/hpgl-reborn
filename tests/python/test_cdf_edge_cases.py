@@ -14,11 +14,11 @@ except (ImportError, OSError):
 
 
 def _make_prop(values, mask=None, grid_shape=None):
-    data = np.array(values, dtype='float32')
+    data = np.array(values, dtype="float32")
     if mask is None:
-        mask = np.ones(len(data), dtype='uint8')
+        mask = np.ones(len(data), dtype="uint8")
     else:
-        mask = np.array(mask, dtype='uint8')
+        mask = np.array(mask, dtype="uint8")
     prop = ContProperty(data, mask)
     if grid_shape is not None:
         grid = SugarboxGrid(*grid_shape)
@@ -39,18 +39,18 @@ class TestCalcCdfDuplicateValues:
         prop = _make_prop([1.0] * 4 + [2.0] * 4, grid_shape=(2, 2, 2))
         cdf = calc_cdf(prop)
         assert cdf.values.size == 2
-        expected_values = np.array([1.0, 2.0], dtype='float32')
+        expected_values = np.array([1.0, 2.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([0.5, 1.0], dtype='float32')
+        expected_probs = np.array([0.5, 1.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_three_groups_of_duplicates(self):
         prop = _make_prop([1.0] * 3 + [2.0] * 3 + [3.0] * 3, grid_shape=(3, 3, 1))
         cdf = calc_cdf(prop)
         assert cdf.values.size == 3
-        expected_values = np.array([1.0, 2.0, 3.0], dtype='float32')
+        expected_values = np.array([1.0, 2.0, 3.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([1/3, 2/3, 1.0], dtype='float32')
+        expected_probs = np.array([1 / 3, 2 / 3, 1.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
 
@@ -117,35 +117,39 @@ class TestCalcCdfNegativeValues:
 @pytest.mark.hpgl
 class TestCalcCdfEdgeCases:
     def test_all_masked_raises(self):
-        prop = _make_prop([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-                          mask=[0, 0, 0, 0, 0, 0, 0, 0],
-                          grid_shape=(2, 2, 2))
+        prop = _make_prop(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            mask=[0, 0, 0, 0, 0, 0, 0, 0],
+            grid_shape=(2, 2, 2),
+        )
         with pytest.raises(ValueError, match="no informed values"):
             calc_cdf(prop)
 
     def test_partially_masked(self):
-        prop = _make_prop([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-                          mask=[1, 1, 0, 0, 0, 0, 0, 0],
-                          grid_shape=(2, 2, 2))
+        prop = _make_prop(
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            mask=[1, 1, 0, 0, 0, 0, 0, 0],
+            grid_shape=(2, 2, 2),
+        )
         cdf = calc_cdf(prop)
         assert cdf.values.size == 2
-        expected_values = np.array([1.0, 2.0], dtype='float32')
+        expected_values = np.array([1.0, 2.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([0.5, 1.0], dtype='float32')
+        expected_probs = np.array([0.5, 1.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_two_unique_values_equal_counts(self):
         prop = _make_prop([10.0] * 6 + [20.0] * 6, grid_shape=(3, 2, 2))
         cdf = calc_cdf(prop)
         assert cdf.values.size == 2
-        expected_values = np.array([10.0, 20.0], dtype='float32')
+        expected_values = np.array([10.0, 20.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([0.5, 1.0], dtype='float32')
+        expected_probs = np.array([0.5, 1.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_many_unique_sorted(self):
         np.random.seed(42)
-        values = np.random.rand(30).astype('float32') * 100
+        values = np.random.rand(30).astype("float32") * 100
         prop = _make_prop(list(values), grid_shape=(5, 3, 2))
         cdf = calc_cdf(prop)
         if cdf.values.size > 1:
@@ -153,7 +157,7 @@ class TestCalcCdfEdgeCases:
 
     def test_probs_monotonically_increasing(self):
         np.random.seed(42)
-        values = np.random.rand(30).astype('float32') * 100
+        values = np.random.rand(30).astype("float32") * 100
         prop = _make_prop(list(values), grid_shape=(5, 3, 2))
         cdf = calc_cdf(prop)
         if cdf.probs.size > 1:
@@ -163,9 +167,9 @@ class TestCalcCdfEdgeCases:
         prop = _make_prop([1e-10, 1e10], grid_shape=(2, 1, 1))
         cdf = calc_cdf(prop)
         assert cdf.values.size == 2
-        expected_values = np.array([1e-10, 1e10], dtype='float32')
+        expected_values = np.array([1e-10, 1e10], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([0.5, 1.0], dtype='float32')
+        expected_probs = np.array([0.5, 1.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_near_equal_floats(self):
@@ -176,15 +180,13 @@ class TestCalcCdfEdgeCases:
 
     def test_all_nan_informed_raises(self):
         """calc_cdf raises ValueError when all informed values are NaN."""
-        prop = _make_prop([np.nan, np.nan, np.nan, np.nan],
-                          grid_shape=(2, 2, 1))
+        prop = _make_prop([np.nan, np.nan, np.nan, np.nan], grid_shape=(2, 2, 1))
         with pytest.raises(ValueError, match="no informed values after filtering NaN"):
             calc_cdf(prop)
 
     def test_mixed_nan_and_finite(self):
         """calc_cdf filters NaN values and computes CDF from finite remainder."""
-        prop = _make_prop([np.nan, 5.0, np.nan, 15.0],
-                          grid_shape=(2, 2, 1))
+        prop = _make_prop([np.nan, 5.0, np.nan, 15.0], grid_shape=(2, 2, 1))
         cdf = calc_cdf(prop)
         assert cdf.values.size == 2
         np.testing.assert_array_almost_equal(cdf.values, [5.0, 15.0])

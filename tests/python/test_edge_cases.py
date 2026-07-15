@@ -10,6 +10,7 @@ across all HPGL functions including:
 - Simulation edge cases (determinism, masks)
 - CDF edge cases
 """
+
 import sys
 from pathlib import Path
 
@@ -40,6 +41,7 @@ except (ImportError, OSError):
 # 1. GRID EDGE CASES
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestGridEdgeCases:
     """Test edge cases related to grid configurations"""
@@ -47,8 +49,8 @@ class TestGridEdgeCases:
     def test_single_cell_grid_1x1x1(self):
         """Test with minimal grid of single cell (1x1x1)"""
         grid = SugarboxGrid(x=1, y=1, z=1)
-        data = np.array([42.5], dtype='float32')
-        mask = np.array([1], dtype='uint8')
+        data = np.array([42.5], dtype="float32")
+        mask = np.array([1], dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # IMPORTANT: Reshape 1D data to match grid
         cov_model = CovarianceModel(
@@ -56,19 +58,17 @@ class TestGridEdgeCases:
             ranges=(1.0, 1.0, 1.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(1, 1, 1),
-            max_neighbours=1,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(1, 1, 1), max_neighbours=1, cov_model=cov_model
         )
 
         assert result.data.shape == (1, 1, 1)
-        assert result.data[0, 0, 0] == pytest.approx(42.5, rel=1e-5)  # Single cell should retain its value
+        assert result.data[0, 0, 0] == pytest.approx(
+            42.5, rel=1e-5
+        )  # Single cell should retain its value
 
     def test_non_cubic_grid_flat_x(self):
         """Test with flat grid along X axis (1 x 10 x 10)
@@ -78,8 +78,8 @@ class TestGridEdgeCases:
         """
         grid = SugarboxGrid(x=1, y=10, z=10)
         np.random.seed(42)
-        data = np.random.rand(100).astype('float32') * 100
-        mask = np.ones(100, dtype='uint8')
+        data = np.random.rand(100).astype("float32") * 100
+        mask = np.ones(100, dtype="uint8")
         mask[::5] = 0
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)
@@ -88,15 +88,11 @@ class TestGridEdgeCases:
             ranges=(1.0, 5.0, 5.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(1, 5, 5),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(1, 5, 5), max_neighbours=12, cov_model=cov_model
         )
 
         assert result.data.shape == (1, 10, 10)
@@ -109,8 +105,8 @@ class TestGridEdgeCases:
         """
         grid = SugarboxGrid(x=10, y=10, z=1)
         np.random.seed(42)
-        data = np.random.rand(100).astype('float32') * 100
-        mask = np.ones(100, dtype='uint8')
+        data = np.random.rand(100).astype("float32") * 100
+        mask = np.ones(100, dtype="uint8")
         mask[::5] = 0
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)
@@ -119,15 +115,11 @@ class TestGridEdgeCases:
             ranges=(5.0, 5.0, 1.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 1),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 1), max_neighbours=12, cov_model=cov_model
         )
 
         assert result.data.shape == (10, 10, 1)
@@ -135,8 +127,8 @@ class TestGridEdgeCases:
     def test_non_cubic_grid_different_dimensions(self):
         """Test with grid having all different dimensions (5 x 10 x 20)"""
         grid = SugarboxGrid(x=5, y=10, z=20)
-        data = np.random.rand(1000).astype('float32') * 100
-        mask = np.ones(1000, dtype='uint8')
+        data = np.random.rand(1000).astype("float32") * 100
+        mask = np.ones(1000, dtype="uint8")
         # Make some uninformed
         mask[::5] = 0
         prop = ContProperty(data, mask)
@@ -146,15 +138,11 @@ class TestGridEdgeCases:
             ranges=(3.0, 5.0, 10.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(2, 5, 10),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(2, 5, 10), max_neighbours=12, cov_model=cov_model
         )
 
         assert result.data.shape == (5, 10, 20)
@@ -162,8 +150,8 @@ class TestGridEdgeCases:
     def test_large_grid_stress(self):
         """Test with large grid (50 x 50 x 50 = 125,000 cells)"""
         grid = SugarboxGrid(x=50, y=50, z=50)
-        data = np.random.rand(125000).astype('float32') * 100
-        mask = np.ones(125000, dtype='uint8')
+        data = np.random.rand(125000).astype("float32") * 100
+        mask = np.ones(125000, dtype="uint8")
         mask[::10] = 0  # 10% uninformed
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)
@@ -172,32 +160,31 @@ class TestGridEdgeCases:
             ranges=(10.0, 10.0, 10.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 5),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 5), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)
 
         assert result.data.shape == (50, 50, 50)
         assert not np.all(result.data == 0)
 
-    @pytest.mark.parametrize("x,y,z", [
-        (2, 3, 5),   # Small but not trivial
-        (3, 2, 2),   # X dominant
-        (2, 5, 3),   # Y dominant
-    ])
+    @pytest.mark.parametrize(
+        "x,y,z",
+        [
+            (2, 3, 5),  # Small but not trivial
+            (3, 2, 2),  # X dominant
+            (2, 5, 3),  # Y dominant
+        ],
+    )
     def test_small_non_cubic_grids(self, x, y, z):
         """Test small non-cubic grids with various dimensions"""
         grid = SugarboxGrid(x=x, y=y, z=z)
         size = x * y * z
-        data = np.arange(size, dtype='float32')
-        mask = np.ones(size, dtype='uint8')
+        data = np.arange(size, dtype="float32")
+        mask = np.ones(size, dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # IMPORTANT: Reshape 1D data to match grid
         cov_model = CovarianceModel(
@@ -205,7 +192,7 @@ class TestGridEdgeCases:
             ranges=(1.0, 1.0, 1.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = ordinary_kriging(
@@ -213,7 +200,7 @@ class TestGridEdgeCases:
             grid=grid,
             radiuses=(1, 1, 1),
             max_neighbours=min(8, size),
-            cov_model=cov_model
+            cov_model=cov_model,
         )
 
         assert result.data.shape == (x, y, z)
@@ -222,6 +209,7 @@ class TestGridEdgeCases:
 # =============================================================================
 # 2. DATA EDGE CASES
 # =============================================================================
+
 
 @pytest.mark.hpgl
 class TestDataEdgeCases:
@@ -235,8 +223,8 @@ class TestDataEdgeCases:
         With 90% sparsity, many cells may not find neighbors within the search radius.
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.zeros(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.zeros(500, dtype="uint8")
         # Only 10% informed
         mask[::10] = 1
         prop = ContProperty(data, mask)
@@ -245,22 +233,18 @@ class TestDataEdgeCases:
             ranges=(10.0, 10.0, 5.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(10, 10, 5),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(10, 10, 5), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
         assert result.data.shape == (10, 10, 5)
         # Original informed cells should remain informed
         # Note: result.mask is now 3D, so we need to flatten it for comparison
-        assert np.all(result.mask.flatten(order='F')[mask == 1] == 1)
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
         # Some uninformed cells may become informed if they found neighbors
         # (but with high sparsity, many may remain uninformed)
 
@@ -271,8 +255,8 @@ class TestDataEdgeCases:
         HPGL handles this gracefully using undefined_on_failure.
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.zeros(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.zeros(500, dtype="uint8")
         # Only 5% informed
         mask[::20] = 1
         prop = ContProperty(data, mask)
@@ -281,15 +265,11 @@ class TestDataEdgeCases:
             ranges=(10.0, 10.0, 5.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(10, 10, 5),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(10, 10, 5), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -297,7 +277,7 @@ class TestDataEdgeCases:
         assert result.data.shape == (10, 10, 5)
         # Original informed cells should remain informed
         # Note: result.mask is now 3D, so we need to flatten it for comparison
-        assert np.all(result.mask.flatten(order='F')[mask == 1] == 1)
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
 
     def test_sparse_data_99_percent_uninformed(self):
         """Test with 99% of data uninformed (nearly empty)
@@ -306,8 +286,8 @@ class TestDataEdgeCases:
         This is an extreme sparse case that tests HPGL's graceful degradation.
         """
         grid = SugarboxGrid(x=10, y=10, z=10)
-        data = np.random.rand(1000).astype('float32') * 100
-        mask = np.zeros(1000, dtype='uint8')
+        data = np.random.rand(1000).astype("float32") * 100
+        mask = np.zeros(1000, dtype="uint8")
         # Only 1% informed (10 values out of 1000)
         mask[::100] = 1
         prop = ContProperty(data, mask)
@@ -316,7 +296,7 @@ class TestDataEdgeCases:
             ranges=(10.0, 10.0, 10.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
@@ -324,7 +304,7 @@ class TestDataEdgeCases:
             grid=grid,
             radiuses=(10, 10, 10),
             max_neighbours=8,  # Use fewer neighbors since data is sparse
-            cov_model=cov_model
+            cov_model=cov_model,
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -332,7 +312,7 @@ class TestDataEdgeCases:
         assert result.data.shape == (10, 10, 10)
         # Original informed cells should remain informed
         # Note: result.mask is now 3D, so we need to flatten it for comparison
-        assert np.all(result.mask.flatten(order='F')[mask == 1] == 1)
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
 
     def test_dense_data_100_percent_informed(self):
         """Test with 100% of data informed (dense data scenario)
@@ -341,23 +321,19 @@ class TestDataEdgeCases:
         using neighbors. Values will be smoothed but similar to input range.
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')  # All informed
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")  # All informed
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
             type=covariance.spherical,
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -372,23 +348,19 @@ class TestDataEdgeCases:
     def test_uniform_data_all_same_value(self):
         """Test with all data having the same value (uniform distribution)"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.ones(500, dtype='float32') * 42.0  # All same value
-        mask = np.ones(500, dtype='uint8')
+        data = np.ones(500, dtype="float32") * 42.0  # All same value
+        mask = np.ones(500, dtype="uint8")
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
             type=covariance.spherical,
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -398,8 +370,8 @@ class TestDataEdgeCases:
     def test_extreme_values_very_large(self):
         """Test with very large positive values"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.full(500, 1e10, dtype='float32')
-        mask = np.ones(500, dtype='uint8')
+        data = np.full(500, 1e10, dtype="float32")
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
@@ -407,15 +379,11 @@ class TestDataEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -426,8 +394,8 @@ class TestDataEdgeCases:
     def test_extreme_values_very_small(self):
         """Test with very small positive values"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.full(500, 1e-10, dtype='float32')
-        mask = np.ones(500, dtype='uint8')
+        data = np.full(500, 1e-10, dtype="float32")
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
@@ -435,15 +403,11 @@ class TestDataEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -459,8 +423,8 @@ class TestDataEdgeCases:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)  # For reproducibility
-        data = np.random.rand(500).astype('float32') * 100 - 50  # Range: -50 to 50
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100 - 50  # Range: -50 to 50
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
@@ -468,15 +432,11 @@ class TestDataEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -491,8 +451,8 @@ class TestDataEdgeCases:
     def test_all_zeros(self):
         """Test with all zero values"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.zeros(500, dtype='float32')
-        mask = np.ones(500, dtype='uint8')
+        data = np.zeros(500, dtype="float32")
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
@@ -500,15 +460,11 @@ class TestDataEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
 
         # Results should be close to zero
@@ -523,10 +479,10 @@ class TestDataEdgeCases:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)  # For reproducibility
-        data = np.random.rand(500).astype('float32') * 100
+        data = np.random.rand(500).astype("float32") * 100
 
         # Create mask - mark all as informed initially
-        mask = np.ones(500, dtype='uint8')
+        mask = np.ones(500, dtype="uint8")
 
         # Identify positions that would have NaN (for simulation)
         # In practice, users should mask these positions
@@ -543,15 +499,11 @@ class TestDataEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -559,7 +511,7 @@ class TestDataEdgeCases:
         assert result.data.shape == (10, 10, 5)
         # Original informed cells should remain informed
         # Note: result.mask is now 3D, so we need to flatten it for comparison
-        assert np.all(result.mask.flatten(order='F')[mask == 1] == 1)
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
         # No NaN in result
         assert not np.any(np.isnan(result.data))
 
@@ -571,8 +523,8 @@ class TestDataEdgeCases:
         This test verifies the current behavior to document the contract.
         """
         grid = SugarboxGrid(x=5, y=5, z=2)
-        data = np.array([1.0, 2.0, np.nan, 4.0, 5.0] * 10, dtype='float32')
-        mask = np.ones(50, dtype='uint8')
+        data = np.array([1.0, 2.0, np.nan, 4.0, 5.0] * 10, dtype="float32")
+        mask = np.ones(50, dtype="uint8")
 
         # ContProperty with NaN values in data — current behavior tested
         try:
@@ -582,14 +534,10 @@ class TestDataEdgeCases:
                 ranges=(5.0, 5.0, 3.0),
                 angles=(0.0, 0.0, 0.0),
                 sill=1.0,
-                nugget=0.1
+                nugget=0.1,
             )
             result = ordinary_kriging(
-                prop=prop,
-                grid=grid,
-                radiuses=(3, 3, 2),
-                max_neighbours=6,
-                cov_model=cov_model
+                prop=prop, grid=grid, radiuses=(3, 3, 2), max_neighbours=6, cov_model=cov_model
             )
             # If it doesn't raise, check result for NaN propagation
             result.fix_shape(grid)
@@ -614,6 +562,7 @@ class TestDataEdgeCases:
 # 3. PARAMETER VALIDATION
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestParameterValidation:
     """Test parameter validation and edge cases"""
@@ -627,8 +576,8 @@ class TestParameterValidation:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0  # 10% uninformed
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
@@ -636,15 +585,11 @@ class TestParameterValidation:
             ranges=(1.0, 1.0, 1.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(1, 1, 1),
-            max_neighbours=1,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(1, 1, 1), max_neighbours=1, cov_model=cov_model
         )
 
         assert result.data.size == 500
@@ -659,8 +604,8 @@ class TestParameterValidation:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)  # For reproducibility
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
@@ -668,15 +613,11 @@ class TestParameterValidation:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=1,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=1, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -687,8 +628,8 @@ class TestParameterValidation:
     def test_zero_neighbors(self):
         """Test with max_neighbours=0 - should raise validation error"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
@@ -696,24 +637,20 @@ class TestParameterValidation:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         # max_neighbours=0 should raise validation error (min is 1)
         with pytest.raises(CriticalValidationError):
             ordinary_kriging(
-                prop=prop,
-                grid=grid,
-                radiuses=(5, 5, 3),
-                max_neighbours=0,
-                cov_model=cov_model
+                prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=0, cov_model=cov_model
             )
 
     def test_negative_range(self):
         """Test with negative range value - should raise validation error"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         prop = ContProperty(data, mask)
 
         # Negative range should raise validation error
@@ -723,14 +660,10 @@ class TestParameterValidation:
                 ranges=(-5.0, 5.0, 3.0),  # Negative X range
                 angles=(0.0, 0.0, 0.0),
                 sill=1.0,
-                nugget=0.1
+                nugget=0.1,
             )
             ordinary_kriging(
-                prop=prop,
-                grid=grid,
-                radiuses=(5, 5, 3),
-                max_neighbours=12,
-                cov_model=cov_model
+                prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
             )
 
     def test_zero_sill_kriging(self):
@@ -743,8 +676,8 @@ class TestParameterValidation:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
@@ -752,18 +685,14 @@ class TestParameterValidation:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=0.0,
-            nugget=0.0
+            nugget=0.0,
         )
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)
         assert result.data.shape == (10, 10, 5)
-        assert np.all(np.isfinite(result.data.astype('float64')))
+        assert np.all(np.isfinite(result.data.astype("float64")))
 
     def test_negative_angle(self):
         """Test with negative angle values
@@ -773,8 +702,8 @@ class TestParameterValidation:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)  # For reproducibility
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0
         prop = ContProperty(data, mask)
 
@@ -784,15 +713,11 @@ class TestParameterValidation:
             ranges=(5.0, 5.0, 3.0),
             angles=(-45.0, -30.0, -15.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -807,7 +732,7 @@ class TestParameterValidation:
                 ranges=(5.0, 5.0, 3.0),
                 angles=(0.0, 0.0, 0.0),
                 sill=-1.0,  # Negative sill
-                nugget=0.1
+                nugget=0.1,
             )
 
     def test_nugget_greater_than_sill(self):
@@ -818,7 +743,7 @@ class TestParameterValidation:
                 ranges=(5.0, 5.0, 3.0),
                 angles=(0.0, 0.0, 0.0),
                 sill=0.5,
-                nugget=1.0  # Greater than sill
+                nugget=1.0,  # Greater than sill
             )
 
     def test_nugget_equal_to_sill(self):
@@ -829,7 +754,7 @@ class TestParameterValidation:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=1.0  # Equal to sill
+            nugget=1.0,  # Equal to sill
         )
 
         assert cov_model.nugget == cov_model.sill
@@ -841,15 +766,15 @@ class TestParameterValidation:
         that size mismatches are properly detected.
         """
         grid = SugarboxGrid(x=10, y=10, z=5)  # 500 cells
-        data = np.random.rand(400).astype('float32')  # Only 400 values - MISMATCH
-        mask = np.ones(400, dtype='uint8')
+        data = np.random.rand(400).astype("float32")  # Only 400 values - MISMATCH
+        mask = np.ones(400, dtype="uint8")
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
             type=covariance.spherical,
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         # Should raise error for size mismatch when calling fix_shape or kriging
@@ -857,18 +782,14 @@ class TestParameterValidation:
         with pytest.raises((RuntimeError, ValueError)):
             prop.fix_shape(grid)
             ordinary_kriging(
-                prop=prop,
-                grid=grid,
-                radiuses=(5, 5, 3),
-                max_neighbours=12,
-                cov_model=cov_model
+                prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
             )
 
     def test_wrong_data_type_int_instead_of_float(self):
         """Test with integer data instead of float32"""
         # Int data should be converted or raise error
-        data = np.array([1, 2, 3, 4, 5] * 100, dtype='int32')  # 500 values
-        mask = np.ones(500, dtype='uint8')
+        data = np.array([1, 2, 3, 4, 5] * 100, dtype="int32")  # 500 values
+        mask = np.ones(500, dtype="uint8")
 
         # ContProperty should convert to float32 or raise error
         try:
@@ -881,8 +802,8 @@ class TestParameterValidation:
 
     def test_wrong_mask_type(self):
         """Test with incorrect mask data type"""
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='int32')  # Wrong type
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="int32")  # Wrong type
 
         # Should convert to uint8 or raise error
         try:
@@ -895,8 +816,8 @@ class TestParameterValidation:
     def test_very_large_max_neighbours(self):
         """Test with max_neighbours larger than available data"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         mask[::10] = 0  # Only 450 informed
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
@@ -904,16 +825,12 @@ class TestParameterValidation:
             ranges=(20.0, 20.0, 10.0),  # Large radius
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         # max_neighbours=1000 but only 450 informed cells
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(20, 20, 10),
-            max_neighbours=1000,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(20, 20, 10), max_neighbours=1000, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -923,6 +840,7 @@ class TestParameterValidation:
 # =============================================================================
 # 4. PROPERTY EDGE CASES
 # =============================================================================
+
 
 @pytest.mark.hpgl
 class TestPropertyEdgeCases:
@@ -936,24 +854,20 @@ class TestPropertyEdgeCases:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)  # For reproducibility
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.zeros(500, dtype='uint8')  # All uninformed
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.zeros(500, dtype="uint8")  # All uninformed
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
             type=covariance.spherical,
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         # With no informed data, kriging will complete but all cells remain uninformed
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -969,23 +883,19 @@ class TestPropertyEdgeCases:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)  # For reproducibility
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')  # All informed
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")  # All informed
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
             type=covariance.spherical,
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
@@ -1001,8 +911,8 @@ class TestPropertyEdgeCases:
 
     def test_single_indicator_indicator_count_1(self):
         """Test indicator property with single indicator"""
-        data = np.zeros(500, dtype='uint8')  # All indicator 0
-        mask = np.ones(500, dtype='uint8')
+        data = np.zeros(500, dtype="uint8")  # All indicator 0
+        mask = np.ones(500, dtype="uint8")
         prop = IndProperty(data, mask, indicator_count=1)
 
         assert prop.indicator_count == 1
@@ -1010,16 +920,16 @@ class TestPropertyEdgeCases:
 
     def test_many_indicators_indicator_count_10(self):
         """Test indicator property with many indicators"""
-        data = np.random.randint(0, 10, 500, dtype='uint8')
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.randint(0, 10, 500, dtype="uint8")
+        mask = np.ones(500, dtype="uint8")
         prop = IndProperty(data, mask, indicator_count=10)
 
         assert prop.indicator_count == 10
 
     def test_indicator_value_outside_range(self):
         """Test indicator property with value outside indicator_count range"""
-        data = np.array([0, 1, 2, 5, 10], dtype='uint8')  # 10 is outside range
-        mask = np.ones(5, dtype='uint8')
+        data = np.array([0, 1, 2, 5, 10], dtype="uint8")  # 10 is outside range
+        mask = np.ones(5, dtype="uint8")
 
         # Should raise error for indicator >= indicator_count
         with pytest.raises(RuntimeError):
@@ -1027,8 +937,8 @@ class TestPropertyEdgeCases:
 
     def test_indicator_at_boundary(self):
         """Test indicator with value at indicator_count - 1 boundary"""
-        data = np.array([0, 1, 2], dtype='uint8')  # 2 is valid for indicator_count=3
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([0, 1, 2], dtype="uint8")  # 2 is valid for indicator_count=3
+        mask = np.ones(3, dtype="uint8")
         prop = IndProperty(data, mask, indicator_count=3)
 
         assert prop.indicator_count == 3
@@ -1036,8 +946,8 @@ class TestPropertyEdgeCases:
 
     def test_property_data_mask_shape_mismatch(self):
         """Test property with mismatched data and mask shapes"""
-        data = np.ones(100, dtype='float32')
-        mask = np.ones(50, dtype='uint8')  # Different size
+        data = np.ones(100, dtype="float32")
+        mask = np.ones(50, dtype="uint8")  # Different size
 
         # ContProperty does not validate shape consistency between data and
         # mask (unlike IndProperty which does). This test documents the current
@@ -1057,6 +967,7 @@ class TestPropertyEdgeCases:
 # 5. SIMULATION EDGE CASES
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestSimulationEdgeCases:
     """Test edge cases for SGS and SIS simulations"""
@@ -1064,8 +975,8 @@ class TestSimulationEdgeCases:
     def test_same_seed_produces_same_result_sgs(self):
         """Test SGS determinism: same seed should produce same results"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         mask[::2] = 0  # 50% uninformed
         prop = ContProperty(data, mask)
 
@@ -1073,7 +984,7 @@ class TestSimulationEdgeCases:
         informed_data = data[mask == 1]
         cdf_data = CdfData(
             values=np.sort(informed_data),
-            probs=np.linspace(0, 1, len(informed_data)).astype('float32')
+            probs=np.linspace(0, 1, len(informed_data)).astype("float32"),
         )
 
         cov_model = CovarianceModel(
@@ -1081,7 +992,7 @@ class TestSimulationEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         seed = 42
@@ -1093,7 +1004,7 @@ class TestSimulationEdgeCases:
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=seed
+            seed=seed,
         )
 
         result2 = sgs_simulation(
@@ -1103,7 +1014,7 @@ class TestSimulationEdgeCases:
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=seed
+            seed=seed,
         )
 
         # Same seed should produce identical results
@@ -1112,15 +1023,15 @@ class TestSimulationEdgeCases:
     def test_different_seeds_produce_different_results_sgs(self):
         """Test SGS: different seeds should produce different results"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         mask[::2] = 0
         prop = ContProperty(data, mask)
 
         informed_data = data[mask == 1]
         cdf_data = CdfData(
             values=np.sort(informed_data),
-            probs=np.linspace(0, 1, len(informed_data)).astype('float32')
+            probs=np.linspace(0, 1, len(informed_data)).astype("float32"),
         )
 
         cov_model = CovarianceModel(
@@ -1128,7 +1039,7 @@ class TestSimulationEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result1 = sgs_simulation(
@@ -1138,7 +1049,7 @@ class TestSimulationEdgeCases:
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=42
+            seed=42,
         )
 
         result2 = sgs_simulation(
@@ -1148,7 +1059,7 @@ class TestSimulationEdgeCases:
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=123
+            seed=123,
         )
 
         # Different seeds should produce different results
@@ -1157,14 +1068,14 @@ class TestSimulationEdgeCases:
     def test_use_harddata_false_starts_from_scratch_sgs(self):
         """Test SGS with use_harddata=False should ignore initial data"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.ones(500, dtype='float32') * 100.0  # All high values
-        mask = np.ones(500, dtype='uint8')
+        data = np.ones(500, dtype="float32") * 100.0  # All high values
+        mask = np.ones(500, dtype="uint8")
         prop = ContProperty(data, mask)
 
         # Use CDF with different range
         cdf_data = CdfData(
-            values=np.array([0.0, 10.0, 20.0], dtype='float32'),
-            probs=np.array([0.33, 0.66, 1.0], dtype='float32')
+            values=np.array([0.0, 10.0, 20.0], dtype="float32"),
+            probs=np.array([0.33, 0.66, 1.0], dtype="float32"),
         )
 
         cov_model = CovarianceModel(
@@ -1172,7 +1083,7 @@ class TestSimulationEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         result = sgs_simulation(
@@ -1183,7 +1094,7 @@ class TestSimulationEdgeCases:
             max_neighbours=12,
             cov_model=cov_model,
             seed=42,
-            use_harddata=False
+            use_harddata=False,
         )
 
         # Results should be based on CDF, not initial 100.0 values
@@ -1198,14 +1109,14 @@ class TestSimulationEdgeCases:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)  # For reproducibility
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         prop = ContProperty(data, mask)
 
         informed_data = data[mask == 1]
         cdf_data = CdfData(
             values=np.sort(informed_data),
-            probs=np.linspace(0, 1, len(informed_data)).astype('float32')
+            probs=np.linspace(0, 1, len(informed_data)).astype("float32"),
         )
 
         cov_model = CovarianceModel(
@@ -1213,11 +1124,11 @@ class TestSimulationEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         # Mask with all zeros - simulate nothing (all zeros means don't simulate these cells)
-        simulate_mask = np.zeros(500, dtype='uint8')
+        simulate_mask = np.zeros(500, dtype="uint8")
 
         result = sgs_simulation(
             prop=prop,
@@ -1227,7 +1138,7 @@ class TestSimulationEdgeCases:
             max_neighbours=12,
             cov_model=cov_model,
             seed=42,
-            mask=simulate_mask
+            mask=simulate_mask,
         )
 
         # Verify result shape and no NaN
@@ -1235,10 +1146,10 @@ class TestSimulationEdgeCases:
         assert not np.any(np.isnan(result.data))
         # The C++ engine processes the mask; with all-zero simulate_mask the
         # result should be finite and within a plausible range for the CDF.
-        assert np.all(np.isfinite(result.data.astype('float64')))
+        assert np.all(np.isfinite(result.data.astype("float64")))
         # Additional behavioral verification: result values should be in a
         # plausible range (not all identical, not all at the initial 100.0).
-        result_flat = result.data.astype('float64').flatten()
+        result_flat = result.data.astype("float64").flatten()
         assert np.min(result_flat) >= 0, "Simulated values should be non-negative"
         assert np.max(result_flat) <= 100, "Simulated values should be within CDF range"
         assert np.std(result_flat) > 0, "Result should not be uniform (all identical)"
@@ -1251,14 +1162,14 @@ class TestSimulationEdgeCases:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)  # For reproducibility
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.zeros(500, dtype='uint8')  # No hard data
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.zeros(500, dtype="uint8")  # No hard data
         prop = ContProperty(data, mask)
 
         # Use synthetic CDF
         cdf_data = CdfData(
-            values=np.array([0.0, 50.0, 100.0], dtype='float32'),
-            probs=np.array([0.33, 0.66, 1.0], dtype='float32')
+            values=np.array([0.0, 50.0, 100.0], dtype="float32"),
+            probs=np.array([0.33, 0.66, 1.0], dtype="float32"),
         )
 
         cov_model = CovarianceModel(
@@ -1266,11 +1177,11 @@ class TestSimulationEdgeCases:
             ranges=(5.0, 5.0, 3.0),
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.1
+            nugget=0.1,
         )
 
         # Mask with all ones - simulate all cells
-        simulate_mask = np.ones(500, dtype='uint8')
+        simulate_mask = np.ones(500, dtype="uint8")
 
         result = sgs_simulation(
             prop=prop,
@@ -1281,7 +1192,7 @@ class TestSimulationEdgeCases:
             cov_model=cov_model,
             seed=42,
             mask=simulate_mask,
-            use_harddata=False
+            use_harddata=False,
         )
 
         # Should simulate all cells
@@ -1292,43 +1203,37 @@ class TestSimulationEdgeCases:
     def test_sis_same_seed_determinism(self):
         """Test SIS determinism: same seed produces same results"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.randint(0, 3, 500, dtype='uint8')
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.randint(0, 3, 500, dtype="uint8")
+        mask = np.ones(500, dtype="uint8")
         mask[::2] = 0
         prop = IndProperty(data, mask, indicator_count=3)
 
         # Setup IK data
         ik_data = []
         for _i in range(3):
-            ik_data.append({
-                'cov_model': CovarianceModel(
-                    type=covariance.spherical,
-                    ranges=(5.0, 5.0, 3.0),
-                    angles=(0.0, 0.0, 0.0),
-                    sill=1.0,
-                    nugget=0.1
-                ),
-                'radiuses': (5, 5, 3),
-                'max_neighbours': 12
-            })
+            ik_data.append(
+                {
+                    "cov_model": CovarianceModel(
+                        type=covariance.spherical,
+                        ranges=(5.0, 5.0, 3.0),
+                        angles=(0.0, 0.0, 0.0),
+                        sill=1.0,
+                        nugget=0.1,
+                    ),
+                    "radiuses": (5, 5, 3),
+                    "max_neighbours": 12,
+                }
+            )
 
         marginal_probs = [0.33, 0.34, 0.33]
         seed = 42
 
         result1 = sis_simulation(
-            prop=prop,
-            grid=grid,
-            data=ik_data,
-            seed=seed,
-            marginal_probs=marginal_probs
+            prop=prop, grid=grid, data=ik_data, seed=seed, marginal_probs=marginal_probs
         )
 
         result2 = sis_simulation(
-            prop=prop,
-            grid=grid,
-            data=ik_data,
-            seed=seed,
-            marginal_probs=marginal_probs
+            prop=prop, grid=grid, data=ik_data, seed=seed, marginal_probs=marginal_probs
         )
 
         # Same seed should produce identical results
@@ -1343,14 +1248,14 @@ class TestSimulationEdgeCases:
         """
         grid = SugarboxGrid(x=5, y=5, z=5)
         np.random.seed(42)  # For reproducibility
-        data = np.random.rand(125).astype('float32') * 100
-        mask = np.ones(125, dtype='uint8')
+        data = np.random.rand(125).astype("float32") * 100
+        mask = np.ones(125, dtype="uint8")
         mask[::2] = 0  # Half uninformed
         prop = ContProperty(data, mask)
 
         cdf_data = CdfData(
-            values=np.linspace(0, 100, 50).astype('float32'),
-            probs=np.linspace(0, 1, 50).astype('float32')
+            values=np.linspace(0, 100, 50).astype("float32"),
+            probs=np.linspace(0, 1, 50).astype("float32"),
         )
 
         cov_model = CovarianceModel(
@@ -1358,7 +1263,7 @@ class TestSimulationEdgeCases:
             ranges=(1.0, 1.0, 1.0),  # Use non-zero for covariance model
             angles=(0.0, 0.0, 0.0),
             sill=1.0,
-            nugget=0.0
+            nugget=0.0,
         )
 
         result = sgs_simulation(
@@ -1368,7 +1273,7 @@ class TestSimulationEdgeCases:
             radiuses=(0, 0, 0),  # But zero search radius
             max_neighbours=1,
             cov_model=cov_model,
-            seed=42
+            seed=42,
         )
 
         # Should complete even with zero radius
@@ -1384,29 +1289,20 @@ class TestSimulationEdgeCases:
         (the only valid indicator for count=1).
         """
         from geo_bsd.geo import indicator_kriging
+
         grid = SugarboxGrid(x=5, y=5, z=2)
-        data = np.zeros(50, dtype='uint8')
-        mask = np.ones(50, dtype='uint8')
+        data = np.zeros(50, dtype="uint8")
+        mask = np.ones(50, dtype="uint8")
         mask[::5] = 0
         prop = IndProperty(data, mask, indicator_count=1)
 
         cov = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(3.0, 3.0, 2.0),
-            sill=1.0,
-            nugget=0.0
+            type=covariance.spherical, ranges=(3.0, 3.0, 2.0), sill=1.0, nugget=0.0
         )
 
-        ik_data = [{
-            'cov_model': cov,
-            'radiuses': (2, 2, 1),
-            'max_neighbours': 6
-        }]
+        ik_data = [{"cov_model": cov, "radiuses": (2, 2, 1), "max_neighbours": 6}]
 
-        result = indicator_kriging(
-            prop=prop, grid=grid, data=ik_data,
-            marginal_probs=(1.0,)
-        )
+        result = indicator_kriging(prop=prop, grid=grid, data=ik_data, marginal_probs=(1.0,))
 
         assert isinstance(result, IndProperty)
         assert result.indicator_count == 1
@@ -1422,29 +1318,20 @@ class TestSimulationEdgeCases:
         simulated cells should receive category 0 (the only possible value).
         """
         from geo_bsd.sis import sis_simulation
+
         grid = SugarboxGrid(x=5, y=5, z=2)
-        data = np.zeros(50, dtype='uint8')
-        mask = np.ones(50, dtype='uint8')
+        data = np.zeros(50, dtype="uint8")
+        mask = np.ones(50, dtype="uint8")
         mask[::5] = 0
         prop = IndProperty(data, mask, indicator_count=1)
 
         cov = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(3.0, 3.0, 2.0),
-            sill=1.0,
-            nugget=0.0
+            type=covariance.spherical, ranges=(3.0, 3.0, 2.0), sill=1.0, nugget=0.0
         )
 
-        sis_data = [{
-            'cov_model': cov,
-            'radiuses': (2, 2, 1),
-            'max_neighbours': 6
-        }]
+        sis_data = [{"cov_model": cov, "radiuses": (2, 2, 1), "max_neighbours": 6}]
 
-        result = sis_simulation(
-            prop=prop, grid=grid, data=sis_data,
-            seed=42, marginal_probs=(1.0,)
-        )
+        result = sis_simulation(prop=prop, grid=grid, data=sis_data, seed=42, marginal_probs=(1.0,))
 
         assert isinstance(result, IndProperty)
         assert result.indicator_count == 1
@@ -1458,6 +1345,7 @@ class TestSimulationEdgeCases:
 # 6. CDF EDGE CASES
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestCDFEdgeCases:
     """Test edge cases for cumulative distribution functions
@@ -1469,8 +1357,8 @@ class TestCDFEdgeCases:
     def test_empty_cdf_no_values(self):
         """Test CDF calculation with property with no informed values raises ValueError"""
         grid = SugarboxGrid(x=2, y=2, z=2)  # 8 cells
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], dtype='float32')
-        mask = np.zeros(8, dtype='uint8')  # All uninformed
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], dtype="float32")
+        mask = np.zeros(8, dtype="uint8")  # All uninformed
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
@@ -1480,8 +1368,8 @@ class TestCDFEdgeCases:
     def test_single_value_cdf(self):
         """Test CDF with only one unique value"""
         grid = SugarboxGrid(x=5, y=5, z=4)  # 100 cells
-        data = np.array([42.0] * 100, dtype='float32')
-        mask = np.ones(100, dtype='uint8')
+        data = np.array([42.0] * 100, dtype="float32")
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
@@ -1497,8 +1385,8 @@ class TestCDFEdgeCases:
         """Test CDF with uniformly distributed values"""
         grid = SugarboxGrid(x=5, y=5, z=4)  # 100 cells
         # Create uniform distribution
-        data = np.array([1, 2, 3, 4, 5] * 20, dtype='float32')  # Each value 20 times
-        mask = np.ones(100, dtype='uint8')
+        data = np.array([1, 2, 3, 4, 5] * 20, dtype="float32")  # Each value 20 times
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
@@ -1508,14 +1396,14 @@ class TestCDFEdgeCases:
         # 5 unique values -> 5 values
         assert cdf.values.size == 5
         # Probabilities are cumulative, final reaches 1.0
-        expected_probs = np.array([0.2, 0.4, 0.6, 0.8, 1.0], dtype='float32')
+        expected_probs = np.array([0.2, 0.4, 0.6, 0.8, 1.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
 
     def test_degenerate_distribution_all_same_value(self):
         """Test CDF with all same value (degenerate distribution)"""
         grid = SugarboxGrid(x=5, y=5, z=4)  # 100 cells
-        data = np.full(100, 42.5, dtype='float32')
-        mask = np.ones(100, dtype='uint8')
+        data = np.full(100, 42.5, dtype="float32")
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
@@ -1529,8 +1417,8 @@ class TestCDFEdgeCases:
     def test_cdf_with_two_unique_values(self):
         """Test CDF with exactly two unique values"""
         grid = SugarboxGrid(x=5, y=5, z=4)  # 100 cells
-        data = np.array([1.0] * 50 + [2.0] * 50, dtype='float32')
-        mask = np.ones(100, dtype='uint8')
+        data = np.array([1.0] * 50 + [2.0] * 50, dtype="float32")
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
@@ -1547,8 +1435,8 @@ class TestCDFEdgeCases:
         """Test CDF with many unique values"""
         grid = SugarboxGrid(x=10, y=10, z=10)  # 1000 cells
         np.random.seed(42)
-        data = np.random.rand(1000).astype('float32') * 100
-        mask = np.ones(1000, dtype='uint8')
+        data = np.random.rand(1000).astype("float32") * 100
+        mask = np.ones(1000, dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
@@ -1564,8 +1452,8 @@ class TestCDFEdgeCases:
         """Test that CDF values are always sorted"""
         grid = SugarboxGrid(x=5, y=5, z=4)  # 100 cells
         np.random.seed(42)
-        data = np.random.rand(100).astype('float32') * 100
-        mask = np.ones(100, dtype='uint8')
+        data = np.random.rand(100).astype("float32") * 100
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
@@ -1579,8 +1467,8 @@ class TestCDFEdgeCases:
         """Test that CDF probabilities are monotonically increasing"""
         grid = SugarboxGrid(x=5, y=5, z=4)  # 100 cells
         np.random.seed(42)
-        data = np.random.rand(100).astype('float32') * 100
-        mask = np.ones(100, dtype='uint8')
+        data = np.random.rand(100).astype("float32") * 100
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
@@ -1594,8 +1482,8 @@ class TestCDFEdgeCases:
         """Test that final CDF probability is 1.0"""
         grid = SugarboxGrid(x=5, y=5, z=4)  # 100 cells
         np.random.seed(42)
-        data = np.random.rand(100).astype('float32') * 100
-        mask = np.ones(100, dtype='uint8')
+        data = np.random.rand(100).astype("float32") * 100
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # Make 3D for calc_cdf
 
@@ -1610,14 +1498,15 @@ class TestCDFEdgeCases:
 # UTILITY TESTS
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestUtilityEdgeCases:
     """Test edge cases for utility functions"""
 
     def test_calc_mean_with_all_uninformed(self):
         """Test calc_mean with all uninformed values"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.zeros(3, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.zeros(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
         # calc_mean should raise ValueError for all-masked property
@@ -1626,8 +1515,8 @@ class TestUtilityEdgeCases:
 
     def test_calc_mean_with_single_value(self):
         """Test calc_mean with single informed value"""
-        data = np.array([42.0], dtype='float32')
-        mask = np.ones(1, dtype='uint8')
+        data = np.array([42.0], dtype="float32")
+        mask = np.ones(1, dtype="uint8")
         prop = ContProperty(data, mask)
 
         mean = calc_mean(prop)
@@ -1635,8 +1524,8 @@ class TestUtilityEdgeCases:
 
     def test_calc_mean_with_negative_values(self):
         """Test calc_mean with negative values"""
-        data = np.array([-50.0, 0.0, 50.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([-50.0, 0.0, 50.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
         mean = calc_mean(prop)
@@ -1646,8 +1535,8 @@ class TestUtilityEdgeCases:
         """Test that _empty_clone preserves indicator count"""
         from geo_bsd.geo import _empty_clone
 
-        data = np.random.randint(0, 3, 100, dtype='uint8')
-        mask = np.ones(100, dtype='uint8')
+        data = np.random.randint(0, 3, 100, dtype="uint8")
+        mask = np.ones(100, dtype="uint8")
         prop = IndProperty(data, mask, 5)
 
         cloned = _empty_clone(prop)
@@ -1661,8 +1550,8 @@ class TestUtilityEdgeCases:
         """Test that _clone_prop creates a proper copy"""
         from geo_bsd.geo import _clone_prop
 
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.array([1, 1, 0], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.array([1, 1, 0], dtype="uint8")
         prop = ContProperty(data, mask)
 
         cloned = _clone_prop(prop)
@@ -1681,8 +1570,8 @@ class TestProductionFixes:
 
     def test_calc_mean_raises_valueerror_on_all_masked(self):
         """calc_mean must raise ValueError (not ZeroDivisionError) when all values masked."""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
-        mask = np.zeros(5, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.zeros(5, dtype="uint8")
         prop = ContProperty(data, mask)
 
         with pytest.raises(ValueError, match="no informed values"):
@@ -1690,8 +1579,8 @@ class TestProductionFixes:
 
     def test_calc_mean_works_with_partial_mask(self):
         """calc_mean returns correct result when some values are masked."""
-        data = np.array([10.0, 20.0, 30.0], dtype='float32')
-        mask = np.array([1, 0, 1], dtype='uint8')
+        data = np.array([10.0, 20.0, 30.0], dtype="float32")
+        mask = np.array([1, 0, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         result = calc_mean(prop)
@@ -1704,11 +1593,11 @@ class TestProductionFixes:
 
         from geo_bsd.geo import write_property
 
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
-        with tempfile.NamedTemporaryFile(suffix='.inc', delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=".inc", delete=False) as f:
             tmpfile = f.name
         try:
             # Should not raise with indicator_values=None (default)
@@ -1724,11 +1613,11 @@ class TestProductionFixes:
 
         from geo_bsd.geo import write_gslib_property
 
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
-        with tempfile.NamedTemporaryFile(suffix='.gslib', delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=".gslib", delete=False) as f:
             tmpfile = f.name
         try:
             write_gslib_property(prop, tmpfile, "TEST", -99.0)
@@ -1744,7 +1633,9 @@ class TestProductionFixes:
         from geo_bsd.geo import _load_prop_cont_slow
 
         content = "-- comment line\n1.0 2.0 BADTOKEN 3.0\n-- another comment\n4.0\n"
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.inc', delete=False, encoding='utf-8') as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".inc", delete=False, encoding="utf-8"
+        ) as f:
             f.write(content)
             tmpfile = f.name
         try:
@@ -1762,7 +1653,9 @@ class TestProductionFixes:
         from geo_bsd.geo import _load_prop_ind_slow
 
         content = "0 1 BADTOKEN 0 1\n"
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.inc', delete=False, encoding='utf-8') as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".inc", delete=False, encoding="utf-8"
+        ) as f:
             f.write(content)
             tmpfile = f.name
         try:
@@ -1776,6 +1669,7 @@ class TestProductionFixes:
 # Production Fix Tests: Error Handling & Indicator Kriging Correctness
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestErrorHandling:
     """Tests for the _check_hpgl_error error handling (CRITICAL fix)."""
@@ -1783,12 +1677,16 @@ class TestErrorHandling:
     def test_hpgl_get_last_exception_message_restype_set(self):
         """CRITICAL: Verify restype is correctly set to c_char_p, not default c_int."""
         from geo_bsd.hpgl_wrap import _hpgl_so
-        assert hasattr(_hpgl_so, 'hpgl_get_last_exception_message'), \
+
+        assert hasattr(_hpgl_so, "hpgl_get_last_exception_message"), (
             "hpgl_get_last_exception_message not loaded"
+        )
         restype = _hpgl_so.hpgl_get_last_exception_message.restype
         import ctypes as C
-        assert restype == C.c_char_p, \
+
+        assert restype == C.c_char_p, (
             f"restype must be c_char_p to avoid pointer truncation, got {restype}"
+        )
 
     def test_error_raised_on_invalid_covariance(self):
         """HIGH: Verify validation catches invalid covariance parameters before C++ call."""
@@ -1801,12 +1699,7 @@ class TestErrorHandling:
         # CovarianceModel constructor validates parameters (nugget > sill is blocked)
         # This test verifies defense-in-depth: validator prevents bad data from reaching C++
         with pytest.raises((ValidationError, CriticalValidationError)):
-            CovarianceModel(
-                type=covariance.spherical,
-                ranges=(5.0, 5.0, 3.0),
-                sill=0.0,
-                nugget=1.0
-            )
+            CovarianceModel(type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=0.0, nugget=1.0)
 
     def test_simple_kriging_weights_return_value_checked(self):
         """HIGH: Verify hpgl_simple_kriging_weights return value is checked."""
@@ -1816,9 +1709,9 @@ class TestErrorHandling:
 
         # Test with valid parameters — should produce non-trivial weights
         center = (0.0, 0.0, 0.0)
-        nx = np.array([1.0, 2.0, 3.0], dtype='float32')
-        ny = np.array([1.0, 2.0, 3.0], dtype='float32')
-        nz = np.array([1.0, 2.0, 3.0], dtype='float32')
+        nx = np.array([1.0, 2.0, 3.0], dtype="float32")
+        ny = np.array([1.0, 2.0, 3.0], dtype="float32")
+        nz = np.array([1.0, 2.0, 3.0], dtype="float32")
 
         weights = simple_kriging_weights(center, nx, ny, nz)
         assert len(weights) == 3, "Should return 3 weights"
@@ -1839,15 +1732,12 @@ class TestIndicatorKrigingFix:
 
         grid = SugarboxGrid(x=5, y=5, z=2)
         # Create indicator data: all category 0 (informed)
-        data = np.zeros(50, dtype='uint8')
-        mask = np.ones(50, dtype='uint8')
+        data = np.zeros(50, dtype="uint8")
+        mask = np.ones(50, dtype="uint8")
         prop = IndProperty(data, mask, 2)
 
         cov = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(10.0, 10.0, 5.0),
-            sill=1.0,
-            nugget=0.1
+            type=covariance.spherical, ranges=(10.0, 10.0, 5.0), sill=1.0, nugget=0.1
         )
 
         # With marginal probs [0.9, 0.1], kriging should heavily favor category 0
@@ -1870,13 +1760,19 @@ class TestIndicatorKrigingFix:
         )
 
         grid = SugarboxGrid(x=6, y=6, z=3)
-        data = np.random.randint(0, 3, 108, dtype='uint8')
-        mask = np.ones(108, dtype='uint8')
+        data = np.random.randint(0, 3, 108, dtype="uint8")
+        mask = np.ones(108, dtype="uint8")
         prop = IndProperty(data, mask, 3)
 
-        cov0 = CovarianceModel(type=covariance.spherical, ranges=(8.0, 8.0, 4.0), sill=1.0, nugget=0.1)
-        cov1 = CovarianceModel(type=covariance.spherical, ranges=(8.0, 8.0, 4.0), sill=1.0, nugget=0.1)
-        cov2 = CovarianceModel(type=covariance.spherical, ranges=(8.0, 8.0, 4.0), sill=1.0, nugget=0.1)
+        cov0 = CovarianceModel(
+            type=covariance.spherical, ranges=(8.0, 8.0, 4.0), sill=1.0, nugget=0.1
+        )
+        cov1 = CovarianceModel(
+            type=covariance.spherical, ranges=(8.0, 8.0, 4.0), sill=1.0, nugget=0.1
+        )
+        cov2 = CovarianceModel(
+            type=covariance.spherical, ranges=(8.0, 8.0, 4.0), sill=1.0, nugget=0.1
+        )
 
         ik_data = [
             {"cov_model": cov0, "radiuses": (2, 2, 1), "max_neighbours": 12},
@@ -1884,16 +1780,18 @@ class TestIndicatorKrigingFix:
             {"cov_model": cov2, "radiuses": (2, 2, 1), "max_neighbours": 12},
         ]
 
-        result = indicator_kriging(prop, grid, ik_data, (1.0/3, 1.0/3, 1.0/3))
+        result = indicator_kriging(prop, grid, ik_data, (1.0 / 3, 1.0 / 3, 1.0 / 3))
         assert result.indicator_count == 3
         # All output values should be valid indicator values (0, 1, or 2)
-        assert np.all(result.data >= 0) and np.all(result.data < 3), \
+        assert np.all(result.data >= 0) and np.all(result.data < 3), (
             f"Invalid indicator values: min={result.data.min()}, max={result.data.max()}"
+        )
 
 
 # =============================================================================
 # NaN/Inf Input Handling Tests
 # =============================================================================
+
 
 @pytest.mark.hpgl
 class TestNaNInfInputHandling:
@@ -1903,60 +1801,42 @@ class TestNaNInfInputHandling:
         """CovarianceModel with NaN sill should raise CriticalValidationError."""
         with pytest.raises(CriticalValidationError):
             CovarianceModel(
-                type=covariance.spherical,
-                ranges=(5.0, 5.0, 3.0),
-                sill=float('nan'),
-                nugget=0.1
+                type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=float("nan"), nugget=0.1
             )
 
     def test_covariance_model_inf_sill_raises(self):
         """CovarianceModel with Inf sill should raise CriticalValidationError."""
         with pytest.raises(CriticalValidationError):
             CovarianceModel(
-                type=covariance.spherical,
-                ranges=(5.0, 5.0, 3.0),
-                sill=float('inf'),
-                nugget=0.1
+                type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=float("inf"), nugget=0.1
             )
 
     def test_covariance_model_nan_nugget_raises(self):
         """CovarianceModel with NaN nugget should raise."""
         with pytest.raises(CriticalValidationError):
             CovarianceModel(
-                type=covariance.spherical,
-                ranges=(5.0, 5.0, 3.0),
-                sill=1.0,
-                nugget=float('nan')
+                type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=float("nan")
             )
 
     def test_covariance_model_inf_nugget_raises(self):
         """CovarianceModel with Inf nugget should raise."""
         with pytest.raises(CriticalValidationError):
             CovarianceModel(
-                type=covariance.spherical,
-                ranges=(5.0, 5.0, 3.0),
-                sill=1.0,
-                nugget=float('inf')
+                type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=float("inf")
             )
 
     def test_covariance_model_nan_range_raises(self):
         """CovarianceModel with NaN range should raise."""
         with pytest.raises(CriticalValidationError):
             CovarianceModel(
-                type=covariance.spherical,
-                ranges=(float('nan'), 5.0, 3.0),
-                sill=1.0,
-                nugget=0.1
+                type=covariance.spherical, ranges=(float("nan"), 5.0, 3.0), sill=1.0, nugget=0.1
             )
 
     def test_covariance_model_inf_range_raises(self):
         """CovarianceModel with Inf range should raise."""
         with pytest.raises(CriticalValidationError):
             CovarianceModel(
-                type=covariance.spherical,
-                ranges=(float('inf'), 5.0, 3.0),
-                sill=1.0,
-                nugget=0.1
+                type=covariance.spherical, ranges=(float("inf"), 5.0, 3.0), sill=1.0, nugget=0.1
             )
 
     def test_covariance_model_nan_angle_raises(self):
@@ -1965,26 +1845,26 @@ class TestNaNInfInputHandling:
             CovarianceModel(
                 type=covariance.spherical,
                 ranges=(5.0, 5.0, 3.0),
-                angles=(float('nan'), 0.0, 0.0),
+                angles=(float("nan"), 0.0, 0.0),
                 sill=1.0,
-                nugget=0.1
+                nugget=0.1,
             )
 
     def test_cont_property_nan_data_construction(self):
         """ContProperty with NaN data should be constructable but operations should handle it."""
-        data = np.array([1.0, np.nan, 3.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1.0, np.nan, 3.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
         # The property is constructed; NaN-aware operations will detect NaN later
         assert prop.data.shape == (3,)
 
     def test_cont_property_inf_data_construction(self):
         """ContProperty with Inf data should be constructable."""
-        data = np.array([1.0, np.inf, 3.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([1.0, np.inf, 3.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
         assert prop.data.shape == (3,)
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

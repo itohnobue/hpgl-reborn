@@ -23,6 +23,7 @@ provides the user-facing Python API.
    wrapper would be added here.
 
 """
+
 import ctypes as C
 import hashlib
 import logging
@@ -40,46 +41,52 @@ from numpy import ctypeslib as NC
 def _load_lib_func(libpath: str) -> C.CDLL:
     return C.CDLL(str(libpath))
 
+
 ndpointer = NC.ndpointer
 
 hpgl_output_handler = C.CFUNCTYPE(C.c_int, C.c_char_p, C.py_object)
 hpgl_progress_handler = C.CFUNCTYPE(C.c_int, C.c_char_p, C.c_int, C.py_object)
+
 
 class _HPGL_MEAN_KIND:
     stationary_auto = 0
     stationary = 1
     varying = 2
 
+
 class _HPGL_KRIGING_KIND:
     ordinary = 0
     simple = 1
 
+
 class _HPGL_SHAPE(C.Structure):
-    _fields_ = [("m_data", C.c_int * 3 ),
-            ("m_strides", C.c_int * 3)]
+    _fields_ = [("m_data", C.c_int * 3), ("m_strides", C.c_int * 3)]
+
 
 class _HPGL_CONT_MASKED_ARRAY(C.Structure):
     _fields_ = [
         ("data", C.POINTER(C.c_float)),
         ("mask", C.POINTER(C.c_ubyte)),
-        ("shape", _HPGL_SHAPE)]
+        ("shape", _HPGL_SHAPE),
+    ]
+
 
 class _HPGL_IND_MASKED_ARRAY(C.Structure):
     _fields_ = [
         ("data", C.POINTER(C.c_ubyte)),
         ("mask", C.POINTER(C.c_ubyte)),
         ("shape", _HPGL_SHAPE),
-        ("indicator_count", C.c_int)]
+        ("indicator_count", C.c_int),
+    ]
+
 
 class _HPGL_UBYTE_ARRAY(C.Structure):
-    _fields_ = [
-        ("data", C.POINTER(C.c_ubyte)),
-        ("shape", _HPGL_SHAPE)]
+    _fields_ = [("data", C.POINTER(C.c_ubyte)), ("shape", _HPGL_SHAPE)]
+
 
 class _HPGL_FLOAT_ARRAY(C.Structure):
-    _fields_ = [
-        ("data", C.POINTER(C.c_float)),
-        ("shape", _HPGL_SHAPE)]
+    _fields_ = [("data", C.POINTER(C.c_float)), ("shape", _HPGL_SHAPE)]
+
 
 class _HPGL_OK_PARAMS(C.Structure):
     _fields_ = [
@@ -89,7 +96,9 @@ class _HPGL_OK_PARAMS(C.Structure):
         ("sill", C.c_double),
         ("nugget", C.c_double),
         ("radiuses", C.c_int * 3),
-        ("max_neighbours", C.c_int)]
+        ("max_neighbours", C.c_int),
+    ]
+
 
 class _HPGL_SK_PARAMS(C.Structure):
     _fields_ = [
@@ -101,7 +110,9 @@ class _HPGL_SK_PARAMS(C.Structure):
         ("radiuses", C.c_int * 3),
         ("max_neighbours", C.c_int),
         ("automatic_mean", C.c_ubyte),
-        ("mean", C.c_double)]
+        ("mean", C.c_double),
+    ]
+
 
 class _HPGL_SGS_PARAMS(C.Structure):
     _fields_ = [
@@ -115,7 +126,8 @@ class _HPGL_SGS_PARAMS(C.Structure):
         ("kriging_kind", C.c_int),
         ("seed", C.c_int64),
         ("min_neighbours", C.c_int),
-        ]
+    ]
+
 
 class _HPGL_MEDIAN_IK_PARAMS(C.Structure):
     _fields_ = [
@@ -126,7 +138,9 @@ class _HPGL_MEDIAN_IK_PARAMS(C.Structure):
         ("nugget", C.c_double),
         ("radiuses", C.c_int * 3),
         ("max_neighbours", C.c_int),
-        ("marginal_probs", C.c_double * 2)]
+        ("marginal_probs", C.c_double * 2),
+    ]
+
 
 class _HPGL_IK_PARAMS(C.Structure):
     _fields_ = [
@@ -137,7 +151,9 @@ class _HPGL_IK_PARAMS(C.Structure):
         ("nugget", C.c_double),
         ("radiuses", C.c_int * 3),
         ("max_neighbours", C.c_int),
-        ("marginal_prob", C.c_double)]
+        ("marginal_prob", C.c_double),
+    ]
+
 
 class __hpgl_cov_params_t(C.Structure):
     _fields_ = [
@@ -145,7 +161,9 @@ class __hpgl_cov_params_t(C.Structure):
         ("ranges", C.c_double * 3),
         ("angles", C.c_double * 3),
         ("sill", C.c_double),
-        ("nugget", C.c_double)]
+        ("nugget", C.c_double),
+    ]
+
 
 class __hpgl_cockriging_m1_params_t(C.Structure):
     _fields_ = [
@@ -159,10 +177,13 @@ class __hpgl_cockriging_m1_params_t(C.Structure):
         ("primary_mean", C.c_double),
         ("secondary_mean", C.c_double),
         ("secondary_variance", C.c_double),
-        ("correlation_coef", C.c_double)]
+        ("correlation_coef", C.c_double),
+    ]
+
 
 # Module-level reference to __hpgl_cov_params_t to avoid name mangling in class _fields_
 _hpgl_cov_params_t_ref = __hpgl_cov_params_t
+
 
 class __hpgl_cockriging_m2_params_t(C.Structure):
     _fields_ = [
@@ -172,13 +193,17 @@ class __hpgl_cockriging_m2_params_t(C.Structure):
         ("max_neighbours", C.c_int),
         ("primary_mean", C.c_double),
         ("secondary_mean", C.c_double),
-        ("correlation_coef", C.c_double)]
+        ("correlation_coef", C.c_double),
+    ]
+
 
 class hpgl_non_parametric_cdf_t(C.Structure):
     _fields_ = [
         ("values", C.POINTER(C.c_float)),
         ("probs", C.POINTER(C.c_float)),
-        ("size", C.c_longlong)]
+        ("size", C.c_longlong),
+    ]
+
 
 _hpgl_so = None
 
@@ -188,6 +213,7 @@ _hpgl_so = None
 _EXPECTED_LIBRARY_HASHES: dict[str, str] = {}
 
 logger = logging.getLogger(__name__)
+
 
 # Security: Validate and safely load the native library
 def _safe_load_library(lib_name: str, ref_file: str):
@@ -219,28 +245,34 @@ def _safe_load_library(lib_name: str, ref_file: str):
     # Try platform-specific library names
     lib_paths = []
 
-    if sys.platform.startswith('win'):
+    if sys.platform.startswith("win"):
         # Windows: .dll or .pyd extensions
-        lib_paths.extend([
-            lib_dir / f"{lib_name}.dll",
-            lib_dir / f"{lib_name}.pyd",
-            lib_dir / f"lib{lib_name}.dll",
-            lib_dir / f"{lib_name}_d.dll",  # Debug version
-            lib_dir / f"lib{lib_name}_d.dll",
-        ])
-    elif sys.platform.startswith('darwin'):
+        lib_paths.extend(
+            [
+                lib_dir / f"{lib_name}.dll",
+                lib_dir / f"{lib_name}.pyd",
+                lib_dir / f"lib{lib_name}.dll",
+                lib_dir / f"{lib_name}_d.dll",  # Debug version
+                lib_dir / f"lib{lib_name}_d.dll",
+            ]
+        )
+    elif sys.platform.startswith("darwin"):
         # macOS: .dylib or .so extensions
-        lib_paths.extend([
-            lib_dir / f"lib{lib_name}.dylib",
-            lib_dir / f"lib{lib_name}.so",
-            lib_dir / f"{lib_name}.dylib",
-            lib_dir / f"{lib_name}.so",
-        ])
+        lib_paths.extend(
+            [
+                lib_dir / f"lib{lib_name}.dylib",
+                lib_dir / f"lib{lib_name}.so",
+                lib_dir / f"{lib_name}.dylib",
+                lib_dir / f"{lib_name}.so",
+            ]
+        )
     else:  # Linux and others
-        lib_paths.extend([
-            lib_dir / f"lib{lib_name}.so",
-            lib_dir / f"{lib_name}.so",
-        ])
+        lib_paths.extend(
+            [
+                lib_dir / f"lib{lib_name}.so",
+                lib_dir / f"{lib_name}.so",
+            ]
+        )
 
     # Try each library path
     for lib_path in lib_paths:
@@ -268,7 +300,7 @@ def _safe_load_library(lib_name: str, ref_file: str):
     try:
         lib = _load_lib_func(os.path.join(str(ref_path.parent), lib_name))
         # Verify the loaded library path is safe
-        if hasattr(lib, '_name'):
+        if hasattr(lib, "_name"):
             loaded_path = pathlib.Path(lib._name)
             # If the library name is relative, resolve relative to lib_dir
             if not loaded_path.is_absolute():
@@ -285,11 +317,11 @@ def _safe_load_library(lib_name: str, ref_file: str):
         return lib
     except OSError as e:
         # Library not found or cannot be loaded
-        lib_dirs_str = ', '.join(str(p.parent) for p in lib_paths)
+        lib_dirs_str = ", ".join(str(p.parent) for p in lib_paths)
         raise OSError(
-            f"Cannot load library '{lib_name}'. Searched in: {lib_dirs_str}. "
-            f"Original error: {e}"
+            f"Cannot load library '{lib_name}'. Searched in: {lib_dirs_str}. Original error: {e}"
         ) from e
+
 
 def _verify_library_hash(lib_name: str, lib_path: pathlib.Path) -> None:
     """Verify the SHA-256 hash of a loaded library against expected values.
@@ -306,7 +338,7 @@ def _verify_library_hash(lib_name: str, lib_path: pathlib.Path) -> None:
         return  # No expected hashes registered — skip wasted I/O + CPU
 
     try:
-        with open(lib_path, 'rb') as f:
+        with open(lib_path, "rb") as f:
             file_hash = hashlib.sha256(f.read()).hexdigest()
     except OSError as e:
         logger.debug("_verify_library_hash: cannot read %s: %s", lib_path, e)
@@ -315,7 +347,9 @@ def _verify_library_hash(lib_name: str, lib_path: pathlib.Path) -> None:
     # Look for a matching expected hash
     for expected_name, expected_hash in _EXPECTED_LIBRARY_HASHES.items():
         if file_hash == expected_hash:
-            logger.debug("_verify_library_hash: %s hash matches expected (%s)", lib_name, expected_name)
+            logger.debug(
+                "_verify_library_hash: %s hash matches expected (%s)", lib_name, expected_name
+            )
             return
 
     # No match found — warn but don't fail
@@ -323,23 +357,25 @@ def _verify_library_hash(lib_name: str, lib_path: pathlib.Path) -> None:
         logger.warning(
             "_verify_library_hash: %s (%s) hash %s does not match any expected hash. "
             "Library may have been modified.",
-            lib_name, lib_path, file_hash
+            lib_name,
+            lib_path,
+            file_hash,
         )
 
-if 'HPGL_DEBUG' in os.environ:
+
+if "HPGL_DEBUG" in os.environ:
     try:
-        _hpgl_so = _safe_load_library('hpgl_d', __file__)
+        _hpgl_so = _safe_load_library("hpgl_d", __file__)
     except OSError:
         # Debug-suffixed library not found: CMake only sets DEBUG_POSTFIX
         # on Windows. Non-Windows debug builds use the standard name.
         # Fall back to the unsuffixed library name.
         logger.warning(
-            "HPGL_DEBUG is set but hpgl_d library not found. "
-            "Falling back to 'hpgl' (release name)."
+            "HPGL_DEBUG is set but hpgl_d library not found. Falling back to 'hpgl' (release name)."
         )
-        _hpgl_so = _safe_load_library('hpgl', __file__)
+        _hpgl_so = _safe_load_library("hpgl", __file__)
 else:
-    _hpgl_so = _safe_load_library('hpgl', __file__)
+    _hpgl_so = _safe_load_library("hpgl", __file__)
 
 _hpgl_so.hpgl_get_last_exception_message.restype = C.c_char_p
 _hpgl_so.hpgl_get_last_exception_message.argtypes = []
@@ -354,39 +390,43 @@ _hpgl_so.hpgl_ordinary_kriging.restype = None
 _hpgl_so.hpgl_ordinary_kriging.argtypes = [
     C.POINTER(_HPGL_CONT_MASKED_ARRAY),
     C.POINTER(_HPGL_OK_PARAMS),
-    C.POINTER(_HPGL_CONT_MASKED_ARRAY)]
+    C.POINTER(_HPGL_CONT_MASKED_ARRAY),
+]
 
 _hpgl_so.hpgl_simple_kriging.restype = None
-_hpgl_so.hpgl_simple_kriging.argtypes =  [
-    NC.ndpointer(dtype = numpy.float32, flags=['F', 'W', 'A']),
-    NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A']),
+_hpgl_so.hpgl_simple_kriging.argtypes = [
+    NC.ndpointer(dtype=numpy.float32, flags=["F", "W", "A"]),
+    NC.ndpointer(dtype=numpy.ubyte, flags=["F", "W", "A"]),
     C.POINTER(_HPGL_SHAPE),
     C.POINTER(_HPGL_SK_PARAMS),
-    NC.ndpointer(dtype = numpy.float32, flags=['F', 'W', 'A']),
-    NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A']),
-    C.POINTER(_HPGL_SHAPE)]
+    NC.ndpointer(dtype=numpy.float32, flags=["F", "W", "A"]),
+    NC.ndpointer(dtype=numpy.ubyte, flags=["F", "W", "A"]),
+    C.POINTER(_HPGL_SHAPE),
+]
 
 _hpgl_so.hpgl_lvm_kriging.restype = None
 _hpgl_so.hpgl_lvm_kriging.argtypes = [
-    NC.ndpointer(dtype = numpy.float32, flags=['F', 'W', 'A']),
-    NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A']),
+    NC.ndpointer(dtype=numpy.float32, flags=["F", "W", "A"]),
+    NC.ndpointer(dtype=numpy.ubyte, flags=["F", "W", "A"]),
     C.POINTER(_HPGL_SHAPE),
-    NC.ndpointer(dtype = numpy.float32, flags=['F', 'W', 'A']),
+    NC.ndpointer(dtype=numpy.float32, flags=["F", "W", "A"]),
     C.POINTER(_HPGL_SHAPE),
     C.POINTER(_HPGL_OK_PARAMS),
-    NC.ndpointer(dtype = numpy.float32, flags=['F', 'W', 'A']),
-    NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A']),
-    C.POINTER(_HPGL_SHAPE)]
+    NC.ndpointer(dtype=numpy.float32, flags=["F", "W", "A"]),
+    NC.ndpointer(dtype=numpy.ubyte, flags=["F", "W", "A"]),
+    C.POINTER(_HPGL_SHAPE),
+]
 
 _hpgl_so.hpgl_simple_kriging_weights.restype = C.c_int
 _hpgl_so.hpgl_simple_kriging_weights.argtypes = [
     (C.c_float * 3),
-    NC.ndpointer(dtype = numpy.float32),
-    NC.ndpointer(dtype = numpy.float32),
-    NC.ndpointer(dtype = numpy.float32),
+    NC.ndpointer(dtype=numpy.float32),
+    NC.ndpointer(dtype=numpy.float32),
+    NC.ndpointer(dtype=numpy.float32),
     C.c_int,
     C.POINTER(__hpgl_cov_params_t),
-    NC.ndpointer(dtype = numpy.float32)]
+    NC.ndpointer(dtype=numpy.float32),
+]
 
 _hpgl_so.hpgl_sgs_simulation.restype = None
 _hpgl_so.hpgl_sgs_simulation.argtypes = [
@@ -394,7 +434,8 @@ _hpgl_so.hpgl_sgs_simulation.argtypes = [
     C.POINTER(_HPGL_SGS_PARAMS),
     C.POINTER(hpgl_non_parametric_cdf_t),
     C.POINTER(C.c_double),
-    C.POINTER(_HPGL_UBYTE_ARRAY)]
+    C.POINTER(_HPGL_UBYTE_ARRAY),
+]
 
 _hpgl_so.hpgl_sgs_lvm_simulation.restype = None
 _hpgl_so.hpgl_sgs_lvm_simulation.argtypes = [
@@ -402,21 +443,23 @@ _hpgl_so.hpgl_sgs_lvm_simulation.argtypes = [
     C.POINTER(_HPGL_SGS_PARAMS),
     C.POINTER(hpgl_non_parametric_cdf_t),
     C.POINTER(_HPGL_FLOAT_ARRAY),
-    C.POINTER(_HPGL_UBYTE_ARRAY)]
+    C.POINTER(_HPGL_UBYTE_ARRAY),
+]
 
 _hpgl_so.hpgl_median_ik.restype = None
 _hpgl_so.hpgl_median_ik.argtypes = [
     C.POINTER(_HPGL_IND_MASKED_ARRAY),
     C.POINTER(_HPGL_MEDIAN_IK_PARAMS),
-    C.POINTER(_HPGL_IND_MASKED_ARRAY)
-    ]
+    C.POINTER(_HPGL_IND_MASKED_ARRAY),
+]
 
 _hpgl_so.hpgl_indicator_kriging.restype = None
 _hpgl_so.hpgl_indicator_kriging.argtypes = [
     C.POINTER(_HPGL_IND_MASKED_ARRAY),
     C.POINTER(_HPGL_IND_MASKED_ARRAY),
     C.POINTER(_HPGL_IK_PARAMS),
-    C.c_int]
+    C.c_int,
+]
 
 _hpgl_so.hpgl_set_thread_num.restype = C.c_int
 _hpgl_so.hpgl_set_thread_num.argtypes = [C.c_int]
@@ -429,25 +472,27 @@ _hpgl_so.hpgl_read_inc_file_float.argtypes = [
     C.c_char_p,
     C.c_float,
     C.c_int,
-    NC.ndpointer(dtype = numpy.float32, flags=['F', 'W', 'A']),
-    NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A'])]
+    NC.ndpointer(dtype=numpy.float32, flags=["F", "W", "A"]),
+    NC.ndpointer(dtype=numpy.ubyte, flags=["F", "W", "A"]),
+]
 
 _hpgl_so.hpgl_read_inc_file_byte.restype = C.c_int
 _hpgl_so.hpgl_read_inc_file_byte.argtypes = [
     C.c_char_p,
     C.c_int,
     C.c_int,
-    NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A']),
-    NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A']),
-    NC.ndpointer(dtype = numpy.ubyte, flags=['F', 'W', 'A']),
-    C.c_int]
+    NC.ndpointer(dtype=numpy.ubyte, flags=["F", "W", "A"]),
+    NC.ndpointer(dtype=numpy.ubyte, flags=["F", "W", "A"]),
+    NC.ndpointer(dtype=numpy.ubyte, flags=["F", "W", "A"]),
+    C.c_int,
+]
 
 _hpgl_so.hpgl_write_inc_file_float.restype = C.c_int
 _hpgl_so.hpgl_write_inc_file_float.argtypes = [
     C.c_char_p,
     C.POINTER(_HPGL_CONT_MASKED_ARRAY),
     C.c_float,
-    C.c_char_p
+    C.c_char_p,
 ]
 
 _hpgl_so.hpgl_write_inc_file_byte.restype = C.c_int
@@ -457,14 +502,16 @@ _hpgl_so.hpgl_write_inc_file_byte.argtypes = [
     C.c_int,
     C.c_char_p,
     C.POINTER(C.c_ubyte),
-    C.c_int]
+    C.c_int,
+]
 
 _hpgl_so.hpgl_write_gslib_cont_property.restype = C.c_int
 _hpgl_so.hpgl_write_gslib_cont_property.argtypes = [
-        C.POINTER(_HPGL_CONT_MASKED_ARRAY),
-        C.c_char_p,
-        C.c_char_p,
-        C.c_double]
+    C.POINTER(_HPGL_CONT_MASKED_ARRAY),
+    C.c_char_p,
+    C.c_char_p,
+    C.c_double,
+]
 
 _hpgl_so.hpgl_write_gslib_byte_property.restype = C.c_int
 _hpgl_so.hpgl_write_gslib_byte_property.argtypes = [
@@ -473,7 +520,8 @@ _hpgl_so.hpgl_write_gslib_byte_property.argtypes = [
     C.c_char_p,
     C.c_double,
     C.POINTER(C.c_ubyte),
-    C.c_int]
+    C.c_int,
+]
 
 
 _hpgl_so.hpgl_sis_simulation.restype = None
@@ -482,7 +530,8 @@ _hpgl_so.hpgl_sis_simulation.argtypes = [
     C.POINTER(_HPGL_IK_PARAMS),
     C.c_int,
     C.c_int64,
-    C.POINTER(_HPGL_UBYTE_ARRAY)]
+    C.POINTER(_HPGL_UBYTE_ARRAY),
+]
 
 _hpgl_so.hpgl_sis_simulation_lvm.restype = None
 _hpgl_so.hpgl_sis_simulation_lvm.argtypes = [
@@ -492,19 +541,21 @@ _hpgl_so.hpgl_sis_simulation_lvm.argtypes = [
     C.c_int,
     C.c_int64,
     C.POINTER(_HPGL_UBYTE_ARRAY),
-    C.c_int
-    ]
+    C.c_int,
+]
 
 _hpgl_so.hpgl_simple_cokriging_mark1.restype = None
 _hpgl_so.hpgl_simple_cokriging_mark1.argtypes = [
     C.POINTER(_HPGL_CONT_MASKED_ARRAY),
     C.POINTER(_HPGL_CONT_MASKED_ARRAY),
     C.POINTER(__hpgl_cockriging_m1_params_t),
-    C.POINTER(_HPGL_CONT_MASKED_ARRAY)]
+    C.POINTER(_HPGL_CONT_MASKED_ARRAY),
+]
 
 _hpgl_so.hpgl_simple_cokriging_mark2.restype = None
 _hpgl_so.hpgl_simple_cokriging_mark2.argtypes = [
     C.POINTER(_HPGL_CONT_MASKED_ARRAY),
     C.POINTER(_HPGL_CONT_MASKED_ARRAY),
     C.POINTER(__hpgl_cockriging_m2_params_t),
-    C.POINTER(_HPGL_CONT_MASKED_ARRAY)]
+    C.POINTER(_HPGL_CONT_MASKED_ARRAY),
+]

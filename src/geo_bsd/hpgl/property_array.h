@@ -97,10 +97,11 @@ namespace hpgl
 		inline void set_at(size_type index, value_type value)
 		{
 			HPGL_CHECK(m_data != nullptr, "indicator_property_array_t::set_at: null data pointer");
-			HPGL_CHECK(m_mask != nullptr, "indicator_property_array_t::set_at: null mask pointer");
 			HPGL_CHECK(index >= 0 && index < m_size, "indicator_property_array_t::set_at: index out of bounds");
 			m_data[index] = value;
-			m_mask[index] = 1;
+			// Null mask = all cells are informed (consistent with is_informed)
+			if (m_mask != nullptr)
+				m_mask[index] = 1;
 		}
 
 		bool is_informed(size_type index)const
@@ -116,9 +117,10 @@ namespace hpgl
 
 		void delete_value_at(node_index_t node)
 		{
-			HPGL_CHECK(m_mask != nullptr, "indicator_property_array_t::delete_value_at: null mask pointer");
 			HPGL_CHECK(node >= 0 && node < m_size, "indicator_property_array_t::delete_value_at: index out of bounds");
-			m_mask[node] = 0;
+			// Null mask = nothing to delete (consistent with is_informed)
+			if (m_mask != nullptr)
+				m_mask[node] = 0;
 		}
 	};
 

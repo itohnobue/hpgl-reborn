@@ -14,6 +14,7 @@ Reference values come from Stage 6 research:
 
 Tolerances: rtol=1e-5, atol=1e-7 (float32-compatible)
 """
+
 import sys
 from pathlib import Path
 
@@ -48,9 +49,9 @@ def compute_covariance_from_sk_weight(sill, nugget, cov_type, ranges, h):
     """
     weights = simple_kriging_weights(
         center_point=(0.0, 0.0, 0.0),
-        n_x=np.array([float(h)], dtype='float32'),
-        n_y=np.array([0.0], dtype='float32'),
-        n_z=np.array([0.0], dtype='float32'),
+        n_x=np.array([float(h)], dtype="float32"),
+        n_y=np.array([0.0], dtype="float32"),
+        n_z=np.array([0.0], dtype="float32"),
         ranges=ranges,
         sill=sill,
         cov_type=cov_type,
@@ -63,38 +64,51 @@ def compute_covariance_from_sk_weight(sill, nugget, cov_type, ranges, h):
 # Spherical Model Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestSphericalCovariance:
     """Spherical covariance model: C(h) = (sill-nugget)*max(0, 1-1.5x+0.5x^3)"""
 
     def test_sph_h0(self):
         """SPH-1: sill=1.0, nugget=0.0, range=10.0, h=0 → C=1.0"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 0.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 0.0
+        )
         np.testing.assert_allclose(C, 1.0, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_sph_half_range(self):
         """SPH-2: sill=1.0, nugget=0.0, range=10.0, h=5.0 → C=0.3125"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 5.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 5.0
+        )
         np.testing.assert_allclose(C, 0.3125, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_sph_h_equals_range(self):
         """SPH-3: sill=1.0, nugget=0.0, range=10.0, h=10.0 → C=0.0"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 10.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 10.0
+        )
         np.testing.assert_allclose(C, 0.0, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_sph_h_gt_range(self):
         """SPH-4: sill=1.0, nugget=0.0, range=10.0, h=20.0 → C=0.0"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 20.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 20.0
+        )
         np.testing.assert_allclose(C, 0.0, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_sph_with_nugget_h0(self):
         """SPH-5: sill=1.0, nugget=0.1, range=10.0, h=0 → C=1.0 (h<0.0001 guard)"""
-        C = compute_covariance_from_sk_weight(1.0, 0.1, covariance.spherical, (10.0, 10.0, 10.0), 0.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.1, covariance.spherical, (10.0, 10.0, 10.0), 0.0
+        )
         np.testing.assert_allclose(C, 1.0, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_sph_with_nugget_half_range(self):
         """SPH-6: sill=1.0, nugget=0.1, range=10.0, h=5.0 → C=0.28125"""
-        C = compute_covariance_from_sk_weight(1.0, 0.1, covariance.spherical, (10.0, 10.0, 10.0), 5.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.1, covariance.spherical, (10.0, 10.0, 10.0), 5.0
+        )
         np.testing.assert_allclose(C, 0.28125, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_sph_double_sill(self):
@@ -104,7 +118,9 @@ class TestSphericalCovariance:
 
     def test_sph_large_nugget_half_range(self):
         """SPH-8: sill=1.0, nugget=0.5, range=10.0, h=5.0 → C=0.15625"""
-        C = compute_covariance_from_sk_weight(1.0, 0.5, covariance.spherical, (10.0, 10.0, 10.0), 5.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.5, covariance.spherical, (10.0, 10.0, 10.0), 5.0
+        )
         expected = (1.0 - 0.5) * 0.3125  # = 0.15625
         np.testing.assert_allclose(C, expected, rtol=COV_RTOL, atol=COV_ATOL)
 
@@ -115,7 +131,9 @@ class TestSphericalCovariance:
 
     def test_sph_tiny_distance(self):
         """SPH-10: sill=1.0, nugget=0.0, range=100.0, h=5e-5 → C=1.0 (h<0.0001 guard)"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.spherical, (100.0, 100.0, 100.0), 5e-5)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.spherical, (100.0, 100.0, 100.0), 5e-5
+        )
         np.testing.assert_allclose(C, 1.0, rtol=COV_RTOL, atol=COV_ATOL)
 
 
@@ -123,54 +141,71 @@ class TestSphericalCovariance:
 # Exponential Model Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestExponentialCovariance:
     """Exponential covariance model: C(h) = (sill-nugget) * exp(-3*h/a)"""
 
     def test_exp_h0(self):
         """EXP-1: sill=1.0, nugget=0.0, range=5.0, h=0 → C=1.0"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), 0.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), 0.0
+        )
         np.testing.assert_allclose(C, 1.0, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_exp_half_range(self):
         """EXP-2: sill=1.0, nugget=0.0, range=5.0, h=2.5 → C=exp(-1.5)~0.223130"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), 2.5)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), 2.5
+        )
         expected = np.exp(-1.5)
         np.testing.assert_allclose(C, expected, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_exp_equals_range(self):
         """EXP-3: sill=1.0, nugget=0.0, range=5.0, h=5.0 → C=exp(-3.0)~0.049787"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), 5.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), 5.0
+        )
         expected = np.exp(-3.0)
         np.testing.assert_allclose(C, expected, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_exp_double_range(self):
         """EXP-4: sill=1.0, nugget=0.0, range=5.0, h=10.0 → C=exp(-6.0)~0.002479"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), 10.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), 10.0
+        )
         expected = np.exp(-6.0)
         np.testing.assert_allclose(C, expected, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_exp_with_nugget(self):
         """EXP-5: sill=1.0, nugget=0.1, range=5.0, h=2.5 → C=0.9*exp(-1.5)~0.200817"""
-        C = compute_covariance_from_sk_weight(1.0, 0.1, covariance.exponential, (5.0, 5.0, 5.0), 2.5)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.1, covariance.exponential, (5.0, 5.0, 5.0), 2.5
+        )
         expected = (1.0 - 0.1) * np.exp(-1.5)
         np.testing.assert_allclose(C, expected, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_exp_double_sill(self):
         """EXP-6: sill=2.0, nugget=0.0, range=3.0, h=3.0 → C=2*exp(-3.0)~0.099574"""
-        C = compute_covariance_from_sk_weight(2.0, 0.0, covariance.exponential, (3.0, 3.0, 3.0), 3.0)
+        C = compute_covariance_from_sk_weight(
+            2.0, 0.0, covariance.exponential, (3.0, 3.0, 3.0), 3.0
+        )
         expected = 2.0 * np.exp(-3.0)
         np.testing.assert_allclose(C, expected, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_exp_range10_h10(self):
         """EXP-7: sill=1.0, nugget=0.0, range=10.0, h=10.0 → C=exp(-3.0)"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.exponential, (10.0, 10.0, 10.0), 10.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.exponential, (10.0, 10.0, 10.0), 10.0
+        )
         expected = np.exp(-3.0)
         np.testing.assert_allclose(C, expected, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_exp_range_div_3(self):
         """EXP-8: sill=1.0, nugget=0.0, range=10.0, h=range/3=3.333... → C=exp(-1.0)"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.exponential, (10.0, 10.0, 10.0), 10.0 / 3.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.exponential, (10.0, 10.0, 10.0), 10.0 / 3.0
+        )
         expected = np.exp(-1.0)
         np.testing.assert_allclose(C, expected, rtol=COV_RTOL, atol=COV_ATOL)
 
@@ -178,6 +213,7 @@ class TestExponentialCovariance:
 # =============================================================================
 # Gaussian Model Tests
 # =============================================================================
+
 
 @pytest.mark.hpgl
 class TestGaussianCovariance:
@@ -214,7 +250,9 @@ class TestGaussianCovariance:
 
     def test_gau_range10_h5(self):
         """GAU-6: sill=1.0, nugget=0.0, range=10.0, h=5.0 → C=exp(-3*(0.5)^2)=exp(-0.75)"""
-        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.gaussian, (10.0, 10.0, 10.0), 5.0)
+        C = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.gaussian, (10.0, 10.0, 10.0), 5.0
+        )
         expected = np.exp(-0.75)
         np.testing.assert_allclose(C, expected, rtol=COV_RTOL, atol=COV_ATOL)
 
@@ -230,15 +268,14 @@ class TestGaussianCovariance:
 # Anisotropic Range Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestAnisotropicCovariance:
     """Anisotropic range tests — different ranges per axis."""
 
     def test_ani_x_along_range(self):
         """ANI-1: ranges=(10,5,5), neighbor at (5,0,0) → h_eff=5.0, C(spherical)=0.3125"""
-        C = compute_covariance_from_sk_weight(
-            1.0, 0.0, covariance.spherical, (10.0, 5.0, 5.0), 5.0
-        )
+        C = compute_covariance_from_sk_weight(1.0, 0.0, covariance.spherical, (10.0, 5.0, 5.0), 5.0)
         # h_eff along X: sqrt((5/10*10)^2 + 0 + 0) = 5, x=5/10=0.5 → C=0.3125
         np.testing.assert_allclose(C, 0.3125, rtol=COV_RTOL, atol=COV_ATOL)
 
@@ -247,9 +284,9 @@ class TestAnisotropicCovariance:
         # Neighbor along X at distance 5: h_eff_x = 5.0 (range_X=10)
         wx = simple_kriging_weights(
             center_point=(0.0, 0.0, 0.0),
-            n_x=np.array([5.0], dtype='float32'),
-            n_y=np.array([0.0], dtype='float32'),
-            n_z=np.array([0.0], dtype='float32'),
+            n_x=np.array([5.0], dtype="float32"),
+            n_y=np.array([0.0], dtype="float32"),
+            n_z=np.array([0.0], dtype="float32"),
             ranges=(10.0, 5.0, 5.0),
             sill=1.0,
             cov_type=covariance.spherical,
@@ -258,9 +295,9 @@ class TestAnisotropicCovariance:
         # Neighbor along Y at distance 5: h_eff_y = sqrt(0 + (10*5/5)^2 + 0) = 10.0
         wy = simple_kriging_weights(
             center_point=(0.0, 0.0, 0.0),
-            n_x=np.array([0.0], dtype='float32'),
-            n_y=np.array([5.0], dtype='float32'),
-            n_z=np.array([0.0], dtype='float32'),
+            n_x=np.array([0.0], dtype="float32"),
+            n_y=np.array([5.0], dtype="float32"),
+            n_z=np.array([0.0], dtype="float32"),
             ranges=(10.0, 5.0, 5.0),
             sill=1.0,
             cov_type=covariance.spherical,
@@ -276,9 +313,9 @@ class TestAnisotropicCovariance:
         for dist in [3.0, 5.0, 7.0]:
             wx = simple_kriging_weights(
                 center_point=(0.0, 0.0, 0.0),
-                n_x=np.array([dist], dtype='float32'),
-                n_y=np.array([0.0], dtype='float32'),
-                n_z=np.array([0.0], dtype='float32'),
+                n_x=np.array([dist], dtype="float32"),
+                n_y=np.array([0.0], dtype="float32"),
+                n_z=np.array([0.0], dtype="float32"),
                 ranges=(10.0, 10.0, 10.0),
                 sill=1.0,
                 cov_type=covariance.spherical,
@@ -286,9 +323,9 @@ class TestAnisotropicCovariance:
             )
             wy = simple_kriging_weights(
                 center_point=(0.0, 0.0, 0.0),
-                n_x=np.array([0.0], dtype='float32'),
-                n_y=np.array([dist], dtype='float32'),
-                n_z=np.array([0.0], dtype='float32'),
+                n_x=np.array([0.0], dtype="float32"),
+                n_y=np.array([dist], dtype="float32"),
+                n_z=np.array([0.0], dtype="float32"),
                 ranges=(10.0, 10.0, 10.0),
                 sill=1.0,
                 cov_type=covariance.spherical,
@@ -296,9 +333,9 @@ class TestAnisotropicCovariance:
             )
             wz = simple_kriging_weights(
                 center_point=(0.0, 0.0, 0.0),
-                n_x=np.array([0.0], dtype='float32'),
-                n_y=np.array([0.0], dtype='float32'),
-                n_z=np.array([dist], dtype='float32'),
+                n_x=np.array([0.0], dtype="float32"),
+                n_y=np.array([0.0], dtype="float32"),
+                n_z=np.array([dist], dtype="float32"),
                 ranges=(10.0, 10.0, 10.0),
                 sill=1.0,
                 cov_type=covariance.spherical,
@@ -311,6 +348,7 @@ class TestAnisotropicCovariance:
 # =============================================================================
 # Cross-model Comparison Tests
 # =============================================================================
+
 
 @pytest.mark.hpgl
 class TestCrossModelProperties:
@@ -328,7 +366,9 @@ class TestCrossModelProperties:
         which tests Gaussian < Exponential at h=2a (far-field decay).
         """
         h = 2.5  # half of range=5
-        C_exp = compute_covariance_from_sk_weight(1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), h)
+        C_exp = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), h
+        )
         C_gau = compute_covariance_from_sk_weight(1.0, 0.0, covariance.gaussian, (5.0, 5.0, 5.0), h)
         assert 0 < C_exp < C_gau <= 1.0, (
             f"At h=a/2 Gaussian ({C_gau}) should be higher than Exponential ({C_exp})"
@@ -337,19 +377,25 @@ class TestCrossModelProperties:
     def test_gaussian_approaches_zero_fast(self):
         """At h=2a, Gaussian C < Exponential C (Gaussian drops faster at large distances)."""
         h = 10.0  # double range=5
-        C_exp = compute_covariance_from_sk_weight(1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), h)
+        C_exp = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.exponential, (5.0, 5.0, 5.0), h
+        )
         C_gau = compute_covariance_from_sk_weight(1.0, 0.0, covariance.gaussian, (5.0, 5.0, 5.0), h)
         # exp(-6) ~ 0.00248, exp(-12) ~ 6.14e-6
-        assert C_gau < C_exp, (
-            f"Gaussian should decay faster at 2a: C_gau={C_gau}, C_exp={C_exp}"
-        )
+        assert C_gau < C_exp, f"Gaussian should decay faster at 2a: C_gau={C_gau}, C_exp={C_exp}"
 
     def test_spherical_has_finite_range(self):
         """Spherical reaches exactly 0 at h=range (not asymptotic)."""
         # At h=range, spherical C = 0 exactly, exponential/gaussian > 0
-        C_sph = compute_covariance_from_sk_weight(1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 10.0)
-        C_exp = compute_covariance_from_sk_weight(1.0, 0.0, covariance.exponential, (10.0, 10.0, 10.0), 10.0)
-        C_gau = compute_covariance_from_sk_weight(1.0, 0.0, covariance.gaussian, (10.0, 10.0, 10.0), 10.0)
+        C_sph = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.spherical, (10.0, 10.0, 10.0), 10.0
+        )
+        C_exp = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.exponential, (10.0, 10.0, 10.0), 10.0
+        )
+        C_gau = compute_covariance_from_sk_weight(
+            1.0, 0.0, covariance.gaussian, (10.0, 10.0, 10.0), 10.0
+        )
         np.testing.assert_allclose(C_sph, 0.0, atol=COV_ATOL)
         assert C_exp > 0, "Exponential should be >0 at h=range"
         assert C_gau > 0, "Gaussian should be >0 at h=range"
@@ -359,6 +405,7 @@ class TestCrossModelProperties:
 # Covariance Matrix Positive-Definiteness Tests (M-T12)
 # =============================================================================
 
+
 def _spherical_cov_py(h, sill, nugget, range_val):
     """Analytical spherical covariance: C(h) in Python."""
     if h < 1e-4:
@@ -366,7 +413,7 @@ def _spherical_cov_py(h, sill, nugget, range_val):
     if h > range_val:
         return 0.0
     x = h / range_val
-    return max(0.0, (sill - nugget) * (1.0 - 1.5 * x + 0.5 * x ** 3))
+    return max(0.0, (sill - nugget) * (1.0 - 1.5 * x + 0.5 * x**3))
 
 
 def _exponential_cov_py(h, sill, nugget, range_val):
@@ -437,29 +484,33 @@ class TestCovarianceMatrixPositiveDefinite:
     def test_spherical_isotropic_pd(self):
         """PD-1: Spherical isotropic covariance matrix is positive-definite."""
         points = self._generate_random_points(10)
-        K = _build_covariance_matrix(points, _spherical_cov_py,
-                                      sill=1.0, nugget=0.1, ranges=(20.0, 20.0, 20.0))
+        K = _build_covariance_matrix(
+            points, _spherical_cov_py, sill=1.0, nugget=0.1, ranges=(20.0, 20.0, 20.0)
+        )
         assert _is_positive_definite(K), "Spherical isotropic matrix should be PD"
 
     def test_exponential_isotropic_pd(self):
         """PD-2: Exponential isotropic covariance matrix is positive-definite."""
         points = self._generate_random_points(10)
-        K = _build_covariance_matrix(points, _exponential_cov_py,
-                                      sill=1.0, nugget=0.1, ranges=(20.0, 20.0, 20.0))
+        K = _build_covariance_matrix(
+            points, _exponential_cov_py, sill=1.0, nugget=0.1, ranges=(20.0, 20.0, 20.0)
+        )
         assert _is_positive_definite(K), "Exponential isotropic matrix should be PD"
 
     def test_gaussian_isotropic_pd(self):
         """PD-3: Gaussian isotropic covariance matrix is positive-definite."""
         points = self._generate_random_points(10)
-        K = _build_covariance_matrix(points, _gaussian_cov_py,
-                                      sill=1.0, nugget=0.1, ranges=(20.0, 20.0, 20.0))
+        K = _build_covariance_matrix(
+            points, _gaussian_cov_py, sill=1.0, nugget=0.1, ranges=(20.0, 20.0, 20.0)
+        )
         assert _is_positive_definite(K), "Gaussian isotropic matrix should be PD"
 
     def test_spherical_anisotropic_pd(self):
         """PD-4: Spherical anisotropic covariance matrix is positive-definite."""
         points = self._generate_random_points(10)
-        K = _build_covariance_matrix(points, _spherical_cov_py,
-                                      sill=1.0, nugget=0.1, ranges=(30.0, 15.0, 10.0))
+        K = _build_covariance_matrix(
+            points, _spherical_cov_py, sill=1.0, nugget=0.1, ranges=(30.0, 15.0, 10.0)
+        )
         assert _is_positive_definite(K), "Spherical anisotropic matrix should be PD"
 
     def test_all_models_zero_nugget_pd(self):
@@ -472,8 +523,9 @@ class TestCovarianceMatrixPositiveDefinite:
             (_exponential_cov_py, "exponential"),
             (_gaussian_cov_py, "gaussian"),
         ]:
-            K = _build_covariance_matrix(points, cov_func,
-                                          sill=1.0, nugget=0.0, ranges=(20.0, 20.0, 20.0))
+            K = _build_covariance_matrix(
+                points, cov_func, sill=1.0, nugget=0.0, ranges=(20.0, 20.0, 20.0)
+            )
             assert _is_positive_definite(K), f"{name} zero-nugget matrix should be PD"
 
     def test_all_models_large_nugget_pd(self):
@@ -484,8 +536,9 @@ class TestCovarianceMatrixPositiveDefinite:
             (_exponential_cov_py, "exponential"),
             (_gaussian_cov_py, "gaussian"),
         ]:
-            K = _build_covariance_matrix(points, cov_func,
-                                          sill=2.0, nugget=0.9, ranges=(10.0, 10.0, 10.0))
+            K = _build_covariance_matrix(
+                points, cov_func, sill=2.0, nugget=0.9, ranges=(10.0, 10.0, 10.0)
+            )
             assert _is_positive_definite(K), f"{name} large-nugget matrix should be PD"
 
     def test_eigenvalues_all_positive(self):
@@ -497,8 +550,7 @@ class TestCovarianceMatrixPositiveDefinite:
             (_gaussian_cov_py, "gaussian", (25.0, 25.0, 25.0)),
             (_spherical_cov_py, "spherical-ani", (40.0, 20.0, 10.0)),
         ]:
-            K = _build_covariance_matrix(points, cov_func,
-                                          sill=1.0, nugget=0.05, ranges=ranges)
+            K = _build_covariance_matrix(points, cov_func, sill=1.0, nugget=0.05, ranges=ranges)
             eigenvalues = np.linalg.eigvalsh(K)
             assert np.all(eigenvalues > 0), (
                 f"{name}: all eigenvalues must be positive, min={eigenvalues.min():.2e}"
@@ -508,6 +560,7 @@ class TestCovarianceMatrixPositiveDefinite:
 # =============================================================================
 # HPGL C++ Covariance Matrix PD Tests (F7-06)
 # =============================================================================
+
 
 def _build_covariance_matrix_hpgl(points, sill, nugget, cov_type, ranges):
     """Build a covariance matrix K_ij = C(h_ij) using HPGL's C++ covariance code.
@@ -557,25 +610,25 @@ class TestCovarianceMatrixPositiveDefiniteHPGL:
     def test_spherical_hpgl_pd(self):
         """PD-H1: Spherical covariance matrix via HPGL C++ is positive-definite."""
         points = self._generate_random_points(10)
-        K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.1,
-                                           cov_type=covariance.spherical,
-                                           ranges=(20.0, 20.0, 20.0))
+        K = _build_covariance_matrix_hpgl(
+            points, sill=1.0, nugget=0.1, cov_type=covariance.spherical, ranges=(20.0, 20.0, 20.0)
+        )
         assert _is_positive_definite(K), "Spherical HPGL matrix should be PD"
 
     def test_exponential_hpgl_pd(self):
         """PD-H2: Exponential covariance matrix via HPGL C++ is positive-definite."""
         points = self._generate_random_points(10)
-        K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.1,
-                                           cov_type=covariance.exponential,
-                                           ranges=(20.0, 20.0, 20.0))
+        K = _build_covariance_matrix_hpgl(
+            points, sill=1.0, nugget=0.1, cov_type=covariance.exponential, ranges=(20.0, 20.0, 20.0)
+        )
         assert _is_positive_definite(K), "Exponential HPGL matrix should be PD"
 
     def test_gaussian_hpgl_pd(self):
         """PD-H3: Gaussian covariance matrix via HPGL C++ is positive-definite."""
         points = self._generate_random_points(10)
-        K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.1,
-                                           cov_type=covariance.gaussian,
-                                           ranges=(20.0, 20.0, 20.0))
+        K = _build_covariance_matrix_hpgl(
+            points, sill=1.0, nugget=0.1, cov_type=covariance.gaussian, ranges=(20.0, 20.0, 20.0)
+        )
         assert _is_positive_definite(K), "Gaussian HPGL matrix should be PD"
 
     def test_all_models_hpgl_zero_nugget_pd(self):
@@ -586,9 +639,9 @@ class TestCovarianceMatrixPositiveDefiniteHPGL:
             (covariance.exponential, "exponential"),
             (covariance.gaussian, "gaussian"),
         ]:
-            K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.0,
-                                               cov_type=cov_type,
-                                               ranges=(20.0, 20.0, 20.0))
+            K = _build_covariance_matrix_hpgl(
+                points, sill=1.0, nugget=0.0, cov_type=cov_type, ranges=(20.0, 20.0, 20.0)
+            )
             assert _is_positive_definite(K), f"{name} HPGL zero-nugget matrix should be PD"
 
     def test_all_models_hpgl_large_nugget_pd(self):
@@ -599,9 +652,9 @@ class TestCovarianceMatrixPositiveDefiniteHPGL:
             (covariance.exponential, "exponential"),
             (covariance.gaussian, "gaussian"),
         ]:
-            K = _build_covariance_matrix_hpgl(points, sill=2.0, nugget=0.9,
-                                               cov_type=cov_type,
-                                               ranges=(10.0, 10.0, 10.0))
+            K = _build_covariance_matrix_hpgl(
+                points, sill=2.0, nugget=0.9, cov_type=cov_type, ranges=(10.0, 10.0, 10.0)
+            )
             assert _is_positive_definite(K), f"{name} HPGL large-nugget matrix should be PD"
 
     def test_hpgl_eigenvalues_all_positive(self):
@@ -612,9 +665,9 @@ class TestCovarianceMatrixPositiveDefiniteHPGL:
             (covariance.exponential, "exponential"),
             (covariance.gaussian, "gaussian"),
         ]:
-            K = _build_covariance_matrix_hpgl(points, sill=1.0, nugget=0.05,
-                                               cov_type=cov_type,
-                                               ranges=(25.0, 25.0, 25.0))
+            K = _build_covariance_matrix_hpgl(
+                points, sill=1.0, nugget=0.05, cov_type=cov_type, ranges=(25.0, 25.0, 25.0)
+            )
             eigenvalues = np.linalg.eigvalsh(K)
             assert np.all(eigenvalues > 0), (
                 f"{name} HPGL: all eigenvalues must be positive, min={eigenvalues.min():.2e}"

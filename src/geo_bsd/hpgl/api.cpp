@@ -337,6 +337,18 @@ HPGL_API int hpgl_write_inc_file_byte(
 		std::vector<unsigned char> remap_table;
 		init_remap_table(values, values_count, arr->m_indicator_count, remap_table);
 
+		// Validate undefined_value fits in unsigned char before write.
+		// Out-of-range int (e.g. negative sentinels like -999) silently
+		// wraps via modulo-256 arithmetic, producing corrupted output
+		// with no warning. Zero range check was present before this fix.
+		if (!(undefined_value >= 0 && undefined_value <= 255))
+		{
+			std::ostringstream oss;
+			oss << "write_inc_file_byte: undefined_value " << undefined_value
+			    << " out of range for unsigned char [0, 255]";
+			throw hpgl::hpgl_exception("hpgl_write_inc_file_byte", oss.str());
+		}
+
 		property_writer_t writer;
 		writer.init(filename, name);
 		indicator_property_array_t prop(
@@ -409,9 +421,22 @@ hpgl_write_gslib_byte_property(
 		std::vector<unsigned char> remap_table;
 		init_remap_table(values, values_count, data->m_indicator_count, remap_table);
 
+		// Validate undefined_value fits in unsigned char before cast.
+		// Cast of out-of-range double (e.g. negative sentinels like -999.0)
+		// to unsigned char is undefined behavior.
+		// Uses IEEE 754 property: NaN comparisons always return false,
+		// so !(NaN >= 0.0 && NaN <= 255.0) is true, catching NaN as well.
+		if (!(undefined_value >= 0.0 && undefined_value <= 255.0))
+		{
+			std::ostringstream oss;
+			oss << "write_gslib_byte_property: undefined_value " << undefined_value
+			    << " out of range for unsigned char [0, 255]";
+			throw hpgl::hpgl_exception("hpgl_write_gslib_byte_property", oss.str());
+		}
+
 		property_writer_t writer;
 		writer.init(filename, name);
-		writer.write_gslib_byte(prop, (unsigned char)undefined_value, remap_table);
+		writer.write_gslib_byte(prop, static_cast<unsigned char>(undefined_value), remap_table);
 		return 0;
 	}
 	catch (const std::exception & ex)
@@ -499,6 +524,9 @@ HPGL_API void hpgl_simple_kriging(
 	validate_shape_volume_or_throw(in_size, "simple_kriging input");
 	int out_size = get_shape_volume(output_data_shape);
 	validate_shape_volume_or_throw(out_size, "simple_kriging output");
+
+	if (in_size != out_size)
+		throw hpgl_exception("hpgl_simple_kriging", "input and output shape volume mismatch");
 
 	cont_property_array_t in_prop(input_data, input_mask, in_size);
 	cont_property_array_t out_prop(output_data, output_mask, out_size);
@@ -600,6 +628,9 @@ HPGL_API void hpgl_lvm_kriging(
 	validate_shape_volume_or_throw(size, "lvm_kriging input");
 	int out_size = get_shape_volume(output_data_shape);
 	validate_shape_volume_or_throw(out_size, "lvm_kriging output");
+
+	if (size != out_size)
+		throw hpgl_exception("hpgl_lvm_kriging", "input and output shape volume mismatch");
 	
 	// Validate means array size matches grid volume to prevent OOB read
 	// in subtract_means / add_means (lvm_utils.h)
@@ -666,6 +697,12 @@ hpgl_indicator_kriging(
 		validate_shape_volume_or_throw(size2, "indicator_kriging output");
 		if (size != size2)
 			throw hpgl_exception("hpgl_indicator_kriging", "input and output size mismatch");
+	// Validate out_data indicator_count matches the validated indicator_count
+	// parameter to prevent downstream OOB reads from consumers that trust
+	// out_data->m_indicator_count (e.g. write_gslib_byte_property at api.cpp:408).
+	if (out_data->m_indicator_count != indicator_count)
+		throw hpgl_exception("hpgl_indicator_kriging",
+			"out_data indicator_count mismatch with validated indicator_count");
 	indicator_property_array_t in_prop(in_data->m_data, in_data->m_mask, size, in_data->m_indicator_count);
 	indicator_property_array_t out_prop(out_data->m_data, out_data->m_mask, size2, out_data->m_indicator_count);
 
@@ -947,6 +984,18 @@ hpgl_sis_simulation_lvm(
 		{
 			std::ostringstream oss;
 			oss << "Null mean_data[" << i << "].m_data pointer";
+			throw hpgl_exception("hpgl_sis_simulation_lvm", oss.str());
+		}
+		// Validate each indicator's mean array shape matches grid volume
+		// to prevent out-of-bounds reads in the LVM simulation kernel.
+		// (cf. hpgl_sgs_lvm_simulation which validates means shape identically.)
+		int mean_vol = get_shape_volume(&(mean_data[i].m_shape));
+		validate_shape_volume_or_throw(mean_vol, "sis_simulation_lvm means");
+		if (mean_vol != size)
+		{
+			std::ostringstream oss;
+			oss << "sis_simulation_lvm: means[" << i << "] volume (" << mean_vol
+			    << ") != grid volume (" << size << ")";
 			throw hpgl_exception("hpgl_sis_simulation_lvm", oss.str());
 		}
 		means.push_back(mean_data[i].m_data);

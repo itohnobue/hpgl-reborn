@@ -62,34 +62,26 @@ class TVEllipsoid:
     R1, R2, R3 : float
         Range values stored as instance attributes.
     """
+
     Direction1 = [1, 0, 0]
     Direction2 = [0, 1, 0]
     Direction3 = [0, 0, 1]
     R1 = 1
     R2 = 1
     R3 = 1
-    def __init__(self, R1, R2, R3, Azimut = 0, Dip = 0, Rotation = 0):
+
+    def __init__(self, R1, R2, R3, Azimut=0, Dip=0, Rotation=0):
         Azimut = radians(Azimut)
         Dip = radians(Dip)
         Rotation = radians(Rotation)
 
-        A = array([
-             [cos(Azimut), -sin(Azimut), 0],
-             [sin(Azimut),  cos(Azimut), 0],
-             [0, 0, 1]
-             ])
+        A = array([[cos(Azimut), -sin(Azimut), 0], [sin(Azimut), cos(Azimut), 0], [0, 0, 1]])
 
-        B = array([
-             [cos(Dip), 0, -sin(Dip)],
-             [0, 1, 0],
-             [sin(Dip), 0,  cos(Dip)]
-             ])
+        B = array([[cos(Dip), 0, -sin(Dip)], [0, 1, 0], [sin(Dip), 0, cos(Dip)]])
 
-        C = array([
-             [1, 0, 0],
-             [0, cos(Rotation), -sin(Rotation)],
-             [0, sin(Rotation),  cos(Rotation)]
-             ])
+        C = array(
+            [[1, 0, 0], [0, cos(Rotation), -sin(Rotation)], [0, sin(Rotation), cos(Rotation)]]
+        )
 
         ABC = A @ B @ C
 
@@ -100,6 +92,7 @@ class TVEllipsoid:
         self.R1 = R1
         self.R2 = R2
         self.R3 = R3
+
 
 class TVVariogramSearchTemplate:
     """Parameters controlling experimental variogram computation.
@@ -131,21 +124,26 @@ class TVVariogramSearchTemplate:
     Ellipsoid : TVEllipsoid
     FirstLagDistance : float
     """
+
     LagSeparation = 1
     TolDistance = 1
     NumLags = 10
-    Ellipsoid = TVEllipsoid(1,  1,  1)
-    def __init__(self, LagWidth, LagSeparation, TolDistance, NumLags, Ellipsoid,  FirstLagDistance = 0):
+    Ellipsoid = TVEllipsoid(1, 1, 1)
+
+    def __init__(
+        self, LagWidth, LagSeparation, TolDistance, NumLags, Ellipsoid, FirstLagDistance=0
+    ):
         if NumLags > MAX_NUM_LAGS:
             raise ValueError(
                 f"TVVariogramSearchTemplate: NumLags {NumLags} exceeds maximum {MAX_NUM_LAGS}"
             )
-        self.LagWidth  = LagWidth
+        self.LagWidth = LagWidth
         self.LagSeparation = LagSeparation
         self.TolDistance = TolDistance
         self.NumLags = NumLags
         self.Ellipsoid = Ellipsoid
         self.FirstLagDistance = FirstLagDistance
+
 
 def _IsInTunnel(VariogramSearchTemplate, V):
     # Compute projections of each vector onto ellipsoid axes via dot product.
@@ -181,8 +179,9 @@ def _IsInTunnel(VariogramSearchTemplate, V):
 
     return Result.ravel()
 
+
 def _CalcSearchTemplateWindow(VariogramSearchTemplate):
-    Max = 1E10
+    Max = 1e10
     MinI = Max
     MaxI = -Max
     MinJ = Max
@@ -192,9 +191,22 @@ def _CalcSearchTemplateWindow(VariogramSearchTemplate):
     for i in range(0, 2):
         for j in range(-1, 2, 2):
             for k in range(-1, 2, 2):
-                DI = VariogramSearchTemplate.Ellipsoid.Direction1 * VariogramSearchTemplate.LagSeparation * VariogramSearchTemplate.NumLags * i
-                DJ = VariogramSearchTemplate.Ellipsoid.Direction2 * VariogramSearchTemplate.Ellipsoid.R2 * j
-                DK = VariogramSearchTemplate.Ellipsoid.Direction3 * VariogramSearchTemplate.Ellipsoid.R3 * k
+                DI = (
+                    VariogramSearchTemplate.Ellipsoid.Direction1
+                    * VariogramSearchTemplate.LagSeparation
+                    * VariogramSearchTemplate.NumLags
+                    * i
+                )
+                DJ = (
+                    VariogramSearchTemplate.Ellipsoid.Direction2
+                    * VariogramSearchTemplate.Ellipsoid.R2
+                    * j
+                )
+                DK = (
+                    VariogramSearchTemplate.Ellipsoid.Direction3
+                    * VariogramSearchTemplate.Ellipsoid.R3
+                    * k
+                )
                 V = DI + DJ + DK
 
                 MinI = float(min(MinI, V[0]))
@@ -205,14 +217,19 @@ def _CalcSearchTemplateWindow(VariogramSearchTemplate):
                 MaxK = float(max(MaxK, V[2]))
     return MinI, MinJ, MinK, MaxI, MaxJ, MaxK
 
+
 def _CalcLagDistances(VariogramSearchTemplate):
     LagIndexes = range(0, VariogramSearchTemplate.NumLags)
-    LagDistance = array(LagIndexes) * VariogramSearchTemplate.LagSeparation + VariogramSearchTemplate.FirstLagDistance
+    LagDistance = (
+        array(LagIndexes) * VariogramSearchTemplate.LagSeparation
+        + VariogramSearchTemplate.FirstLagDistance
+    )
     LagWidth = VariogramSearchTemplate.LagWidth
     LagStart = LagDistance - float(LagWidth) / 2
     LagEnd = LagDistance + float(LagWidth) / 2
 
     return LagIndexes, LagDistance, LagStart, LagEnd
+
 
 def _CalcLagsAreas(VariogramSearchTemplate):
     (MinI, MinJ, MinK, MaxI, MaxJ, MaxK) = _CalcSearchTemplateWindow(VariogramSearchTemplate)
@@ -230,7 +247,7 @@ def _CalcLagsAreas(VariogramSearchTemplate):
 
     (Index, LagDistance, LagStart, LagEnd) = _CalcLagDistances(VariogramSearchTemplate)
 
-    GI, GJ, GK = mgrid[MinI:MaxI+1, MinJ:MaxJ+1, MinK:MaxK+1]
+    GI, GJ, GK = mgrid[MinI : MaxI + 1, MinJ : MaxJ + 1, MinK : MaxK + 1]
 
     GI = GI.reshape(prod(GI.shape), 1)
     GJ = GJ.reshape(prod(GJ.shape), 1)
@@ -257,6 +274,7 @@ def _CalcLagsAreas(VariogramSearchTemplate):
     lag_indexes = reshape(lag_indexes[1:], len(lag_indexes[1:])).astype(int)
     return idx_i, idx_j, idx_k, lag_indexes, LagDistance
 
+
 def _verify_dict_keys(d, required_keys, name="dict"):
     """Validate that a dictionary contains all required keys.
 
@@ -271,14 +289,10 @@ def _verify_dict_keys(d, required_keys, name="dict"):
             listing which keys were not found.
     """
     if not isinstance(d, dict):
-        raise TypeError(
-            f"Expected {name} to be a dict, got {type(d).__name__}"
-        )
+        raise TypeError(f"Expected {name} to be a dict, got {type(d).__name__}")
     missing = [repr(k) for k in required_keys if k not in d]
     if missing:
-        raise KeyError(
-            f"{name} is missing required key(s): {', '.join(missing)}"
-        )
+        raise KeyError(f"{name} is missing required key(s): {', '.join(missing)}")
 
 
 def _verify_shape(obj, ndim, name="array"):
@@ -293,15 +307,13 @@ def _verify_shape(obj, ndim, name="array"):
         AttributeError: If obj has no .shape attribute.
         ValueError: If obj.shape has wrong number of dimensions.
     """
-    if not hasattr(obj, 'shape'):
+    if not hasattr(obj, "shape"):
         raise AttributeError(
             f"Expected {name} to have a .shape attribute, got {type(obj).__name__}"
         )
     shp = obj.shape
     if len(shp) != ndim:
-        raise ValueError(
-            f"Expected {name}.shape to have {ndim} dimensions, got {len(shp)}: {shp}"
-        )
+        raise ValueError(f"Expected {name}.shape to have {ndim} dimensions, got {len(shp)}: {shp}")
 
 
 def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
@@ -337,10 +349,10 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     neighbors are filtered first by bounding box, then by distance
     range, and finally by the ellipsoid tunnel test (``_IsInTunnel``).
     """
-    _verify_dict_keys(PointSet, ['X', 'Y', 'Z'], 'PointSet')
-    PX = PointSet['X']
-    PY = PointSet['Y']
-    PZ = PointSet['Z']
+    _verify_dict_keys(PointSet, ["X", "Y", "Z"], "PointSet")
+    PX = PointSet["X"]
+    PY = PointSet["Y"]
+    PZ = PointSet["Z"]
 
     MinX, MinY, MinZ, MaxX, MaxY, MaxZ = _CalcSearchTemplateWindow(VariogramSearchTemplate)
 
@@ -370,7 +382,7 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         FDX, FDY, FDZ = DX[Filter], DY[Filter], DZ[Filter]
         FIndex = Index[Filter]
 
-        FDistance2 = FDX ** 2 + FDY ** 2 + FDZ ** 2
+        FDistance2 = FDX**2 + FDY**2 + FDZ**2
         Filter = MinDistance2 <= FDistance2
         Filter = bitwise_and(Filter, FDistance2 <= MaxDistance2)
 
@@ -384,7 +396,7 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         FIndex = FIndex[Filter]
         FDistance2 = FDistance2[Filter]
 
-        FDistance = FDistance2 ** 0.5
+        FDistance = FDistance2**0.5
 
         for Lag in LagIndex:
             Filter = bitwise_and(LagStart[Lag] <= FDistance, FDistance < LagEnd[Lag])
@@ -392,6 +404,7 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
                 Result[Lag, :] = Function([i], [j], Result[Lag, :], Params)
 
     return Result, LagDistance
+
 
 def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params):
     """Compute variogram from grid-aligned point data using lag index lookups.
@@ -420,15 +433,15 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
         Distance values for each lag center.
     """
     if isinstance(PointSetXYZ, dict):
-        _verify_dict_keys(PointSetXYZ, [0, 1, 2], 'PointSetXYZ')
-    elif not hasattr(PointSetXYZ, '__len__') or len(PointSetXYZ) < 3:
+        _verify_dict_keys(PointSetXYZ, [0, 1, 2], "PointSetXYZ")
+    elif not hasattr(PointSetXYZ, "__len__") or len(PointSetXYZ) < 3:
         # PointSetXYZ is typically a tuple (X, Y, Z) of coordinate arrays
         raise KeyError(
             f"PointSetXYZ must have at least 3 elements (X, Y, Z), "
             f"got {type(PointSetXYZ).__name__}"
             f"{' with length ' + str(len(PointSetXYZ)) if hasattr(PointSetXYZ, '__len__') else ''}"
         )
-    LI,  LJ,  LK,  LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
+    LI, LJ, LK, LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
     IMin, IMax = LI.min(), LI.max()
     JMin, JMax = LJ.min(), LJ.max()
     KMin, KMax = LK.min(), LK.max()
@@ -473,6 +486,7 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
 
     return Result, LagDistance
 
+
 def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
     """Compute variogram from a dense 3D grid using precomputed lag offsets.
 
@@ -500,7 +514,7 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
     LagDistance : numpy.ndarray
         Distance values for each lag center.
     """
-    _verify_shape(Mask, 3, 'Mask')
+    _verify_shape(Mask, 3, "Mask")
     NI, NJ, NK = Mask.shape
 
     LI, LJ, LK, LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
@@ -527,18 +541,50 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
         DK = LK[i]
         Lag = LagIndexes[i]
 
-        Mask1 = Mask[max(0, 0 + DI):min(NI, NI + DI), max(0, 0 + DJ):min(NJ, NJ + DJ), max(0, 0 + DK):min(NK, NK + DK)]
-        Mask2 = Mask[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
+        Mask1 = Mask[
+            max(0, 0 + DI) : min(NI, NI + DI),
+            max(0, 0 + DJ) : min(NJ, NJ + DJ),
+            max(0, 0 + DK) : min(NK, NK + DK),
+        ]
+        Mask2 = Mask[
+            max(0 - DI, 0) : min(NI - DI, NI),
+            max(0 - DJ, 0) : min(NJ - DJ, NJ),
+            max(0 - DK, 0) : min(NK - DK, NK),
+        ]
 
         Intersection = Mask1 & Mask2
 
-        GI1 = GI[max(0, 0 + DI):min(NI, NI + DI), max(0, 0 + DJ):min(NJ, NJ + DJ), max(0, 0 + DK):min(NK, NK + DK)]
-        GJ1 = GJ[max(0, 0 + DI):min(NI, NI + DI), max(0, 0 + DJ):min(NJ, NJ + DJ), max(0, 0 + DK):min(NK, NK + DK)]
-        GK1 = GK[max(0, 0 + DI):min(NI, NI + DI), max(0, 0 + DJ):min(NJ, NJ + DJ), max(0, 0 + DK):min(NK, NK + DK)]
+        GI1 = GI[
+            max(0, 0 + DI) : min(NI, NI + DI),
+            max(0, 0 + DJ) : min(NJ, NJ + DJ),
+            max(0, 0 + DK) : min(NK, NK + DK),
+        ]
+        GJ1 = GJ[
+            max(0, 0 + DI) : min(NI, NI + DI),
+            max(0, 0 + DJ) : min(NJ, NJ + DJ),
+            max(0, 0 + DK) : min(NK, NK + DK),
+        ]
+        GK1 = GK[
+            max(0, 0 + DI) : min(NI, NI + DI),
+            max(0, 0 + DJ) : min(NJ, NJ + DJ),
+            max(0, 0 + DK) : min(NK, NK + DK),
+        ]
 
-        GI2 = GI[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
-        GJ2 = GJ[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
-        GK2 = GK[max(0 - DI, 0):min(NI - DI, NI), max(0 - DJ, 0):min(NJ - DJ, NJ), max(0 - DK, 0):min(NK - DK, NK)]
+        GI2 = GI[
+            max(0 - DI, 0) : min(NI - DI, NI),
+            max(0 - DJ, 0) : min(NJ - DJ, NJ),
+            max(0 - DK, 0) : min(NK - DK, NK),
+        ]
+        GJ2 = GJ[
+            max(0 - DI, 0) : min(NI - DI, NI),
+            max(0 - DJ, 0) : min(NJ - DJ, NJ),
+            max(0 - DK, 0) : min(NK - DK, NK),
+        ]
+        GK2 = GK[
+            max(0 - DI, 0) : min(NI - DI, NI),
+            max(0 - DJ, 0) : min(NJ - DJ, NJ),
+            max(0 - DK, 0) : min(NK - DK, NK),
+        ]
 
         for k in range(Intersection.shape[2]):
             GI1Slice = GI1[:, :, k][Intersection[:, :, k]].flatten()
@@ -548,13 +594,19 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
             GJ2Slice = GJ2[:, :, k][Intersection[:, :, k]].flatten()
             GK2Slice = GK2[:, :, k][Intersection[:, :, k]].flatten()
 
-            Result[Lag, :] = Function((GI1Slice, GJ1Slice, GK1Slice), (GI2Slice, GJ2Slice, GK2Slice), Result[Lag, :], Params)
+            Result[Lag, :] = Function(
+                (GI1Slice, GJ1Slice, GK1Slice),
+                (GI2Slice, GJ2Slice, GK2Slice),
+                Result[Lag, :],
+                Params,
+            )
 
     return Result, LagDistance
 
+
 def CalcVariogramFunction(Point1, Point2, Result, Params):
-    _verify_dict_keys(Params, ['HardData'], 'Params')
-    Values = Params['HardData']
+    _verify_dict_keys(Params, ["HardData"], "Params")
+    Values = Params["HardData"]
     NumValues = len(Values)
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
@@ -564,23 +616,31 @@ def CalcVariogramFunction(Point1, Point2, Result, Params):
         if numpy.ndim(Point1) == 0:
             Point1 = numpy.array([Point1])
             Point2 = numpy.array([Point2])
-        NumPoints = shape(Point1)[len(shape(Point1))-1]
+        NumPoints = shape(Point1)[len(shape(Point1)) - 1]
 
         Values1 = zeros((NumValues, NumPoints))
         Values2 = zeros((NumValues, NumPoints))
         for i in range(NumValues):
             Values1[i] = Values[i][Point1[:]]
             Values2[i] = Values[i][Point2[:]]
-        Variances = float32(Values1 - Values2)**2
-        Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Variances.sum(axis=1)
+        Variances = float32(Values1 - Values2) ** 2
+        Result[NumValues + 0 : NumValues + NumValues] = Result[
+            NumValues + 0 : NumValues + NumValues
+        ] + Variances.sum(axis=1)
         Result[NumValues + NumValues] += Variances.shape[1]
-        Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues] / 2
+        # Guard against division by zero when a lag has no point pairs.
+        # Without this, empty lags produce NaN results.
+        if Result[NumValues + NumValues] > 0:
+            Result[0:NumValues] = (
+                Result[NumValues + 0 : NumValues + NumValues] / Result[NumValues + NumValues] / 2
+            )
     return Result
+
 
 def CalcCovarianceFunction(Point1, Point2, Result, Params):
-    _verify_dict_keys(Params, ['HardData', 'SoftData'], 'Params')
-    Values = Params['HardData']
-    SoftData = Params['SoftData']
+    _verify_dict_keys(Params, ["HardData", "SoftData"], "Params")
+    Values = Params["HardData"]
+    SoftData = Params["SoftData"]
     NumValues = len(Values)
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
@@ -599,16 +659,21 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
             Values2[i] = Values[i][Point2]
             SoftValues1[i] = SoftData[i][Point1]
             SoftValues2[i] = SoftData[i][Point2]
-        Covariances = float32((Values1 - SoftValues1)*(Values2 - SoftValues2))
-        Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Covariances
+        Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2))
+        Result[NumValues + 0 : NumValues + NumValues] = (
+            Result[NumValues + 0 : NumValues + NumValues] + Covariances
+        )
         Result[NumValues + NumValues] += 1
-        Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues]
+        Result[0:NumValues] = (
+            Result[NumValues + 0 : NumValues + NumValues] / Result[NumValues + NumValues]
+        )
     return Result
 
+
 def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
-    _verify_dict_keys(Params, ['HardData', 'SoftData'], 'Params')
-    Values = Params['HardData']
-    SoftData = Params['SoftData']
+    _verify_dict_keys(Params, ["HardData", "SoftData"], "Params")
+    Values = Params["HardData"]
+    SoftData = Params["SoftData"]
     NumValues = len(Values)
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float32)
@@ -627,10 +692,14 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
             Values2[i] = Values[i][Point2]
             SoftValues1[i] = SoftData[i][Point1]
             SoftValues2[i] = SoftData[i][Point2]
-        denom = (SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1-SoftValues2)) ** 0.5
+        denom = (SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1 - SoftValues2)) ** 0.5
         denom[denom <= 0] = 1.0  # Avoid div/0 and NaN from negative floating-point noise
-        Covariances = float32((Values1 - SoftValues1)*(Values2 - SoftValues2) / denom)
-        Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Covariances
+        Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2) / denom)
+        Result[NumValues + 0 : NumValues + NumValues] = (
+            Result[NumValues + 0 : NumValues + NumValues] + Covariances
+        )
         Result[NumValues + NumValues] += 1
-        Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues]
+        Result[0:NumValues] = (
+            Result[NumValues + 0 : NumValues + NumValues] / Result[NumValues + NumValues]
+        )
     return Result

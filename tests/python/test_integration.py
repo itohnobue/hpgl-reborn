@@ -1,6 +1,7 @@
 """
 Integration tests for HPGL workflows
 """
+
 import sys
 from pathlib import Path
 
@@ -37,36 +38,29 @@ class TestWorkflowIntegration:
     def test_kriging_then_simulation(self):
         """Test using kriging results for simulation"""
         grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         prop = ContProperty(data, mask)
 
         cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(5.0, 5.0, 3.0),
-            sill=1.0,
-            nugget=0.1
+            type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
         )
 
         # First run kriging
         kriged = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
 
         # Data integrity: kriged output has no NaN/Inf
         assert isinstance(kriged, ContProperty)
-        assert not np.any(np.isnan(kriged.data.astype('float64')))
-        assert not np.any(np.isinf(kriged.data.astype('float64')))
+        assert not np.any(np.isnan(kriged.data.astype("float64")))
+        assert not np.any(np.isinf(kriged.data.astype("float64")))
         assert kriged.data.shape == (500,)
 
         # Use kriged result for simulation
         cdf_data = CdfData(
-            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype='float32'),
-            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
+            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype="float32"),
+            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32"),
         )
 
         sim_result = sgs_simulation(
@@ -76,12 +70,12 @@ class TestWorkflowIntegration:
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=42
+            seed=42,
         )
 
         assert isinstance(sim_result, ContProperty)
         # Data integrity: simulation output is finite
-        sim_f64 = sim_result.data.astype('float64')
+        sim_f64 = sim_result.data.astype("float64")
         assert np.all(np.isfinite(sim_f64)), "SGS output must have all finite values"
         assert np.any(sim_f64 != 0), "SGS output must not be all zeros"
 
@@ -90,23 +84,20 @@ class TestWorkflowIntegration:
         grid = SugarboxGrid(x=10, y=10, z=5)
 
         cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(5.0, 5.0, 3.0),
-            sill=1.0,
-            nugget=0.1
+            type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
         )
 
         cdf_data = CdfData(
-            np.array([0.0, 50.0, 100.0], dtype='float32'),
-            np.array([0.0, 0.5, 1.0], dtype='float32')
+            np.array([0.0, 50.0, 100.0], dtype="float32"),
+            np.array([0.0, 0.5, 1.0], dtype="float32"),
         )
 
         realizations = []
         for i in range(3):
             # Create fresh input property for each realization
             # because SGS modifies the input property in-place
-            data = np.random.rand(500).astype('float32') * 100
-            mask = np.ones(500, dtype='uint8')
+            data = np.random.rand(500).astype("float32") * 100
+            mask = np.ones(500, dtype="uint8")
             prop = ContProperty(data, mask)
 
             result = sgs_simulation(
@@ -116,7 +107,7 @@ class TestWorkflowIntegration:
                 radiuses=(5, 5, 3),
                 max_neighbours=12,
                 cov_model=cov_model,
-                seed=1000 + i
+                seed=1000 + i,
             )
             realizations.append(result)
 
@@ -126,7 +117,7 @@ class TestWorkflowIntegration:
             assert not np.array_equal(realizations[0].data, realizations[i].data)
         # Data integrity: all values finite, reasonable range
         for i, r in enumerate(realizations):
-            r_f64 = r.data.astype('float64')
+            r_f64 = r.data.astype("float64")
             assert np.all(np.isfinite(r_f64)), f"Realization {i} has non-finite values"
             assert np.std(r_f64) > 0.0, f"Realization {i} has zero variance"
             # Values should be within the CDF range [0, 100] with tolerance
@@ -141,20 +132,17 @@ class TestWorkflowIntegration:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
         prop = ContProperty(data, mask)
 
         cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(5.0, 5.0, 3.0),
-            sill=1.0,
-            nugget=0.1
+            type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
         )
 
         cdf_data = CdfData(
-            np.array([0.0, 50.0, 100.0], dtype='float32'),
-            np.array([0.0, 0.5, 1.0], dtype='float32')
+            np.array([0.0, 50.0, 100.0], dtype="float32"),
+            np.array([0.0, 0.5, 1.0], dtype="float32"),
         )
 
         # Save original data copy and object identity
@@ -168,7 +156,7 @@ class TestWorkflowIntegration:
             radiuses=(5, 5, 3),
             max_neighbours=12,
             cov_model=cov_model,
-            seed=42
+            seed=42,
         )
 
         # Verify identity: same object reference (in-place modification)
@@ -194,18 +182,13 @@ class TestIOIntegration:
 
     def test_property_roundtrip(self, tmp_path):
         """Test writing and reading properties"""
-        data = np.arange(500, dtype='float32') % 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.arange(500, dtype="float32") % 100
+        mask = np.ones(500, dtype="uint8")
         prop = ContProperty(data, mask)
 
         # Write property
         output_file = tmp_path / "test_output.inc"
-        write_property(
-            prop,
-            str(output_file),
-            "TestProperty",
-            -999.0
-        )
+        write_property(prop, str(output_file), "TestProperty", -999.0)
 
         # Verify file was created
         assert output_file.exists()
@@ -217,15 +200,13 @@ class TestIOIntegration:
         assert read_prop.data.shape == (500,)
         # Informed cells should match original data
         informed = mask.astype(bool)
-        np.testing.assert_array_equal(
-            read_prop.data[informed],
-            data[informed]
-        )
+        np.testing.assert_array_equal(read_prop.data[informed], data[informed])
 
 
 # =============================================================================
 # Multi-Stage Workflow Tests (M21)
 # =============================================================================
+
 
 @pytest.mark.hpgl
 @pytest.mark.integration
@@ -242,8 +223,8 @@ class TestMultiStageWorkflows:
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)
-        data = np.random.rand(500).astype('float32') * 100
-        mask = np.ones(500, dtype='uint8')
+        data = np.random.rand(500).astype("float32") * 100
+        mask = np.ones(500, dtype="uint8")
 
         # Step 1: Compute mean and variance from data (simulates variogram analysis)
         prop = ContProperty(data, mask)
@@ -254,25 +235,21 @@ class TestMultiStageWorkflows:
         cov_model = CovarianceModel(
             type=covariance.spherical,
             ranges=(5.0, 5.0, 3.0),
-            sill=float(data_std ** 2),
-            nugget=float(data_std ** 2 * 0.1)
+            sill=float(data_std**2),
+            nugget=float(data_std**2 * 0.1),
         )
 
         # Step 3: Run ordinary kriging with the derived model
         kriged = ordinary_kriging(
-            prop=prop,
-            grid=grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=cov_model
+            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
         )
 
         assert isinstance(kriged, ContProperty)
         assert kriged.data.shape == (500,)
-        assert not np.any(np.isnan(kriged.data.astype('float64')))
-        assert not np.any(np.isinf(kriged.data.astype('float64')))
+        assert not np.any(np.isnan(kriged.data.astype("float64")))
+        assert not np.any(np.isinf(kriged.data.astype("float64")))
         # Data integrity: kriged values should be within reasonable range
-        kriged_f64 = kriged.data.astype('float64')
+        kriged_f64 = kriged.data.astype("float64")
         assert np.std(kriged_f64) > 0.0, "Kriged output must have non-zero variance"
         assert np.min(kriged_f64) >= -50.0, "Kriged values must not be far below zero"
 
@@ -288,50 +265,45 @@ class TestMultiStageWorkflows:
         size = grid.x * grid.y * grid.z
 
         # Create indicator property (3 categories)
-        data = np.random.randint(0, 3, size, dtype='uint8')
-        mask = np.ones(size, dtype='uint8')
+        data = np.random.randint(0, 3, size, dtype="uint8")
+        mask = np.ones(size, dtype="uint8")
         ind_prop = IndProperty(data, mask, 3)
 
         # Step 1: Setup indicator kriging data
         ik_data = []
         marginal_probs = [0.3, 0.4, 0.3]
         for _ in range(3):
-            ik_data.append({
-                'cov_model': CovarianceModel(
-                    type=covariance.spherical,
-                    ranges=(5.0, 5.0, 3.0),
-                    angles=(0.0, 0.0, 0.0),
-                    sill=1.0,
-                    nugget=0.1
-                ),
-                'radiuses': (5, 5, 3),
-                'max_neighbours': 12
-            })
+            ik_data.append(
+                {
+                    "cov_model": CovarianceModel(
+                        type=covariance.spherical,
+                        ranges=(5.0, 5.0, 3.0),
+                        angles=(0.0, 0.0, 0.0),
+                        sill=1.0,
+                        nugget=0.1,
+                    ),
+                    "radiuses": (5, 5, 3),
+                    "max_neighbours": 12,
+                }
+            )
 
         # Step 2: Run indicator kriging
         ik_result = indicator_kriging(
-            prop=ind_prop,
-            grid=grid,
-            data=ik_data,
-            marginal_probs=marginal_probs
+            prop=ind_prop, grid=grid, data=ik_data, marginal_probs=marginal_probs
         )
         assert isinstance(ik_result, IndProperty)
         assert ik_result.indicator_count == 3
 
         # Step 3: Run SIS using IK results
         sis_result = sis_simulation(
-            prop=ik_result,
-            grid=grid,
-            data=ik_data,
-            seed=42,
-            marginal_probs=marginal_probs
+            prop=ik_result, grid=grid, data=ik_data, seed=42, marginal_probs=marginal_probs
         )
 
         assert isinstance(sis_result, IndProperty)
         assert sis_result.indicator_count == 3
         assert sis_result.data.shape == ik_result.data.shape
         # Data integrity: SIS output has valid indicator categories
-        sis_data = sis_result.data.astype('uint8')
+        sis_data = sis_result.data.astype("uint8")
         assert np.all(sis_data < 3), "SIS indicator values must be within category count"
         # Verify category distribution is reasonable (roughly matches marginal probs)
         category_counts = [int(np.sum(sis_data == c)) for c in range(3)]
@@ -340,9 +312,10 @@ class TestMultiStageWorkflows:
             observed = category_counts[c] / total
             expected = marginal_probs[c]
             # Allow generous 0.15 tolerance for small sample randomness
-            assert abs(observed - expected) < 0.20, \
+            assert abs(observed - expected) < 0.20, (
                 f"Category {c}: observed proportion {observed:.2f} too far from expected {expected:.2f}"
+            )
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

@@ -55,8 +55,6 @@ _error_snapshot_lock = threading.Lock()
 _hpgl_call_lock = threading.Lock()
 
 
-
-
 @contextlib.contextmanager
 def _hpgl_error_guard(context=""):
     """Serialize a C++ HPGL call with error checking to prevent cross-thread races.
@@ -78,6 +76,7 @@ def _hpgl_error_guard(context=""):
         _check_hpgl_error(context)
     finally:
         _hpgl_call_lock.release()
+
 
 logger = logging.getLogger(__name__)
 
@@ -401,9 +400,7 @@ class IndProperty:
                 % (indicator_count - 1)
             )
         if data.shape != mask.shape:
-            raise ValueError(
-                f"Data shape {data.shape} does not match mask shape {mask.shape}"
-            )
+            raise ValueError(f"Data shape {data.shape} does not match mask shape {mask.shape}")
 
     def validate(self):
         checkFWA(self.data)
@@ -544,6 +541,10 @@ def _load_prop_cont_slow(filename, undefined_value):
         for line in f:
             if line.strip().startswith("--"):
                 continue
+            # Detect INC format end-of-data marker '/' — stop parsing.
+            # The C++ writer emits '/' after all data values.
+            if line.strip().startswith("/"):
+                break
             for part in line.split():
                 if element_count >= _MAX_SLOW_PARSER_ELEMENTS:
                     raise MemoryError(
@@ -589,6 +590,10 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
         for line in f:
             if line.strip().startswith("--"):
                 continue
+            # Detect INC format end-of-data marker '/' — stop parsing.
+            # The C++ writer emits '/' after all data values.
+            if line.strip().startswith("/"):
+                break
             for part in line.split():
                 if element_count >= _MAX_SLOW_PARSER_ELEMENTS:
                     raise MemoryError(
@@ -1432,9 +1437,7 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     # The C API (hpgl_median_ik) hardcodes indicator_count=2 with an
     # interleaved data layout; other counts would read wrong cells.
     if prop.indicator_count != 2:
-        raise ValueError(
-            f"median_ik: indicator_count must be 2, got {prop.indicator_count}"
-        )
+        raise ValueError(f"median_ik: indicator_count must be 2, got {prop.indicator_count}")
 
     out_prop = _empty_clone(prop)
 

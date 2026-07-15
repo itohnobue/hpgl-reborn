@@ -6,6 +6,7 @@ Comprehensive tests for all HPGL core classes:
 - IndProperty (Indicator Property)
 - CdfData
 """
+
 import sys
 from pathlib import Path
 
@@ -31,6 +32,7 @@ except (ImportError, OSError):
         spherical = 0
         exponential = 1
         gaussian = 2
+
     covariance = _DummyCovarianceTypes()
 
 
@@ -94,7 +96,7 @@ class TestCovarianceModel:
             ranges=(10.0, 10.0, 5.0),
             angles=(0.0, 0.0, 0.0),
             sill=2.0,
-            nugget=0.5
+            nugget=0.5,
         )
         assert cov.type == covariance.spherical
         assert cov.ranges == (10.0, 10.0, 5.0)
@@ -108,7 +110,7 @@ class TestCovarianceModel:
             ranges=(15.0, 15.0, 8.0),
             angles=(45.0, 0.0, 30.0),
             sill=1.5,
-            nugget=0.3
+            nugget=0.3,
         )
         assert cov.type == covariance.exponential
         assert cov.angles == (45.0, 0.0, 30.0)
@@ -116,10 +118,7 @@ class TestCovarianceModel:
     def test_constructor_gaussian_type(self):
         """Test constructor with Gaussian covariance type"""
         cov = CovarianceModel(
-            type=covariance.gaussian,
-            ranges=(20.0, 20.0, 10.0),
-            sill=3.0,
-            nugget=0.0
+            type=covariance.gaussian, ranges=(20.0, 20.0, 10.0), sill=3.0, nugget=0.0
         )
         assert cov.type == covariance.gaussian
 
@@ -127,7 +126,7 @@ class TestCovarianceModel:
         """Test that nugget equal to sill is valid"""
         cov = CovarianceModel(
             sill=1.0,
-            nugget=1.0  # Equal to sill
+            nugget=1.0,  # Equal to sill
         )
         assert cov.nugget == 1.0
 
@@ -135,7 +134,7 @@ class TestCovarianceModel:
         """Test that nugget less than sill is valid"""
         cov = CovarianceModel(
             sill=2.0,
-            nugget=0.5  # Less than sill
+            nugget=0.5,  # Less than sill
         )
         assert cov.nugget == 0.5
 
@@ -144,7 +143,7 @@ class TestCovarianceModel:
         with pytest.raises(Exception, match="Nugget .* exceeds sill"):
             CovarianceModel(
                 sill=1.0,
-                nugget=1.5  # Greater than sill - should raise
+                nugget=1.5,  # Greater than sill - should raise
             )
 
     def test_nugget_zero_valid(self):
@@ -156,30 +155,21 @@ class TestCovarianceModel:
         """Test anisotropic range parameters"""
         cov = CovarianceModel(
             ranges=(30.0, 20.0, 10.0),  # Different ranges for each direction
-            sill=1.0
+            sill=1.0,
         )
         assert cov.ranges == (30.0, 20.0, 10.0)
 
     def test_rotation_angles(self):
         """Test rotation angles for anisotropy"""
-        cov = CovarianceModel(
-            angles=(30.0, 45.0, 60.0),
-            sill=1.0
-        )
+        cov = CovarianceModel(angles=(30.0, 45.0, 60.0), sill=1.0)
         assert cov.angles == (30.0, 45.0, 60.0)
 
-    @pytest.mark.parametrize("cov_type", [
-        covariance.spherical,
-        covariance.exponential,
-        covariance.gaussian
-    ])
+    @pytest.mark.parametrize(
+        "cov_type", [covariance.spherical, covariance.exponential, covariance.gaussian]
+    )
     def test_all_covariance_types(self, cov_type):
         """Parametrized test for all covariance types"""
-        cov = CovarianceModel(
-            type=cov_type,
-            ranges=(10.0, 10.0, 5.0),
-            sill=1.0
-        )
+        cov = CovarianceModel(type=cov_type, ranges=(10.0, 10.0, 5.0), sill=1.0)
         assert cov.type == cov_type
 
 
@@ -195,12 +185,12 @@ class TestContProperty:
 
         assert prop.data.dtype == np.float32
         assert prop.mask.dtype == np.uint8
-        assert np.array_equal(prop.data, np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32'))
+        assert np.array_equal(prop.data, np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32"))
 
     def test_constructor_with_numpy_arrays(self):
         """Test constructor with numpy arrays"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float64')
-        mask = np.array([1, 0, 1], dtype='int32')
+        data = np.array([1.0, 2.0, 3.0], dtype="float64")
+        mask = np.array([1, 0, 1], dtype="int32")
         prop = ContProperty(data, mask)
 
         # Should convert to proper types
@@ -209,17 +199,17 @@ class TestContProperty:
 
     def test_data_fortran_order(self):
         """Test that data array is Fortran-ordered"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
-        assert prop.data.flags['F_CONTIGUOUS']
-        assert prop.mask.flags['F_CONTIGUOUS']
+        assert prop.data.flags["F_CONTIGUOUS"]
+        assert prop.mask.flags["F_CONTIGUOUS"]
 
     def test_validate_with_valid_data(self):
         """Test validate() with valid Fortran-order arrays"""
-        data = np.asfortranarray(np.ones((10, 10, 5), dtype='float32'))
-        mask = np.asfortranarray(np.ones((10, 10, 5), dtype='uint8'))
+        data = np.asfortranarray(np.ones((10, 10, 5), dtype="float32"))
+        mask = np.asfortranarray(np.ones((10, 10, 5), dtype="uint8"))
         prop = ContProperty(data, mask)
 
         # Should not raise any exception
@@ -227,8 +217,8 @@ class TestContProperty:
 
     def test_validate_with_shape_mismatch(self):
         """Test validate() raises error when data and mask shapes don't match"""
-        data = np.asfortranarray(np.ones((10, 10, 5), dtype='float32'))
-        mask = np.asfortranarray(np.ones((10, 10, 3), dtype='uint8'))  # Different shape
+        data = np.asfortranarray(np.ones((10, 10, 5), dtype="float32"))
+        mask = np.asfortranarray(np.ones((10, 10, 3), dtype="uint8"))  # Different shape
         prop = ContProperty(data, mask)
 
         with pytest.raises(ValueError):
@@ -236,8 +226,8 @@ class TestContProperty:
 
     def test_fix_shape_reshapes_flat_data(self):
         """Test fix_shape() reshapes flat array to 3D grid"""
-        data = np.arange(100, dtype='float32')  # 1D array
-        mask = np.ones(100, dtype='uint8')
+        data = np.arange(100, dtype="float32")  # 1D array
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
 
         grid = SugarboxGrid(x=5, y=5, z=4)  # 5*5*4 = 100
@@ -248,8 +238,8 @@ class TestContProperty:
 
     def test_fix_shape_already_3d(self):
         """Test fix_shape() does nothing if data is already 3D"""
-        data = np.asfortranarray(np.ones((5, 5, 4), dtype='float32'))
-        mask = np.asfortranarray(np.ones((5, 5, 4), dtype='uint8'))
+        data = np.asfortranarray(np.ones((5, 5, 4), dtype="float32"))
+        mask = np.asfortranarray(np.ones((5, 5, 4), dtype="uint8"))
         prop = ContProperty(data, mask)
 
         grid = SugarboxGrid(x=5, y=5, z=4)
@@ -260,8 +250,8 @@ class TestContProperty:
 
     def test_fix_shape_size_mismatch(self):
         """Test fix_shape() doesn't reshape when size doesn't match grid"""
-        data = np.arange(50, dtype='float32')  # Wrong size
-        mask = np.ones(50, dtype='uint8')
+        data = np.arange(50, dtype="float32")  # Wrong size
+        mask = np.ones(50, dtype="uint8")
         prop = ContProperty(data, mask)
 
         grid = SugarboxGrid(x=5, y=5, z=4)  # 5*5*4 = 100, not 50
@@ -272,8 +262,8 @@ class TestContProperty:
 
     def test_getitem_data(self):
         """Test deprecated __getitem__ for data access (index 0)"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         result = prop[0]
@@ -281,8 +271,8 @@ class TestContProperty:
 
     def test_getitem_mask(self):
         """Test deprecated __getitem__ for mask access (index 1)"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.array([1, 0, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.array([1, 0, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         result = prop[1]
@@ -290,8 +280,8 @@ class TestContProperty:
 
     def test_getitem_invalid_index(self):
         """Test deprecated __getitem__ raises error for invalid index"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         with pytest.raises(RuntimeError, match="Index out of range"):
@@ -299,8 +289,8 @@ class TestContProperty:
 
     def test_writable_and_aligned_flags(self):
         """Test that arrays are writable and aligned"""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         # checkFWA checks Fortran, Writable, and Aligned flags
@@ -309,8 +299,8 @@ class TestContProperty:
 
     def test_empty_arrays(self):
         """Test with empty arrays"""
-        data = np.array([], dtype='float32')
-        mask = np.array([], dtype='uint8')
+        data = np.array([], dtype="float32")
+        mask = np.array([], dtype="uint8")
         prop = ContProperty(data, mask)
 
         assert prop.data.size == 0
@@ -318,8 +308,8 @@ class TestContProperty:
 
     def test_single_element(self):
         """Test with single element arrays"""
-        data = np.array([42.0], dtype='float32')
-        mask = np.array([1], dtype='uint8')
+        data = np.array([42.0], dtype="float32")
+        mask = np.array([1], dtype="uint8")
         prop = ContProperty(data, mask)
 
         assert prop.data[0] == 42.0
@@ -328,8 +318,8 @@ class TestContProperty:
     def test_large_array(self):
         """Test with large array"""
         size = 1000000
-        data = np.random.rand(size).astype('float32')
-        mask = np.ones(size, dtype='uint8')
+        data = np.random.rand(size).astype("float32")
+        mask = np.ones(size, dtype="uint8")
         prop = ContProperty(data, mask)
 
         assert prop.data.size == size
@@ -342,8 +332,8 @@ class TestIndProperty:
 
     def test_constructor_valid(self):
         """Test constructor with valid indicator data"""
-        data = np.array([0, 1, 2, 0, 1], dtype='uint8')  # 3 indicators
-        mask = np.array([1, 1, 1, 1, 1], dtype='uint8')
+        data = np.array([0, 1, 2, 0, 1], dtype="uint8")  # 3 indicators
+        mask = np.array([1, 1, 1, 1, 1], dtype="uint8")
         prop = IndProperty(data, mask, 3)
 
         assert prop.indicator_count == 3
@@ -352,25 +342,25 @@ class TestIndProperty:
 
     def test_data_fortran_order(self):
         """Test that data and mask arrays are Fortran-ordered"""
-        data = np.array([0, 1, 2], dtype='uint8')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([0, 1, 2], dtype="uint8")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = IndProperty(data, mask, 3)
 
-        assert prop.data.flags['F_CONTIGUOUS']
-        assert prop.mask.flags['F_CONTIGUOUS']
+        assert prop.data.flags["F_CONTIGUOUS"]
+        assert prop.mask.flags["F_CONTIGUOUS"]
 
     def test_validate_with_valid_data(self):
         """Test validate() with valid indicator property"""
-        data = np.asfortranarray(np.array([0, 1, 2, 0, 1], dtype='uint8'))
-        mask = np.asfortranarray(np.ones(5, dtype='uint8'))
+        data = np.asfortranarray(np.array([0, 1, 2, 0, 1], dtype="uint8"))
+        mask = np.asfortranarray(np.ones(5, dtype="uint8"))
         prop = IndProperty(data, mask, 3)
 
         prop.validate()  # Should not raise
 
     def test_validate_with_shape_mismatch(self):
         """Test that constructor raises error when data and mask shapes don't match"""
-        data = np.asfortranarray(np.ones(10, dtype='uint8'))
-        mask = np.asfortranarray(np.ones(5, dtype='uint8'))
+        data = np.asfortranarray(np.ones(10, dtype="uint8"))
+        mask = np.asfortranarray(np.ones(5, dtype="uint8"))
 
         # The constructor has an assertion that checks shape match
         with pytest.raises((ValueError, AssertionError)):
@@ -378,16 +368,16 @@ class TestIndProperty:
 
     def test_indicator_value_out_of_range_raises_error(self):
         """Test that indicator values >= indicator_count raise error"""
-        data = np.array([0, 1, 3, 0], dtype='uint8')  # 3 is out of range for 3 indicators
-        mask = np.array([1, 1, 1, 1], dtype='uint8')
+        data = np.array([0, 1, 3, 0], dtype="uint8")  # 3 is out of range for 3 indicators
+        mask = np.array([1, 1, 1, 1], dtype="uint8")
 
         with pytest.raises(RuntimeError, match="Property contains some indicators outside of"):
             IndProperty(data, mask, 3)  # indicator_count=3 means valid values are 0,1,2
 
     def test_indicator_value_equal_to_count_allowed_if_masked(self):
         """Test that out-of-range values are OK if masked (mask=0)"""
-        data = np.array([0, 1, 3, 0], dtype='uint8')  # 3 is out of range
-        mask = np.array([1, 1, 0, 1], dtype='uint8')  # Value at index 2 is masked
+        data = np.array([0, 1, 3, 0], dtype="uint8")  # 3 is out of range
+        mask = np.array([1, 1, 0, 1], dtype="uint8")  # Value at index 2 is masked
 
         # Should not raise because the out-of-range value is masked
         prop = IndProperty(data, mask, 3)
@@ -395,8 +385,8 @@ class TestIndProperty:
 
     def test_getitem_data(self):
         """Test deprecated __getitem__ for data access (index 0)"""
-        data = np.array([0, 1, 2], dtype='uint8')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([0, 1, 2], dtype="uint8")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = IndProperty(data, mask, 3)
 
         result = prop[0]
@@ -404,8 +394,8 @@ class TestIndProperty:
 
     def test_getitem_mask(self):
         """Test deprecated __getitem__ for mask access (index 1)"""
-        data = np.array([0, 1, 2], dtype='uint8')
-        mask = np.array([1, 0, 1], dtype='uint8')
+        data = np.array([0, 1, 2], dtype="uint8")
+        mask = np.array([1, 0, 1], dtype="uint8")
         prop = IndProperty(data, mask, 3)
 
         result = prop[1]
@@ -413,8 +403,8 @@ class TestIndProperty:
 
     def test_getitem_indicator_count(self):
         """Test deprecated __getitem__ for indicator_count (index 2)"""
-        data = np.array([0, 1, 2], dtype='uint8')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([0, 1, 2], dtype="uint8")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = IndProperty(data, mask, 5)
 
         result = prop[2]
@@ -422,8 +412,8 @@ class TestIndProperty:
 
     def test_getitem_invalid_index(self):
         """Test deprecated __getitem__ raises error for invalid index"""
-        data = np.array([0, 1, 2], dtype='uint8')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([0, 1, 2], dtype="uint8")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = IndProperty(data, mask, 3)
 
         with pytest.raises(RuntimeError, match="Index out of range"):
@@ -431,8 +421,8 @@ class TestIndProperty:
 
     def test_writable_and_aligned_flags(self):
         """Test that arrays are writable and aligned"""
-        data = np.array([0, 1, 2], dtype='uint8')
-        mask = np.array([1, 1, 1], dtype='uint8')
+        data = np.array([0, 1, 2], dtype="uint8")
+        mask = np.array([1, 1, 1], dtype="uint8")
         prop = IndProperty(data, mask, 3)
 
         checkFWA(prop.data)
@@ -440,8 +430,8 @@ class TestIndProperty:
 
     def test_binary_indicator_property(self):
         """Test binary indicator property (2 indicators: 0 and 1)"""
-        data = np.array([0, 1, 1, 0, 1], dtype='uint8')
-        mask = np.array([1, 1, 1, 1, 1], dtype='uint8')
+        data = np.array([0, 1, 1, 0, 1], dtype="uint8")
+        mask = np.array([1, 1, 1, 1, 1], dtype="uint8")
         prop = IndProperty(data, mask, 2)
 
         assert prop.indicator_count == 2
@@ -450,16 +440,16 @@ class TestIndProperty:
     def test_multi_indicator_property(self):
         """Test multi-category indicator property"""
         categories = 10
-        data = np.random.randint(0, categories, 100, dtype='uint8')
-        mask = np.ones(100, dtype='uint8')
+        data = np.random.randint(0, categories, 100, dtype="uint8")
+        mask = np.ones(100, dtype="uint8")
         prop = IndProperty(data, mask, categories)
 
         assert prop.indicator_count == categories
 
     def test_empty_arrays(self):
         """Test with empty arrays"""
-        data = np.array([], dtype='uint8')
-        mask = np.array([], dtype='uint8')
+        data = np.array([], dtype="uint8")
+        mask = np.array([], dtype="uint8")
         prop = IndProperty(data, mask, 3)
 
         assert prop.data.size == 0
@@ -467,8 +457,8 @@ class TestIndProperty:
 
     def test_all_zero_indicators(self):
         """Test with all zero indicator values"""
-        data = np.zeros(10, dtype='uint8')
-        mask = np.ones(10, dtype='uint8')
+        data = np.zeros(10, dtype="uint8")
+        mask = np.ones(10, dtype="uint8")
         prop = IndProperty(data, mask, 5)
 
         assert np.all(prop.data == 0)
@@ -491,8 +481,8 @@ class TestCdfData:
 
     def test_constructor_with_numpy_arrays(self):
         """Test constructor with numpy arrays"""
-        values = np.array([1.0, 2.0, 3.0], dtype='float64')
-        probs = np.array([0.33, 0.66, 1.0], dtype='float64')
+        values = np.array([1.0, 2.0, 3.0], dtype="float64")
+        probs = np.array([0.33, 0.66, 1.0], dtype="float64")
         cdf = CdfData(values, probs)
 
         # Should convert to float32
@@ -523,8 +513,8 @@ class TestCdfData:
         """Test CDF probabilities are monotonically increasing"""
         # This test verifies the property, not the constructor validation
         # (the constructor doesn't validate this)
-        probs = np.array([0.1, 0.3, 0.6, 0.8, 1.0], dtype='float32')
-        values = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
+        probs = np.array([0.1, 0.3, 0.6, 0.8, 1.0], dtype="float32")
+        values = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
         cdf = CdfData(values, probs)
 
         # Verify probabilities are sorted
@@ -541,8 +531,8 @@ class TestCdfData:
     def test_large_cdf(self):
         """Test with large CDF array"""
         size = 10000
-        values = np.linspace(0, 100, size).astype('float32')
-        probs = np.linspace(0, 1, size).astype('float32')
+        values = np.linspace(0, 100, size).astype("float32")
+        probs = np.linspace(0, 1, size).astype("float32")
         cdf = CdfData(values, probs)
 
         assert cdf.values.size == size
@@ -567,11 +557,7 @@ class TestCovarianceClass:
 
     def test_constants_are_unique(self):
         """Test that all covariance type constants are unique"""
-        types = [
-            covariance.spherical,
-            covariance.exponential,
-            covariance.gaussian
-        ]
+        types = [covariance.spherical, covariance.exponential, covariance.gaussian]
         assert len(set(types)) == len(types)
 
 
@@ -581,23 +567,23 @@ class TestCheckFWA:
 
     def test_fortran_writable_aligned_array(self):
         """Test checkFWA passes for F, W, A arrays"""
-        arr = np.asfortranarray(np.ones((10, 10), dtype='float32'))
+        arr = np.asfortranarray(np.ones((10, 10), dtype="float32"))
         # Should not raise
         checkFWA(arr)
 
     def test_non_fortran_array_raises(self):
         """Test checkFWA raises for non-Fortran array"""
-        arr = np.ones((10, 10), dtype='float32')  # C-order by default
+        arr = np.ones((10, 10), dtype="float32")  # C-order by default
         with pytest.raises(RuntimeError):
             checkFWA(arr)
 
     def test_non_writable_array_raises(self):
         """Test checkFWA raises for non-writable array"""
-        arr = np.asfortranarray(np.ones((10, 10), dtype='float32'))
+        arr = np.asfortranarray(np.ones((10, 10), dtype="float32"))
         arr.flags.writeable = False
         with pytest.raises(RuntimeError):
             checkFWA(arr)
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

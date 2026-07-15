@@ -3,6 +3,7 @@
 
 struct hpgl_shape_t;
 struct hpgl_sgs_params_t;
+struct hpgl_ik_params_t;
 
 namespace hpgl
 {

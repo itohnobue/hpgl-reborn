@@ -23,6 +23,7 @@ try:
         variogram_search_template_t,
         vector_t,
     )
+
     CVAR_AVAILABLE = True
 except Exception:
     CVAR_AVAILABLE = False
@@ -44,45 +45,43 @@ class TestCStructTypes:
 
     def test_ellipsoid_t_creation(self):
         vec = vector_t(data=_c_array(C.c_double, 3, (0, 0, 0)))
-        ell = ellipsoid_t(
-            direction1=vec, direction2=vec, direction3=vec,
-            R1=10.0, R2=5.0, R3=3.0
-        )
+        ell = ellipsoid_t(direction1=vec, direction2=vec, direction3=vec, R1=10.0, R2=5.0, R3=3.0)
         assert ell.R1 == 10.0
         assert ell.R2 == 5.0
         assert ell.R3 == 3.0
 
     def test_variogram_search_template_t_creation(self):
         vec = vector_t(data=_c_array(C.c_double, 3, (0, 0, 0)))
-        ell = ellipsoid_t(
-            direction1=vec, direction2=vec, direction3=vec,
-            R1=10.0, R2=5.0, R3=3.0
-        )
+        ell = ellipsoid_t(direction1=vec, direction2=vec, direction3=vec, R1=10.0, R2=5.0, R3=3.0)
         templ = variogram_search_template_t(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=10, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=10,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         assert templ.num_lags == 10
         assert templ.lag_separation == 2.0
 
     def test_hard_data_t_fields_exist(self):
-        assert hasattr(hard_data_t, '_fields_')
+        assert hasattr(hard_data_t, "_fields_")
         field_names = [f for f, _ in hard_data_t._fields_]
-        assert 'data' in field_names
-        assert 'mask' in field_names
+        assert "data" in field_names
+        assert "mask" in field_names
 
     def test_cont_point_set_t_fields_exist(self):
         field_names = [f for f, _ in cont_point_set_t._fields_]
-        assert 'xs' in field_names
-        assert 'ys' in field_names
-        assert 'zs' in field_names
-        assert 'values' in field_names
-        assert 'size' in field_names
+        assert "xs" in field_names
+        assert "ys" in field_names
+        assert "zs" in field_names
+        assert "values" in field_names
+        assert "size" in field_names
 
     def test_float_data_t_fields_exist(self):
         field_names = [f for f, _ in float_data_t._fields_]
-        assert 'data' in field_names
-        assert 'data_shape' in field_names
+        assert "data" in field_names
+        assert "data_shape" in field_names
 
 
 @pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
@@ -118,7 +117,7 @@ class TestEllipsoid:
 
     def test_with_nonzero_angles(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=45, dip=30, rotation=60)
-        d1_norm = sum(ell.ell.direction1.data[i]**2 for i in range(3))**0.5
+        d1_norm = sum(ell.ell.direction1.data[i] ** 2 for i in range(3)) ** 0.5
         assert abs(d1_norm - 1.0) < 1e-6
 
     def test_with_zero_r2_r3_no_crash(self):
@@ -136,8 +135,12 @@ class TestVariogramSearchTemplate:
     def test_creation(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=10, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=10,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         assert templ.num_lags == 10
         assert templ.lag_separation == 2.0
@@ -145,8 +148,12 @@ class TestVariogramSearchTemplate:
     def test_with_one_lag(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=1, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=1,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         assert templ.num_lags == 1
 
@@ -155,16 +162,20 @@ class TestVariogramSearchTemplate:
 class TestCalcVariograms:
     def _make_grid_data(self, nx=5, ny=5, nz=3):
         np.random.seed(42)
-        data = np.random.rand(nx, ny, nz).astype('float32') * 100
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        data = np.random.rand(nx, ny, nz).astype("float32") * 100
+        mask = np.ones((nx, ny, nz), dtype="uint8")
         mask[::2, ::2, :] = 0
         return (data, mask)
 
     def test_basic_calculation(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data)
@@ -175,8 +186,12 @@ class TestCalcVariograms:
     def test_lag_borders_correct(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=3.0, tol_distance=1.0,
-            num_lags=4, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=3.0,
+            tol_distance=1.0,
+            num_lags=4,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data)
@@ -186,8 +201,12 @@ class TestCalcVariograms:
     def test_percent_100(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data, percent=100)
@@ -196,8 +215,12 @@ class TestCalcVariograms:
     def test_percent_50(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data, percent=50)
@@ -206,8 +229,12 @@ class TestCalcVariograms:
     def test_percent_boundary_1(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data, percent=1)
@@ -216,8 +243,12 @@ class TestCalcVariograms:
     def test_percent_boundary_100(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data, percent=100)
@@ -225,8 +256,12 @@ class TestCalcVariograms:
     def test_percent_zero_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         with pytest.raises(ValueError, match="percent must be in"):
@@ -235,8 +270,12 @@ class TestCalcVariograms:
     def test_percent_negative_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         with pytest.raises(ValueError, match="percent must be in"):
@@ -245,8 +284,12 @@ class TestCalcVariograms:
     def test_percent_101_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         with pytest.raises(ValueError, match="percent must be in"):
@@ -255,8 +298,12 @@ class TestCalcVariograms:
     def test_zero_num_lags_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=0, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=0,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         with pytest.raises(ValueError, match="num_lags must be positive"):
@@ -265,8 +312,12 @@ class TestCalcVariograms:
     def test_negative_num_lags_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=-5, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=-5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         with pytest.raises(ValueError, match="num_lags must be positive"):
@@ -282,11 +333,15 @@ class TestCalcVariograms:
         """
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
-        data = np.ones((5, 5, 3), dtype='float32') * 42.0
-        mask = np.ones((5, 5, 3), dtype='uint8')
+        data = np.ones((5, 5, 3), dtype="float32") * 42.0
+        mask = np.ones((5, 5, 3), dtype="uint8")
         lags, variogram = CalcVariograms(templ, (data, mask))
         assert len(variogram) == 5
         # All γ(h) must be very close to zero for constant data
@@ -301,8 +356,12 @@ class TestCalcVariograms:
         """
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data)
@@ -316,19 +375,21 @@ class TestCalcVariograms:
         """
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=3.0, tol_distance=1.0,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=3.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data, percent=100)
         # All γ(h) should be finite
         assert np.all(np.isfinite(variogram)), "Variogram contains Inf or NaN"
         # For data with variance > 0, at least some γ(h) should be > 0
-        data_var = np.var(hard_data[0][hard_data[1] > 0].astype('float64'))
+        data_var = np.var(hard_data[0][hard_data[1] > 0].astype("float64"))
         if data_var > 0:
-            assert np.any(variogram > 0), (
-                f"Variogram all zeros for data with variance {data_var}"
-            )
+            assert np.any(variogram > 0), f"Variogram all zeros for data with variance {data_var}"
 
     # --- C28: tol_distance boundary tests ---
 
@@ -340,8 +401,12 @@ class TestCalcVariograms:
         """
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=0.5,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=0.5,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data)
@@ -357,8 +422,12 @@ class TestCalcVariograms:
         """
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=2.0,
-            num_lags=3, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=2.0,
+            num_lags=3,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data)
@@ -372,17 +441,21 @@ class TestCalcVariogramsFromPointSet:
     def _make_point_set(self, n=20):
         np.random.seed(42)
         return {
-            "X": np.random.rand(n).astype('float32') * 10,
-            "Y": np.random.rand(n).astype('float32') * 10,
-            "Z": np.random.rand(n).astype('float32') * 5,
-            "Property": np.random.rand(n).astype('float32') * 100,
+            "X": np.random.rand(n).astype("float32") * 10,
+            "Y": np.random.rand(n).astype("float32") * 10,
+            "Z": np.random.rand(n).astype("float32") * 5,
+            "Property": np.random.rand(n).astype("float32") * 100,
         }
 
     def test_basic_calculation(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         ps = self._make_point_set()
         lags, variogram = CalcVariogramsFromPointSet(templ, ps, None)
@@ -392,8 +465,12 @@ class TestCalcVariogramsFromPointSet:
     def test_zero_num_lags_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=0, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=0,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         ps = self._make_point_set()
         with pytest.raises(ValueError, match="num_lags must be positive"):
@@ -402,28 +479,48 @@ class TestCalcVariogramsFromPointSet:
     def test_missing_x_key_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
-        ps = {"Y": np.zeros(10, dtype='float32'), "Z": np.zeros(10, dtype='float32'), "Property": np.zeros(10, dtype='float32')}
+        ps = {
+            "Y": np.zeros(10, dtype="float32"),
+            "Z": np.zeros(10, dtype="float32"),
+            "Property": np.zeros(10, dtype="float32"),
+        }
         with pytest.raises(ValueError, match="missing required key 'X'"):
             CalcVariogramsFromPointSet(templ, ps, None)
 
     def test_missing_property_key_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
-            num_lags=5, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
-        ps = {"X": np.zeros(10, dtype='float32'), "Y": np.zeros(10, dtype='float32'), "Z": np.zeros(10, dtype='float32')}
+        ps = {
+            "X": np.zeros(10, dtype="float32"),
+            "Y": np.zeros(10, dtype="float32"),
+            "Z": np.zeros(10, dtype="float32"),
+        }
         with pytest.raises(ValueError, match="missing required key 'Property'"):
             CalcVariogramsFromPointSet(templ, ps, None)
 
     def test_lag_borders_correct(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
-            lag_width=1.0, lag_separation=3.0, tol_distance=1.0,
-            num_lags=4, first_lag_distance=0.0, ellipsoid=ell
+            lag_width=1.0,
+            lag_separation=3.0,
+            tol_distance=1.0,
+            num_lags=4,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
         )
         ps = self._make_point_set()
         lags, variogram = CalcVariogramsFromPointSet(templ, ps, None)
@@ -435,10 +532,10 @@ class TestCalcVariogramsFromPointSet:
 class TestCStackLayers:
     def _make_layer(self, nx=5, ny=5):
         np.random.seed(42)
-        return np.random.rand(nx, ny, 1).astype('float32')
+        return np.random.rand(nx, ny, 1).astype("float32")
 
     def _make_result(self, nx=5, ny=5, nz=10):
-        return np.zeros((nx, ny, nz), dtype='float32')
+        return np.zeros((nx, ny, nz), dtype="float32")
 
     def test_empty_layers_raises(self):
         with pytest.raises(ValueError, match="layers list is empty"):
@@ -447,12 +544,16 @@ class TestCStackLayers:
     def test_zero_nz_raises(self):
         layer = self._make_layer()
         with pytest.raises(ValueError, match="nz must be positive"):
-            CStackLayers([layer], [1], nz=0, scalez=1.0, blank_value=-99.0, result=self._make_result())
+            CStackLayers(
+                [layer], [1], nz=0, scalez=1.0, blank_value=-99.0, result=self._make_result()
+            )
 
     def test_negative_nz_raises(self):
         layer = self._make_layer()
         with pytest.raises(ValueError, match="nz must be positive"):
-            CStackLayers([layer], [1], nz=-5, scalez=1.0, blank_value=-99.0, result=self._make_result())
+            CStackLayers(
+                [layer], [1], nz=-5, scalez=1.0, blank_value=-99.0, result=self._make_result()
+            )
 
     def test_basic_stacking(self):
         layer = self._make_layer()

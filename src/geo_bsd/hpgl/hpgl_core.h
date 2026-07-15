@@ -14,7 +14,6 @@ namespace hpgl
 	class neighbourhood_param_t;
 	class progress_reporter_t;
 	class sugarbox_grid_t;
-	class indicator_lvm_data_t;
 	class covariance_param_t;
 	struct indicator_params_t
 	{

@@ -18,14 +18,15 @@ def pseudo_gaussian_transform(prop, pk_prop, rng=None):
     if rng is None:
         rng = np.random.RandomState()
     # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
-    prop_flat = prop.data.ravel(order='K')
-    pk_flat = pk_prop.data.ravel(order='K')
+    prop_flat = prop.data.ravel(order="K")
+    pk_flat = pk_prop.data.ravel(order="K")
     for i in range(pk_prop.data.size):
-        if (prop_flat[i] == 0):
+        if prop_flat[i] == 0:
             prop_flat[i] = rng.uniform(0.0, pk_flat[i])
-        if (prop_flat[i] == 1):
+        if prop_flat[i] == 1:
             prop_flat[i] = rng.uniform(pk_flat[i], 1.0)
     return prop
+
 
 def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
     """
@@ -57,13 +58,23 @@ def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
 
     # Vectorized Gaussian PDF computation.
     # Uses ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
-    pk_flat = pk_prop.data.ravel(order='K')
+    pk_flat = pk_prop.data.ravel(order="K")
     normalized = (pk_flat - mean) / std_dev
     pk_flat[:] = 1.0 / (std_dev * sqrt(2 * pi)) * exp(-0.5 * normalized * normalized)
     return pk_prop
 
-def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
-               tk_mean=0.0, tk_std_dev=1.0, seed=3439275):
+
+def gtsim_2ind(
+    grid,
+    prop,
+    sk_params,
+    do_sk=True,
+    pk_prop=None,
+    sgs_params=None,
+    tk_mean=0.0,
+    tk_std_dev=1.0,
+    seed=3439275,
+):
     """
     Gaussian Truncated Simulation for 2 indicators (facies).
 
@@ -99,7 +110,7 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     # 1. calculate pk_prop
     # check pk_prop, if presented, use it, if not - do SK
 
-    if (pk_prop is None):
+    if pk_prop is None:
         logger.info("Testing SK...")
         pk_prop = simple_kriging(prop, grid, **sk_params)
         logger.info("Done.")
@@ -121,7 +132,7 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     logger.info("Pseudo gaussian transforming...")
     rng = np.random.RandomState(seed)
     prop = pseudo_gaussian_transform(prop, pk_prop, rng)
-    del(pk_prop)
+    del pk_prop
     logger.info("Done.")
 
     # 4. SGS on prop (after transfrom in 3)
@@ -129,7 +140,7 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
     # if not, use sk_params
     # sill of covariance must be 1
 
-    if (sgs_params is None):
+    if sgs_params is None:
         sgs_params = sk_params
     logger.info("Computing CDF...")
     cdf_data = calc_cdf(prop)
@@ -144,8 +155,8 @@ def gtsim_2ind(grid, prop, sk_params, do_sk=True, pk_prop=None, sgs_params=None,
 
     logger.info("Truncation.")
     # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
-    prop1_flat = prop1.data.ravel(order='K')
-    tk_flat = tk_prop.data.ravel(order='K')
+    prop1_flat = prop1.data.ravel(order="K")
+    tk_flat = tk_prop.data.ravel(order="K")
     # Vectorized thresholding. IEEE 754 NaN fails both >= and <, so
     # NaN passes through to the ~mask branch and becomes 0 — this
     # fixes the old for-loop which silently preserved NaN unchanged.

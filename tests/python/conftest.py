@@ -5,6 +5,7 @@ This module provides comprehensive fixtures for testing HPGL (Geostatistical
 Python Library) functionality including grids, properties, covariance models,
 CDF data, and various test data scenarios.
 """
+
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ try:
     # geo.py syntax errors in unrelated modules.
     # Use importlib to avoid unused-import lint warnings.
     import importlib.util
+
     _spec = importlib.util.find_spec("geo_bsd.geo")
     HPGL_AVAILABLE = _spec is not None
 except (ImportError, SyntaxError, IndentationError, OSError):
@@ -29,6 +31,7 @@ except (ImportError, SyntaxError, IndentationError, OSError):
 # =============================================================================
 # Autouse Fixture: Handler Cleanup (M10)
 # =============================================================================
+
 
 @pytest.fixture(autouse=True)
 def _clear_handlers():
@@ -43,6 +46,7 @@ def _clear_handlers():
     if HPGL_AVAILABLE:
         try:
             from geo_bsd.geo import set_output_handler, set_progress_handler
+
             set_output_handler(None, None)
             set_progress_handler(None, None)
         except (ImportError, OSError):
@@ -62,6 +66,7 @@ def sample_grid():
         SugarboxGrid: A grid with dimensions 10x10x5 suitable for general testing.
     """
     import geo_bsd
+
     return geo_bsd.geo.SugarboxGrid(x=10, y=10, z=5)
 
 
@@ -76,6 +81,7 @@ def small_grid():
         SugarboxGrid: A compact 5x5x3 grid.
     """
     import geo_bsd
+
     return geo_bsd.geo.SugarboxGrid(x=5, y=5, z=3)
 
 
@@ -90,6 +96,7 @@ def medium_grid():
         SugarboxGrid: A 20x20x10 grid.
     """
     import geo_bsd
+
     return geo_bsd.geo.SugarboxGrid(x=20, y=20, z=10)
 
 
@@ -104,6 +111,7 @@ def large_grid():
         SugarboxGrid: A large 50x50x20 grid.
     """
     import geo_bsd
+
     return geo_bsd.geo.SugarboxGrid(x=50, y=50, z=20)
 
 
@@ -118,6 +126,7 @@ def non_cubic_grid():
         SugarboxGrid: A 30x20x10 grid with non-equal dimensions.
     """
     import geo_bsd
+
     return geo_bsd.geo.SugarboxGrid(x=30, y=20, z=10)
 
 
@@ -137,9 +146,10 @@ def sample_property():
         ContProperty: A continuous property with 500 cells.
     """
     import geo_bsd
+
     rng = np.random.RandomState(42)
-    data = rng.rand(500).astype('float32') * 100  # 10x10x5 = 500
-    mask = np.ones(500, dtype='uint8')
+    data = rng.rand(500).astype("float32") * 100  # 10x10x5 = 500
+    mask = np.ones(500, dtype="uint8")
     # Add some uninformed values
     mask[::10] = 0
     return geo_bsd.geo.ContProperty(data, mask)
@@ -156,9 +166,10 @@ def sparse_property():
         ContProperty: A property with only 10% informed values (100 out of 1000).
     """
     import geo_bsd
+
     rng = np.random.RandomState(42)
-    data = rng.rand(1000).astype('float32') * 100
-    mask = np.zeros(1000, dtype='uint8')
+    data = rng.rand(1000).astype("float32") * 100
+    mask = np.zeros(1000, dtype="uint8")
     mask[::10] = 1  # Only 10% informed
     return geo_bsd.geo.ContProperty(data, mask)
 
@@ -174,9 +185,10 @@ def dense_property():
         ContProperty: A fully informed property with 1000 cells.
     """
     import geo_bsd
+
     rng = np.random.RandomState(42)
-    data = rng.rand(1000).astype('float32') * 100
-    mask = np.ones(1000, dtype='uint8')
+    data = rng.rand(1000).astype("float32") * 100
+    mask = np.ones(1000, dtype="uint8")
     return geo_bsd.geo.ContProperty(data, mask)
 
 
@@ -190,8 +202,9 @@ def uniform_property():
         ContProperty: A property with all values set to 50.0.
     """
     import geo_bsd
-    data = np.full(1000, 50.0, dtype='float32')
-    mask = np.ones(1000, dtype='uint8')
+
+    data = np.full(1000, 50.0, dtype="float32")
+    mask = np.ones(1000, dtype="uint8")
     return geo_bsd.geo.ContProperty(data, mask)
 
 
@@ -206,8 +219,9 @@ def extreme_values_property():
         ContProperty: A property with values ranging from 1e-30 to 1e30.
     """
     import geo_bsd
-    data = np.array([1e-30, 1e30, -1e10, 1e10] * 250, dtype='float32')
-    mask = np.ones(1000, dtype='uint8')
+
+    data = np.array([1e-30, 1e30, -1e10, 1e10] * 250, dtype="float32")
+    mask = np.ones(1000, dtype="uint8")
     return geo_bsd.geo.ContProperty(data, mask)
 
 
@@ -222,9 +236,10 @@ def sample_indicator_property():
         IndProperty: An indicator property with 3 categories.
     """
     import geo_bsd
+
     rng = np.random.RandomState(42)
-    data = rng.randint(0, 3, 500, dtype='uint8')  # 3 indicators
-    mask = np.ones(500, dtype='uint8')
+    data = rng.randint(0, 3, 500, dtype="uint8")  # 3 indicators
+    mask = np.ones(500, dtype="uint8")
     mask[::10] = 0
     return geo_bsd.geo.IndProperty(data, mask, 3)
 
@@ -242,12 +257,13 @@ def sample_covariance_model():
         CovarianceModel: A spherical covariance model with isotropic ranges.
     """
     import geo_bsd
+
     return geo_bsd.geo.CovarianceModel(
         type=geo_bsd.geo.covariance.spherical,
         ranges=(5.0, 5.0, 3.0),
         angles=(0.0, 0.0, 0.0),
         sill=1.0,
-        nugget=0.1
+        nugget=0.1,
     )
 
 
@@ -262,11 +278,9 @@ def spherical_cov_model():
         CovarianceModel: A spherical covariance with ranges (10, 10, 5).
     """
     import geo_bsd
+
     return geo_bsd.geo.CovarianceModel(
-        type=geo_bsd.geo.covariance.spherical,
-        ranges=(10.0, 10.0, 5.0),
-        sill=1.0,
-        nugget=0.1
+        type=geo_bsd.geo.covariance.spherical, ranges=(10.0, 10.0, 5.0), sill=1.0, nugget=0.1
     )
 
 
@@ -281,11 +295,9 @@ def exponential_cov_model():
         CovarianceModel: An exponential covariance with ranges (15, 15, 8).
     """
     import geo_bsd
+
     return geo_bsd.geo.CovarianceModel(
-        type=geo_bsd.geo.covariance.exponential,
-        ranges=(15.0, 15.0, 8.0),
-        sill=1.0,
-        nugget=0.1
+        type=geo_bsd.geo.covariance.exponential, ranges=(15.0, 15.0, 8.0), sill=1.0, nugget=0.1
     )
 
 
@@ -299,11 +311,9 @@ def gaussian_cov_model():
         CovarianceModel: A Gaussian covariance with ranges (12, 12, 6).
     """
     import geo_bsd
+
     return geo_bsd.geo.CovarianceModel(
-        type=geo_bsd.geo.covariance.gaussian,
-        ranges=(12.0, 12.0, 6.0),
-        sill=1.0,
-        nugget=0.1
+        type=geo_bsd.geo.covariance.gaussian, ranges=(12.0, 12.0, 6.0), sill=1.0, nugget=0.1
     )
 
 
@@ -319,12 +329,13 @@ def anisotropic_cov_model():
             ranges (20, 10, 5) and rotation angles (30, 0, 0).
     """
     import geo_bsd
+
     return geo_bsd.geo.CovarianceModel(
         type=geo_bsd.geo.covariance.spherical,
         ranges=(20.0, 10.0, 5.0),
         angles=(30.0, 0.0, 0.0),
         sill=1.0,
-        nugget=0.1
+        nugget=0.1,
     )
 
 
@@ -343,8 +354,9 @@ def uniform_cdf():
         CdfData: A CDF with uniform distribution.
     """
     import geo_bsd
-    values = np.array([0.0, 100.0], dtype='float32')
-    probs = np.array([0.0, 1.0], dtype='float32')
+
+    values = np.array([0.0, 100.0], dtype="float32")
+    probs = np.array([0.0, 1.0], dtype="float32")
     return geo_bsd.CdfData(values, probs)
 
 
@@ -359,8 +371,9 @@ def normal_cdf():
         CdfData: A CDF with 5 points approximating a normal distribution.
     """
     import geo_bsd
-    values = np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype='float32')
-    probs = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
+
+    values = np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype="float32")
+    probs = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32")
     return geo_bsd.CdfData(values, probs)
 
 
@@ -374,8 +387,9 @@ def multi_cdf():
         CdfData: A CDF with 20 points linearly spaced from 0 to 100.
     """
     import geo_bsd
-    values = np.linspace(0, 100, 20, dtype='float32')
-    probs = np.linspace(0, 1, 20, dtype='float32')
+
+    values = np.linspace(0, 100, 20, dtype="float32")
+    probs = np.linspace(0, 1, 20, dtype="float32")
     return geo_bsd.CdfData(values, probs)
 
 
@@ -394,7 +408,7 @@ def lvm_mean_data():
         ndarray: Array of 5000 random float32 values scaled to 0-100 range.
     """
     rng = np.random.RandomState(42)
-    return rng.rand(5000).astype('float32') * 100
+    return rng.rand(5000).astype("float32") * 100
 
 
 @pytest.fixture
@@ -407,7 +421,7 @@ def lvm_mean_data_grid():
         ndarray: Array of 1000 random float32 values scaled to 0-100 range.
     """
     rng = np.random.RandomState(42)
-    return rng.rand(1000).astype('float32') * 100
+    return rng.rand(1000).astype("float32") * 100
 
 
 # =============================================================================
@@ -426,7 +440,7 @@ def checkerboard_mask():
         ndarray: A uint8 mask array with checkerboard pattern.
     """
     size = 1000
-    mask = np.zeros(size, dtype='uint8')
+    mask = np.zeros(size, dtype="uint8")
     for i in range(size):
         if (i // 10 + i % 10) % 2 == 0:
             mask[i] = 1
@@ -444,7 +458,7 @@ def random_mask():
         ndarray: A uint8 mask array with random binary values.
     """
     rng = np.random.RandomState(42)
-    return rng.randint(0, 2, 1000, dtype='uint8')
+    return rng.randint(0, 2, 1000, dtype="uint8")
 
 
 # =============================================================================
@@ -462,7 +476,7 @@ def numpy2_compatible_array():
     Returns:
         ndarray: A float32 array with 5 elements.
     """
-    return np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
+    return np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
 
 
 @pytest.fixture
@@ -475,7 +489,7 @@ def fortran_order_array():
     Returns:
         ndarray: A float32 array in Fortran order.
     """
-    return np.asfortranarray(np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32'))
+    return np.asfortranarray(np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32"))
 
 
 # =============================================================================
@@ -512,15 +526,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
-    config.addinivalue_line(
-        "markers", "integration: marks tests as integration tests"
-    )
-    config.addinivalue_line(
-        "markers", "legacy: marks tests migrated from legacy test suite"
-    )
-    config.addinivalue_line(
-        "markers", "hpgl: skip test when HPGL (geo_bsd) is not available"
-    )
+    config.addinivalue_line("markers", "integration: marks tests as integration tests")
+    config.addinivalue_line("markers", "legacy: marks tests migrated from legacy test suite")
+    config.addinivalue_line("markers", "hpgl: skip test when HPGL (geo_bsd) is not available")
 
 
 def pytest_collection_modifyitems(config, items):
@@ -544,6 +552,3 @@ def skip_if_hpgl_not_available():
     """
     if not HPGL_AVAILABLE:
         pytest.skip("HPGL (geo_bsd) not available")
-
-
-

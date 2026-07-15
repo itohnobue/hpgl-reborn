@@ -15,6 +15,7 @@ Test categories:
 Tolerances: float32-compatible (rtol=1e-5, atol=1e-7 for most;
                                   rtol=1e-4, atol=1e-5 for full pipeline)
 """
+
 import sys
 from pathlib import Path
 
@@ -59,6 +60,7 @@ WEIGHT_ATOL = 1e-7
 # Simple Kriging — Exact Interpolation
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestSimpleKrigingExactInterpolation:
     """SK produces exact interpolation at sample points with zero nugget."""
@@ -67,9 +69,9 @@ class TestSimpleKrigingExactInterpolation:
         """SK-EI-1: Co-located neighbor with nugget=0 → weight=1.0."""
         weights = simple_kriging_weights(
             center_point=(5.0, 5.0, 2.5),
-            n_x=np.array([5.0], dtype='float32'),
-            n_y=np.array([5.0], dtype='float32'),
-            n_z=np.array([2.5], dtype='float32'),
+            n_x=np.array([5.0], dtype="float32"),
+            n_y=np.array([5.0], dtype="float32"),
+            n_z=np.array([2.5], dtype="float32"),
             ranges=(5.0, 5.0, 3.0),
             sill=1.0,
             cov_type=covariance.spherical,
@@ -83,17 +85,20 @@ class TestSimpleKrigingExactInterpolation:
         for cv_type in [covariance.spherical, covariance.exponential, covariance.gaussian]:
             weights = simple_kriging_weights(
                 center_point=(3.0, 3.0, 1.0),
-                n_x=np.array([3.0], dtype='float32'),
-                n_y=np.array([3.0], dtype='float32'),
-                n_z=np.array([1.0], dtype='float32'),
+                n_x=np.array([3.0], dtype="float32"),
+                n_y=np.array([3.0], dtype="float32"),
+                n_z=np.array([1.0], dtype="float32"),
                 ranges=(10.0, 10.0, 5.0),
                 sill=1.0,
                 cov_type=cv_type,
                 nugget=0.0,
             )
             np.testing.assert_allclose(
-                weights[0], 1.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL,
-                err_msg=f"Covariance type {cv_type}: co-located weight should be 1.0"
+                weights[0],
+                1.0,
+                rtol=WEIGHT_RTOL,
+                atol=WEIGHT_ATOL,
+                err_msg=f"Covariance type {cv_type}: co-located weight should be 1.0",
             )
 
     def test_sk_finite_distance_exponential(self):
@@ -106,9 +111,9 @@ class TestSimpleKrigingExactInterpolation:
         """
         weights = simple_kriging_weights(
             center_point=(0.0, 0.0, 0.0),
-            n_x=np.array([3.0], dtype='float32'),
-            n_y=np.array([0.0], dtype='float32'),
-            n_z=np.array([0.0], dtype='float32'),
+            n_x=np.array([3.0], dtype="float32"),
+            n_y=np.array([0.0], dtype="float32"),
+            n_z=np.array([0.0], dtype="float32"),
             ranges=(5.0, 5.0, 5.0),
             sill=1.0,
             cov_type=covariance.exponential,
@@ -131,9 +136,9 @@ class TestSimpleKrigingExactInterpolation:
 
         weights = simple_kriging_weights(
             center_point=(0.0, 0.0, 0.0),
-            n_x=np.array([1.0, 0.0], dtype='float32'),
-            n_y=np.array([0.0, 1.0], dtype='float32'),
-            n_z=np.array([0.0, 0.0], dtype='float32'),
+            n_x=np.array([1.0, 0.0], dtype="float32"),
+            n_y=np.array([0.0, 1.0], dtype="float32"),
+            n_z=np.array([0.0, 0.0], dtype="float32"),
             ranges=(5.0, 5.0, 5.0),
             sill=1.0,
             cov_type=covariance.exponential,
@@ -156,9 +161,9 @@ class TestSimpleKrigingExactInterpolation:
         """
         weights = simple_kriging_weights(
             center_point=(0.0, 0.0, 0.0),
-            n_x=np.array([4.0, 10.0], dtype='float32'),
-            n_y=np.array([0.0, 0.0], dtype='float32'),
-            n_z=np.array([0.0, 0.0], dtype='float32'),
+            n_x=np.array([4.0, 10.0], dtype="float32"),
+            n_y=np.array([0.0, 0.0], dtype="float32"),
+            n_z=np.array([0.0, 0.0], dtype="float32"),
             ranges=(10.0, 10.0, 10.0),
             sill=1.0,
             cov_type=covariance.spherical,
@@ -181,6 +186,7 @@ class TestSimpleKrigingExactInterpolation:
 # Ordinary Kriging — Weight Sum Constraint
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestOrdinaryKrigingConstraints:
     """OK weight sum equals 1.0 (unbiasedness constraint)."""
@@ -198,8 +204,8 @@ class TestOrdinaryKrigingConstraints:
         """
         grid = SugarboxGrid(x=3, y=3, z=1)
         n_total = grid.x * grid.y * grid.z
-        data = np.zeros(n_total, dtype='float32')
-        mask = np.zeros(n_total, dtype='uint8')
+        data = np.zeros(n_total, dtype="float32")
+        mask = np.zeros(n_total, dtype="uint8")
         # Cell (0,0,0): flat index 0, value 100
         data[0] = 100.0
         mask[0] = 1
@@ -231,9 +237,12 @@ class TestOrdinaryKrigingConstraints:
         expected = (100.0 + 50.0) / 2.0
 
         np.testing.assert_allclose(
-            estimate, expected, rtol=1e-4, atol=1e-5,
+            estimate,
+            expected,
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"OK symmetric estimate {estimate} != {expected}; "
-                    f"weight-sum constraint (w0+w1=1) or symmetry (w0=w1) violated"
+            f"weight-sum constraint (w0+w1=1) or symmetry (w0=w1) violated",
         )
         # All estimated cells must be finite
         assert np.all(np.isfinite(result.data[result.mask != 0]))
@@ -242,9 +251,9 @@ class TestOrdinaryKrigingConstraints:
         """SK weights with many neighbors should be finite and valid."""
         np.random.seed(42)
         n = 8
-        n_x = np.random.rand(n).astype('float32') * 10
-        n_y = np.random.rand(n).astype('float32') * 10
-        n_z = np.random.rand(n).astype('float32') * 5
+        n_x = np.random.rand(n).astype("float32") * 10
+        n_y = np.random.rand(n).astype("float32") * 10
+        n_z = np.random.rand(n).astype("float32") * 5
 
         weights = simple_kriging_weights(
             center_point=(5.0, 5.0, 2.5),
@@ -265,16 +274,15 @@ class TestOrdinaryKrigingConstraints:
 # CDF Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestCDFAnalytical:
     """CDF construction and invariants from known datasets."""
 
     def test_cdf_uniform_distribution(self):
         """CDF-ANALYTIC-1: 9 values 0.0..2.0 step 0.25 → probs=[1/9, 2/9, ..., 1.0]."""
-        data = np.array(
-            [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0], dtype='float32'
-        )
-        mask = np.ones(9, dtype='uint8')
+        data = np.array([0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0], dtype="float32")
+        mask = np.ones(9, dtype="uint8")
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
@@ -282,16 +290,14 @@ class TestCDFAnalytical:
         assert len(cdf.probs) == 9
         # Expected probs: cumulative after each unique value
         for i in range(9):
-            np.testing.assert_allclose(
-                cdf.probs[i], (i + 1) / 9.0, rtol=1e-6, atol=1e-8
-            )
+            np.testing.assert_allclose(cdf.probs[i], (i + 1) / 9.0, rtol=1e-6, atol=1e-8)
         # Last prob must be 1.0
         np.testing.assert_allclose(cdf.probs[-1], 1.0)
 
     def test_cdf_sorted_values(self):
         """CDF values must be sorted ascending."""
-        data = np.array([3.0, 1.0, 4.0, 1.5, 2.0, 2.5], dtype='float32')
-        mask = np.ones(6, dtype='uint8')
+        data = np.array([3.0, 1.0, 4.0, 1.5, 2.0, 2.5], dtype="float32")
+        mask = np.ones(6, dtype="uint8")
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
@@ -300,8 +306,8 @@ class TestCDFAnalytical:
     def test_cdf_monotonic_probs(self):
         """CDF probabilities must be non-decreasing."""
         np.random.seed(42)
-        data = np.random.rand(50).astype('float32') * 100
-        mask = np.ones(50, dtype='uint8')
+        data = np.random.rand(50).astype("float32") * 100
+        mask = np.ones(50, dtype="uint8")
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
@@ -310,8 +316,8 @@ class TestCDFAnalytical:
     def test_cdf_last_prob_is_one(self):
         """CDF invariant: last probability must be 1.0."""
         np.random.seed(42)
-        data = np.random.rand(100).astype('float32') * 100
-        mask = np.ones(100, dtype='uint8')
+        data = np.random.rand(100).astype("float32") * 100
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
@@ -320,8 +326,8 @@ class TestCDFAnalytical:
     def test_cdf_first_prob_positive(self):
         """CDF invariant: first probability must be strictly positive (>0)."""
         np.random.seed(42)
-        data = np.random.rand(100).astype('float32') * 100
-        mask = np.ones(100, dtype='uint8')
+        data = np.random.rand(100).astype("float32") * 100
+        mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
@@ -330,8 +336,8 @@ class TestCDFAnalytical:
     def test_cdf_values_probs_same_length(self):
         """CDF invariant: len(values) == len(probs)."""
         np.random.seed(42)
-        data = np.random.rand(75).astype('float32') * 100
-        mask = np.ones(75, dtype='uint8')
+        data = np.random.rand(75).astype("float32") * 100
+        mask = np.ones(75, dtype="uint8")
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
@@ -339,8 +345,8 @@ class TestCDFAnalytical:
 
     def test_cdf_duplicate_values(self):
         """CDF with duplicate values: each unique value appears once."""
-        data = np.array([1.0, 1.0, 2.0, 2.0, 3.0, 3.0], dtype='float32')
-        mask = np.ones(6, dtype='uint8')
+        data = np.array([1.0, 1.0, 2.0, 2.0, 3.0, 3.0], dtype="float32")
+        mask = np.ones(6, dtype="uint8")
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
@@ -349,8 +355,8 @@ class TestCDFAnalytical:
 
     def test_cdf_single_value(self):
         """CDF with a single value: one entry with prob=1.0."""
-        data = np.array([42.0, 42.0, 42.0], dtype='float32')
-        mask = np.ones(3, dtype='uint8')
+        data = np.array([42.0, 42.0, 42.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
@@ -360,8 +366,8 @@ class TestCDFAnalytical:
 
     def test_cdf_with_masked_values(self):
         """CDF only considers informed (unmasked) cells."""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
-        mask = np.array([1, 0, 1, 0, 1], dtype='uint8')  # Only 1.0, 3.0, 5.0
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.array([1, 0, 1, 0, 1], dtype="uint8")  # Only 1.0, 3.0, 5.0
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
@@ -370,8 +376,8 @@ class TestCDFAnalytical:
 
     def test_cdf_all_masked_raises(self):
         """calc_cdf raises ValueError when all cells are masked."""
-        data = np.array([1.0, 2.0, 3.0], dtype='float32')
-        mask = np.zeros(3, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0], dtype="float32")
+        mask = np.zeros(3, dtype="uint8")
         prop = ContProperty(data, mask)
 
         with pytest.raises(ValueError, match="no informed values"):
@@ -380,8 +386,8 @@ class TestCDFAnalytical:
     def test_cdf_3d_grid(self):
         """CDF from 3D grid produces same result as flat array with same data."""
         # 3D: 2x2x2 grid
-        data_3d = np.array([1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0], dtype='float32')
-        mask_3d = np.ones(8, dtype='uint8')
+        data_3d = np.array([1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0], dtype="float32")
+        mask_3d = np.ones(8, dtype="uint8")
         prop = ContProperty(data_3d, mask_3d)
         cdf = calc_cdf(prop)
 
@@ -391,8 +397,8 @@ class TestCDFAnalytical:
 
     def test_cdf_nan_in_data(self):
         """CDF with NaN in informed data — NaN values are filtered with a warning."""
-        data = np.array([1.0, np.nan, 3.0, 4.0], dtype='float32')
-        mask = np.ones(4, dtype='uint8')
+        data = np.array([1.0, np.nan, 3.0, 4.0], dtype="float32")
+        mask = np.ones(4, dtype="uint8")
         prop = ContProperty(data, mask)
         # calc_cdf now filters NaN values and issues a warning, producing NaN-free CDF
         cdf = calc_cdf(prop)
@@ -406,27 +412,30 @@ class TestCDFAnalytical:
 # CalcMean Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestCalcMean:
     """calc_mean arithmetic mean of informed cells."""
 
     def test_calc_mean_all_informed(self):
         """calc_mean: all cells informed → simple average."""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
-        mask = np.ones(5, dtype='uint8')
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.ones(5, dtype="uint8")
         prop = ContProperty(data, mask)
 
         from geo_bsd.geo import calc_mean
+
         result = calc_mean(prop)
         np.testing.assert_allclose(result, 3.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)
 
     def test_calc_mean_with_uninformed(self):
         """calc_mean: ignores masked cells."""
-        data = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype='float32')
-        mask = np.array([1, 1, 1, 0, 0], dtype='uint8')  # Only 10, 20, 30
+        data = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype="float32")
+        mask = np.array([1, 1, 1, 0, 0], dtype="uint8")  # Only 10, 20, 30
         prop = ContProperty(data, mask)
 
         from geo_bsd.geo import calc_mean
+
         result = calc_mean(prop)
         np.testing.assert_allclose(result, 20.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)
 
@@ -434,6 +443,7 @@ class TestCalcMean:
 # =============================================================================
 # MeanCalc Boundary Tests (E01)
 # =============================================================================
+
 
 @pytest.mark.hpgl
 class TestMeanCalcBoundary:
@@ -447,8 +457,8 @@ class TestMeanCalcBoundary:
     def test_e01_interior_uniform_cubical(self):
         """E01-T1: Interior point with cubical mask on uniform data → exact mean."""
         nx, ny, nz = 5, 5, 3
-        cube = np.ones((nx, ny, nz), dtype='float32') * 100.0
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        cube = np.ones((nx, ny, nz), dtype="float32") * 100.0
+        mask = np.ones((nx, ny, nz), dtype="uint8")
         radii = (2, 2, 1)
         mmask = GetCubicalMask(radii)
 
@@ -458,8 +468,8 @@ class TestMeanCalcBoundary:
     def test_e02_left_boundary_uniform_cubical(self):
         """E01-T2: Left edge with cubical mask on uniform data → exact mean."""
         nx, ny, nz = 5, 5, 3
-        cube = np.ones((nx, ny, nz), dtype='float32') * 100.0
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        cube = np.ones((nx, ny, nz), dtype="float32") * 100.0
+        mask = np.ones((nx, ny, nz), dtype="uint8")
         radii = (2, 2, 1)
         mmask = GetCubicalMask(radii)
 
@@ -469,20 +479,29 @@ class TestMeanCalcBoundary:
     def test_e03_corners_uniform_cubical(self):
         """E01-T3: All 8 corners with uniform data → exact mean."""
         nx, ny, nz = 5, 5, 3
-        cube = np.ones((nx, ny, nz), dtype='float32') * 100.0
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        cube = np.ones((nx, ny, nz), dtype="float32") * 100.0
+        mask = np.ones((nx, ny, nz), dtype="uint8")
         radii = (2, 2, 1)
         mmask = GetCubicalMask(radii)
 
         corners = [
-            (0, 0, 0), (0, 0, 2), (0, 4, 0), (0, 4, 2),
-            (4, 0, 0), (4, 0, 2), (4, 4, 0), (4, 4, 2),
+            (0, 0, 0),
+            (0, 0, 2),
+            (0, 4, 0),
+            (0, 4, 2),
+            (4, 0, 0),
+            (4, 0, 2),
+            (4, 4, 0),
+            (4, 4, 2),
         ]
         for corner in corners:
             result = MeanCalc(cube, mask, radii, mmask, corner, -999.0)
             np.testing.assert_allclose(
-                result, 100.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL,
-                err_msg=f"Corner {corner}: expected 100.0, got {result}"
+                result,
+                100.0,
+                rtol=WEIGHT_RTOL,
+                atol=WEIGHT_ATOL,
+                err_msg=f"Corner {corner}: expected 100.0, got {result}",
             )
 
     def test_e04_ellipsoid_interior_vs_boundary(self):
@@ -507,10 +526,10 @@ class TestMeanCalcBoundary:
         """
         nx, ny, nz = 5, 5, 3
         # Non-uniform data: gradient along X
-        cube = np.zeros((nx, ny, nz), dtype='float32')
+        cube = np.zeros((nx, ny, nz), dtype="float32")
         for i in range(nx):
             cube[i, :, :] = float(i)
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        mask = np.ones((nx, ny, nz), dtype="uint8")
         radii = (2, 2, 1)
         emask = GetEllipseMask(radii)
 
@@ -527,8 +546,8 @@ class TestMeanCalcBoundary:
 
     def test_e05_single_cell_grid(self):
         """E01-T5: Single-cell grid — works with any radius size."""
-        cube = np.ones((1, 1, 1), dtype='float32') * 42.0
-        mask = np.ones((1, 1, 1), dtype='uint8')
+        cube = np.ones((1, 1, 1), dtype="float32") * 42.0
+        mask = np.ones((1, 1, 1), dtype="uint8")
         radii = (5, 5, 5)
         mmask = GetCubicalMask(radii)
 
@@ -544,10 +563,10 @@ class TestMeanCalcBoundary:
         Expected boundary mean ≈ 1.0 (average of cells at X=0,1,2).
         """
         nx, ny, nz = 10, 10, 5
-        cube = np.zeros((nx, ny, nz), dtype='float32')
+        cube = np.zeros((nx, ny, nz), dtype="float32")
         for i in range(nx):
             cube[i, :, :] = float(i)
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        mask = np.ones((nx, ny, nz), dtype="uint8")
         radii = (2, 2, 2)
         # Use cubical mask for predictable boundary behavior
         mmask = GetCubicalMask(radii)
@@ -566,8 +585,8 @@ class TestMeanCalcBoundary:
 
     def test_e07_no_neighbors_returns_undefined(self):
         """E01-T7: When no neighbors exist (all masked locally), returns undefined_value."""
-        cube = np.ones((5, 5, 3), dtype='float32') * 100.0
-        mask = np.zeros((5, 5, 3), dtype='uint8')  # All masked
+        cube = np.ones((5, 5, 3), dtype="float32") * 100.0
+        mask = np.zeros((5, 5, 3), dtype="uint8")  # All masked
         radii = (2, 2, 1)
         mmask = GetCubicalMask(radii)
 
@@ -579,6 +598,7 @@ class TestMeanCalcBoundary:
 # CalcVPC Tests
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestCalcVPC:
     """CalcVPC per-layer mean consistency."""
@@ -587,23 +607,26 @@ class TestCalcVPC:
         """CalcVPC with uniform data: each layer mean = uniform value."""
         nx, ny, nz = 4, 4, 3
         value = 77.0
-        cube = np.ones((nx, ny, nz), dtype='float32') * value
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        cube = np.ones((nx, ny, nz), dtype="float32") * value
+        mask = np.ones((nx, ny, nz), dtype="uint8")
 
         result = CalcVPC(cube.copy(), mask, 0.0)
         assert len(result) == nz
         for k in range(nz):
             np.testing.assert_allclose(
-                result[k], value, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL,
-                err_msg=f"Layer {k}: expected {value}, got {result[k]}"
+                result[k],
+                value,
+                rtol=WEIGHT_RTOL,
+                atol=WEIGHT_ATOL,
+                err_msg=f"Layer {k}: expected {value}, got {result[k]}",
             )
 
     def test_vpc_empty_layer_gets_marginal(self):
         """CalcVPC: empty layer gets marginal mean."""
         nx, ny, nz = 4, 4, 3
         value = 77.0
-        cube = np.ones((nx, ny, nz), dtype='float32') * value
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        cube = np.ones((nx, ny, nz), dtype="float32") * value
+        mask = np.ones((nx, ny, nz), dtype="uint8")
         mask[:, :, 1] = 0  # Entire layer 1 uninformed
 
         marginal = 99.0
@@ -617,23 +640,23 @@ class TestCalcVPC:
     def test_vpc_gradient_layers(self):
         """CalcVPC: layers with different values produce different means."""
         nx, ny, nz = 4, 4, 3
-        cube = np.zeros((nx, ny, nz), dtype='float32')
+        cube = np.zeros((nx, ny, nz), dtype="float32")
         for k in range(nz):
             cube[:, :, k] = float(k * 10)  # Layer 0=0, 1=10, 2=20
-        mask = np.ones((nx, ny, nz), dtype='uint8')
+        mask = np.ones((nx, ny, nz), dtype="uint8")
 
         result = CalcVPC(cube.copy(), mask, -1.0)
         assert len(result) == nz
         for k in range(nz):
             np.testing.assert_allclose(
-                result[k], float(k * 10), rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL,
-                err_msg=f"Layer {k}"
+                result[k], float(k * 10), rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL, err_msg=f"Layer {k}"
             )
 
 
 # =============================================================================
 # Rotation / Anisotropy Tests
 # =============================================================================
+
 
 @pytest.mark.hpgl
 class TestRotationAnisotropy:
@@ -647,29 +670,48 @@ class TestRotationAnisotropy:
         for cv_type in [covariance.spherical, covariance.exponential, covariance.gaussian]:
             wx = simple_kriging_weights(
                 (0, 0, 0),
-                np.array([dist], dtype='float32'),
-                np.array([0.0], dtype='float32'),
-                np.array([0.0], dtype='float32'),
-                ranges=ranges, sill=1.0, cov_type=cv_type, nugget=0.0,
+                np.array([dist], dtype="float32"),
+                np.array([0.0], dtype="float32"),
+                np.array([0.0], dtype="float32"),
+                ranges=ranges,
+                sill=1.0,
+                cov_type=cv_type,
+                nugget=0.0,
             )
             wy = simple_kriging_weights(
                 (0, 0, 0),
-                np.array([0.0], dtype='float32'),
-                np.array([dist], dtype='float32'),
-                np.array([0.0], dtype='float32'),
-                ranges=ranges, sill=1.0, cov_type=cv_type, nugget=0.0,
+                np.array([0.0], dtype="float32"),
+                np.array([dist], dtype="float32"),
+                np.array([0.0], dtype="float32"),
+                ranges=ranges,
+                sill=1.0,
+                cov_type=cv_type,
+                nugget=0.0,
             )
             wz = simple_kriging_weights(
                 (0, 0, 0),
-                np.array([0.0], dtype='float32'),
-                np.array([0.0], dtype='float32'),
-                np.array([dist], dtype='float32'),
-                ranges=ranges, sill=1.0, cov_type=cv_type, nugget=0.0,
+                np.array([0.0], dtype="float32"),
+                np.array([0.0], dtype="float32"),
+                np.array([dist], dtype="float32"),
+                ranges=ranges,
+                sill=1.0,
+                cov_type=cv_type,
+                nugget=0.0,
             )
-            np.testing.assert_allclose(wx[0], wy[0], rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL,
-                err_msg=f"Isotropic {cv_type}: X vs Y mismatch")
-            np.testing.assert_allclose(wx[0], wz[0], rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL,
-                err_msg=f"Isotropic {cv_type}: X vs Z mismatch")
+            np.testing.assert_allclose(
+                wx[0],
+                wy[0],
+                rtol=WEIGHT_RTOL,
+                atol=WEIGHT_ATOL,
+                err_msg=f"Isotropic {cv_type}: X vs Y mismatch",
+            )
+            np.testing.assert_allclose(
+                wx[0],
+                wz[0],
+                rtol=WEIGHT_RTOL,
+                atol=WEIGHT_ATOL,
+                err_msg=f"Isotropic {cv_type}: X vs Z mismatch",
+            )
 
     def test_rot_azimuth_90_swaps_axes(self):
         """ROT-T3: azimuth=90 swaps X and Y axes.
@@ -684,24 +726,28 @@ class TestRotationAnisotropy:
 
         wx = simple_kriging_weights(
             (0, 0, 0),
-            np.array([5.0], dtype='float32'),
-            np.array([0.0], dtype='float32'),
-            np.array([0.0], dtype='float32'),
-            ranges=ranges, angles=angles, sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([5.0], dtype="float32"),
+            np.array([0.0], dtype="float32"),
+            np.array([0.0], dtype="float32"),
+            ranges=ranges,
+            angles=angles,
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
         wy = simple_kriging_weights(
             (0, 0, 0),
-            np.array([0.0], dtype='float32'),
-            np.array([5.0], dtype='float32'),
-            np.array([0.0], dtype='float32'),
-            ranges=ranges, angles=angles, sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([0.0], dtype="float32"),
+            np.array([5.0], dtype="float32"),
+            np.array([0.0], dtype="float32"),
+            ranges=ranges,
+            angles=angles,
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
         # With azimuth 90, global Y maps to range=10 axis → higher weight
-        assert wy[0] > wx[0], (
-            f"azimuth=90: wy={wy[0]} should be > wx={wx[0]}"
-        )
+        assert wy[0] > wx[0], f"azimuth=90: wy={wy[0]} should be > wx={wx[0]}"
 
     def test_rot_zero_angles_no_effect(self):
         """With all-zero angles and isotropic ranges, rotation has no effect."""
@@ -711,20 +757,26 @@ class TestRotationAnisotropy:
         # Neighbor at (3, 4, 0): distance = 5
         w1 = simple_kriging_weights(
             (0, 0, 0),
-            np.array([3.0], dtype='float32'),
-            np.array([4.0], dtype='float32'),
-            np.array([0.0], dtype='float32'),
-            ranges=ranges, angles=angles, sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([3.0], dtype="float32"),
+            np.array([4.0], dtype="float32"),
+            np.array([0.0], dtype="float32"),
+            ranges=ranges,
+            angles=angles,
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
         # Same distance but different rotation (should be same for isotropic)
         w2 = simple_kriging_weights(
             (0, 0, 0),
-            np.array([5.0], dtype='float32'),
-            np.array([0.0], dtype='float32'),
-            np.array([0.0], dtype='float32'),
-            ranges=ranges, angles=angles, sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([5.0], dtype="float32"),
+            np.array([0.0], dtype="float32"),
+            np.array([0.0], dtype="float32"),
+            ranges=ranges,
+            angles=angles,
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
         # Both at distance 5 from center → same weight for isotropic
         np.testing.assert_allclose(w1[0], w2[0], rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)
@@ -749,52 +801,64 @@ class TestRotationAnisotropy:
 
         weights = simple_kriging_weights(
             (0, 0, 0),
-            np.array([3.0], dtype='float32'),
-            np.array([4.0], dtype='float32'),
-            np.array([2.0], dtype='float32'),
-            ranges=ranges, angles=angles, sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([3.0], dtype="float32"),
+            np.array([4.0], dtype="float32"),
+            np.array([2.0], dtype="float32"),
+            ranges=ranges,
+            angles=angles,
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
         assert len(weights) == 1
-        assert 0.0 < weights[0] <= 1.0, (
-            "Weight must be in (0, 1] for spherical with no nugget"
-        )
+        assert 0.0 < weights[0] <= 1.0, "Weight must be in (0, 1] for spherical with no nugget"
 
         # Independent mathematical validation using HPGL's transposed matrices
         a0, a1, a2 = np.radians(angles)  # angles = (azimuth, dip, plunge)
-        Rz = np.array([
-            [np.cos(a0), np.sin(a0), 0],
-            [-np.sin(a0), np.cos(a0), 0],
-            [0, 0, 1],
-        ])
-        Ry = np.array([
-            [np.cos(a1), 0, -np.sin(a1)],
-            [0, 1, 0],
-            [np.sin(a1), 0, np.cos(a1)],
-        ])
-        Rx = np.array([
-            [1, 0, 0],
-            [0, np.cos(a2), np.sin(a2)],
-            [0, -np.sin(a2), np.cos(a2)],
-        ])
+        Rz = np.array(
+            [
+                [np.cos(a0), np.sin(a0), 0],
+                [-np.sin(a0), np.cos(a0), 0],
+                [0, 0, 1],
+            ]
+        )
+        Ry = np.array(
+            [
+                [np.cos(a1), 0, -np.sin(a1)],
+                [0, 1, 0],
+                [np.sin(a1), 0, np.cos(a1)],
+            ]
+        )
+        Rx = np.array(
+            [
+                [1, 0, 0],
+                [0, np.cos(a2), np.sin(a2)],
+                [0, -np.sin(a2), np.cos(a2)],
+            ]
+        )
         R = Rx @ Ry @ Rz
         neighbor = np.array([3.0, 4.0, 2.0])
         rotated = R @ neighbor
-        scaled = np.array([
-            rotated[0] / ranges[0],
-            rotated[1] / ranges[1],
-            rotated[2] / ranges[2],
-        ])
-        h_eff = np.sqrt(np.sum(scaled ** 2))
+        scaled = np.array(
+            [
+                rotated[0] / ranges[0],
+                rotated[1] / ranges[1],
+                rotated[2] / ranges[2],
+            ]
+        )
+        h_eff = np.sqrt(np.sum(scaled**2))
 
         # Spherical covariance: C(h) = 1 - 1.5*h + 0.5*h^3  for h <= 1
         assert h_eff <= 1.0, f"Effective distance {h_eff:.4f} should be <= 1"
-        expected_weight = 1.0 - 1.5 * h_eff + 0.5 * h_eff ** 3
+        expected_weight = 1.0 - 1.5 * h_eff + 0.5 * h_eff**3
 
         np.testing.assert_allclose(
-            weights[0], expected_weight, rtol=1e-4, atol=1e-5,
+            weights[0],
+            expected_weight,
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"Rotation mismatch: HPGL={weights[0]:.6f}, "
-                    f"independent math={expected_weight:.6f}, h_eff={h_eff:.6f}"
+            f"independent math={expected_weight:.6f}, h_eff={h_eff:.6f}",
         )
 
     def test_rot_convention_single_axis_only(self):
@@ -812,21 +876,27 @@ class TestRotationAnisotropy:
         # Without rotation (azimuth=0)
         w_no_rot = simple_kriging_weights(
             (0, 0, 0),
-            np.array([dist_xy], dtype='float32'),
-            np.array([dist_xy], dtype='float32'),
-            np.array([0.0], dtype='float32'),
-            ranges=ranges, angles=(0.0, 0.0, 0.0), sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([dist_xy], dtype="float32"),
+            np.array([dist_xy], dtype="float32"),
+            np.array([0.0], dtype="float32"),
+            ranges=ranges,
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
 
         # With 45° azimuth rotation
         w_rot = simple_kriging_weights(
             (0, 0, 0),
-            np.array([dist_xy], dtype='float32'),
-            np.array([dist_xy], dtype='float32'),
-            np.array([0.0], dtype='float32'),
-            ranges=ranges, angles=(45.0, 0.0, 0.0), sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([dist_xy], dtype="float32"),
+            np.array([dist_xy], dtype="float32"),
+            np.array([0.0], dtype="float32"),
+            ranges=ranges,
+            angles=(45.0, 0.0, 0.0),
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
 
         # With rotation, the effective scaled distance should differ
@@ -849,27 +919,33 @@ class TestRotationAnisotropy:
 
         def hpgl_rotate_z(angle_deg):
             a = radians(angle_deg)
-            return np.array([
-                [cos(a),  sin(a), 0],
-                [-sin(a), cos(a), 0],
-                [0,       0,      1],
-            ])
+            return np.array(
+                [
+                    [cos(a), sin(a), 0],
+                    [-sin(a), cos(a), 0],
+                    [0, 0, 1],
+                ]
+            )
 
         def hpgl_rotate_y(angle_deg):
             a = radians(angle_deg)
-            return np.array([
-                [cos(a), 0, -sin(a)],
-                [0,      1, 0],
-                [sin(a), 0, cos(a)],
-            ])
+            return np.array(
+                [
+                    [cos(a), 0, -sin(a)],
+                    [0, 1, 0],
+                    [sin(a), 0, cos(a)],
+                ]
+            )
 
         def hpgl_rotate_x(angle_deg):
             a = radians(angle_deg)
-            return np.array([
-                [1, 0,       0],
-                [0, cos(a),  sin(a)],
-                [0, -sin(a), cos(a)],
-            ])
+            return np.array(
+                [
+                    [1, 0, 0],
+                    [0, cos(a), sin(a)],
+                    [0, -sin(a), cos(a)],
+                ]
+            )
 
         def hpgl_effective_distance(ranges, angles, vec):
             """Compute h_eff the way HPGL does: ||scale * (Rx * Ry * Rz) * vec||."""
@@ -884,7 +960,7 @@ class TestRotationAnisotropy:
             # Scale
             scale = np.array([1.0, rx / ry, rx / rz])
             v_scaled = v_rot * scale
-            return np.sqrt(np.sum(v_scaled ** 2))
+            return np.sqrt(np.sum(v_scaled**2))
 
         def spherical_cov(h, sill, nugget, range_val):
             """Analytical spherical covariance: C(h)."""
@@ -893,7 +969,7 @@ class TestRotationAnisotropy:
             if h > range_val:
                 return 0.0
             x = h / range_val
-            return max(0.0, (sill - nugget) * (1.0 - 1.5 * x + 0.5 * x ** 3))
+            return max(0.0, (sill - nugget) * (1.0 - 1.5 * x + 0.5 * x**3))
 
         # Test with non-trivial anisotropic ranges and all three angles
         ranges = (100.0, 50.0, 30.0)
@@ -908,17 +984,23 @@ class TestRotationAnisotropy:
         # Get HPGL's weight
         weights = simple_kriging_weights(
             (0, 0, 0),
-            np.array([displacement[0]], dtype='float32'),
-            np.array([displacement[1]], dtype='float32'),
-            np.array([displacement[2]], dtype='float32'),
-            ranges=ranges, angles=angles, sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([displacement[0]], dtype="float32"),
+            np.array([displacement[1]], dtype="float32"),
+            np.array([displacement[2]], dtype="float32"),
+            ranges=ranges,
+            angles=angles,
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
 
         np.testing.assert_allclose(
-            weights[0], expected_weight, rtol=1e-4, atol=1e-5,
+            weights[0],
+            expected_weight,
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"ZYX convention mismatch: HPGL={weights[0]:.8f}, "
-                    f"independent={expected_weight:.8f} (h_eff={h_eff:.6f})"
+            f"independent={expected_weight:.8f} (h_eff={h_eff:.6f})",
         )
 
         # Second test case: just azimuth, anisotropic ranges
@@ -932,17 +1014,23 @@ class TestRotationAnisotropy:
 
         weights2 = simple_kriging_weights(
             (0, 0, 0),
-            np.array([displacement2[0]], dtype='float32'),
-            np.array([displacement2[1]], dtype='float32'),
-            np.array([displacement2[2]], dtype='float32'),
-            ranges=ranges2, angles=angles2, sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([displacement2[0]], dtype="float32"),
+            np.array([displacement2[1]], dtype="float32"),
+            np.array([displacement2[2]], dtype="float32"),
+            ranges=ranges2,
+            angles=angles2,
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
 
         np.testing.assert_allclose(
-            weights2[0], expected_weight2, rtol=1e-4, atol=1e-5,
+            weights2[0],
+            expected_weight2,
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"ZYX convention mismatch (azimuth only): "
-                    f"HPGL={weights2[0]:.8f}, independent={expected_weight2:.8f}"
+            f"HPGL={weights2[0]:.8f}, independent={expected_weight2:.8f}",
         )
 
         # Third test case: dip only
@@ -956,17 +1044,23 @@ class TestRotationAnisotropy:
 
         weights3 = simple_kriging_weights(
             (0, 0, 0),
-            np.array([displacement3[0]], dtype='float32'),
-            np.array([displacement3[1]], dtype='float32'),
-            np.array([displacement3[2]], dtype='float32'),
-            ranges=ranges3, angles=angles3, sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([displacement3[0]], dtype="float32"),
+            np.array([displacement3[1]], dtype="float32"),
+            np.array([displacement3[2]], dtype="float32"),
+            ranges=ranges3,
+            angles=angles3,
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
 
         np.testing.assert_allclose(
-            weights3[0], expected_weight3, rtol=1e-4, atol=1e-5,
+            weights3[0],
+            expected_weight3,
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"ZYX convention mismatch (dip only): "
-                    f"HPGL={weights3[0]:.8f}, independent={expected_weight3:.8f}"
+            f"HPGL={weights3[0]:.8f}, independent={expected_weight3:.8f}",
         )
 
     def test_rot_zyx_not_zxz(self):
@@ -981,19 +1075,23 @@ class TestRotationAnisotropy:
 
         def make_rz(angle_deg):
             a = radians(angle_deg)
-            return np.array([
-                [cos(a),  sin(a), 0],
-                [-sin(a), cos(a), 0],
-                [0, 0, 1],
-            ])
+            return np.array(
+                [
+                    [cos(a), sin(a), 0],
+                    [-sin(a), cos(a), 0],
+                    [0, 0, 1],
+                ]
+            )
 
         def make_rx(angle_deg):
             a = radians(angle_deg)
-            return np.array([
-                [1, 0, 0],
-                [0, cos(a),  sin(a)],
-                [0, -sin(a), cos(a)],
-            ])
+            return np.array(
+                [
+                    [1, 0, 0],
+                    [0, cos(a), sin(a)],
+                    [0, -sin(a), cos(a)],
+                ]
+            )
 
         def zxz_effective_distance(ranges, angles, vec):
             """ZXZ (GSLIB) convention: R = Rz2 * Rx * Rz1."""
@@ -1005,7 +1103,7 @@ class TestRotationAnisotropy:
             v_rot = R @ vec
             scale = np.array([1.0, rx / ry, rx / rz])
             v_scaled = v_rot * scale
-            return np.sqrt(np.sum(v_scaled ** 2))
+            return np.sqrt(np.sum(v_scaled**2))
 
         def spherical_cov(h, sill, nugget, range_val):
             if h < 0.0001:
@@ -1013,7 +1111,7 @@ class TestRotationAnisotropy:
             if h > range_val:
                 return 0.0
             x = h / range_val
-            return max(0.0, (sill - nugget) * (1.0 - 1.5 * x + 0.5 * x ** 3))
+            return max(0.0, (sill - nugget) * (1.0 - 1.5 * x + 0.5 * x**3))
 
         # Use all three angles non-zero so ZYX vs ZXZ diverge
         ranges = (100.0, 50.0, 30.0)
@@ -1022,11 +1120,14 @@ class TestRotationAnisotropy:
 
         weights = simple_kriging_weights(
             (0, 0, 0),
-            np.array([displacement[0]], dtype='float32'),
-            np.array([displacement[1]], dtype='float32'),
-            np.array([displacement[2]], dtype='float32'),
-            ranges=ranges, angles=angles, sill=1.0,
-            cov_type=covariance.spherical, nugget=0.0,
+            np.array([displacement[0]], dtype="float32"),
+            np.array([displacement[1]], dtype="float32"),
+            np.array([displacement[2]], dtype="float32"),
+            ranges=ranges,
+            angles=angles,
+            sill=1.0,
+            cov_type=covariance.spherical,
+            nugget=0.0,
         )
 
         # ZXZ effective distance (GSLIB convention — should NOT match)
@@ -1045,21 +1146,22 @@ class TestRotationAnisotropy:
 # CalcMean from routines
 # =============================================================================
 
+
 @pytest.mark.hpgl
 class TestCalcMeanRoutines:
     """CalcMean function from routines.py."""
 
     def test_calc_mean_uniform(self):
         """CalcMean on uniform data returns the uniform value."""
-        cube = np.ones((5, 5, 3), dtype='float32') * 42.0
-        mask = np.ones((5, 5, 3), dtype='uint8')
+        cube = np.ones((5, 5, 3), dtype="float32") * 42.0
+        mask = np.ones((5, 5, 3), dtype="uint8")
         result = CalcMean(cube, mask)
         np.testing.assert_allclose(result, 42.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)
 
     def test_calc_mean_with_mask(self):
         """CalcMean excludes masked cells."""
-        cube = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype='float32')
+        cube = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
         cube = cube.reshape((1, 1, 5))
-        mask = np.array([1, 1, 1, 0, 0], dtype='uint8').reshape((1, 1, 5))
+        mask = np.array([1, 1, 1, 0, 0], dtype="uint8").reshape((1, 1, 5))
         result = CalcMean(cube, mask)
         np.testing.assert_allclose(result, 2.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)

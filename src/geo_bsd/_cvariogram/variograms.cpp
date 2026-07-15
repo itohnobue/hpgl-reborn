@@ -106,15 +106,17 @@ bool is_in_tunnel(
 	double ss2 = fabs(dot_product(vec, &(templ->m_ellipsoid.m_direction2)));
 	double ss3 = fabs(dot_product(vec, &(templ->m_ellipsoid.m_direction3)));
 
-	if (templ->m_ellipsoid.m_R2 == 0 ||
+	if (templ->m_ellipsoid.m_R1 == 0 ||
+	    templ->m_ellipsoid.m_R2 == 0 ||
 	    templ->m_ellipsoid.m_R3 == 0)
 		return false;
 
+	double s1 = ss1 / templ->m_ellipsoid.m_R1;
 	double s2 = ss2 / templ->m_ellipsoid.m_R2;
 	double s3 = ss3 / templ->m_ellipsoid.m_R3;
 
 	double dist = sqrt(s2*s2 + s3*s3);
-	bool result = (dist <= 1.0) && (templ->m_tol_distance * dist <= ss1);
+	bool result = (dist <= 1.0) && (templ->m_tol_distance * dist <= s1);
 	return result;
 }
 
@@ -320,7 +322,12 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
                         vec.m_data[0] = i;
                         vec.m_data[1] = j;
                         vec.m_data[2] = k;
-                        double dist = sqrt( (double)i*i + (double)j*j + (double)k*k );
+                        // Use directional projection onto the principal
+                        // anisotropy axis (direction1) for lag binning.
+                        // Lags are spaced along direction1 at intervals of
+                        // lag_separation; Euclidean distance is inappropriate
+                        // for anisotropic variograms.
+                        double dist = fabs(dot_product(&vec, &(templ->m_ellipsoid.m_direction1)));
                         if (is_in_tunnel(templ, &vec)
                                 && lag->m_start <= dist
                                 && dist < lag->m_end)
@@ -505,7 +512,10 @@ void calc_variograms(
 									{
 										if ((rand() % 100) >= percentToUse)
 											continue;
-										double dist = calc_dist(&vec);
+										// Directional projection onto the
+										// principal anisotropy axis for lag
+										// binning (see calc_lag_areas).
+										double dist = fabs(dot_product(&vec, &(templ->m_ellipsoid.m_direction1)));
 										double v2 = dpx[doffset];
 										//double v2 = get_value(data, x, y, z);
 										double var = v1 - v2;
@@ -585,7 +595,9 @@ void calc_variograms_from_point_set(
 			vec.m_data[2] = point_set->zs[idx1] - point_set->zs[idx2];
 			if (is_in_tunnel(templ, &vec))
 			{
-				double dist = calc_dist(&vec);
+				// Directional projection onto the principal
+				// anisotropy axis for lag binning (see calc_lag_areas).
+				double dist = fabs(dot_product(&vec, &(templ->m_ellipsoid.m_direction1)));
 				double var = pow(point_set->values[idx1] - point_set->values[idx2], 2);
 				for (int lag_idx = 0; lag_idx < lag_count; ++lag_idx)
 				{

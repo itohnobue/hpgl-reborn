@@ -22,14 +22,16 @@ class CdfData:
         value in ``values``. Probabilities are in [0, 1] and
         monotonically non-decreasing.
     """
+
     def __init__(self, values, probs):
-        self.values = numpy.require(values, 'float32')
-        self.probs = numpy.require(probs, 'float32')
+        self.values = numpy.require(values, "float32")
+        self.probs = numpy.require(probs, "float32")
         if len(self.values) != len(self.probs):
             raise ValueError(
                 f"CdfData: values length ({len(self.values)}) "
                 f"must match probs length ({len(self.probs)})"
             )
+
 
 def calc_cdf(prop):
     """Compute the empirical CDF from a ``ContProperty``.

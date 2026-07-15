@@ -17,13 +17,13 @@ except (ImportError, OSError):
 def _make_cont_prop(size, values=None, mask=None):
     if values is None:
         np.random.seed(42)
-        values = np.random.rand(size).astype('float32')
+        values = np.random.rand(size).astype("float32")
     else:
-        values = np.array(values, dtype='float32')
+        values = np.array(values, dtype="float32")
     if mask is None:
-        mask = np.ones(size, dtype='uint8')
+        mask = np.ones(size, dtype="uint8")
     else:
-        mask = np.array(mask, dtype='uint8')
+        mask = np.array(mask, dtype="uint8")
     return ContProperty(values, mask)
 
 
@@ -64,8 +64,8 @@ class TestTkCalculation:
             tk_calculation(prop, std_dev=-1.0)
 
     def test_gaussian_pdf_peak_at_mean(self):
-        values_at_mean = np.array([0.0] * 5, dtype='float32')
-        values_away = np.array([5.0] * 5, dtype='float32')
+        values_at_mean = np.array([0.0] * 5, dtype="float32")
+        values_away = np.array([5.0] * 5, dtype="float32")
         prop_mean = _make_cont_prop(5, values=list(values_at_mean))
         prop_away = _make_cont_prop(5, values=list(values_away))
         result_mean = tk_calculation(prop_mean, mean=0.0, std_dev=1.0)
@@ -73,7 +73,7 @@ class TestTkCalculation:
         assert result_mean.data.flat[0] > result_away.data.flat[0]
 
     def test_larger_std_dev_spreads_values(self):
-        values = np.array([0.0, 1.0, 2.0, 3.0, 4.0], dtype='float32')
+        values = np.array([0.0, 1.0, 2.0, 3.0, 4.0], dtype="float32")
         prop_narrow = _make_cont_prop(5, values=list(values))
         prop_wide = _make_cont_prop(5, values=list(values.copy()))
         result_narrow = tk_calculation(prop_narrow, mean=2.0, std_dev=0.5)
@@ -158,7 +158,7 @@ class TestGtsimNoFileWrites:
         tk_calculation(prop)
         files_after = set(os.listdir(tmp_path))
         new_files = files_after - files_before
-        debug_files = [f for f in new_files if f.endswith(('.txt', '.dat', '.csv', '.log'))]
+        debug_files = [f for f in new_files if f.endswith((".txt", ".dat", ".csv", ".log"))]
         assert len(debug_files) == 0
 
 
@@ -174,12 +174,15 @@ class TestGtsimNoFileWrites:
 try:
     from geo_bsd.geo import ContProperty, CovarianceModel, SugarboxGrid, covariance
     from geo_bsd.gtsim import gtsim_2ind
+
     _GTSIM_2IND_AVAILABLE = True
 except (ImportError, SyntaxError, IndentationError, RuntimeError, OSError):
     _GTSIM_2IND_AVAILABLE = False
 
 
-@pytest.mark.skipif(not _GTSIM_2IND_AVAILABLE, reason="gtsim_2ind not available (requires working geo.py)")
+@pytest.mark.skipif(
+    not _GTSIM_2IND_AVAILABLE, reason="gtsim_2ind not available (requires working geo.py)"
+)
 class TestGtsim2Ind:
     """Tests for the gtsim_2ind Gaussian Truncated Simulation workflow.
 
@@ -195,18 +198,15 @@ class TestGtsim2Ind:
         grid = SugarboxGrid(x=x, y=y, z=z)
         size = x * y * z
         # Binary 0/1 data with ~20% uninformed
-        data = np.where(np.random.rand(size) < 0.6, 0.0, 1.0).astype('float32')
-        mask = np.ones(size, dtype='uint8')
+        data = np.where(np.random.rand(size) < 0.6, 0.0, 1.0).astype("float32")
+        mask = np.ones(size, dtype="uint8")
         prop = ContProperty(data, mask)
         return grid, prop
 
     def _make_sk_params(self):
         """Create simple kriging parameters."""
         cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(3.0, 3.0, 2.0),
-            sill=1.0,
-            nugget=0.1
+            type=covariance.spherical, ranges=(3.0, 3.0, 2.0), sill=1.0, nugget=0.1
         )
         return {
             "radiuses": (3, 3, 2),
@@ -228,12 +228,11 @@ class TestGtsim2Ind:
         grid, prop = self._make_grid_prop()
         sk_params = self._make_sk_params()
 
-        pk_data = np.full(prop.data.size, 0.5, dtype='float32')
-        pk_mask = np.ones(prop.data.size, dtype='uint8')
+        pk_data = np.full(prop.data.size, 0.5, dtype="float32")
+        pk_mask = np.ones(prop.data.size, dtype="uint8")
         pk_prop = ContProperty(pk_data, pk_mask)
 
-        result = gtsim_2ind(grid, prop, sk_params, do_sk=False,
-                           pk_prop=pk_prop, seed=42)
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=False, pk_prop=pk_prop, seed=42)
         assert isinstance(result, ContProperty)
 
     def test_gtsim_2ind_with_custom_tk_params(self):
@@ -241,8 +240,7 @@ class TestGtsim2Ind:
         grid, prop = self._make_grid_prop()
         sk_params = self._make_sk_params()
 
-        result = gtsim_2ind(grid, prop, sk_params, do_sk=True,
-                           tk_mean=0.5, tk_std_dev=2.0, seed=42)
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=True, tk_mean=0.5, tk_std_dev=2.0, seed=42)
         assert isinstance(result, ContProperty)
 
     def test_gtsim_2ind_reproducibility_same_seed(self):

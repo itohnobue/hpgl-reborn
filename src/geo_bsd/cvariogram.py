@@ -301,6 +301,10 @@ def CalcVariograms(templ, hard_data, percent=100):
         raise ValueError(
             f"CalcVariograms: hard_data[1] must be 3-dimensional, got {hard_data[1].ndim}d"
         )
+    if any(d <= 0 for d in hard_data[0].shape):
+        raise ValueError(
+            f"CalcVariograms: all grid dimensions must be positive, got {hard_data[0].shape}"
+        )
     if hard_data[0].shape != hard_data[1].shape:
         raise ValueError(
             f"CalcVariograms: hard_data[0].shape {hard_data[0].shape} does not match "
@@ -345,6 +349,8 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
             raise ValueError(f"CalcVariogramsFromPointSet: point_set missing required key '{key}'")
     # Pre-call size validation: prevent silent C++ failure
     pts = point_set["Property"]
+    if len(pts) == 0:
+        raise ValueError("CalcVariogramsFromPointSet: point_set must have at least one point")
     if len(pts) > MAX_POINT_SET_SIZE:
         raise ValueError(
             f"CalcVariogramsFromPointSet: point_set size {len(pts)} exceeds "
@@ -426,14 +432,11 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
                 )
     # Validate nz fits within result array dimensions
     if nz > result.shape[2]:
-        raise ValueError(
-            f"CStackLayers: nz ({nz}) exceeds result.shape[2] ({result.shape[2]})"
-        )
+        raise ValueError(f"CStackLayers: nz ({nz}) exceeds result.shape[2] ({result.shape[2]})")
     # Validate markers count matches layers count
     if len(markers) != len(layers):
         raise ValueError(
-            f"CStackLayers: len(markers) ({len(markers)}) must match "
-            f"len(layers) ({len(layers)})"
+            f"CStackLayers: len(markers) ({len(markers)}) must match len(layers) ({len(layers)})"
         )
     layers2 = []
     for layer in layers:

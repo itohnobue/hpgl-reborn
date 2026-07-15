@@ -59,7 +59,6 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 
 class Colors:
@@ -149,13 +148,12 @@ def check_hpgl_available() -> tuple[bool, str]:
         if src_path.exists():
             sys.path.insert(0, str(src_path))
 
-    # Try to import
-    try:
-        import geo_bsd
+    import importlib.util
 
+    spec = importlib.util.find_spec("geo_bsd")
+    if spec is not None:
         return True, "HPGL library loaded successfully"
-    except ImportError as e:
-        return False, f"HPGL library not available: {e}"
+    return False, "HPGL library not available"
 
 
 def get_pytest_command() -> str:
@@ -171,13 +169,13 @@ def build_pytest_args(
     verbose: bool = False,
     show_output: bool = False,
     include_slow: bool = False,
-    filter_expr: Optional[str] = None,
+    filter_expr: str | None = None,
     stop_on_fail: bool = False,
     tb_style: str = "short",
-    maxfail: Optional[int] = None,
-    workers: Optional[int] = None,
-    extra_args: Optional[List[str]] = None,
-) -> List[str]:
+    maxfail: int | None = None,
+    workers: int | None = None,
+    extra_args: list[str] | None = None,
+) -> list[str]:
     """
     Build pytest command arguments.
 
@@ -252,10 +250,18 @@ def build_pytest_args(
         "memory": str(tests_dir / "test_memory_leaks.py"),
         "performance": str(tests_dir / "test_performance.py"),
         "integration": str(tests_dir / "test_integration.py"),
-        "utilities": str(tests_dir / "test_utilities.py") if (tests_dir / "test_utilities.py").exists() else str(tests_dir),
-        "classes": str(tests_dir / "test_classes.py") if (tests_dir / "test_classes.py").exists() else str(tests_dir),
-        "edge": str(tests_dir / "test_edge_cases.py") if (tests_dir / "test_edge_cases.py").exists() else str(tests_dir),
-        "legacy": str(tests_dir / "test_legacy_migrated.py") if (tests_dir / "test_legacy_migrated.py").exists() else str(tests_dir),
+        "utilities": str(tests_dir / "test_utilities.py")
+        if (tests_dir / "test_utilities.py").exists()
+        else str(tests_dir),
+        "classes": str(tests_dir / "test_classes.py")
+        if (tests_dir / "test_classes.py").exists()
+        else str(tests_dir),
+        "edge": str(tests_dir / "test_edge_cases.py")
+        if (tests_dir / "test_edge_cases.py").exists()
+        else str(tests_dir),
+        "legacy": str(tests_dir / "test_legacy_migrated.py")
+        if (tests_dir / "test_legacy_migrated.py").exists()
+        else str(tests_dir),
         "slow": f"-m slow {tests_dir}",
     }
 
@@ -285,12 +291,17 @@ def print_summary(test_type: str, result: subprocess.CompletedProcess[bytes]) ->
     width = 70
 
     if result.returncode == 0:
-        print_color(f" [SUCCESS] {test_type.upper()} tests passed ".center(width, "="), Colors.OKGREEN + Colors.BOLD)
+        print_color(
+            f" [SUCCESS] {test_type.upper()} tests passed ".center(width, "="),
+            Colors.OKGREEN + Colors.BOLD,
+        )
     else:
-        print_color(f" [FAILED] {test_type.upper()} tests failed ".center(width, "="), Colors.FAIL + Colors.BOLD)
+        print_color(
+            f" [FAILED] {test_type.upper()} tests failed ".center(width, "="),
+            Colors.FAIL + Colors.BOLD,
+        )
 
     print()
-
 
     if result.returncode == 0 and "--cov" in " ".join(result.args):
         print_color("Coverage report generated in htmlcov/ directory", Colors.OKCYAN)
@@ -308,12 +319,12 @@ def run_tests(
     verbose: bool = False,
     show_output: bool = False,
     include_slow: bool = False,
-    filter_expr: Optional[str] = None,
+    filter_expr: str | None = None,
     stop_on_fail: bool = False,
     tb_style: str = "short",
-    maxfail: Optional[int] = None,
-    workers: Optional[int] = None,
-    extra_args: Optional[List[str]] = None,
+    maxfail: int | None = None,
+    workers: int | None = None,
+    extra_args: list[str] | None = None,
 ) -> int:
     """
     Run HPGL tests.
@@ -339,11 +350,15 @@ def run_tests(
 
     # Check HPGL availability
     hpgl_available, hpgl_message = check_hpgl_available()
-    print_color(f"HPGL Status: {hpgl_message}", Colors.OKGREEN if hpgl_available else Colors.WARNING)
+    print_color(
+        f"HPGL Status: {hpgl_message}", Colors.OKGREEN if hpgl_available else Colors.WARNING
+    )
     print()
 
     if not hpgl_available:
-        print_color("Warning: HPGL library is not available. Tests will be skipped.", Colors.WARNING)
+        print_color(
+            "Warning: HPGL library is not available. Tests will be skipped.", Colors.WARNING
+        )
         print_color("To fix this:", Colors.WARNING)
         print_color("  1. Ensure HPGL has been built successfully", Colors.WARNING)
         print_color("  2. Check that the build output is in the expected location", Colors.WARNING)
@@ -436,13 +451,15 @@ For more information, see the documentation in TEST_README.md
     )
 
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="Verbose output (show individual test names)",
     )
 
     parser.add_argument(
-        "-s", "--capture-no",
+        "-s",
+        "--capture-no",
         action="store_true",
         help="Show print output during tests",
     )

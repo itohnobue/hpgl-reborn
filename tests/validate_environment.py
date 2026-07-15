@@ -10,6 +10,7 @@ This script checks:
 
 Run this before attempting to run the test suite.
 """
+
 import sys
 from pathlib import Path
 
@@ -27,15 +28,17 @@ def check_python_version():
         print("  [WARN] Python version < 3.9, some features may not work")
         return False
 
+
 def check_numpy():
     """Check NumPy installation"""
     print("\nChecking NumPy...")
     try:
         import numpy
+
         print(f"  Found: NumPy {numpy.__version__}")
 
         # Parse version
-        version_parts = numpy.__version__.split('.')
+        version_parts = numpy.__version__.split(".")
         major, minor = int(version_parts[0]), int(version_parts[1])
 
         if (major, minor) >= (1, 24):
@@ -49,11 +52,13 @@ def check_numpy():
         print("  Install with: uv sync")
         return False
 
+
 def check_pytest():
     """Check pytest installation"""
     print("\nChecking pytest...")
     try:
         import pytest
+
         print(f"  Found: pytest {pytest.__version__}")
         print("  [PASS] pytest is installed")
         return True
@@ -61,6 +66,7 @@ def check_pytest():
         print("  [WARN] pytest not installed")
         print("  Install with: uv sync --extra test")
         return False
+
 
 def check_hpgl():
     """Check HPGL library availability"""
@@ -71,17 +77,19 @@ def check_hpgl():
     src_dir = project_root / "src"
     sys.path.insert(0, str(src_dir))
 
-    try:
-        import geo_bsd
+    import importlib.util
+
+    spec = importlib.util.find_spec("geo_bsd")
+    if spec is not None:
         print("  [PASS] HPGL library imported successfully")
         return True
-    except ImportError as e:
-        print(f"  [FAIL] Cannot import HPGL library: {e}")
-        print("\nPossible reasons:")
-        print("  1. Build has not completed - run build.bat (Windows) or cmake (Linux)")
-        print("  2. DLL/SO not in expected location (src/geo_bsd/)")
-        print("  3. Missing dependencies (run: uv sync)")
-        return False
+    print("  [FAIL] Cannot import HPGL library")
+    print("\nPossible reasons:")
+    print("  1. Build has not completed - run build.bat (Windows) or cmake (Linux)")
+    print("  2. DLL/SO not in expected location (src/geo_bsd/)")
+    print("  3. Missing dependencies (run: uv sync)")
+    return False
+
 
 def check_build_files():
     """Check for built extension files"""
@@ -92,7 +100,9 @@ def check_build_files():
 
     # Look for native libraries (DLL on Windows, SO on Linux)
     dll_files = list(geo_bsd_dir.glob("hpgl.dll")) + list(geo_bsd_dir.glob("hpgl.so"))
-    cvar_files = list(geo_bsd_dir.glob("_cvariogram.dll")) + list(geo_bsd_dir.glob("_cvariogram.so"))
+    cvar_files = list(geo_bsd_dir.glob("_cvariogram.dll")) + list(
+        geo_bsd_dir.glob("_cvariogram.so")
+    )
 
     found = bool(dll_files)
     if dll_files:
@@ -114,6 +124,7 @@ def check_build_files():
         print("  [FAIL] Native libraries not found")
         print("\n  Build with: build.bat (Windows) or cmake (Linux)")
         return False
+
 
 def check_test_files():
     """Check test files exist"""
@@ -138,7 +149,7 @@ def check_test_files():
         "test_cdf_edge_cases.py",
         "test_variogram.py",
         "test_validation.py",
-        "test_regression_v150.py"
+        "test_regression_v150.py",
     ]
 
     all_exist = True
@@ -157,6 +168,7 @@ def check_test_files():
         print("  [FAIL] Some test files missing")
         return False
 
+
 def main():
     """Run all checks"""
     print("=" * 60)
@@ -169,7 +181,7 @@ def main():
         "pytest": check_pytest(),
         "HPGL library": check_hpgl(),
         "Build files": check_build_files(),
-        "Test files": check_test_files()
+        "Test files": check_test_files(),
     }
 
     print("\n" + "=" * 60)
@@ -197,6 +209,7 @@ def main():
         print("\n[NOT READY] Environment not ready for testing")
         print("\nPlease complete the build and install dependencies first.")
         return 2
+
 
 if __name__ == "__main__":
     sys.exit(main())
