@@ -1,5 +1,7 @@
 #include "stdafx.h"
 
+#include <cstring>
+
 #include "property_array.h"
 #include "property_writer.h"
 #include "locale_keeper.h"
@@ -32,13 +34,17 @@ namespace hpgl
 		typedef std::shared_ptr<FILE> file_t;
 		file_t open_file_checked(const char * filename, const char * mode)
 		{
-			FILE * f = fopen(filename, mode);
-			if (f == 0)
-			{
-				std::ostringstream oss;
-				oss << "Can't open file '" << filename << "'.";
-				throw hpgl_exception("open_file_checked", oss.str());
-			}
+		FILE * f = fopen(filename, mode);
+		if (f == 0)
+		{
+			// Use basename to avoid leaking full filesystem path in error messages.
+			const char * bn = strrchr(filename, '/');
+			if (bn == nullptr) bn = filename;
+			else ++bn; // skip '/'
+			std::ostringstream oss;
+			oss << "Can't open file '" << bn << "'.";
+			throw hpgl_exception("open_file_checked", oss.str());
+		}
 			return file_t(f, [](FILE* fp) {
 				if (fclose(fp) != 0)
 					fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");

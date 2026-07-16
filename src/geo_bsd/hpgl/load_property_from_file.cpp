@@ -40,6 +40,10 @@ start:
 	// lines with leading spaces/tabs not caught by the empty check above).
 	if (isspace(static_cast<unsigned char>(line[0])))
 		goto start;
+	// Skip GSLIB-style comment lines beginning with "--"
+	// (matching load_doubles_into_vector and read_inc_file.cpp behaviour)
+	if (line_size >= 2 && line[0] == '-' && line[1] == '-')
+		goto start;
 	prop_name = line;
 	// Handle continuation for excessively long property names
 	// Cap total length to prevent unbounded memory exhaustion (M59 fix)

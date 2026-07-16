@@ -43,6 +43,7 @@ namespace hpgl
 
 	progress_reporter_t::progress_reporter_t(long n_iterations)
 	{
+		m_cancelled = false;
 		set_iteration_count(n_iterations);		
 	}
 
@@ -65,9 +66,12 @@ namespace hpgl
 		if (m_counter % m_delta == 0)
 		{
 		//	boost::mutex::scoped_lock lock(m_mutex);
-			int perc = (int) 100.0 * m_counter / m_iterations;
+			int perc = (int)(100LL * m_counter / m_iterations);
 			if (perc > 0)
-				update_progress("", perc);
+			{
+				if (update_progress("", perc) != 0)
+					m_cancelled = true;
+			}
 			//			write(boost::format("%1%%%...") % ((int) 100.0 * m_counter / m_iterations));
 			//			std::cout << (int) 100.0 * m_counter / m_iterations << "%... ";
 			//			std::cout.flush();

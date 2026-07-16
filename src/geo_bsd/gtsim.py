@@ -3,6 +3,7 @@
 # GTSIM for 2 indicators (facies)
 
 import logging
+import warnings
 
 import numpy as np
 from numpy import exp, pi, sqrt
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def pseudo_gaussian_transform(prop, pk_prop, rng=None):
+    # NOTE: modifies prop.data in-place. Returns the same prop object.
     if rng is None:
         rng = np.random.RandomState()
     # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
@@ -56,6 +58,7 @@ def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
     if std_dev <= 0:
         raise ValueError(f"std_dev must be positive, got {std_dev}")
 
+    # NOTE: modifies pk_prop.data in-place via pk_flat[:] assignment.
     # Vectorized Gaussian PDF computation.
     # Uses ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
     pk_flat = pk_prop.data.ravel(order="K")
@@ -109,6 +112,19 @@ def gtsim_2ind(
 
     # 1. calculate pk_prop
     # check pk_prop, if presented, use it, if not - do SK
+
+    if not do_sk:
+        warnings.warn(
+            "The 'do_sk' parameter is deprecated and will be removed in a future version. "
+            "Simple kriging is always performed unless pk_prop is provided.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        if pk_prop is None:
+            raise ValueError(
+                "gtsim_2ind: do_sk=False requires pk_prop to be provided, "
+                "since simple kriging is the only way to compute pk_prop."
+            )
 
     if pk_prop is None:
         logger.info("Testing SK...")

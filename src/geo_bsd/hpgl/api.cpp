@@ -463,6 +463,9 @@ HPGL_API void hpgl_ordinary_kriging(
 	int out_size = get_shape_volume(&output_data->m_shape);
 	validate_shape_volume_or_throw(out_size, "ordinary_kriging output");
 
+	if (in_size != out_size)
+		throw hpgl_exception("hpgl_ordinary_kriging", "input and output shape volume mismatch");
+
 	cont_property_array_t in_prop(input_data->m_data, input_data->m_mask, in_size);
 	cont_property_array_t out_prop(output_data->m_data, output_data->m_mask, out_size);
 

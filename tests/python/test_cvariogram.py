@@ -198,6 +198,25 @@ class TestCalcVariograms:
         expected_lags = np.array([0, 3, 6, 9], dtype=float)
         np.testing.assert_array_almost_equal(lags, expected_lags)
 
+    def test_lag_borders_with_first_lag_distance(self):
+        """Verify lags_borders includes first_lag_distance offset."""
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=5.0,
+            ellipsoid=ell,
+        )
+        hard_data = self._make_grid_data()
+        lags, variogram = CalcVariograms(templ, hard_data)
+        # With first_lag_distance=5 and lag_separation=2:
+        # lag 0 = 0*2 + 5 = 5, lag 1 = 1*2 + 5 = 7, lag 2 = 2*2 + 5 = 9
+        expected_lags = np.array([5, 7, 9], dtype=float)
+        np.testing.assert_array_almost_equal(lags, expected_lags)
+        assert variogram.dtype == np.float32
+
     def test_percent_100(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
@@ -526,6 +545,25 @@ class TestCalcVariogramsFromPointSet:
         lags, variogram = CalcVariogramsFromPointSet(templ, ps, None)
         expected_lags = np.array([0, 3, 6, 9], dtype=float)
         np.testing.assert_array_almost_equal(lags, expected_lags)
+
+    def test_lag_borders_with_first_lag_distance(self):
+        """Verify lags_borders includes first_lag_distance offset for point set."""
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=3,
+            first_lag_distance=5.0,
+            ellipsoid=ell,
+        )
+        ps = self._make_point_set()
+        lags, variogram = CalcVariogramsFromPointSet(templ, ps, None)
+        # With first_lag_distance=5 and lag_separation=2:
+        # lag 0 = 0*2 + 5 = 5, lag 1 = 1*2 + 5 = 7, lag 2 = 2*2 + 5 = 9
+        expected_lags = np.array([5, 7, 9], dtype=float)
+        np.testing.assert_array_almost_equal(lags, expected_lags)
+        assert variogram.dtype == np.float32
 
 
 @pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")

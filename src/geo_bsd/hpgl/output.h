@@ -8,7 +8,7 @@ namespace hpgl
 	void write(const char * str);
 	void write(const std::string & str);
 
-	void update_progress(const char * stage, int percentage);
+	int update_progress(const char * stage, int percentage);
 }
 
 // Simplified logging macro - uses string concatenation instead of boost::format.

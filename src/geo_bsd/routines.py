@@ -22,7 +22,7 @@ from numpy import (
     zeros,
 )
 
-from .validation import PathValidator, ValidationConstants
+from .validation import GridValidator, PathValidator, ValidationConstants
 
 
 def CalcMean(Cube, Mask):
@@ -455,6 +455,10 @@ def LoadGslibFile(filename, property_size):
             f"LoadGslibFile: property_size dimensions must be positive integers, "
             f"got ({nx}, {ny}, {nz})"
         )
+
+    # Validate grid dimensions against MAX_GRID_SIZE for consistency with
+    # all other grid-creating paths (SugarboxGrid, sgs_simulation, sis_simulation, etc.)
+    GridValidator.validate_grid_dimensions(nx, ny, nz)
 
     # Validate filepath for security (path traversal prevention, exists check)
     safe_path = PathValidator.validate_filepath_in_basedir(

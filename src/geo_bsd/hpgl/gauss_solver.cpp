@@ -20,18 +20,24 @@ namespace hpgl
 		std::vector<int> order(size, 0);
 		for (int i = 0; i < size; ++i)
 		{
-			//searching for non zero row;
+			// Partial pivoting: select row with maximum absolute value in column i.
+			// Previously used first-nonzero coefficient, which can silently lose
+			// significant digits for ill-conditioned matrices on the Cholesky-failure
+			// fallback path.  Max-abs pivoting reduces round-off error magnification.
 			bool found = false;
 			int row = -1;
+			double max_abs = 0.0;
 			for (int j = 0; j < size; ++j)
 			{
-				if (flags[j] == 0 && A[j * size + i] != 0)
+				if (flags[j] == 0)
 				{
-					found = true;
-					row = j;
-					flags[j] = 1;
-					order[i] = j;
-					break;
+					double abs_val = std::abs(A[j * size + i]);
+					if (abs_val > max_abs)
+					{
+						max_abs = abs_val;
+						found = true;
+						row = j;
+					}
 				}
 			}
 
@@ -39,6 +45,8 @@ namespace hpgl
 			{
 				return false; //matrix is singular
 			}
+			flags[row] = 1;
+			order[i] = row;
 
 			//normalize row
 			double coef = A[row * size + i];

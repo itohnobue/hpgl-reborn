@@ -1,6 +1,7 @@
 #ifndef PROGRESS_REPORTER_H_INCLUDED_ALKSJSHDKASHDJKASBNJDFHNGKHDFKLSHFJKSDGJHGVDGLJKHVJGKKGJ
 #define PROGRESS_REPORTER_H_INCLUDED_ALKSJSHDKASHDJKASBNJDFHNGKHDFKLSHFJKSDGJHGVDGLJKHVJGKKGJ
 
+#include <atomic>
 #include <chrono>
 
 namespace hpgl
@@ -11,6 +12,7 @@ namespace hpgl
 		long m_counter;
 		long m_delta;
 		long m_iterations;
+		std::atomic<bool> m_cancelled;
 		std::chrono::high_resolution_clock::time_point m_start;
 		std::chrono::high_resolution_clock::time_point m_end;
 		void set_iteration_count(long iteration_count);
@@ -27,6 +29,7 @@ namespace hpgl
 		void stop();
 		double iterations_per_second();
 		double duration();
+		bool cancelled() const { return m_cancelled; }
 	};
 }
 

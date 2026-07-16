@@ -159,6 +159,12 @@ namespace hpgl
 					report.next_lap(local_lap_count);
 				}
 				local_lap_count = 0;
+				if (report.cancelled()) {
+#ifdef _OPENMP
+					#pragma omp cancel for
+#endif
+					break;
+				}
 			}
 		}
 		// Flush remaining laps for this thread
@@ -169,6 +175,10 @@ namespace hpgl
 				report.next_lap(local_lap_count);
 			}
 		}
+#ifdef _OPENMP
+		if (report.cancelled())
+			#pragma omp cancel for
+#endif
 }	
 
 		// Restore BLAS thread count after parallel region completes

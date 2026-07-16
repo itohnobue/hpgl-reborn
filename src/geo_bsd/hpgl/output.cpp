@@ -51,13 +51,13 @@ namespace hpgl
 		write(str.c_str());
 	}
 
-	void update_progress(const char * stage, int percentage)
+	int update_progress(const char * stage, int percentage)
 	{
 		auto ph = s_progress_handler.load();
 		if (ph)
 		{
 			std::lock_guard<std::mutex> lock(s_handler_mutex);
-			ph(const_cast<char*>(stage), percentage, s_progress_handler_param.load());
+			return ph(const_cast<char*>(stage), percentage, s_progress_handler_param.load());
 		}
 		else
 		{
@@ -75,6 +75,7 @@ namespace hpgl
 				std::cout << percentage << "%... ";
 			}
 			std::cout.flush();
+			return 0;
 		}
 	}
 }

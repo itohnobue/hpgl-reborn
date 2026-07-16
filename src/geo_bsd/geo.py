@@ -391,6 +391,10 @@ class IndProperty:
     """
 
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray, indicator_count: int):
+        if not 1 <= indicator_count <= 255:
+            raise ValueError(
+                f"indicator_count must be 1-255, got {indicator_count}"
+            )
         self.data = numpy.require(data, "uint8", "F")
         self.mask = numpy.require(mask, "uint8", "F")
         self.indicator_count = indicator_count
@@ -529,7 +533,7 @@ class CovarianceModel:
 def _load_prop_cont_slow(filename, undefined_value):
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
     )
 
     values = []
@@ -546,15 +550,18 @@ def _load_prop_cont_slow(filename, undefined_value):
             if line.strip().startswith("/"):
                 break
             for part in line.split():
+                # Count all token attempts (including non-numeric) for DoS protection.
+                # Prevents unbounded loop from malicious files with billions of
+                # unparseable tokens.
                 if element_count >= _MAX_SLOW_PARSER_ELEMENTS:
                     raise MemoryError(
                         f"_load_prop_cont_slow: file exceeds {_MAX_SLOW_PARSER_ELEMENTS} elements. "
                         f"Use fast C++ reader by specifying `size` parameter."
                     )
+                element_count += 1
                 try:
                     val = float(part.strip())
                     values.append(val)
-                    element_count += 1
                     if val == undefined_value:
                         mask.append(0)
                     else:
@@ -576,7 +583,7 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
 
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False
+        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
     )
 
     values = []
@@ -595,11 +602,15 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
             if line.strip().startswith("/"):
                 break
             for part in line.split():
+                # Count all token attempts (including non-numeric) for DoS protection.
+                # Prevents unbounded loop from malicious files with billions of
+                # unparseable tokens.
                 if element_count >= _MAX_SLOW_PARSER_ELEMENTS:
                     raise MemoryError(
                         f"_load_prop_ind_slow: file exceeds {_MAX_SLOW_PARSER_ELEMENTS} elements. "
                         f"Use fast C++ reader by specifying `size` parameter."
                     )
+                element_count += 1
                 try:
                     val = int(part.strip())
                 except (ValueError, TypeError):
@@ -608,14 +619,11 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
                 if val == undefined_value:
                     values.append(255)
                     mask.append(0)
-                    element_count += 1
                 elif val in dict_map:
                     values.append(dict_map[val])
                     mask.append(1)
-                    element_count += 1
                 else:
                     unknown_values.add(val)
-                    element_count += 1
 
     if skipped_parse > 0:
         logger.warning(
@@ -1083,11 +1091,16 @@ def set_thread_num(num):
             num,
             cpu_count,
         )
+    _hpgl_call_lock.acquire()
     _hpgl_so.hpgl_set_thread_num(num)
+    _hpgl_call_lock.release()
 
 
 def get_thread_num():
-    return _hpgl_so.hpgl_get_thread_num()
+    _hpgl_call_lock.acquire()
+    result = _hpgl_so.hpgl_get_thread_num()
+    _hpgl_call_lock.release()
+    return result
 
 
 @accepts_tuple("prop", 0)

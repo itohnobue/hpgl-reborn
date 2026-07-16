@@ -278,6 +278,7 @@ class VariogramSearchTemplate:
 
         self.num_lags = num_lags
         self.lag_separation = lag_separation
+        self.first_lag_distance = first_lag_distance
 
 
 def CalcVariograms(templ, hard_data, percent=100):
@@ -336,7 +337,7 @@ def CalcVariograms(templ, hard_data, percent=100):
     lags_borders = numpy.zeros(templ.num_lags)
 
     for k in range(templ.num_lags):
-        lags_borders[k] = k * templ.lag_separation
+        lags_borders[k] = k * templ.lag_separation + templ.first_lag_distance
 
     return (lags_borders, variogram)
 
@@ -394,7 +395,7 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
     lags_borders = numpy.zeros(templ.num_lags)
 
     for k in range(templ.num_lags):
-        lags_borders[k] = k * templ.lag_separation
+        lags_borders[k] = k * templ.lag_separation + templ.first_lag_distance
 
     return (lags_borders, variogram)
 
