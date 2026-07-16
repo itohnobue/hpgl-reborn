@@ -1,7 +1,6 @@
 #include "stdafx.h"
 #include <stdexcept>
 #include <climits>
-#include <mutex>
 #include "api.h"
 #include "hpgl_exception.h"
 #include "covariance_type.h"
@@ -14,20 +13,17 @@
 namespace hpgl
 {
 
-static std::string last_exception_message;
-static std::mutex last_exception_mutex;
+static thread_local std::string last_exception_message;
 
 std::string
 get_last_exception_message()
 {
-	std::lock_guard<std::mutex> lock(last_exception_mutex);
-	return last_exception_message; // value copy constructed while lock is held
+	return last_exception_message;
 }
 
 void
 set_last_exception_message(const char * message)
 {
-	std::lock_guard<std::mutex> lock(last_exception_mutex);
 	last_exception_message = message;
 }
 
@@ -117,11 +113,8 @@ init_sis_params(
 		ikp->m_marginal_probs.push_back(p->m_marginal_prob);
 		covariance_param_t cp;
 		cp.m_covariance_type = (covariance_type_t) p->m_covariance_type;
-		for (int j = 0; j < 3; ++j)
-		{
-			cp.m_ranges[j] = p->m_ranges[j];
-			cp.m_angles[j] = p->m_angles[j];
-		}
+		cp.set_ranges(p->m_ranges[0], p->m_ranges[1], p->m_ranges[2]);
+		cp.set_angles(p->m_angles[0], p->m_angles[1], p->m_angles[2]);
 		cp.set_sill(p->m_sill);
 		cp.set_nugget(p->m_nugget);
 		cp.validate();

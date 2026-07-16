@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "calc_mean.h"
 #include "property_array.h"
+#include <cmath>
 
 
 	double hpgl::calc_mean(const cont_property_array_t & property, bool * success)
@@ -13,7 +14,13 @@
 		{
 			if( property.is_informed(idx) )
 			{
-				sum += property.get_at(idx);
+				double val = property.get_at(idx);
+				if (!std::isfinite(val))
+				{
+					*success = false;
+					return NAN;
+				}
+				sum += val;
 				count_points += 1;
 			}
 		}		

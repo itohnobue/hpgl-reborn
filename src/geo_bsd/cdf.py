@@ -32,6 +32,26 @@ class CdfData:
                 f"must match probs length ({len(self.probs)})"
             )
 
+        # Validate data integrity beyond length check
+        if len(self.probs) > 0:
+            # Probabilities must be in [0, 1]
+            if numpy.any(self.probs < 0.0) or numpy.any(self.probs > 1.0):
+                raise ValueError(
+                    "CdfData: probabilities must be in [0, 1] range"
+                )
+
+            # Probabilities must be monotonically non-decreasing (CDF property)
+            if numpy.any(numpy.diff(self.probs) < 0.0):
+                raise ValueError(
+                    "CdfData: probabilities must be monotonically non-decreasing"
+                )
+
+            # Values should be monotonically non-decreasing (sorted unique values)
+            if numpy.any(numpy.diff(self.values) < 0.0):
+                raise ValueError(
+                    "CdfData: values must be monotonically non-decreasing"
+                )
+
 
 def calc_cdf(prop):
     """Compute the empirical CDF from a ``ContProperty``.

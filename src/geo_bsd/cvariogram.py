@@ -50,8 +50,8 @@ def _cvar_error_guard(context=""):
     new C++ error does not prevent lock release.
     """
     _cvar_call_lock.acquire()
-    _snapshot_cvar_error()
     try:
+        _snapshot_cvar_error()
         yield
         _check_cvar_error(context)
     finally:
@@ -367,6 +367,14 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
             f"CalcVariogramsFromPointSet: coordinate array length mismatch: "
             f"len(X)={x_len}, len(Y)={y_len}, len(Z)={z_len}, len(Property)={p_len}"
         )
+    # Validate dtypes before raw ctypes pointer cast prevents silent garbage results
+    for key in ("X", "Y", "Z", "Property"):
+        arr = point_set[key]
+        if not isinstance(arr, numpy.ndarray) or arr.dtype != numpy.float32:
+            raise TypeError(
+                f"CalcVariogramsFromPointSet: point_set['{key}'] must be a float32 ndarray, "
+                f"got {type(arr).__name__}"
+            )
     if variogram is None:
         variogram = numpy.array([0] * templ.num_lags, dtype="float32")
 
@@ -438,6 +446,18 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
     if len(markers) != len(layers):
         raise ValueError(
             f"CStackLayers: len(markers) ({len(markers)}) must match len(layers) ({len(layers)})"
+        )
+    # Validate dtypes before raw ctypes pointer cast prevents silent garbage results
+    for i, layer in enumerate(layers):
+        if not isinstance(layer, numpy.ndarray) or layer.dtype != numpy.float32:
+            raise TypeError(
+                f"CStackLayers: layer {i} must be a float32 ndarray, "
+                f"got {type(layer).__name__}"
+            )
+    if not isinstance(result, numpy.ndarray) or result.dtype != numpy.float32:
+        raise TypeError(
+            f"CStackLayers: result must be a float32 ndarray, "
+            f"got {type(result).__name__}"
         )
     layers2 = []
     for layer in layers:

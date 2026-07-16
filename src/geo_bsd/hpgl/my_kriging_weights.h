@@ -640,6 +640,16 @@ namespace hpgl
 
 #endif
 
+		// Guard: when the linear solver failed (e.g. dpotrs_ error),
+		// sk_weights and ones_result contain garbage. Skip OK weight
+		// computation to avoid producing corrupted output.
+		if (!system_solved)
+		{
+			weights.resize(coords.size());
+			if (calc_variance) variance = -1;
+			return false;
+		}
+
 		double SumSK = 0;
 		double SumOnes = 0;
 
@@ -1008,15 +1018,22 @@ namespace hpgl
 
 
 		double meanc = center_mean;
-		double delta = CORRELOGRAM_DELTA;
 
-		if(meanc == 0)
+		// Range validation: clamp correlogram mean to valid [0,1] interval.
+		// Values outside [0,1] can produce sqrt(negative) → NaN downstream.
+		if (meanc < 0.0) meanc = 0.0;
+		if (meanc > 1.0) meanc = 1.0;
+
+		// Boundary adjustment: shift means away from exact 0 and 1 to avoid
+		// sqrt(0)=0 (zero kriging weights) and to stabilise the correlogram.
+		// Use tolerance-based checks instead of exact float equality.
+		if (meanc < CORRELOGRAM_DELTA)
 		{
-			meanc += delta;
+			meanc = CORRELOGRAM_DELTA;
 		}
-		if(meanc == 1)
+		else if (meanc > 1.0 - CORRELOGRAM_DELTA)
 		{
-			meanc -= delta;
+			meanc = 1.0 - CORRELOGRAM_DELTA;
 		}
 
 		double sigmac = sqrt(meanc * (1 - meanc));
@@ -1027,13 +1044,17 @@ namespace hpgl
 		{
 			double meani = means[i];
 
-			if(meani == 0)
+			// Range validation: clamp to [0,1] before boundary adjustment
+			if (meani < 0.0) meani = 0.0;
+			if (meani > 1.0) meani = 1.0;
+
+			if (meani < CORRELOGRAM_DELTA)
 			{
-				meani += delta;
+				meani = CORRELOGRAM_DELTA;
 			}
-			if(meani == 1)
+			else if (meani > 1.0 - CORRELOGRAM_DELTA)
 			{
-				meani -= delta;
+				meani = 1.0 - CORRELOGRAM_DELTA;
 			}
 
 			sigmas[i] = sqrt(meani * (1-meani));
@@ -1164,15 +1185,22 @@ namespace hpgl
 		}
 
 		double meanc = center_mean;
-		double delta = CORRELOGRAM_DELTA;
 
-		if(meanc == 0)
+		// Range validation: clamp correlogram mean to valid [0,1] interval.
+		// Values outside [0,1] can produce sqrt(negative) → NaN downstream.
+		if (meanc < 0.0) meanc = 0.0;
+		if (meanc > 1.0) meanc = 1.0;
+
+		// Boundary adjustment: shift means away from exact 0 and 1 to avoid
+		// sqrt(0)=0 (zero kriging weights) and to stabilise the correlogram.
+		// Use tolerance-based checks instead of exact float equality.
+		if (meanc < CORRELOGRAM_DELTA)
 		{
-			meanc += delta;
+			meanc = CORRELOGRAM_DELTA;
 		}
-		if(meanc == 1)
+		else if (meanc > 1.0 - CORRELOGRAM_DELTA)
 		{
-			meanc -= delta;
+			meanc = 1.0 - CORRELOGRAM_DELTA;
 		}
 
 		double sigmac = sqrt(meanc * (1 - meanc));
@@ -1183,13 +1211,17 @@ namespace hpgl
 		{
 			double meani = means[i];
 
-			if(meani == 0)
+			// Range validation: clamp to [0,1] before boundary adjustment
+			if (meani < 0.0) meani = 0.0;
+			if (meani > 1.0) meani = 1.0;
+
+			if (meani < CORRELOGRAM_DELTA)
 			{
-				meani += delta;
+				meani = CORRELOGRAM_DELTA;
 			}
-			if(meani == 1)
+			else if (meani > 1.0 - CORRELOGRAM_DELTA)
 			{
-				meani -= delta;
+				meani = 1.0 - CORRELOGRAM_DELTA;
 			}
 
 			ws.sigmas[i] = sqrt(meani * (1-meani));

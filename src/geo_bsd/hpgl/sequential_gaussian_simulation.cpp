@@ -105,6 +105,12 @@ namespace hpgl
 			throw hpgl_exception("sequential_gaussian_simulation_lvm", oss.str());
 		}
 
+		if (mean_data == nullptr)
+		{
+			throw hpgl_exception("sequential_gaussian_simulation_lvm",
+				"Null mean_data pointer");
+		}
+
 		std::vector<mean_t> mean_data_vec;
 		mean_data_vec.assign(mean_data, mean_data + output.size());
 

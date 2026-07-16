@@ -165,6 +165,11 @@ def sis_simulation(
     if is_lvm:
         for i in range(len(data)):
             GridValidator.validate_array_size(marginal_probs[i], (grid.x, grid.y, grid.z))
+            if not numpy.all(numpy.isfinite(marginal_probs[i])):
+                raise ValueError(
+                    f"sis_simulation: LVM marginal_probs[{i}] "
+                    f"contains NaN or Inf values"
+                )
             means.append(_create_hpgl_float_array(marginal_probs[i], grid))
 
     if not is_lvm:

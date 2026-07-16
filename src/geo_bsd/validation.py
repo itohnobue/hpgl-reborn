@@ -182,6 +182,12 @@ class PathValidator:
                     "filename",
                 )
 
+        # Check if path is a directory and directories are not allowed
+        if not allow_directories and resolved_path.is_dir():
+            raise CriticalValidationError(
+                f"Path is a directory: {resolved_path}", "filename"
+            )
+
         return str(resolved_path)
 
     @staticmethod
@@ -277,8 +283,8 @@ class GridValidator:
                 "grid_z",
             )
 
-        # Check total grid size
-        total_size = x * y * z
+        # Check total grid size — cast to Python int to avoid numpy int32 overflow
+        total_size = int(x) * int(y) * int(z)
         if total_size > ValidationConstants.MAX_GRID_SIZE:
             raise CriticalValidationError(
                 f"Total grid size {total_size} exceeds maximum of {ValidationConstants.MAX_GRID_SIZE}",
@@ -348,7 +354,7 @@ class ParameterValidator:
         Raises:
             CriticalValidationError: If radius is invalid
         """
-        if isinstance(radius, (int, float)):
+        if isinstance(radius, (int, float, numpy.integer, numpy.floating)):
             vals = [float(radius)] * 3
         elif isinstance(radius, (tuple, list)) and len(radius) == 3:
             vals = list(map(float, radius))
@@ -441,6 +447,10 @@ class ParameterValidator:
             CriticalValidationError: If parameters are invalid
         """
         # Validate sill
+        if not isinstance(sill, (int, float, numpy.floating, numpy.integer)):
+            raise CriticalValidationError(
+                f"Sill must be a number, got {type(sill).__name__}", "sill"
+            )
         if numpy.isnan(sill) or numpy.isinf(sill):
             raise CriticalValidationError("Sill is NaN or infinite", "sill")
 
@@ -455,6 +465,10 @@ class ParameterValidator:
             )
 
         # Validate nugget
+        if not isinstance(nugget, (int, float, numpy.floating, numpy.integer)):
+            raise CriticalValidationError(
+                f"Nugget must be a number, got {type(nugget).__name__}", "nugget"
+            )
         if numpy.isnan(nugget) or numpy.isinf(nugget):
             raise CriticalValidationError("Nugget is NaN or infinite", "nugget")
 
@@ -524,6 +538,10 @@ class ParameterValidator:
         Raises:
             CriticalValidationError: If probability is invalid
         """
+        if not isinstance(prob, (int, float, numpy.floating, numpy.integer)):
+            raise CriticalValidationError(
+                f"{name} must be a number, got {type(prob).__name__}", name
+            )
         if numpy.isnan(prob) or numpy.isinf(prob):
             raise CriticalValidationError(f"{name} is NaN or infinite", name)
 
@@ -607,7 +625,7 @@ class ParameterValidator:
         """
         import math
 
-        if not isinstance(coef, (int, float)):
+        if not isinstance(coef, (int, float, numpy.floating, numpy.integer)):
             raise CriticalValidationError(
                 f"{name} must be a number, got {type(coef).__name__}", name
             )
@@ -630,7 +648,7 @@ class ParameterValidator:
         """
         import math
 
-        if not isinstance(variance, (int, float)):
+        if not isinstance(variance, (int, float, numpy.floating, numpy.integer)):
             raise CriticalValidationError(
                 f"{name} must be a number, got {type(variance).__name__}", name
             )

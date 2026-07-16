@@ -45,10 +45,12 @@ namespace hpgl
 			oss << "Can't open file '" << bn << "'.";
 			throw hpgl_exception("open_file_checked", oss.str());
 		}
-			return file_t(f, [](FILE* fp) {
-				if (fclose(fp) != 0)
-					fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");
-			});
+		return file_t(f, [](FILE* fp) {
+			if (fflush(fp) != 0)
+				fprintf(stderr, "HPGL: fflush failed — buffered data may be lost\n");
+			if (fclose(fp) != 0)
+				fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");
+		});
 		}
 
 		void write_property_cont(

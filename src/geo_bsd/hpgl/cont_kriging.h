@@ -5,6 +5,7 @@
 #include "covariance_field.h"
 #include "progress_reporter.h"
 #include "kriging_stats.h"
+#include <limits>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -75,6 +76,19 @@ namespace hpgl
 
 		report.start();
 		node_index_t idx_end = input_property.size();
+
+		// Pre-initialise uninformed cells to NaN so that unprocessed cells
+		// (e.g. after cancellation) are distinguishable from computed cells.
+		// The OpenMP loop below overwrites these with computed values or
+		// mean-on-failure as each cell is processed.
+		for (node_index_t idx = 0; idx < idx_end; ++idx)
+		{
+			if (!input_property.is_informed(idx))
+			{
+				output_property.set_at(idx, std::numeric_limits<value_t>::quiet_NaN());
+			}
+		}
+
 		unsigned long points_calculated = 0;
 		unsigned long points_without_neighbours = 0;
 		unsigned long points_singularity = 0;
@@ -194,6 +208,19 @@ namespace hpgl
 		stats.m_points_singularity = points_singularity;
 		stats.m_mean = points_processed > 0 ? sum / points_processed : 0;
 		stats.m_speed_nps = report.iterations_per_second();
+
+		// Report kriging failures to stderr so they are visible even when
+		// HPGL_LOG_ON is not defined. The Python wrapper reads stats for
+		// error propagation; this provides a human-readable warning as well.
+		if (stats.m_points_singularity > 0 || stats.m_points_without_neighbours > 0)
+		{
+			fprintf(stderr,
+				"HPGL: kriging failures: %lu singularity, %lu no-neighbours (of %lu total)\n",
+				stats.m_points_singularity,
+				stats.m_points_without_neighbours,
+				static_cast<unsigned long>(idx_end));
+		}
+
 		{
 			std::ostringstream oss;
 			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";

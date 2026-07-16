@@ -127,6 +127,7 @@ namespace hpgl
 		cov_model_t(const covariance_param_t & params)
 		{
 			m_params = params;
+			m_params.validate();
 			init_fun();
 			create_transform(params.m_ranges, params.m_angles, m_transform);
 		}

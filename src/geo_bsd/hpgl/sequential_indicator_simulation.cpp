@@ -217,6 +217,12 @@ void sequential_indicator_simulation_lvm(
 		oss << "Property size '" << property.size() << "' is not equal to grid size '" << grid.size() << "'";
 		throw hpgl_exception("sequential_indicator_simulation_lvm", oss.str());
 	}
+
+	if (mean_data == nullptr)
+	{
+		throw hpgl_exception("sequential_indicator_simulation_lvm",
+			"Null mean_data pointer-to-pointer");
+	}
 		
 	if(use_corellogram)
 	{

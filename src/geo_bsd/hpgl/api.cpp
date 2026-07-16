@@ -753,7 +753,7 @@ hpgl_sgs_simulation(
 		    sgs_p,
 			prop,
 			cdf,
-			simulation_mask != 0 ? simulation_mask->m_data : 0);
+			(simulation_mask != 0 && simulation_mask->m_data != 0) ? simulation_mask->m_data : 0);
 	}
 	catch (const std::exception & ex) { handle_exception(ex); }
 }
@@ -810,7 +810,7 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 			means->m_data,
 			prop,
 			cdf,
-			simulation_mask != 0 ? simulation_mask->m_data : 0);
+			(simulation_mask != 0 && simulation_mask->m_data != 0) ? simulation_mask->m_data : 0);
 	}
 	catch (const std::exception & ex) { handle_exception(ex); }
 }
@@ -924,7 +924,7 @@ hpgl_sis_simulation(
 			ikp,
 			seed,
 			rep,
-			simulation_mask !=0 ? simulation_mask->m_data : 0);
+			(simulation_mask != 0 && simulation_mask->m_data != 0) ? simulation_mask->m_data : 0);
 	}
 	catch (const std::exception & ex) { handle_exception(ex); }
 }
@@ -1012,7 +1012,7 @@ hpgl_sis_simulation_lvm(
 			&means[0],
 			rep,
 			use_correlograms != 0,
-			simulation_mask != 0 ? simulation_mask->m_data : 0);
+			(simulation_mask != 0 && simulation_mask->m_data != 0) ? simulation_mask->m_data : 0);
 	}
 	catch (const std::exception & ex) { handle_exception(ex); }
 }

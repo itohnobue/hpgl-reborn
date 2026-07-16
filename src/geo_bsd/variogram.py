@@ -11,6 +11,7 @@ from numpy import (
     cos,
     dot,
     float32,
+    float64,
     floor,
     mgrid,
     ones,
@@ -71,6 +72,10 @@ class TVEllipsoid:
     R3 = 1
 
     def __init__(self, R1, R2, R3, Azimut=0, Dip=0, Rotation=0):
+        if R1 < 0 or R2 < 0 or R3 < 0:
+            raise ValueError(
+                f"TVEllipsoid: ranges must not be negative, got R1={R1!r}, R2={R2!r}, R3={R3!r}"
+            )
         Azimut = radians(Azimut)
         Dip = radians(Dip)
         Rotation = radians(Rotation)
@@ -162,20 +167,26 @@ def _IsInTunnel(VariogramSearchTemplate, V):
     SS2 = abs(dot(V, D2))
     SS3 = abs(dot(V, D3))
 
-    if VariogramSearchTemplate.Ellipsoid.R2 == 0 or VariogramSearchTemplate.Ellipsoid.R3 == 0:
+    if (
+        VariogramSearchTemplate.Ellipsoid.R1 == 0
+        or VariogramSearchTemplate.Ellipsoid.R2 == 0
+        or VariogramSearchTemplate.Ellipsoid.R3 == 0
+    ):
         warnings.warn(
-            f"_IsInTunnel: R2={VariogramSearchTemplate.Ellipsoid.R2!r} or "
-            f"R3={VariogramSearchTemplate.Ellipsoid.R3!r} is zero. "
+            f"_IsInTunnel: R1={VariogramSearchTemplate.Ellipsoid.R1!r}, "
+            f"R2={VariogramSearchTemplate.Ellipsoid.R2!r}, "
+            f"R3={VariogramSearchTemplate.Ellipsoid.R3!r} — at least one range is zero. "
             f"Returning all-False result (no vectors in tunnel).",
             stacklevel=2,
         )
         return zeros(V.shape[0], dtype=bool)
 
+    S1 = SS1 / VariogramSearchTemplate.Ellipsoid.R1
     S2 = SS2 / VariogramSearchTemplate.Ellipsoid.R2
     S3 = SS3 / VariogramSearchTemplate.Ellipsoid.R3
 
     Dist = power(power(S2, 2) + power(S3, 2), 0.5)
-    Result = array(bitwise_and(Dist <= 1, VariogramSearchTemplate.TolDistance * Dist <= SS1))
+    Result = array(bitwise_and(Dist <= 1, VariogramSearchTemplate.TolDistance * Dist <= S1))
 
     return Result.ravel()
 
@@ -193,8 +204,11 @@ def _CalcSearchTemplateWindow(VariogramSearchTemplate):
             for k in range(-1, 2, 2):
                 DI = (
                     VariogramSearchTemplate.Ellipsoid.Direction1
-                    * VariogramSearchTemplate.LagSeparation
-                    * VariogramSearchTemplate.NumLags
+                    * (
+                        VariogramSearchTemplate.LagSeparation
+                        * VariogramSearchTemplate.NumLags
+                        + VariogramSearchTemplate.FirstLagDistance
+                    )
                     * i
                 )
                 DJ = (
@@ -609,7 +623,7 @@ def CalcVariogramFunction(Point1, Point2, Result, Params):
     Values = Params["HardData"]
     NumValues = len(Values)
     if Result is None:
-        Result = zeros(NumValues + NumValues + 1, dtype=float32)
+        Result = zeros(NumValues + NumValues + 1, dtype=float64)
     else:
         NumPoints = shape(Point1)[len(shape(Point1)) - 1]
 
@@ -638,30 +652,38 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
     SoftData = Params["SoftData"]
     NumValues = len(Values)
     if Result is None:
-        Result = zeros(NumValues + NumValues + 1, dtype=float32)
+        Result = zeros(NumValues + NumValues + 1, dtype=float64)
     else:
-        # Normalize Point1/Point2 to scalar indices for point-by-point functions.
-        # PointSetScanContStyle passes list-point args [i], [j] which must be
-        # converted to scalars for consistent single-element array indexing.
-        Point1 = numpy.asarray(Point1).flat[0] if not numpy.isscalar(Point1) else Point1
-        Point2 = numpy.asarray(Point2).flat[0] if not numpy.isscalar(Point2) else Point2
-        Values1 = zeros(NumValues)
-        Values2 = zeros(NumValues)
-        SoftValues1 = zeros(NumValues)
-        SoftValues2 = zeros(NumValues)
-        for i in range(NumValues):
-            Values1[i] = Values[i][Point1]
-            Values2[i] = Values[i][Point2]
-            SoftValues1[i] = SoftData[i][Point1]
-            SoftValues2[i] = SoftData[i][Point2]
-        Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2))
-        Result[NumValues + 0 : NumValues + NumValues] = (
-            Result[NumValues + 0 : NumValues + NumValues] + Covariances
-        )
-        Result[NumValues + NumValues] += 1
-        Result[0:NumValues] = (
-            Result[NumValues + 0 : NumValues + NumValues] / Result[NumValues + NumValues]
-        )
+        # Normalize Point1/Point2 to flat 1D arrays to handle both scalar
+        # (PointSetScanContStyle) and batch (CubeScan) inputs.
+        P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
+        P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()
+        n_points = len(P1)
+
+        # Accumulate covariances across all point pairs in the batch
+        for idx in range(n_points):
+            p1 = P1[idx]
+            p2 = P2[idx]
+            Values1 = zeros(NumValues)
+            Values2 = zeros(NumValues)
+            SoftValues1 = zeros(NumValues)
+            SoftValues2 = zeros(NumValues)
+            for i in range(NumValues):
+                Values1[i] = Values[i][p1]
+                Values2[i] = Values[i][p2]
+                SoftValues1[i] = SoftData[i][p1]
+                SoftValues2[i] = SoftData[i][p2]
+            Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2))
+            Result[NumValues + 0 : NumValues + NumValues] = (
+                Result[NumValues + 0 : NumValues + NumValues] + Covariances
+            )
+            Result[NumValues + NumValues] += 1
+
+        # Normalize after all pairs accumulated; guard against empty lags
+        if Result[NumValues + NumValues] > 0:
+            Result[0:NumValues] = (
+                Result[NumValues + 0 : NumValues + NumValues] / Result[NumValues + NumValues]
+            )
     return Result
 
 
@@ -671,30 +693,44 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
     SoftData = Params["SoftData"]
     NumValues = len(Values)
     if Result is None:
-        Result = zeros(NumValues + NumValues + 1, dtype=float32)
+        Result = zeros(NumValues + NumValues + 1, dtype=float64)
     else:
-        # Normalize Point1/Point2 to scalar indices for point-by-point functions.
-        # PointSetScanContStyle passes list-point args [i], [j] which must be
-        # converted to scalars for consistent single-element array indexing.
-        Point1 = numpy.asarray(Point1).flat[0] if not numpy.isscalar(Point1) else Point1
-        Point2 = numpy.asarray(Point2).flat[0] if not numpy.isscalar(Point2) else Point2
-        Values1 = zeros(NumValues)
-        Values2 = zeros(NumValues)
-        SoftValues1 = zeros(NumValues)
-        SoftValues2 = zeros(NumValues)
-        for i in range(NumValues):
-            Values1[i] = Values[i][Point1]
-            Values2[i] = Values[i][Point2]
-            SoftValues1[i] = SoftData[i][Point1]
-            SoftValues2[i] = SoftData[i][Point2]
-        denom = (SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1 - SoftValues2)) ** 0.5
-        denom[denom <= 0] = 1.0  # Avoid div/0 and NaN from negative floating-point noise
-        Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2) / denom)
-        Result[NumValues + 0 : NumValues + NumValues] = (
-            Result[NumValues + 0 : NumValues + NumValues] + Covariances
-        )
-        Result[NumValues + NumValues] += 1
-        Result[0:NumValues] = (
-            Result[NumValues + 0 : NumValues + NumValues] / Result[NumValues + NumValues]
-        )
+        # Normalize Point1/Point2 to flat 1D arrays to handle both scalar
+        # (PointSetScanContStyle) and batch (CubeScan) inputs.
+        P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
+        P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()
+        n_points = len(P1)
+
+        # Accumulate indicator correlations across all point pairs in the batch
+        for idx in range(n_points):
+            p1 = P1[idx]
+            p2 = P2[idx]
+            Values1 = zeros(NumValues)
+            Values2 = zeros(NumValues)
+            SoftValues1 = zeros(NumValues)
+            SoftValues2 = zeros(NumValues)
+            for i in range(NumValues):
+                Values1[i] = Values[i][p1]
+                Values2[i] = Values[i][p2]
+                SoftValues1[i] = SoftData[i][p1]
+                SoftValues2[i] = SoftData[i][p2]
+
+            # Guard negative/NaN before sqrt to prevent silent NaN propagation.
+            # NaN <= 0 is False, so denom[denom <= 0] alone misses NaN.
+            product = SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1 - SoftValues2)
+            invalid = (product <= 0) | numpy.isnan(product)
+            product[invalid] = 1.0
+            denom = product**0.5
+
+            Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2) / denom)
+            Result[NumValues + 0 : NumValues + NumValues] = (
+                Result[NumValues + 0 : NumValues + NumValues] + Covariances
+            )
+            Result[NumValues + NumValues] += 1
+
+        # Normalize after all pairs accumulated; guard against empty lags
+        if Result[NumValues + NumValues] > 0:
+            Result[0:NumValues] = (
+                Result[NumValues + 0 : NumValues + NumValues] / Result[NumValues + NumValues]
+            )
     return Result

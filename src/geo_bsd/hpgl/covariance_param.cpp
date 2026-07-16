@@ -64,5 +64,12 @@ namespace hpgl
 			throw hpgl_exception("covariance_param_t::validate", "nugget must be >= 0 and finite");
 		if (m_nugget > m_sill)
 			throw hpgl_exception("covariance_param_t::validate", "nugget must be <= sill");
+		for (int i = 0; i < 3; ++i)
+		{
+			if (!std::isfinite(m_ranges[i]) || m_ranges[i] < 0.0)
+				throw hpgl_exception("covariance_param_t::validate", "range must be >= 0 and finite");
+			if (!std::isfinite(m_angles[i]))
+				throw hpgl_exception("covariance_param_t::validate", "angle must be finite");
+		}
 	}
 }

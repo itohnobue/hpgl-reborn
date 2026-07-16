@@ -1,23 +1,24 @@
 #include "stdafx.h"
 #include "api.h"
 #include <string>
-#include <atomic>
 #include <mutex>
 
 // Handler function pointers — set once at startup (before any concurrent calls).
-// std::atomic provides defense-in-depth memory ordering even though the contract
-// is single-threaded startup configuration. This is the standard ctypes callback
-// pattern; synchronization deferred to caller.
-static std::atomic<int (*)(char * data, void * param)> s_handler{nullptr};
-// s_param stores an opaque handle to a caller-owned Python object (e.g. a
-// Python file-like or StringIO passed via ctypes). The caller MUST ensure the
-// object remains alive for the lifetime of all C++ operations that invoke the
-// output handler. If Python GC collects the object, this pointer dangles.
-// The Python side (hpgl_wrap.py) is responsible for holding a reference.
-static std::atomic<void *> s_param{nullptr};
+// Protected by s_output_pair_mutex / s_progress_pair_mutex to ensure handler+param
+// pair is always read/written atomically.
+struct output_handler_pair_t {
+	int (*handler)(char * data, void * param);
+	void * param;
+};
+static output_handler_pair_t s_output_pair{nullptr, nullptr};
+static std::mutex s_output_pair_mutex;
 
-static std::atomic<int (*)(char * stage, int percentage, void * param)> s_progress_handler{nullptr};
-static std::atomic<void *> s_progress_handler_param{nullptr};
+struct progress_handler_pair_t {
+	int (*handler)(char * stage, int percentage, void * param);
+	void * param;
+};
+static progress_handler_pair_t s_progress_pair{nullptr, nullptr};
+static std::mutex s_progress_pair_mutex;
 
 // Mutex serializes handler invocations from concurrent threads.
 // The write() and update_progress() handlers may be called from
@@ -31,11 +32,17 @@ namespace hpgl
 {
 	void write(const char * str)
 	{
-		auto h = s_handler.load(std::memory_order_acquire);
+		int (*h)(char*, void*) = nullptr;
+		void *p = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(s_output_pair_mutex);
+			h = s_output_pair.handler;
+			p = s_output_pair.param;
+		}
 		if (h)
 		{
 			std::lock_guard<std::mutex> lock(s_handler_mutex);
-			h(const_cast<char*>(str), s_param.load(std::memory_order_relaxed));
+			h(const_cast<char*>(str), p);
 		}
 		else
 		{
@@ -53,11 +60,17 @@ namespace hpgl
 
 	int update_progress(const char * stage, int percentage)
 	{
-		auto ph = s_progress_handler.load();
+		int (*ph)(char*, int, void*) = nullptr;
+		void *pp = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(s_progress_pair_mutex);
+			ph = s_progress_pair.handler;
+			pp = s_progress_pair.param;
+		}
 		if (ph)
 		{
 			std::lock_guard<std::mutex> lock(s_handler_mutex);
-			return ph(const_cast<char*>(stage), percentage, s_progress_handler_param.load());
+			return ph(const_cast<char*>(stage), percentage, pp);
 		}
 		else
 		{
@@ -82,12 +95,14 @@ namespace hpgl
 
 HPGL_API void hpgl_set_output_handler(int (*handler)(char * data, void * param), void * param)
 {
-	s_handler.store(handler);
-	s_param.store(param);
+	std::lock_guard<std::mutex> lock(s_output_pair_mutex);
+	s_output_pair.handler = handler;
+	s_output_pair.param = param;
 }
 
 HPGL_API void hpgl_set_progress_handler(int (*handler)(char * stage, int percentage, void * param), void * param)
 {
-	s_progress_handler.store(handler);
-	s_progress_handler_param.store(param);
+	std::lock_guard<std::mutex> lock(s_progress_pair_mutex);
+	s_progress_pair.handler = handler;
+	s_progress_pair.param = param;
 }

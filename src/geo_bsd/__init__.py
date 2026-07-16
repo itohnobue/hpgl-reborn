@@ -32,7 +32,17 @@ variogram, cvariogram, routines, validation
 # Import validation module for user convenience
 import logging
 
-from . import cvariogram, routines, validation, variogram
+from . import routines, validation, variogram
+
+try:
+    from . import cvariogram
+except (ImportError, OSError) as e:
+    logging.getLogger(__name__).warning(
+        "cvariogram C++ extension not available; variogram C++ functions "
+        "will not work. Build with HPGL_BUILD_VARIOGRAM=ON to enable. "
+        f"Error: {e}"
+    )
+    cvariogram = None  # type: ignore[assignment]
 from .cdf import *
 from .geo import *
 from .sgs import sgs_simulation

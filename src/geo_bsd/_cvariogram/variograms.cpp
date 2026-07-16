@@ -189,6 +189,11 @@ void calc_search_template_window(
 
 				vec_by_scalar(&templ->m_ellipsoid.m_direction1, templ->m_lag_separation, &DI);
 				vec_by_scalar(&DI, templ->m_num_lags, &DI);
+				// Account for first_lag_distance offset so the window
+				// covers the actual lag range, not just 0..num_lags*lag_sep.
+				vector_t first_lag;
+				vec_by_scalar(&templ->m_ellipsoid.m_direction1, templ->m_first_lag_distance, &first_lag);
+				sum_vec(&DI, &first_lag, &DI);
 				vec_by_scalar(&DI, i, &DI);
 
 				vec_by_scalar(&templ->m_ellipsoid.m_direction2, templ->m_ellipsoid.m_R2, &DJ);
@@ -397,11 +402,11 @@ double calc_dist(vector_t * vec)
 	return sqrt(result);
 }
 
-int get_offset(vector_t * vec, int * strides)
+int64_t get_offset(vector_t * vec, int * strides)
 {
-	int result = 0;
+	int64_t result = 0;
 	for (int i = 0; i < 3; ++i)
-		result += vec->m_data[i] * strides[i];
+		result += static_cast<int64_t>(vec->m_data[i]) * strides[i];
 	return result;
 }
 
@@ -483,8 +488,8 @@ void calc_variograms(
 				vec.m_data[1] = j2;
 				vec.m_data[2] = k2;
 
-				int doffset = get_offset(&vec, data->m_data_strides);
-				int moffset = get_offset(&vec, data->m_mask_strides);
+				int64_t doffset = get_offset(&vec, data->m_data_strides);
+				int64_t moffset = get_offset(&vec, data->m_mask_strides);
 
 				if (is_in_tunnel(templ, &vec))
 				{

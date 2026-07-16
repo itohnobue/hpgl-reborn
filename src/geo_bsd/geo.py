@@ -4,6 +4,7 @@ import contextlib
 import ctypes as C
 import functools
 import logging
+import math
 import os
 import threading
 
@@ -64,14 +65,14 @@ def _hpgl_error_guard(context=""):
         with _hpgl_error_guard("ordinary_kriging"):
             _hpgl_so.hpgl_ordinary_kriging(...)
 
-    Acquires ``_hpgl_call_lock`` before the snapshot, holds it across the
-    C++ call window, and releases it in ``finally``.  Error checking
-    happens inside the ``try`` block so that a ``RuntimeError`` from a
-    new C++ error does not prevent lock release.
+    Acquires ``_hpgl_call_lock``, snapshots the C++ error state, runs the
+    C++ call (yield), and checks for new errors.  The lock is released in
+    ``finally`` so that a ``RuntimeError`` from a new C++ error or a failure
+    in ``_snapshot_hpgl_error`` does not prevent lock release.
     """
     _hpgl_call_lock.acquire()
-    _snapshot_hpgl_error()
     try:
+        _snapshot_hpgl_error()
         yield
         _check_hpgl_error(context)
     finally:
@@ -117,12 +118,15 @@ def _check_hpgl_error(context=""):
     The entire read-compare-raise sequence is atomic under
     _error_snapshot_lock, preventing races between concurrent calls
     to this function that access the same thread-local snapshot.
-    However, between _snapshot_hpgl_error releasing the lock and this
-    function acquiring it, another thread's C++ call may update the
-    global HPGL error state. In practice, snapshot identity comparison
-    (byte-for-byte match) combined with the C++ library's inclusion
-    of __FILE__:__LINE__ in error messages makes false-positive
-    RuntimeErrors infeasible.
+
+    .. note::
+
+       The C++ HPGL library stores the last exception message globally
+       and never clears it (no ``hpgl_clear_error`` API exists).  This
+       means consecutive C++ calls that produce *identical* error messages
+       cannot be distinguished from a stale error — the second identical
+       error will be silently missed.  A C++ clear-error function is the
+       proper fix; until then this is a known limitation documented here.
 
     Args:
         context: Description of the operation being checked (e.g. "ordinary_kriging")
@@ -138,7 +142,11 @@ def _check_hpgl_error(context=""):
                 # Error unchanged from pre-call snapshot — C++ call did
                 # not produce a new error. Always suppress stale errors.
                 return
-            # Genuine new error (different from pre-call snapshot)
+            # Genuine new error (different from pre-call snapshot).
+            # Update the snapshot BEFORE raising so the thread-local
+            # state reflects the consumed error, preventing double-raises
+            # on re-entry within the same guard window.
+            _error_local._hpgl_error_snapshot = err
             err_str = err.decode("utf-8", errors="replace")
             raise RuntimeError(
                 f"{context} failed: {err_str}" if context else f"HPGL error: {err_str}"
@@ -228,6 +236,19 @@ def _create_hpgl_cont_masked_array(prop, grid):
     else:
         # Use actual NumPy strides if array is 3D, otherwise compute strides from grid
         if prop.data.ndim == 3:
+            # Validate that the 3D data shape matches grid dimensions exactly.
+            # The total-product check below is not sufficient: shape (nz, ny, nx)
+            # with grid (nx, ny, nz) has the same product but swapped dimensions,
+            # causing the C++ reader to mis-index the data through wrong strides.
+            if (
+                prop.data.shape[0] != grid.x
+                or prop.data.shape[1] != grid.y
+                or prop.data.shape[2] != grid.z
+            ):
+                raise RuntimeError(
+                    f"3D data shape {prop.data.shape} does not match grid dimensions "
+                    f"({grid.x}, {grid.y}, {grid.z})"
+                )
             sh = _create_hpgl_shape((grid.x, grid.y, grid.z), __get_strides(prop.data))
         else:
             # For 1D arrays, compute expected strides based on grid dimensions
@@ -437,7 +458,14 @@ def _prop_to_tuple_(prop):
 def append_mask(prop, mask):
     infs = prop[1]
     infs &= mask
-    infs.choose(-99, prop[0], out=prop[0])
+    # Use dtype-appropriate sentinel: -99 wraps to 157 in uint8 (mod 256).
+    # For IndProperty (uint8), use 255 as the masked-cell sentinel since
+    # valid indicator values are in [0, indicator_count) with max 254.
+    # For ContProperty (float32), -99 is safe.
+    if prop[0].dtype == numpy.uint8:
+        infs.choose(255, prop[0], out=prop[0])
+    else:
+        infs.choose(-99, prop[0], out=prop[0])
 
 
 class covariance:
@@ -562,7 +590,9 @@ def _load_prop_cont_slow(filename, undefined_value):
                 try:
                     val = float(part.strip())
                     values.append(val)
-                    if val == undefined_value:
+                    # IEEE 754 NaN≠NaN: equality check fails when both are NaN.
+                    # Use math.isnan() to detect NaN sentinel values reliably.
+                    if (math.isnan(undefined_value) and math.isnan(val)) or val == undefined_value:
                         mask.append(0)
                     else:
                         mask.append(1)
@@ -577,6 +607,18 @@ def _load_prop_cont_slow(filename, undefined_value):
 
 
 def _load_prop_ind_slow(filename, undefined_value, ind_values):
+    # Validate that ind_values contains no duplicates. Duplicate indicator
+    # values cause dict_map overwrites, silently corrupting the category
+    # mapping when later entries overwrite earlier ones.
+    seen = set()
+    for v in ind_values:
+        if v in seen:
+            raise ValueError(
+                f"Duplicate indicator value {v} in ind_values. "
+                f"Each indicator value must be unique."
+            )
+        seen.add(v)
+
     dict_map = {}
     for i in range(len(ind_values)):
         dict_map[ind_values[i]] = i
@@ -914,6 +956,12 @@ def load_cont_property(filename, undefined_value, size=None):
                 "Python parser. C++ error: %s",
                 e,
             )
+            logger.warning(
+                "load_cont_property: Falling back to slow Python parser which "
+                "ignores the 'size' parameter (%s). The result may have "
+                "geometry-mismatched dimensions. Verify output data shape.",
+                size,
+            )
             return _load_prop_cont_slow(safe_path, undefined_value)
 
 
@@ -1049,6 +1097,12 @@ def load_ind_property(filename, undefined_value, indicator_values, size=None):
                 "Python parser. C++ error: %s",
                 e,
             )
+            logger.warning(
+                "load_ind_property: Falling back to slow Python parser which "
+                "ignores the 'size' parameter (%s). The result may have "
+                "geometry-mismatched dimensions. Verify output data shape.",
+                size,
+            )
             return _load_prop_ind_slow(safe_path, undefined_value, indicator_values)
 
 
@@ -1128,6 +1182,33 @@ def calc_mean(prop):
     return float(masked.mean())
 
 
+def _validate_kriging_params(grid, radiuses, max_neighbours, cov_model):
+    """Shared validation for kriging function parameters.
+
+    Centralises the four common validation calls used by ordinary_kriging,
+    simple_kriging, lvm_kriging, median_ik, and simple_cokriging_markI,
+    eliminating ~60 lines of duplicated validation.
+
+    Returns the validated radiuses tuple.
+
+    .. note::
+
+       C++ error propagation (LAPACK errors, KI_NO_NEIGHBOURS,
+       KI_SINGULARITY, etc.) is handled by ``_hpgl_error_guard`` which
+       every kriging function uses to wrap its C++ call.  The guard
+       snapshots the C++ error state before the call and raises
+       ``RuntimeError`` if the C++ function sets a new error message.
+       No additional per-call error checking is needed.
+    """
+    GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
+    ParameterValidator.validate_max_neighbors(max_neighbours)
+    ParameterValidator.validate_covariance_parameters(
+        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
+    )
+    return valid_radiuses
+
+
 @accepts_tuple("prop", 0)
 def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     """Perform Ordinary Kriging (OK) interpolation on a 3D grid.
@@ -1161,20 +1242,20 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
         parameters are invalid.
     RuntimeError
         If the C++ computation produces an error.
+
+    Notes
+    -----
+    The underlying C++ function (``hpgl_ordinary_kriging``) returns
+    void — there is no per-cell error signal.  When kriging fails for
+    individual grid cells (e.g. no neighbours, singular system), those
+    cells are silently filled with the global mean (``mean_on_failure``
+    fallback) and their output values are indistinguishable from cells
+    that were kriged successfully.  Callers who need to detect partial
+    results should compare output against the expected mean field or use
+    the weight-based API (:func:`simple_kriging_weights`) which can detect
+    failures explicitly.
     """
-    # Validate grid dimensions
-    GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
-
-    # Validate radiuses
-    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
-
-    # Validate max_neighbours
-    ParameterValidator.validate_max_neighbors(max_neighbours)
-
-    # Validate covariance model
-    ParameterValidator.validate_covariance_parameters(
-        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
-    )
+    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     out_prop = _empty_clone(prop)
 
@@ -1232,20 +1313,20 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
         parameters are invalid.
     RuntimeError
         If the C++ computation produces an error.
+
+    Notes
+    -----
+    The underlying C++ function (``hpgl_simple_kriging``) returns
+    void — there is no per-cell error signal.  When kriging fails for
+    individual grid cells (e.g. no neighbours, singular system), those
+    cells are silently filled with the global mean (``mean_on_failure``
+    fallback) and their output values are indistinguishable from cells
+    that were kriged successfully.  Callers who need to detect partial
+    results should compare output against the expected mean field or use
+    the weight-based API (:func:`simple_kriging_weights`) which can detect
+    failures explicitly.
     """
-    # Validate grid dimensions
-    GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
-
-    # Validate radiuses
-    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
-
-    # Validate max_neighbours
-    ParameterValidator.validate_max_neighbors(max_neighbours)
-
-    # Validate covariance model
-    ParameterValidator.validate_covariance_parameters(
-        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
-    )
+    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     # Validate property data size against grid
     if prop.data.size == 0:
@@ -1319,20 +1400,19 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
         the grid.
     RuntimeError
         If the C++ computation produces an error.
+
+    Notes
+    -----
+    The underlying C++ function (``hpgl_lvm_kriging``) returns
+    void — there is no per-cell error signal.  When kriging fails for
+    individual grid cells (e.g. no neighbours, singular system), those
+    cells are silently filled with the local mean value and their output
+    values are indistinguishable from cells that were kriged successfully.
+    Callers who need to detect partial results should compare output against
+    the ``mean_data`` field or use the weight-based API
+    (:func:`simple_kriging_weights`) which can detect failures explicitly.
     """
-    # Validate grid dimensions
-    GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
-
-    # Validate radiuses
-    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
-
-    # Validate max_neighbours
-    ParameterValidator.validate_max_neighbors(max_neighbours)
-
-    # Validate covariance model
-    ParameterValidator.validate_covariance_parameters(
-        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
-    )
+    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     # Validate mean_data
     if not isinstance(mean_data, numpy.ndarray):
@@ -1426,19 +1506,7 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     RuntimeError
         If the C++ computation produces an error.
     """
-    # Validate grid dimensions
-    GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
-
-    # Validate radiuses
-    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
-
-    # Validate max_neighbours
-    ParameterValidator.validate_max_neighbors(max_neighbours)
-
-    # Validate covariance model
-    ParameterValidator.validate_covariance_parameters(
-        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
-    )
+    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     # Validate marginal_probs
     if len(marginal_probs) != 2:
@@ -1521,6 +1589,17 @@ def indicator_kriging(prop, grid, data, marginal_probs):
         )
 
     if len(data) == 2:
+        # Two-category indicator kriging is redirected to median_ik, which
+        # uses a single set of covariance/radius/neighbour parameters.
+        # Only data[0] configuration is used; data[1] is discarded.
+        # marginal_probs[0] is passed as-is; median_ik derives p1 = 1 - p0.
+        logger.warning(
+            "indicator_kriging: 2-category case redirects to median_ik. "
+            "data[1] configuration (radiuses=%s, cov_model=%s) is ignored; "
+            "only data[0] params are used.",
+            data[1]["radiuses"],
+            data[1]["cov_model"],
+        )
         return median_ik(
             prop,
             grid,
@@ -1554,17 +1633,7 @@ def simple_cokriging_markI(
     secondary_variance,
     correlation_coef,
 ):
-    # Validate grid dimensions
-    GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
-
-    # Validate radiuses and max_neighbours
-    ParameterValidator.validate_radius(radiuses, "radiuses")
-    ParameterValidator.validate_max_neighbors(max_neighbours)
-
-    # Validate covariance model
-    ParameterValidator.validate_covariance_parameters(
-        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
-    )
+    _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     # Validate cokriging-specific parameters
     ParameterValidator.validate_correlation_coef(correlation_coef)
@@ -1815,21 +1884,42 @@ def set_output_handler(handler, param):
     ------
     TypeError
         If handler is not callable and not None.
+
+    Notes
+    -----
+    The C++ handler pointer is stored by atomic store, but the handler+param
+    pair is written in two separate stores — there is a brief window where a
+    concurrent C++ reader could see a mismatched handler/param pair.  This
+    function acquires ``_hpgl_call_lock`` to serialise handler mutation with
+    other HPGL calls, and keeps the old CFUNCTYPE object alive until the new
+    handler has been installed to prevent use-after-free of the C function
+    pointer.
     """
     global _h, _output_handler_param
     if handler is not None and not callable(handler):
         raise TypeError(
             f"set_output_handler: handler must be callable or None, got {type(handler).__name__}"
         )
-    if handler is None:
-        # Cast None to the expected type for ctypes compatibility
-        _hpgl_so.hpgl_set_output_handler(C.cast(None, hpgl_output_handler), None)  # type: ignore[arg-type]
-        _h = None
-        _output_handler_param = None
-    else:
-        _h = hpgl_output_handler(handler)
-        _output_handler_param = param
-        _hpgl_so.hpgl_set_output_handler(_h, param)
+    _hpgl_call_lock.acquire()
+    try:
+        if handler is None:
+            _hpgl_so.hpgl_set_output_handler(C.cast(None, hpgl_output_handler), None)  # type: ignore[arg-type]
+            _h = None
+            _output_handler_param = None
+        else:
+            # Keep old handler objects alive during the transition so the
+            # CFUNCTYPE thunk is not freed while C++ may still reference it.
+            old_h = _h
+            old_param = _output_handler_param
+            new_h = hpgl_output_handler(handler)
+            _h = new_h
+            _output_handler_param = param
+            _hpgl_so.hpgl_set_output_handler(new_h, param)
+            # old_h / old_param go out of scope after the C++ atomic store
+            # has completed, preventing use-after-free.
+            del old_h, old_param
+    finally:
+        _hpgl_call_lock.release()
 
 
 def set_progress_handler(handler, param):
@@ -1847,21 +1937,42 @@ def set_progress_handler(handler, param):
     ------
     TypeError
         If handler is not callable and not None.
+
+    Notes
+    -----
+    The C++ handler pointer is stored by atomic store, but the handler+param
+    pair is written in two separate stores — there is a brief window where a
+    concurrent C++ reader could see a mismatched handler/param pair.  This
+    function acquires ``_hpgl_call_lock`` to serialise handler mutation with
+    other HPGL calls, and keeps the old CFUNCTYPE object alive until the new
+    handler has been installed to prevent use-after-free of the C function
+    pointer.
     """
     global _progress_handler, _progress_handler_param
     if handler is not None and not callable(handler):
         raise TypeError(
             f"set_progress_handler: handler must be callable or None, got {type(handler).__name__}"
         )
-    if handler is None:
-        # Cast None to the expected type for ctypes compatibility
-        _hpgl_so.hpgl_set_progress_handler(C.cast(None, hpgl_progress_handler), None)  # type: ignore[arg-type]
-        _progress_handler = None
-        _progress_handler_param = None
-    else:
-        _progress_handler = hpgl_progress_handler(handler)
-        _progress_handler_param = param
-        _hpgl_so.hpgl_set_progress_handler(_progress_handler, param)
+    _hpgl_call_lock.acquire()
+    try:
+        if handler is None:
+            _hpgl_so.hpgl_set_progress_handler(C.cast(None, hpgl_progress_handler), None)  # type: ignore[arg-type]
+            _progress_handler = None
+            _progress_handler_param = None
+        else:
+            # Keep old handler objects alive during the transition so the
+            # CFUNCTYPE thunk is not freed while C++ may still reference it.
+            old_h = _progress_handler
+            old_param = _progress_handler_param
+            new_h = hpgl_progress_handler(handler)
+            _progress_handler = new_h
+            _progress_handler_param = param
+            _hpgl_so.hpgl_set_progress_handler(new_h, param)
+            # old_h / old_param go out of scope after the C++ atomic store
+            # has completed, preventing use-after-free.
+            del old_h, old_param
+    finally:
+        _hpgl_call_lock.release()
 
 
 __all__ = [

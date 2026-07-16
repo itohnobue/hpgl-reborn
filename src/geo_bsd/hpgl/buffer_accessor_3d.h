@@ -6,6 +6,7 @@
 #include <index_3d.h>
 #include <cstdio>
 #include <cstdlib>
+#include <climits>
 
 namespace hpgl
 {
@@ -75,16 +76,18 @@ namespace hpgl
 		
 		inline void from_shape(const data_shape_t & shape, const int * axes_order = 0)
 		{
-			int x = 1;
+			long long x = 1;
 			int def_ao[] = {0, 1, 2};
 			const int * ao = axes_order != 0 ? axes_order : def_ao;
 			for (int i = 0; i < 3; ++i)
 			{
-				m_data[ao[i]] = x;
+				m_data[ao[i]] = static_cast<int>(x);
 				x *= shape[i];
 				m_shape[i] = shape[i];
 			}
-			m_size = x;
+			if (x > INT_MAX)
+				throw hpgl_exception("data_strides_t::from_shape", "grid volume exceeds INT_MAX");
+			m_size = static_cast<int>(x);
 		}
 
 		inline int get_flat_idx(const index_3d_t & idx3d)const

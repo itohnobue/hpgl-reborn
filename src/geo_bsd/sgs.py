@@ -192,6 +192,8 @@ def sgs_simulation(
         hpgl_mask = None
 
     if mean is None or numpy.isscalar(mean):
+        if mean is not None and not numpy.isfinite(mean):
+            raise ValueError(f"sgs_simulation: scalar mean must be finite, got {mean}")
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
         _c_mean = C.c_double(mean) if mean is not None else None
         with _hpgl_error_guard("sgs_simulation"):
@@ -206,6 +208,10 @@ def sgs_simulation(
     else:
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
         GridValidator.validate_array_size(mean, (grid.x, grid.y, grid.z))
+        if not numpy.all(numpy.isfinite(mean)):
+            raise ValueError(
+                "sgs_simulation: LVM mean array contains NaN or Inf values"
+            )
         _float_arr = _create_hpgl_float_array(mean, grid)
         with _hpgl_error_guard("sgs_lvm_simulation"):
             _hpgl_so.hpgl_sgs_lvm_simulation(

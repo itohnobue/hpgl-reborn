@@ -19,7 +19,7 @@ namespace hpgl
 		int64_t m_seed;
 		mean_kind_t m_mean_kind;
 		mean_t * m_lvm;		
-		int m_min_neighbours;
+		int m_min_neighbours; // DEPRECATED: stored/printed but not wired into simulation logic. Reserved for future use.
 	};
 
 	inline std::ostream & operator<<(std::ostream & o, const sgs_params_t & p)

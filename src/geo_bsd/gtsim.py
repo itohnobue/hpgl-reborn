@@ -6,7 +6,6 @@ import logging
 import warnings
 
 import numpy as np
-from numpy import exp, pi, sqrt
 
 from .cdf import calc_cdf
 from .geo import simple_kriging
@@ -27,27 +26,66 @@ def pseudo_gaussian_transform(prop, pk_prop, rng=None):
             prop_flat[i] = rng.uniform(0.0, pk_flat[i])
         if prop_flat[i] == 1:
             prop_flat[i] = rng.uniform(pk_flat[i], 1.0)
+    # Clamp output to [0, 1] as a safety net
+    prop_flat[:] = np.clip(prop_flat, 0.0, 1.0)
     return prop
+
+
+def _norm_ppf(p):
+    """Inverse CDF (percent point function) for the standard normal distribution.
+
+    Uses the Beasley-Springer-Moro approximation, accurate to ~4.5e-5
+    for probabilities in [1e-15, 1-1e-15]. Vectorized over numpy arrays.
+
+    Parameters
+    ----------
+    p : numpy.ndarray
+        Probabilities in (0, 1). Values are clipped to avoid singularities.
+
+    Returns
+    -------
+    numpy.ndarray
+        Standard normal quantiles returning Φ⁻¹(p).
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # Force a copy and clip to avoid log(0) and log(negative)
+        p = np.asarray(p, dtype=np.float64).clip(1e-15, 1.0 - 1e-15)
+        # Split at 0.5 for numerical stability
+        q = np.where(p > 0.5, 1.0 - p, p)
+        upper = p > 0.5
+
+        t = np.sqrt(-2.0 * np.log(q))
+        c0, c1, c2 = 2.515517, 0.802853, 0.010328
+        d1, d2, d3 = 1.432788, 0.189269, 0.001308
+
+        z = t - (c0 + c1 * t + c2 * t * t) / (1.0 + d1 * t + d2 * t * t + d3 * t * t * t)
+        # Φ⁻¹(p) is negative for p < 0.5, positive for p > 0.5
+        z[~upper] = -z[~upper]
+        return z
 
 
 def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
     """
-    Calculate threshold probabilities using Gaussian PDF.
+    Calculate truncation thresholds using the inverse normal CDF.
+
+    Given the probability p = P(indicator=1) from simple kriging, computes
+    the threshold t such that P(N(mean, std_dev²) >= t) = p.
+
+    The threshold is: t = mean - std_dev * Φ⁻¹(p)
 
     Parameters:
     -----------
     pk_prop : ContProperty
-        Probability property to transform
+        Probability property from simple kriging (values in ~[0, 1]).
     mean : float, optional
         Mean of the Gaussian distribution (default: 0.0)
     std_dev : float, optional
-        Standard deviation (quad_diff) of the Gaussian distribution (default: 1.0)
-        For standard normal distribution, use std_dev=1.0
+        Standard deviation of the Gaussian distribution (default: 1.0)
 
     Returns:
     --------
     ContProperty
-        Transformed property with Gaussian PDF values
+        Same property object with data overwritten by threshold values.
 
     Raises:
     -------
@@ -59,11 +97,11 @@ def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
         raise ValueError(f"std_dev must be positive, got {std_dev}")
 
     # NOTE: modifies pk_prop.data in-place via pk_flat[:] assignment.
-    # Vectorized Gaussian PDF computation.
     # Uses ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
     pk_flat = pk_prop.data.ravel(order="K")
-    normalized = (pk_flat - mean) / std_dev
-    pk_flat[:] = 1.0 / (std_dev * sqrt(2 * pi)) * exp(-0.5 * normalized * normalized)
+    # Compute inverse normal CDF: t = mean - std_dev * Φ⁻¹(p)
+    z = _norm_ppf(pk_flat)
+    pk_flat[:] = mean - std_dev * z
     return pk_prop
 
 
@@ -139,7 +177,13 @@ def gtsim_2ind(
     # (for 2 indicators)
 
     logger.info("Calculate tk_prop...")
+    # Save original probability data (tk_calculation overwrites pk_prop.data in-place)
+    original_pk_data = pk_prop.data.copy()
     tk_prop = tk_calculation(pk_prop, mean=tk_mean, std_dev=tk_std_dev)
+    # Extract threshold data for truncation (tk_prop.data contains inverse CDF thresholds)
+    threshold_data = tk_prop.data.copy()
+    # Restore original probabilities for pseudo_gaussian_transform
+    pk_prop.data = original_pk_data
     logger.info("Done.")
 
     # 3. pseudo gaussian transform of initial property (prop) with pk_prop
@@ -147,6 +191,8 @@ def gtsim_2ind(
 
     logger.info("Pseudo gaussian transforming...")
     rng = np.random.RandomState(seed)
+    # Copy prop data to avoid mutating caller's data (I2F-11)
+    prop.data = prop.data.copy()
     prop = pseudo_gaussian_transform(prop, pk_prop, rng)
     del pk_prop
     logger.info("Done.")
@@ -172,7 +218,7 @@ def gtsim_2ind(
     logger.info("Truncation.")
     # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
     prop1_flat = prop1.data.ravel(order="K")
-    tk_flat = tk_prop.data.ravel(order="K")
+    tk_flat = threshold_data.ravel(order="K")
     # Vectorized thresholding. IEEE 754 NaN fails both >= and <, so
     # NaN passes through to the ~mask branch and becomes 0 — this
     # fixes the old for-loop which silently preserved NaN unchanged.

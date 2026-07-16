@@ -16,6 +16,11 @@ namespace hpgl
 				fprintf(stderr, "HPGL: select: Negative index in select\n");
 				abort();
 			}
+			if (static_cast<size_t>(indices[i]) >= src.size()) {
+				fprintf(stderr, "HPGL: select: index %zu out of bounds for source size %zu\n",
+					static_cast<size_t>(indices[i]), static_cast<size_t>(src.size()));
+				abort();
+			}
 			dest[i] = src[indices[i]];
 		}
 	}
