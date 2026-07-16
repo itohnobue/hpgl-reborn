@@ -13,6 +13,9 @@
 namespace hpgl
 {
 
+// Thread-local error storage — each thread has its own independent
+// last_exception_message.  No global/shared state; no lock required
+// for read-after-write within the same thread.
 static thread_local std::string last_exception_message;
 
 std::string

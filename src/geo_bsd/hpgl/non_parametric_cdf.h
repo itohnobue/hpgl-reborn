@@ -215,6 +215,8 @@ namespace hpgl
 			:m_values(cdf->m_values), m_probs(cdf->m_probs), m_size(cdf->m_size)
 		{}
 
+		bool is_empty() const { return m_size <= 0; }
+
 		prob_t prob(cont_value_t value)
 		{
 			return (*this)(value);

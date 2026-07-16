@@ -66,8 +66,8 @@ class TestValidationConstants:
         assert ValidationConstants.PROBABILITY_SUM_TOLERANCE == 0.01
 
     def test_covariance_limits(self):
-        """MIN_SILL=0.0, MIN_NUGGET=0.0, MAX_INDICATORS=256."""
-        assert ValidationConstants.MIN_SILL == 0.0
+        """MIN_SILL=1e-6, MIN_NUGGET=0.0, MAX_INDICATORS=256."""
+        assert ValidationConstants.MIN_SILL == 1e-6
         assert ValidationConstants.MIN_NUGGET == 0.0
         assert ValidationConstants.MAX_INDICATORS == 255
         assert ValidationConstants.MIN_SEED == 0
@@ -388,9 +388,10 @@ class TestParameterValidator:
         with pytest.raises(CriticalValidationError):
             ParameterValidator.validate_covariance_parameters(sill=-1.0, nugget=0.1)
 
-    def test_zero_sill_passes(self):
-        """Zero sill is allowed (MIN_SILL=0.0). Note: this can cause divide-by-zero downstream."""
-        ParameterValidator.validate_covariance_parameters(sill=0.0, nugget=0.0)
+    def test_zero_sill_raises(self):
+        """Zero sill raises (MIN_SILL=1e-6). Sill must be >= 1e-6 for color schemes."""
+        with pytest.raises(CriticalValidationError):
+            ParameterValidator.validate_covariance_parameters(sill=0.0, nugget=0.0)
 
     def test_nugget_exceeds_sill_raises(self):
         """Nugget > sill raises CriticalValidationError."""

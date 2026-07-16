@@ -52,7 +52,12 @@ start:
 	while (line_size == sizeof(line) - 1 && line[sizeof(line) - 2] != '\n')
 	{
 		if (fgets(line, static_cast<int>(sizeof(line)), file) == nullptr)
+		{
+			if (feof(file))
+				throw hpgl_exception("read_prop_name",
+					"Property name continuation truncated: unexpected end of file.");
 			break;
+		}
 		line_size = strlen(line);
 		if (line_size > 0 && line[line_size - 1] == '\n')
 			line[--line_size] = '\0';

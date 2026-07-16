@@ -20,7 +20,7 @@ from .geo import (
     accepts_tuple,
 )
 from .hpgl_wrap import _HPGL_FLOAT_ARRAY, _HPGL_IK_PARAMS, _hpgl_so
-from .validation import GridValidator, ParameterValidator
+from .validation import GridValidator, ParameterValidator, ValidationConstants
 
 
 def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
@@ -170,6 +170,19 @@ def sis_simulation(
 
     means = []
     if is_lvm:
+        # Per-cell probability sum validation: in LVM mode, each cell's
+        # indicator probabilities must sum to approximately 1.0. The global
+        # validate_probability_sum check is intentionally skipped for LVM
+        # arrays (each cell has its own distribution), so we validate
+        # per-cell sums here with floating-point tolerance.
+        lvm_prob_sum = numpy.sum(marginal_probs, axis=0)
+        if not numpy.allclose(lvm_prob_sum, 1.0, atol=ValidationConstants.PROBABILITY_SUM_TOLERANCE):
+            max_dev = numpy.max(numpy.abs(lvm_prob_sum - 1.0))
+            raise ValueError(
+                f"sis_simulation: LVM per-cell probability sum deviates from 1.0. "
+                f"Max deviation: {max_dev:.6e}, tolerance: {ValidationConstants.PROBABILITY_SUM_TOLERANCE}. "
+                f"Some cells have Σ P_i(cell) ≠ 1.0"
+            )
         for i in range(len(data)):
             GridValidator.validate_array_size(marginal_probs[i], (grid.x, grid.y, grid.z))
             if not numpy.all(numpy.isfinite(marginal_probs[i])):

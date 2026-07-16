@@ -34,7 +34,15 @@ namespace hpgl
 
 		if (cdf != nullptr)
 		{
-			transform_cdf_p(output, non_parametric_cdf_2_t(cdf), gaussian_cdf_t());
+			non_parametric_cdf_2_t ncdf(cdf);
+			if (ncdf.is_empty())
+			{
+				LOGWARNING("Non-parametric CDF is empty — skipping forward transformation.\n");
+			}
+			else
+			{
+				transform_cdf_p(output, ncdf, gaussian_cdf_t());
+			}
 		}
 
 		if (params.m_kriging_kind == KRIG_SIMPLE)
@@ -42,10 +50,13 @@ namespace hpgl
 			double mean;
 			if (params.m_calculate_mean)
 			{
-				bool valid_mean;
-				mean = calc_mean(output, &valid_mean);
-				if (!valid_mean)
-					LOGWARNING("No data to calculate mean. Defaulting to 0.\n");
+			bool valid_mean;
+			mean = calc_mean(output, &valid_mean);
+			if (!valid_mean)
+			{
+				LOGWARNING("No data to calculate mean. Defaulting to 0.\n");
+				mean = 0.0;
+			}
 			}
 			else
 				mean = params.mean();
@@ -83,7 +94,17 @@ namespace hpgl
 		}
 
 		if (cdf != nullptr)
-			transform_cdf_p(output, gaussian_cdf_t(), non_parametric_cdf_2_t(cdf));
+		{
+			non_parametric_cdf_2_t ncdf(cdf);
+			if (ncdf.is_empty())
+			{
+				LOGWARNING("Non-parametric CDF is empty — skipping back-transformation.\n");
+			}
+			else
+			{
+				transform_cdf_p(output, gaussian_cdf_t(), ncdf);
+			}
+		}
 	}
 
 	void sequential_gaussian_simulation_lvm(
@@ -117,8 +138,15 @@ namespace hpgl
 		if (cdf != nullptr)
 		{
 			non_parametric_cdf_2_t new_cdf(cdf);
-			transform_cdf_p(output, new_cdf, gaussian_cdf_t());
-			transform_cdf_ptr(mean_data, mean_data_vec, new_cdf, gaussian_cdf_t());
+			if (new_cdf.is_empty())
+			{
+				LOGWARNING("Non-parametric CDF is empty — skipping forward transformation.\n");
+			}
+			else
+			{
+				transform_cdf_p(output, new_cdf, gaussian_cdf_t());
+				transform_cdf_ptr(mean_data, mean_data_vec, new_cdf, gaussian_cdf_t());
+			}
 		}
 
 		if (mask != nullptr)
@@ -140,7 +168,14 @@ namespace hpgl
 		if (cdf != nullptr)
 		{
 			non_parametric_cdf_2_t new_cdf(cdf);
-			transform_cdf_p(output, gaussian_cdf_t(), new_cdf);
+			if (new_cdf.is_empty())
+			{
+				LOGWARNING("Non-parametric CDF is empty — skipping back-transformation.\n");
+			}
+			else
+			{
+				transform_cdf_p(output, gaussian_cdf_t(), new_cdf);
+			}
 		}
 	}
 }

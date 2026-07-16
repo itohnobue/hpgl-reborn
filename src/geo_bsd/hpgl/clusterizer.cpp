@@ -69,6 +69,8 @@ namespace hpgl
 	clusterizer_t::clusterizer_t()
 		: m_state(std::make_unique<state>())
 	{
+		throw hpgl_exception("clusterizer_t",
+			"Default construction is not supported — use the parameterized constructor.");
 	}
 
 	clusterizer_t::clusterizer_t(

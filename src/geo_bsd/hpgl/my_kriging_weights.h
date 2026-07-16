@@ -249,6 +249,9 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
+		// Save a copy of A before dpotrf_ modifies the upper triangle,
+		// so the fallback gauss_solve receives the original matrix.
+		std::vector<double> A_backup(A);
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
@@ -256,10 +259,8 @@ namespace hpgl
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
-			// the lower triangle retains original elements.  Copy the
-			// partially-intact matrix for the gauss_solve fallback.
-			std::vector<double> A_backup(A);
+			// Fallback: dpotrf_ modified the upper triangle; use the
+			// saved original matrix for gauss_solve.
 			system_solved = gauss_solve(&A_backup[0], &b[0], &weights[0], size);
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 			// Compute SK variance on the fallback path (mirrors non-fallback
@@ -408,18 +409,16 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
-		// On success path, no backup is needed — dpotrf_ produces the
-		// factor and dpotrs_ solves directly.  Only allocate and copy
-		// A_backup on the failure path, right before the fallback.
+		// Save a copy of ws.A before dpotrf_ modifies the upper triangle,
+		// so the fallback gauss_solve receives the original matrix.
+		ws.A_backup.resize(matrix_size);
+		std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
 		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
-			// the lower triangle retains original elements.  Copy the
-			// partially-intact matrix for the gauss_solve fallback.
-			ws.A_backup.resize(matrix_size);
-			std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
+			// Fallback: dpotrf_ modified the upper triangle; use the
+			// saved original matrix for gauss_solve.
 			system_solved = gauss_solve(&ws.A_backup[0], &ws.b[0], &weights[0], size);
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 			// Compute SK variance on the fallback path (mirrors non-fallback
@@ -602,6 +601,9 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
+		// Save a copy of A before dpotrf_ modifies the upper triangle,
+		// so the fallback gauss_solve receives the original matrix.
+		std::vector<double> A_backup(A);
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
@@ -609,10 +611,8 @@ namespace hpgl
 		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
-			// the lower triangle retains original elements.  Copy the
-			// partially-intact matrix for the gauss_solve fallback.
-			std::vector<double> A_backup(A);
+			// Fallback: dpotrf_ modified the upper triangle; use the
+			// saved original matrix for gauss_solve.
 			// Solve both RHS (b→sk_weights, ones→ones_result) via gauss_solve.
 			// gauss_solve modifies A in-place, so use a second copy.
 			std::vector<double> A_backup2(A_backup);
@@ -883,18 +883,16 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
-		// On success path, no backup is needed — dpotrf_ produces the
-		// factor and dpotrs_ solves directly.  Only allocate and copy
-		// A_backup on the failure path, right before the fallback.
+		// Save a copy of ws.A before dpotrf_ modifies the upper triangle,
+		// so the fallback gauss_solve receives the original matrix.
+		ws.A_backup.resize(matrix_size);
+		std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
 		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
 		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
-			// the lower triangle retains original elements.  Copy the
-			// partially-intact matrix for the gauss_solve fallback.
-			ws.A_backup.resize(matrix_size);
-			std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
+			// Fallback: dpotrf_ modified the upper triangle; use the
+			// saved original matrix for gauss_solve.
 			// A_backup2 created BEFORE gauss_solve so it preserves the
 			// original matrix — gauss_solve modifies A_backup in-place.
 			std::vector<double> A_backup2(ws.A_backup);
@@ -1161,6 +1159,9 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
+		// Save a copy of A before dpotrf_ modifies the upper triangle,
+		// so the fallback gauss_solve receives the original matrix.
+		std::vector<double> A_backup(A);
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
@@ -1168,10 +1169,8 @@ namespace hpgl
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
-			// the lower triangle retains original elements.  Copy the
-			// partially-intact matrix for the gauss_solve fallback.
-			std::vector<double> A_backup(A);
+			// Fallback: dpotrf_ modified the upper triangle; use the
+			// saved original matrix for gauss_solve.
 			system_solved = gauss_solve(&A_backup[0], &b[0], &weights[0], size);
 			return system_solved;
 		}
@@ -1324,18 +1323,16 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
-		// On success path, no backup is needed — dpotrf_ produces the
-		// factor and dpotrs_ solves directly.  Only allocate and copy
-		// A_backup on the failure path, right before the fallback.
+		// Save a copy of ws.A before dpotrf_ modifies the upper triangle,
+		// so the fallback gauss_solve receives the original matrix.
+		ws.A_backup.resize(matrix_size);
+		std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
 		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
-			// the lower triangle retains original elements.  Copy the
-			// partially-intact matrix for the gauss_solve fallback.
-			ws.A_backup.resize(matrix_size);
-			std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
+			// Fallback: dpotrf_ modified the upper triangle; use the
+			// saved original matrix for gauss_solve.
 			system_solved = gauss_solve(&ws.A_backup[0], &ws.b[0], &weights[0], size);
 			return system_solved;
 		}

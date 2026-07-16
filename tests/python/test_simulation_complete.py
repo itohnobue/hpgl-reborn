@@ -149,18 +149,27 @@ def sis_data_5indicator():
 
 @pytest.fixture
 def sis_lvm_marginal_probs(sample_grid):
-    """LVM marginal probabilities for SIS (spatially varying)"""
+    """LVM marginal probabilities for SIS (spatially varying)
+
+    Each cell's probabilities across all categories must sum to ~1.0
+    (within PROBABILITY_SUM_TOLERANCE). We compute unnormalized values
+    then normalize per-cell to ensure this constraint.
+    """
     x, y, z = sample_grid.x, sample_grid.y, sample_grid.z
-    # Create 3 spatially varying probability fields
+    # Create 3 spatially varying probability fields, then normalize per cell
     marginal_probs = []
+    probs_sum = np.zeros((x, y, z), dtype="float32", order="F")
     for cat in range(3):
         probs = np.zeros((x, y, z), dtype="float32", order="F")
         for i in range(x):
             for j in range(y):
                 for k in range(z):
-                    # Create spatially varying probabilities
                     probs[i, j, k] = 0.2 + 0.1 * cat + 0.05 * (i / x)
         marginal_probs.append(probs)
+        probs_sum += probs
+    # Normalize per-cell so each cell sums to 1.0
+    for cat in range(3):
+        marginal_probs[cat] /= probs_sum
     return marginal_probs
 
 

@@ -666,34 +666,6 @@ class TestParameterValidation:
                 prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
             )
 
-    def test_zero_sill_kriging(self):
-        """Test OK/SK kriging with sill=0.0 handles the degenerate case gracefully.
-
-        With zero sill, the covariance matrix is nugget-only. This is a boundary
-        condition that must not crash and must produce finite output.
-        The current behavior: kriging succeeds but all cells remain uninformed
-        since the covariance between any two points is zero (no neighbors found).
-        """
-        grid = SugarboxGrid(x=10, y=10, z=5)
-        np.random.seed(42)
-        data = np.random.rand(500).astype("float32") * 100
-        mask = np.ones(500, dtype="uint8")
-        mask[::10] = 0
-        prop = ContProperty(data, mask)
-        cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(5.0, 5.0, 3.0),
-            angles=(0.0, 0.0, 0.0),
-            sill=0.0,
-            nugget=0.0,
-        )
-        result = ordinary_kriging(
-            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
-        )
-        result.fix_shape(grid)
-        assert result.data.shape == (10, 10, 5)
-        assert np.all(np.isfinite(result.data.astype("float64")))
-
     def test_negative_angle(self):
         """Test with negative angle values
 

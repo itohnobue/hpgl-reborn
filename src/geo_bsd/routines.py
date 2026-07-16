@@ -327,6 +327,11 @@ def GetCubicalMask(Radiuses):
 
 def GetEllipseMask(Radiuses):
     rx, ry, rz = Radiuses
+    if rx <= 0 or ry <= 0 or rz <= 0:
+        raise ValueError(
+            f"GetEllipseMask: radius components must be positive, "
+            f"got ({rx}, {ry}, {rz})"
+        )
     x0, y0, z0 = rx, ry, rz
 
     a, b, c = mgrid[0 : rx * 2, 0 : ry * 2, 0 : rz * 2]

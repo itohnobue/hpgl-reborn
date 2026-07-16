@@ -53,7 +53,10 @@ namespace hpgl
 			bool valid_mean;
 			mean = calc_mean(input, &valid_mean);
 			if (!valid_mean)
+			{
 				LOGWARNING("No data to calculate mean. Defaulting to 0.\n");
+				mean = 0.0;
+			}
 			print_param("Calculated mean: ", mean);		
 		}
 		else

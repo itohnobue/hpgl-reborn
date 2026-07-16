@@ -1,4 +1,5 @@
 #include <math.h>
+#include <cmath>
 #include <memory.h>
 #include <assert.h>
 #include <stdlib.h>
@@ -381,6 +382,7 @@ void calc_variograms(
 		int result_length,
 		int percentToUse)		
 {
+    lag_statistics_t * lag_stats = nullptr;
     try
     {
 	if (!validate_ptr(templ, "templ (calc_variograms)")) return;
@@ -393,7 +395,7 @@ void calc_variograms(
 		? templ->m_num_lags
 		: result_length;
 
-	lag_statistics_t * lag_stats = (lag_statistics_t *) calloc(lag_count, sizeof(lag_statistics_t));
+	lag_stats = (lag_statistics_t *) calloc(lag_count, sizeof(lag_statistics_t));
 	if (!lag_stats) {
 		fprintf(stderr, "[HPGL ERROR] calc_variograms: calloc(lag_stats) failed\n");
 		fflush(stderr);
@@ -442,6 +444,7 @@ void calc_variograms(
 								if (*mpx != 0)
 								{
 									double v1 = *dpx;
+									if (!std::isfinite(v1)) continue;
 									//double v1 = get_value(data, x1, y1, z1);
 									int x = x1 + vec.m_data[0];
 									int y = y1 + vec.m_data[1];
@@ -455,6 +458,7 @@ void calc_variograms(
 										// binning (see calc_lag_areas).
 										double dist = fabs(dot_product(&vec, &(templ->m_ellipsoid.m_direction1)));
 										double v2 = dpx[doffset];
+										if (!std::isfinite(v2)) continue;
 										//double v2 = get_value(data, x, y, z);
 										double var = v1 - v2;
 										var = var*var;
@@ -474,10 +478,12 @@ void calc_variograms(
 	}
 
 	free(lag_stats);
+	lag_stats = nullptr;
 	//free(lags);
     }
     catch (const std::exception & ex)
     {
+        free(lag_stats);
         cvar_set_last_error(ex.what());
     }
 }
@@ -488,6 +494,8 @@ void calc_variograms_from_point_set(
 		float * result_covariations,
 		int result_length)
 {
+    lag_statistics_t * lag_stats = nullptr;
+    lag_t * lags = nullptr;
     try
     {
 	if (!validate_ptr(templ, "templ (calc_variograms_from_point_set)")) return;
@@ -520,7 +528,7 @@ void calc_variograms_from_point_set(
 		? templ->m_num_lags
 		: result_length;
 
-	lag_statistics_t * lag_stats = (lag_statistics_t *) calloc(lag_count, sizeof(lag_statistics_t));
+	lag_stats = (lag_statistics_t *) calloc(lag_count, sizeof(lag_statistics_t));
 	if (!lag_stats) {
 		fprintf(stderr, "[HPGL ERROR] calc_variograms_from_point_set: calloc(lag_stats) failed\n");
 		fflush(stderr);
@@ -533,7 +541,7 @@ void calc_variograms_from_point_set(
 		lag_stats[i].m_cov_sum = 0.0;
 	}
 
-	lag_t * lags = (lag_t*) calloc(lag_count, sizeof(lag_t));
+	lags = (lag_t*) calloc(lag_count, sizeof(lag_t));
 	if (!lags) {
 		free(lag_stats);
 		fprintf(stderr, "[HPGL ERROR] calc_variograms_from_point_set: calloc(lags) failed\n");
@@ -547,16 +555,20 @@ void calc_variograms_from_point_set(
 	{
 		for (int idx2 = 0; idx2 < point_set->size; ++idx2)
 		{
+			if (idx1 == idx2) continue;
 			vector_t vec;
 			vec.m_data[0] = point_set->xs[idx1] - point_set->xs[idx2];
 			vec.m_data[1] = point_set->ys[idx1] - point_set->ys[idx2];
 			vec.m_data[2] = point_set->zs[idx1] - point_set->zs[idx2];
 			if (is_in_tunnel(templ, &vec))
 			{
+				double v1 = point_set->values[idx1];
+				double v2 = point_set->values[idx2];
+				if (!std::isfinite(v1) || !std::isfinite(v2)) continue;
 				// Directional projection onto the principal
 				// anisotropy axis for lag binning (see calc_lag_areas).
 				double dist = fabs(dot_product(&vec, &(templ->m_ellipsoid.m_direction1)));
-				double var = pow(point_set->values[idx1] - point_set->values[idx2], 2);
+				double var = pow(v1 - v2, 2);
 				for (int lag_idx = 0; lag_idx < lag_count; ++lag_idx)
 				{
 					if (lags[lag_idx].m_start <= dist
@@ -580,9 +592,13 @@ void calc_variograms_from_point_set(
 
 	free(lag_stats);
 	free(lags);
+	lag_stats = nullptr;
+	lags = nullptr;
     }
     catch (const std::exception & ex)
     {
+        free(lag_stats);
+        free(lags);
         cvar_set_last_error(ex.what());
     }
 }

@@ -97,8 +97,10 @@ def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
         If std_dev <= 0
     """
     # Input validation
-    if std_dev <= 0:
-        raise ValueError(f"std_dev must be positive, got {std_dev}")
+    if not np.isfinite(mean):
+        raise ValueError(f"mean must be finite, got {mean}")
+    if not np.isfinite(std_dev) or std_dev <= 0:
+        raise ValueError(f"std_dev must be positive and finite, got {std_dev}")
 
     # NOTE: modifies pk_prop.data in-place via pk_flat[:] assignment.
     # Uses ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
@@ -182,10 +184,12 @@ def gtsim_2ind(
 
     logger.info("Calculate tk_prop...")
     # Save original probability data (tk_calculation overwrites pk_prop.data in-place)
-    original_pk_data = pk_prop.data.copy()
+    # Use copy(order="F") to preserve Fortran (column-major) order expected by
+    # the C++ backend. Default C-order copy would corrupt 3D array layout.
+    original_pk_data = pk_prop.data.copy(order="F")
     tk_prop = tk_calculation(pk_prop, mean=tk_mean, std_dev=tk_std_dev)
     # Extract threshold data for truncation (tk_prop.data contains inverse CDF thresholds)
-    threshold_data = tk_prop.data.copy()
+    threshold_data = tk_prop.data.copy(order="F")
     # Restore original probabilities for pseudo_gaussian_transform
     pk_prop.data = original_pk_data
     logger.info("Done.")

@@ -44,7 +44,7 @@ class ValidationConstants:
     MAX_RADIUS = 1000000.0
 
     # Covariance parameter limits
-    MIN_SILL = 0.0
+    MIN_SILL = 1e-6
     MAX_SILL = 1e10
     MIN_NUGGET = 0.0
     MAX_NUGGET = 1e10

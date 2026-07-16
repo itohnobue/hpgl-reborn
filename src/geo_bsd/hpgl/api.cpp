@@ -119,8 +119,6 @@ static void validate_shape_dims_or_throw(hpgl_shape_t * shape, const char * cont
 // Thread-local storage for kriging statistics — populated by the
 // kriging implementation functions (ordinary_kriging, simple_kriging,
 // lvm_kriging) and retrieved via hpgl_get_kriging_stats().
-// TODO: ordinary_kriging.cpp, simple_kriging.cpp, lvm_kriging.cpp
-// need to save stats here after cont_kriging returns.
 namespace {
 	thread_local hpgl::kriging_stats_t g_last_kriging_stats;
 }

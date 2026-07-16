@@ -18,6 +18,7 @@ from numpy import (
     power,
     prod,
     radians,
+    ravel_multi_index,
     repeat,
     reshape,
     sin,
@@ -137,9 +138,29 @@ class TVVariogramSearchTemplate:
     def __init__(
         self, LagWidth, LagSeparation, TolDistance, NumLags, Ellipsoid, FirstLagDistance=0
     ):
+        if NumLags <= 0:
+            raise ValueError(
+                f"TVVariogramSearchTemplate: NumLags must be positive, got {NumLags}"
+            )
         if NumLags > MAX_NUM_LAGS:
             raise ValueError(
                 f"TVVariogramSearchTemplate: NumLags {NumLags} exceeds maximum {MAX_NUM_LAGS}"
+            )
+        if LagWidth <= 0:
+            raise ValueError(
+                f"TVVariogramSearchTemplate: LagWidth must be positive, got {LagWidth}"
+            )
+        if LagSeparation <= 0:
+            raise ValueError(
+                f"TVVariogramSearchTemplate: LagSeparation must be positive, got {LagSeparation}"
+            )
+        if TolDistance <= 0:
+            raise ValueError(
+                f"TVVariogramSearchTemplate: TolDistance must be positive, got {TolDistance}"
+            )
+        if FirstLagDistance < 0:
+            raise ValueError(
+                f"TVVariogramSearchTemplate: FirstLagDistance must be non-negative, got {FirstLagDistance}"
             )
         self.LagWidth = LagWidth
         self.LagSeparation = LagSeparation
@@ -207,6 +228,7 @@ def _CalcSearchTemplateWindow(VariogramSearchTemplate):
                         VariogramSearchTemplate.LagSeparation
                         * VariogramSearchTemplate.NumLags
                         + VariogramSearchTemplate.FirstLagDistance
+                        + VariogramSearchTemplate.LagWidth / 2
                     )
                     * i
                 )
@@ -699,14 +721,22 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float64)
     else:
-        # Normalize Point1/Point2 to flat 1D arrays to handle both scalar
-        # (PointSetScanContStyle) and batch (CubeScan) inputs.
-        P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
-        P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()
-        n_points = len(P1)
+        # Normalize Point1/Point2 to handle both scalar (PointSetScanGridStyle),
+        # list (PointSetScanContStyle), and tuple-of-arrays (CubeScan) inputs.
+        if isinstance(Point1, tuple):
+            # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays.
+            # Convert multi-dimensional indices to flat indices for the
+            # scalar-index loop below.
+            NumPoints = len(Point1[0])
+            P1 = ravel_multi_index(Point1, Values[0].shape)
+            P2 = ravel_multi_index(Point2, Values[0].shape)
+        else:
+            P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
+            P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()
+            NumPoints = len(P1)
 
         # Accumulate covariances across all point pairs in the batch
-        for idx in range(n_points):
+        for idx in range(NumPoints):
             p1 = P1[idx]
             p2 = P2[idx]
             Values1 = zeros(NumValues)
@@ -753,14 +783,22 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float64)
     else:
-        # Normalize Point1/Point2 to flat 1D arrays to handle both scalar
-        # (PointSetScanContStyle) and batch (CubeScan) inputs.
-        P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
-        P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()
-        n_points = len(P1)
+        # Normalize Point1/Point2 to handle both scalar (PointSetScanGridStyle),
+        # list (PointSetScanContStyle), and tuple-of-arrays (CubeScan) inputs.
+        if isinstance(Point1, tuple):
+            # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays.
+            # Convert multi-dimensional indices to flat indices for the
+            # scalar-index loop below.
+            NumPoints = len(Point1[0])
+            P1 = ravel_multi_index(Point1, Values[0].shape)
+            P2 = ravel_multi_index(Point2, Values[0].shape)
+        else:
+            P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
+            P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()
+            NumPoints = len(P1)
 
         # Accumulate indicator correlations across all point pairs in the batch
-        for idx in range(n_points):
+        for idx in range(NumPoints):
             p1 = P1[idx]
             p2 = P2[idx]
             Values1 = zeros(NumValues)

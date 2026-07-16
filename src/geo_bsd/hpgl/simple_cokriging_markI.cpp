@@ -175,6 +175,7 @@ public:
 		// cov_at_zero must also be positive.
 		if (cov_at_zero <= 0 || d2 <= 0)
 		{
+			LOGWARNING("Mark I cross-covariance degraded: cov_at_zero or d2 non-positive, setting coef=0.\n");
 			m_coef = 0;
 		}
 		else
@@ -209,6 +210,7 @@ public:
 		double secondary_variance = (*secondary_cov_model)(coord_t(0,0,0), coord_t(0,0,0));
 		if (secondary_variance <= 0)
 		{
+			LOGWARNING("Mark II cross-covariance degraded: secondary_variance non-positive, setting coef=0.\n");
 			m_coef = 0;
 		}
 		else

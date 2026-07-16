@@ -47,36 +47,33 @@ from .validation import (
 _error_local = threading.local()
 _error_snapshot_lock = threading.Lock()
 
-# Serializes C++ HPGL calls with error checking to prevent cross-thread
-# error races. The C++ error state is global (not thread_local), so
-# concurrent calls from different threads can corrupt error reporting.
-# This lock ensures only one thread is in the snapshot→C++ call→check
-# window at a time. This is a Python-side mitigation; the proper fix
-# requires making the C++ error state thread_local.
+# Serializes C++ HPGL calls for operations that require cross-thread
+# exclusion. The C++ error state is thread_local, so error checking
+# in _hpgl_error_guard does not need serialization. This lock is
+# retained for handler mutation (set_output_handler, set_progress_handler)
+# and thread count changes (set_thread_num) where concurrent access
+# could produce inconsistent CFUNCTYPE/global state.
 _hpgl_call_lock = threading.Lock()
 
 
 @contextlib.contextmanager
 def _hpgl_error_guard(context=""):
-    """Serialize a C++ HPGL call with error checking to prevent cross-thread races.
+    """Guard a C++ HPGL call with error checking to detect new C++ errors.
 
     Usage::
 
         with _hpgl_error_guard("ordinary_kriging"):
             _hpgl_so.hpgl_ordinary_kriging(...)
 
-    Acquires ``_hpgl_call_lock``, snapshots the C++ error state, runs the
-    C++ call (yield), and checks for new errors.  The lock is released in
-    ``finally`` so that a ``RuntimeError`` from a new C++ error or a failure
-    in ``_snapshot_hpgl_error`` does not prevent lock release.
+    Snapshots the C++ error state, runs the C++ call (yield), and checks
+    for new errors.  The C++ error state is thread_local, so no lock is
+    needed for error isolation between threads.  Callers that require
+    cross-thread exclusion for other reasons (e.g. handler mutation)
+    should acquire ``_hpgl_call_lock`` separately.
     """
-    _hpgl_call_lock.acquire()
-    try:
-        _snapshot_hpgl_error()
-        yield
-        _check_hpgl_error(context)
-    finally:
-        _hpgl_call_lock.release()
+    _snapshot_hpgl_error()
+    yield
+    _check_hpgl_error(context)
 
 
 logger = logging.getLogger(__name__)
@@ -121,8 +118,9 @@ def _check_hpgl_error(context=""):
 
     .. note::
 
-       The C++ HPGL library stores the last exception message globally
-       and never clears it (no ``hpgl_clear_error`` API exists).  This
+       The C++ HPGL library stores the last exception message using
+       thread-local storage and never clears it (no ``hpgl_clear_error``
+       API exists).  This
        means consecutive C++ calls that produce *identical* error messages
        cannot be distinguished from a stale error — the second identical
        error will be silently missed.  A C++ clear-error function is the
@@ -586,6 +584,26 @@ class CovarianceModel:
         sill: float = 1.0,
         nugget: float = 0.0,
     ):
+        # Validate covariance type against known C++ enum values
+        # (covariance_type_t: COV_SPHERICAL=0, COV_EXPONENTIAL=1,
+        #  COV_GAUSSIAN=2). C++ init_fun() throws on unknown types;
+        # validating in Python provides a clearer error earlier.
+        if type not in (0, 1, 2):
+            raise validation.CriticalValidationError(
+                f"Covariance type must be 0 (spherical), 1 (exponential), "
+                f"or 2 (gaussian), got {type}",
+                "type",
+            )
+
+        # Convert list values to tuples for ctypes compatibility.
+        # ctypes (C.c_double * 3) fields require tuples — lists cause
+        # TypeError at the kriging call sites (ordinary_kriging,
+        # simple_kriging, lvm_kriging).
+        if isinstance(ranges, list):
+            ranges = tuple(ranges)
+        if isinstance(angles, list):
+            angles = tuple(angles)
+
         self.type = type
         self.ranges = ranges
         self.angles = angles
@@ -603,7 +621,9 @@ def _load_prop_cont_slow(filename, undefined_value):
     element_count = 0
     # Security: uses safe_open_read() which validates the path and opens
     # atomically with O_NOFOLLOW to prevent TOCTOU symlink attacks.
-    with PathValidator.safe_open_read(filename, basedir=os.path.dirname(os.path.abspath(filename))) as f:
+    # Use realpath() so the basedir resolves any symlinks in the path,
+    # preventing symlink-based directory traversal escapes.
+    with PathValidator.safe_open_read(filename, basedir=os.path.dirname(os.path.realpath(filename))) as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -665,7 +685,9 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
 
     # Security: uses safe_open_read() which validates the path and opens
     # atomically with O_NOFOLLOW to prevent TOCTOU symlink attacks.
-    with PathValidator.safe_open_read(filename, basedir=os.path.dirname(os.path.abspath(filename))) as f:
+    # Use realpath() so the basedir resolves any symlinks in the path,
+    # preventing symlink-based directory traversal escapes.
+    with PathValidator.safe_open_read(filename, basedir=os.path.dirname(os.path.realpath(filename))) as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -1174,15 +1196,30 @@ def set_thread_num(num):
             cpu_count,
         )
     _hpgl_call_lock.acquire()
-    _hpgl_so.hpgl_set_thread_num(num)
-    _hpgl_call_lock.release()
+    try:
+        _snapshot_hpgl_error()
+        rc = _hpgl_so.hpgl_set_thread_num(num)
+        _check_hpgl_error("set_thread_num")
+        if rc != 0:
+            raise RuntimeError(f"set_thread_num: C++ call failed with return code {rc}")
+    finally:
+        _hpgl_call_lock.release()
 
 
 def get_thread_num():
-    _hpgl_call_lock.acquire()
-    result = _hpgl_so.hpgl_get_thread_num()
-    _hpgl_call_lock.release()
-    return result
+    """Get the current OpenMP thread count.
+
+    Returns
+    -------
+    int
+        The number of OpenMP threads (via ``omp_get_max_threads()``).
+
+    Notes
+    -----
+    ``omp_get_max_threads()`` is thread-safe and does not require
+    serialization via ``_hpgl_call_lock``.
+    """
+    return _hpgl_so.hpgl_get_thread_num()
 
 
 @accepts_tuple("prop", 0)
@@ -1381,6 +1418,10 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
             f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
         )
 
+    # Validate mean for NaN/Inf when explicitly provided
+    if mean is not None and not numpy.isfinite(mean):
+        raise ValueError(f"simple_kriging: mean must be finite, got {mean}")
+
     out_prop = _empty_clone(prop)
 
     skp = _HPGL_SK_PARAMS(
@@ -1465,8 +1506,7 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
     # Validate mean_data
     if not isinstance(mean_data, numpy.ndarray):
         raise ValueError("lvm_kriging: mean_data must be a numpy array")
-    if mean_data.dtype != numpy.float32:
-        mean_data = numpy.require(mean_data, dtype="float32")
+    mean_data = numpy.require(mean_data, dtype="float32", requirements="F")
     expected_size = grid.x * grid.y * grid.z
     if mean_data.size != expected_size:
         raise ValueError(
@@ -1566,6 +1606,7 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
         raise ValueError("median_ik: marginal_probs must have exactly 2 elements")
     for i, p in enumerate(marginal_probs):
         ParameterValidator.validate_probability(p, f"marginal_probs[{i}]")
+    ParameterValidator.validate_probability_sum(marginal_probs)
 
     # Validate indicator_count must be exactly 2
     # The C API (hpgl_median_ik) hardcodes indicator_count=2 with an
@@ -1702,6 +1743,16 @@ def simple_cokriging_markI(
     ParameterValidator.validate_correlation_coef(correlation_coef)
     ParameterValidator.validate_variance(secondary_variance, "secondary_variance")
 
+    # Validate mean values for NaN/Inf
+    if not numpy.isfinite(primary_mean):
+        raise ValueError(
+            f"simple_cokriging_markI: primary_mean must be finite, got {primary_mean}"
+        )
+    if not numpy.isfinite(secondary_mean):
+        raise ValueError(
+            f"simple_cokriging_markI: secondary_mean must be finite, got {secondary_mean}"
+        )
+
     # Validate secondary_data
     if not isinstance(secondary_data, ContProperty):
         raise TypeError(
@@ -1777,6 +1828,14 @@ def simple_cokriging_markII(
     for _label, d in [("primary", primary_data), ("secondary", secondary_data)]:
         cm = d["cov_model"]
         ParameterValidator.validate_covariance_parameters(cm.sill, cm.nugget, cm.ranges, cm.angles)
+
+    # Validate mean values for NaN/Inf
+    for label, d in [("primary", primary_data), ("secondary", secondary_data)]:
+        mean_val = d["mean"]
+        if not numpy.isfinite(mean_val):
+            raise ValueError(
+                f"simple_cokriging_markII: {label}_data['mean'] must be finite, got {mean_val}"
+            )
 
     out_prop = _empty_clone(primary_data["data"])
 
