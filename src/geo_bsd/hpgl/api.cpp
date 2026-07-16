@@ -6,6 +6,7 @@
 #include "api.h"
 #include "api_helpers.hpp"
 #include "hpgl_core.h"
+#include "kriging_stats.h"
 #include "sugarbox_grid.h"
 #include "ok_params.h"
 #include "sk_params.h"
@@ -97,7 +98,52 @@ static void validate_shape_volume_or_throw(int volume, const char * context)
 	}
 }
 
+/// Validates that all three grid dimensions (sx, sy, sz) are positive.
+/// get_shape_volume checks only the product — even-negative dimensions
+/// produce a positive product that passes volume validation but causes
+/// undefined behavior in grid initialization.
+static void validate_shape_dims_or_throw(hpgl_shape_t * shape, const char * context)
+{
+	for (int i = 0; i < 3; ++i)
+	{
+		if (shape->m_data[i] <= 0)
+		{
+			std::ostringstream oss;
+			oss << context << ": dimension " << i << " is " << shape->m_data[i]
+			    << " — all dimensions must be positive";
+			throw hpgl::hpgl_exception("C API", oss.str());
+		}
+	}
+}
+
+// Thread-local storage for kriging statistics — populated by the
+// kriging implementation functions (ordinary_kriging, simple_kriging,
+// lvm_kriging) and retrieved via hpgl_get_kriging_stats().
+// TODO: ordinary_kriging.cpp, simple_kriging.cpp, lvm_kriging.cpp
+// need to save stats here after cont_kriging returns.
+namespace {
+	thread_local hpgl::kriging_stats_t g_last_kriging_stats;
+}
+
+namespace hpgl {
+	void set_kriging_stats(const kriging_stats_t & stats)
+	{
+		g_last_kriging_stats = stats;
+	}
+}
+
 extern "C" {
+
+HPGL_API hpgl_kriging_stats_t hpgl_get_kriging_stats()
+{
+	hpgl_kriging_stats_t result;
+	result.m_points_calculated = g_last_kriging_stats.m_points_calculated;
+	result.m_points_without_neighbours = g_last_kriging_stats.m_points_without_neighbours;
+	result.m_points_singularity = g_last_kriging_stats.m_points_singularity;
+	result.m_mean = g_last_kriging_stats.m_mean;
+	result.m_speed_nps = g_last_kriging_stats.m_speed_nps;
+	return result;
+}
 
 HPGL_API char * hpgl_get_last_exception_message()
 {
@@ -458,6 +504,9 @@ HPGL_API void hpgl_ordinary_kriging(
 	validate_pointer_or_throw(params, "params (ordinary_kriging)");
 	validate_pointer_or_throw(output_data, "output_data (ordinary_kriging)");
 
+	validate_shape_dims_or_throw(&input_data->m_shape, "ordinary_kriging input shape");
+	validate_shape_dims_or_throw(&output_data->m_shape, "ordinary_kriging output shape");
+
 	int in_size = get_shape_volume(&input_data->m_shape);
 	validate_shape_volume_or_throw(in_size, "ordinary_kriging input");
 	int out_size = get_shape_volume(&output_data->m_shape);
@@ -522,6 +571,9 @@ HPGL_API void hpgl_simple_kriging(
 	validate_pointer_or_throw(input_data_shape, "input_data_shape (simple_kriging)");
 	validate_pointer_or_throw(params, "params (simple_kriging)");
 	validate_pointer_or_throw(output_data_shape, "output_data_shape (simple_kriging)");
+
+	validate_shape_dims_or_throw(input_data_shape, "simple_kriging input shape");
+	validate_shape_dims_or_throw(output_data_shape, "simple_kriging output shape");
 
 	int in_size = get_shape_volume(input_data_shape);
 	validate_shape_volume_or_throw(in_size, "simple_kriging input");
@@ -627,6 +679,10 @@ HPGL_API void hpgl_lvm_kriging(
 	validate_pointer_or_throw(params, "params (lvm_kriging)");
 	validate_pointer_or_throw(output_data_shape, "output_data_shape (lvm_kriging)");
 
+	validate_shape_dims_or_throw(input_data_shape, "lvm_kriging input shape");
+	validate_shape_dims_or_throw(output_data_shape, "lvm_kriging output shape");
+	validate_shape_dims_or_throw(mean_data_shape, "lvm_kriging means shape");
+
 	int size = get_shape_volume(input_data_shape);
 	validate_shape_volume_or_throw(size, "lvm_kriging input");
 	int out_size = get_shape_volume(output_data_shape);
@@ -681,6 +737,9 @@ hpgl_indicator_kriging(
 	validate_pointer_or_throw(out_data, "out_data (indicator_kriging)");
 	validate_pointer_or_throw(params, "params (indicator_kriging)");
 
+	validate_shape_dims_or_throw(&in_data->m_shape, "indicator_kriging input shape");
+	validate_shape_dims_or_throw(&out_data->m_shape, "indicator_kriging output shape");
+
 	// Validate indicator_count matches the data's actual indicator_count.
 	// Direct C callers may pass mismatched values, leading to out-of-bounds reads
 	// in init_sis_params or indicator_kriging.
@@ -734,6 +793,8 @@ hpgl_sgs_simulation(
 	validate_pointer_or_throw(data, "data (sgs_simulation)");
 	validate_pointer_or_throw(params, "params (sgs_simulation)");
 
+	validate_shape_dims_or_throw(&data->m_shape, "sgs_simulation");
+
 	int size = get_shape_volume(&(data->m_shape));
 	validate_shape_volume_or_throw(size, "sgs_simulation");
 	cont_property_array_t prop(data->m_data, data->m_mask, size);
@@ -772,6 +833,9 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	validate_pointer_or_throw(data, "data (sgs_lvm_simulation)");
 	validate_pointer_or_throw(params, "params (sgs_lvm_simulation)");
 	validate_pointer_or_throw(means, "means (sgs_lvm_simulation)");
+
+	validate_shape_dims_or_throw(&data->m_shape, "sgs_lvm_simulation");
+	validate_shape_dims_or_throw(&means->m_shape, "sgs_lvm_simulation means");
 
 	int size = get_shape_volume(&(data->m_shape));
 	validate_shape_volume_or_throw(size, "sgs_lvm_simulation");
@@ -826,6 +890,9 @@ HPGL_API void hpgl_median_ik(
 	validate_pointer_or_throw(in_data, "in_data (median_ik)");
 	validate_pointer_or_throw(params, "params (median_ik)");
 	validate_pointer_or_throw(out_data, "out_data (median_ik)");
+
+	validate_shape_dims_or_throw(&in_data->m_shape, "median_ik input shape");
+	validate_shape_dims_or_throw(&out_data->m_shape, "median_ik output shape");
 
 	int size = get_shape_volume(&(in_data->m_shape));
 	validate_shape_volume_or_throw(size, "median_ik input");
@@ -888,6 +955,8 @@ hpgl_sis_simulation(
 	validate_pointer_or_throw(data, "data (sis_simulation)");
 	validate_pointer_or_throw(params, "params (sis_simulation)");
 
+	validate_shape_dims_or_throw(&data->m_shape, "sis_simulation");
+
 	// Validate indicator_count matches the data's actual indicator_count.
 	// Direct C callers may pass mismatched values, leading to out-of-bounds reads.
 	if (indicator_count != data->m_indicator_count)
@@ -945,6 +1014,8 @@ hpgl_sis_simulation_lvm(
 	validate_pointer_or_throw(data, "data (sis_simulation_lvm)");
 	validate_pointer_or_throw(params, "params (sis_simulation_lvm)");
 	validate_pointer_or_throw(mean_data, "mean_data (sis_simulation_lvm)");
+
+	validate_shape_dims_or_throw(&data->m_shape, "sis_simulation_lvm");
 
 	// Validate indicator_count matches the data's actual indicator_count.
 	// Direct C callers may pass mismatched values, leading to out-of-bounds reads.
@@ -1032,6 +1103,10 @@ hpgl_simple_cokriging_mark1(
 		validate_pointer_or_throw(params, "params (cokriging_m1)");
 		validate_pointer_or_throw(output_data, "output_data (cokriging_m1)");
 
+		validate_shape_dims_or_throw(&input_data->m_shape, "cokriging_m1 primary");
+		validate_shape_dims_or_throw(&secondary_data->m_shape, "cokriging_m1 secondary");
+		validate_shape_dims_or_throw(&output_data->m_shape, "cokriging_m1 output");
+
 		int size = get_shape_volume(&input_data->m_shape);
 		validate_shape_volume_or_throw(size, "cokriging_m1 primary");
 		int size2 = get_shape_volume(&secondary_data->m_shape);
@@ -1117,6 +1192,10 @@ hpgl_simple_cokriging_mark2(
 		validate_pointer_or_throw(secondary_data, "secondary_data (cokriging_m2)");
 		validate_pointer_or_throw(params, "params (cokriging_m2)");
 		validate_pointer_or_throw(output_data, "output_data (cokriging_m2)");
+
+		validate_shape_dims_or_throw(&primary_data->m_shape, "cokriging_m2 primary");
+		validate_shape_dims_or_throw(&secondary_data->m_shape, "cokriging_m2 secondary");
+		validate_shape_dims_or_throw(&output_data->m_shape, "cokriging_m2 output");
 
 		int size = get_shape_volume(&primary_data->m_shape);
 		validate_shape_volume_or_throw(size, "cokriging_m2 primary");

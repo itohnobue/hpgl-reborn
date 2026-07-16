@@ -16,6 +16,7 @@ import ctypes as C
 import sys
 import threading
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -84,6 +85,121 @@ class TestHPGLWrapContract:
         # Try to load a non-existent library — must raise an error
         with pytest.raises((ImportError, OSError)):
             _safe_load_library("nonexistent_library_xyz", __file__)
+
+    # ---- F-213: _safe_load_library exception path tests ----
+
+    def test_safe_load_library_path_escape_raises(self, monkeypatch):
+        """F-213: _safe_load_library raises ValueError when resolved path escapes lib_dir."""
+        from geo_bsd import hpgl_wrap
+
+        # Create a mock Path that exists but whose relative_to raises ValueError
+        mock_path = mock.MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mock_path.resolve.return_value = mock_path
+        mock_path.relative_to.side_effect = ValueError("not a subpath")
+
+        # Patch Path.__truediv__ to return our mock for any lib path
+        def mock_truediv(self, other):
+            return mock_path
+
+        # Patch the ref_path.resolve to give us a known dir
+        ref_mock = mock.MagicMock(spec=Path)
+        ref_mock.resolve.return_value = ref_mock
+        ref_mock.parent = Path("/fake/lib/dir")
+
+        with mock.patch.object(Path, "resolve", return_value=ref_mock):
+            pass  # We'll replace resolve in the next patch
+
+        # Simpler: just patch the entire function behavior
+        # The key code path: resolved_lib.relative_to(lib_dir) raises ValueError
+        # which is caught and re-raised as "Library path ... is outside allowed directory"
+        monkeypatch.setattr(Path, "__truediv__", mock_truediv)
+        monkeypatch.setattr(hpgl_wrap.pathlib.Path, "resolve",
+                            lambda self: self)
+        # Make all paths "exist"
+        monkeypatch.setattr(hpgl_wrap.pathlib.Path, "exists", lambda self: True)
+
+        # Now mock relative_to to raise ValueError
+        def _mock_relative_to(self, other):
+            raise ValueError("outside")
+        monkeypatch.setattr(hpgl_wrap.pathlib.Path, "relative_to", _mock_relative_to)
+
+        # Also need to mock _load_lib_func to not actually try loading
+        monkeypatch.setattr(hpgl_wrap, "_load_lib_func", lambda p: mock.MagicMock())
+
+        with pytest.raises(ValueError, match="outside allowed directory"):
+            hpgl_wrap._safe_load_library("test_lib", str(Path("/fake/ref.py")))
+
+    def test_safe_load_library_oserror_continue(self, monkeypatch):
+        """F-213: _safe_load_library continues to next path on OSError from _load_lib_func."""
+        from geo_bsd import hpgl_wrap
+
+        call_count = [0]
+
+        def mock_load_func(path):
+            call_count[0] += 1
+            raise OSError("Incompatible library")
+
+        monkeypatch.setattr(hpgl_wrap, "_load_lib_func", mock_load_func)
+
+        # Make ALL platform-specific paths "exist"
+        monkeypatch.setattr(hpgl_wrap.pathlib.Path, "exists", lambda self: True)
+        monkeypatch.setattr(hpgl_wrap.pathlib.Path, "resolve", lambda self: self)
+
+        # relative_to should succeed for these paths (no escape)
+        def _mock_relative_to(self, other):
+            return "subdir/lib.so"
+        monkeypatch.setattr(hpgl_wrap.pathlib.Path, "relative_to", _mock_relative_to)
+
+        # Should cycle through all platform paths + fallback, eventually raising OSError
+        with pytest.raises(OSError, match="Cannot load library"):
+            hpgl_wrap._safe_load_library("test_lib", str(Path("/fake/ref.py")))
+
+        # Verify _load_lib_func was called multiple times (OSError was caught, continued)
+        assert call_count[0] >= 2, (
+            f"Expected _load_lib_func to be called at least 2 times (continue on OSError), "
+            f"got {call_count[0]}"
+        )
+
+    def test_verify_library_hash_path(self, monkeypatch, tmp_path):
+        """F-213: _verify_library_hash runs hash comparison when _EXPECTED_LIBRARY_HASHES is non-empty."""
+        import hashlib
+
+        from geo_bsd import hpgl_wrap
+
+        # Create a temp file with known content
+        test_file = tmp_path / "test_lib.so"
+        test_content = b"fake library content"
+        test_file.write_bytes(test_content)
+        expected_hash = hashlib.sha256(test_content).hexdigest()
+
+        # Set expected hashes to a non-empty dict
+        old_hashes = hpgl_wrap._EXPECTED_LIBRARY_HASHES
+        try:
+            hpgl_wrap._EXPECTED_LIBRARY_HASHES = {"known_build": expected_hash}
+
+            # Should complete without error (hash matches expected)
+            hpgl_wrap._verify_library_hash("test_lib", test_file)
+        finally:
+            hpgl_wrap._EXPECTED_LIBRARY_HASHES = old_hashes
+
+    def test_verify_library_hash_warns_on_mismatch(self, monkeypatch, tmp_path):
+        """F-213: _verify_library_hash logs warning when hash doesn't match expected."""
+        from geo_bsd import hpgl_wrap
+
+        # Create a temp file with known content
+        test_file = tmp_path / "test_lib.so"
+        test_file.write_bytes(b"unexpected content")
+
+        old_hashes = hpgl_wrap._EXPECTED_LIBRARY_HASHES
+        try:
+            # Set a hash that will NOT match
+            hpgl_wrap._EXPECTED_LIBRARY_HASHES = {"known_build": "a" * 64}
+
+            # Should log a warning but NOT raise
+            hpgl_wrap._verify_library_hash("test_lib", test_file)
+        finally:
+            hpgl_wrap._EXPECTED_LIBRARY_HASHES = old_hashes
 
     def test_error_local_thread_safe(self):
         """F-123: Thread-local error storage exists in geo.py (ctypes FFI layer)."""

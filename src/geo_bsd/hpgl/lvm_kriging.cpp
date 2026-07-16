@@ -9,6 +9,7 @@
 #include "mean_provider.h"
 #include "my_kriging_weights.h"
 #include "sugarbox_indexed_neighbour_lookup.h"
+#include "api.h"
 
 namespace hpgl
 {
@@ -32,6 +33,8 @@ void lvm_kriging(
 	hpgl::cont_kriging(input, grid, params, mean_data, pcov,
 		sk_weight_calculator_t(),
 		output, reporter, stats, kriging_failure_handling::mean_on_failure);
+
+	set_kriging_stats(stats);
 
 	std::ostringstream oss;
 	oss << stats;

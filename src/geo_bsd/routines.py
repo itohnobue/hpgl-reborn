@@ -173,17 +173,23 @@ def Cube2PointSet(Cube, Mask):
 def PointSet2Cube(X, Y, Z, Property, Cube):
     NX, NY, NZ = Cube.shape
     Mask = zeros(Cube.shape)
-    for Ind in range(len(X.flat)):
-        if (
-            (0 <= X[Ind])
-            & (X[Ind] < NX)
-            & (0 <= Y[Ind])
-            & (Y[Ind] < NY)
-            & (0 <= Z[Ind])
-            & (Z[Ind] < NZ)
-        ):
-            Cube[X[Ind], Y[Ind], Z[Ind]] = Property[Ind]
-            Mask[X[Ind], Y[Ind], Z[Ind]] = 1
+
+    # Vectorized: filter all valid indices at once, then assign in bulk.
+    Xf = numpy.array(X).ravel()
+    Yf = numpy.array(Y).ravel()
+    Zf = numpy.array(Z).ravel()
+    Pf = numpy.array(Property).ravel()
+
+    valid = (Xf >= 0) & (Xf < NX) & (Yf >= 0) & (Yf < NY) & (Zf >= 0) & (Zf < NZ)
+
+    if numpy.any(valid):
+        vX = Xf[valid]
+        vY = Yf[valid]
+        vZ = Zf[valid]
+        vP = Pf[valid]
+        Cube[vX, vY, vZ] = vP
+        Mask[vX, vY, vZ] = 1
+
     return Cube, Mask == 1
 
 
@@ -216,9 +222,6 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
     """
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBPointSet: FileName must be a non-empty string")
-    safe_path = PathValidator.validate_filepath_in_basedir(
-        FileName, basedir=os.path.dirname(os.path.abspath(FileName))
-    )
 
     if not PointSet:
         raise ValueError("SaveGSLIBPointSet: PointSet must not be empty")
@@ -233,7 +236,9 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
             "SaveGSLIBPointSet: All properties in GSLIB dictionary must have equal size"
         )
 
-    with open(safe_path, "w", encoding="utf-8") as f:
+    # Security: safe_open_write validates the path and opens atomically
+    # with O_NOFOLLOW to prevent TOCTOU symlink attacks.
+    with PathValidator.safe_open_write(FileName, basedir=os.path.dirname(os.path.abspath(FileName))) as f:
         # 1. Caption
         f.write(Caption + "\n")
 
@@ -281,9 +286,6 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g"):
     """
     if not FileName or not isinstance(FileName, str):
         raise ValueError("SaveGSLIBCubes: FileName must be a non-empty string")
-    safe_path = PathValidator.validate_filepath_in_basedir(
-        FileName, basedir=os.path.dirname(os.path.abspath(FileName))
-    )
 
     if not CubesDictionary:
         raise ValueError("SaveGSLIBCubes: CubesDictionary must not be empty")
@@ -298,7 +300,9 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g"):
             "SaveGSLIBCubes: All properties in GSLIB dictionary must have equal size"
         )
 
-    with open(safe_path, "w", encoding="utf-8") as f:
+    # Security: safe_open_write validates the path and opens atomically
+    # with O_NOFOLLOW to prevent TOCTOU symlink attacks.
+    with PathValidator.safe_open_write(FileName, basedir=os.path.dirname(os.path.abspath(FileName))) as f:
         # 1. Caption
         f.write(Caption + "\n")
 
@@ -469,16 +473,13 @@ def LoadGslibFile(filename, property_size):
     # all other grid-creating paths (SugarboxGrid, sgs_simulation, sis_simulation, etc.)
     GridValidator.validate_grid_dimensions(nx, ny, nz)
 
-    # Validate filepath for security (path traversal prevention, exists check)
-    safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
-    )
-
     result = {}
     list_prop = []
     points = []
 
-    with open(safe_path, encoding="utf-8") as f:
+    # Security: safe_open_read validates the path and opens atomically
+    # with O_NOFOLLOW to prevent TOCTOU symlink attacks.
+    with PathValidator.safe_open_read(filename, basedir=os.path.dirname(os.path.abspath(filename))) as f:
         f.readline()  # Skip caption line
         num_p = int(f.readline())
 

@@ -6,6 +6,8 @@
 
 #include <cstdio>
 #include <limits>
+#include <cmath>
+#include <mutex>
 
 // Use LAPACK compatibility header
 // Supports Intel MKL, OpenBLAS, and CLAPACK
@@ -27,6 +29,48 @@
 
 namespace hpgl
 {
+	// ================================================================
+	// BLAS thread-count guard for concurrent kriging function calls.
+	// Process-wide BLAS thread count is reference-counted so that
+	// concurrent calls to different kriging functions do not lose the
+	// original thread count through non-atomic save/restore races.
+	// ================================================================
+	namespace detail {
+		inline std::mutex& blas_thread_mutex() {
+			static std::mutex m;
+			return m;
+		}
+		inline int& blas_ref_count() {
+			static int c = 0;
+			return c;
+		}
+		inline int& blas_saved_threads() {
+			static int s = 0;
+			return s;
+		}
+		/// Acquire BLAS thread-count guard: sets BLAS threads to 1.
+		/// Only the first caller saves the original count.
+		/// Must be paired with blas_thread_restore().
+		inline void blas_thread_acquire(int (*getter)(), void (*setter)(int)) {
+			std::lock_guard<std::mutex> lock(blas_thread_mutex());
+			if (blas_ref_count() == 0) {
+				blas_saved_threads() = getter();
+			}
+			blas_ref_count()++;
+			setter(1);
+		}
+		/// Release BLAS thread-count guard: restores original count
+		/// when all callers have released. Must be paired with
+		/// blas_thread_acquire().
+		inline void blas_thread_restore(void (*setter)(int)) {
+			std::lock_guard<std::mutex> lock(blas_thread_mutex());
+			blas_ref_count()--;
+			if (blas_ref_count() == 0) {
+				setter(blas_saved_threads());
+			}
+		}
+	}
+
 	// SECURITY FIX: Safe allocation helper to prevent integer overflow
 	namespace detail {
 		// LAPACK error handler with proper error codes
@@ -77,6 +121,7 @@ namespace hpgl
 		std::vector<double> ones_result;// size: OK solve result for ones
 		std::vector<double> sk_weights; // size: OK SK-weights
 		std::vector<double> sigmas;     // size: corellogram sigma values
+		std::vector<double> A_backup;   // size²: backup of A for fallback path
 #ifdef LAPACK_SOLVER
 		std::vector<double> B;          // 2*size: combined OK RHS buffer
 #endif
@@ -205,15 +250,16 @@ namespace hpgl
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
 		// Cholesky decomposition
-		// Backup A before dpotrf_: dpotrf_ corrupts A on failure
-		std::vector<double> A_backup(A);
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
 		// Handle decomposition errors
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: dpotrf_ corrupted A, restore from backup and try gauss_solve
+			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
+			// the lower triangle retains original elements.  Copy the
+			// partially-intact matrix for the gauss_solve fallback.
+			std::vector<double> A_backup(A);
 			system_solved = gauss_solve(&A_backup[0], &b[0], &weights[0], size);
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 			// Compute SK variance on the fallback path (mirrors non-fallback
@@ -362,14 +408,19 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
-		// Backup ws.A before dpotrf_: dpotrf_ corrupts A on failure
-		std::vector<double> A_backup(ws.A.begin(), ws.A.begin() + matrix_size);
+		// On success path, no backup is needed — dpotrf_ produces the
+		// factor and dpotrs_ solves directly.  Only allocate and copy
+		// A_backup on the failure path, right before the fallback.
 		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: restore A from backup and try gauss_solve
-			system_solved = gauss_solve(&A_backup[0], &ws.b[0], &weights[0], size);
+			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
+			// the lower triangle retains original elements.  Copy the
+			// partially-intact matrix for the gauss_solve fallback.
+			ws.A_backup.resize(matrix_size);
+			std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
+			system_solved = gauss_solve(&ws.A_backup[0], &ws.b[0], &weights[0], size);
 			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 			// Compute SK variance on the fallback path (mirrors non-fallback
 			// variance block of the ws variant).  ws.b2 holds original RHS values.
@@ -551,9 +602,6 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
-		// Backup A before dpotrf_: dpotrf_ corrupts A on failure
-		std::vector<double> A_backup(A);
-
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
@@ -561,11 +609,12 @@ namespace hpgl
 		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: dpotrf_ corrupted A, restore from backup.
+			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
+			// the lower triangle retains original elements.  Copy the
+			// partially-intact matrix for the gauss_solve fallback.
+			std::vector<double> A_backup(A);
 			// Solve both RHS (b→sk_weights, ones→ones_result) via gauss_solve.
 			// gauss_solve modifies A in-place, so use a second copy.
-			// A_backup2 created BEFORE gauss_solve so it preserves the
-			// original matrix — gauss_solve modifies A_backup in-place.
 			std::vector<double> A_backup2(A_backup);
 			system_solved = gauss_solve(&A_backup[0], &b[0], &sk_weights[0], size);
 			if (system_solved) {
@@ -834,17 +883,22 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
-		// Backup ws.A before dpotrf_: dpotrf_ corrupts A on failure
-		std::vector<double> A_backup(ws.A.begin(), ws.A.begin() + matrix_size);
+		// On success path, no backup is needed — dpotrf_ produces the
+		// factor and dpotrs_ solves directly.  Only allocate and copy
+		// A_backup on the failure path, right before the fallback.
 		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
 		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: restore A from backup. Solve both RHS via gauss_solve.
+			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
+			// the lower triangle retains original elements.  Copy the
+			// partially-intact matrix for the gauss_solve fallback.
+			ws.A_backup.resize(matrix_size);
+			std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
 			// A_backup2 created BEFORE gauss_solve so it preserves the
 			// original matrix — gauss_solve modifies A_backup in-place.
-			std::vector<double> A_backup2(A_backup);
-			system_solved = gauss_solve(&A_backup[0], &ws.b[0], &ws.sk_weights[0], size);
+			std::vector<double> A_backup2(ws.A_backup);
+			system_solved = gauss_solve(&ws.A_backup[0], &ws.b[0], &ws.sk_weights[0], size);
 			if (system_solved) {
 				system_solved = gauss_solve(&A_backup2[0], &ws.ones[0], &ws.ones_result[0], size);
 			}
@@ -1021,6 +1075,9 @@ namespace hpgl
 
 		// Range validation: clamp correlogram mean to valid [0,1] interval.
 		// Values outside [0,1] can produce sqrt(negative) → NaN downstream.
+		// IEEE 754 NaN passes both < 0.0 and > 1.0 checks unmodified,
+		// so detect and clamp NaN explicitly.
+		if (std::isnan(meanc)) meanc = 0.0;
 		if (meanc < 0.0) meanc = 0.0;
 		if (meanc > 1.0) meanc = 1.0;
 
@@ -1045,6 +1102,7 @@ namespace hpgl
 			double meani = means[i];
 
 			// Range validation: clamp to [0,1] before boundary adjustment
+			if (std::isnan(meani)) meani = 0.0;
 			if (meani < 0.0) meani = 0.0;
 			if (meani > 1.0) meani = 1.0;
 
@@ -1103,9 +1161,6 @@ namespace hpgl
 		char matrix_type = 'U';
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
-		// Backup A before dpotrf_: dpotrf_ corrupts A on failure
-		std::vector<double> A_backup(A);
-
 		// Cholesky decomposition
 		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
@@ -1113,7 +1168,10 @@ namespace hpgl
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: restore A from backup and try gauss_solve
+			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
+			// the lower triangle retains original elements.  Copy the
+			// partially-intact matrix for the gauss_solve fallback.
+			std::vector<double> A_backup(A);
 			system_solved = gauss_solve(&A_backup[0], &b[0], &weights[0], size);
 			return system_solved;
 		}
@@ -1188,6 +1246,9 @@ namespace hpgl
 
 		// Range validation: clamp correlogram mean to valid [0,1] interval.
 		// Values outside [0,1] can produce sqrt(negative) → NaN downstream.
+		// IEEE 754 NaN passes both < 0.0 and > 1.0 checks unmodified,
+		// so detect and clamp NaN explicitly.
+		if (std::isnan(meanc)) meanc = 0.0;
 		if (meanc < 0.0) meanc = 0.0;
 		if (meanc > 1.0) meanc = 1.0;
 
@@ -1212,6 +1273,7 @@ namespace hpgl
 			double meani = means[i];
 
 			// Range validation: clamp to [0,1] before boundary adjustment
+			if (std::isnan(meani)) meani = 0.0;
 			if (meani < 0.0) meani = 0.0;
 			if (meani > 1.0) meani = 1.0;
 
@@ -1262,14 +1324,19 @@ namespace hpgl
 		integer b_size = 1;
 		char matrix_type = 'U';
 
-		// Backup ws.A before dpotrf_: dpotrf_ corrupts A on failure
-		std::vector<double> A_backup(ws.A.begin(), ws.A.begin() + matrix_size);
+		// On success path, no backup is needed — dpotrf_ produces the
+		// factor and dpotrs_ solves directly.  Only allocate and copy
+		// A_backup on the failure path, right before the fallback.
 		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
 		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
 
 		if (info_dec != 0) {
-			// Fallback: restore A from backup and try gauss_solve
-			system_solved = gauss_solve(&A_backup[0], &ws.b[0], &weights[0], size);
+			// Fallback: dpotrf_ only modifies the upper triangle (UPLO='U');
+			// the lower triangle retains original elements.  Copy the
+			// partially-intact matrix for the gauss_solve fallback.
+			ws.A_backup.resize(matrix_size);
+			std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
+			system_solved = gauss_solve(&ws.A_backup[0], &ws.b[0], &weights[0], size);
 			return system_solved;
 		}
 

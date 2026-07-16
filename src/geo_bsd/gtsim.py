@@ -21,11 +21,15 @@ def pseudo_gaussian_transform(prop, pk_prop, rng=None):
     # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
     prop_flat = prop.data.ravel(order="K")
     pk_flat = pk_prop.data.ravel(order="K")
-    for i in range(pk_prop.data.size):
-        if prop_flat[i] == 0:
-            prop_flat[i] = rng.uniform(0.0, pk_flat[i])
-        if prop_flat[i] == 1:
-            prop_flat[i] = rng.uniform(pk_flat[i], 1.0)
+
+    # Vectorized: generate random values for all zero/one cells at once.
+    zero_mask = prop_flat == 0
+    if np.any(zero_mask):
+        prop_flat[zero_mask] = rng.uniform(0.0, pk_flat[zero_mask])
+    one_mask = prop_flat == 1
+    if np.any(one_mask):
+        prop_flat[one_mask] = rng.uniform(pk_flat[one_mask], 1.0)
+
     # Clamp output to [0, 1] as a safety net
     prop_flat[:] = np.clip(prop_flat, 0.0, 1.0)
     return prop

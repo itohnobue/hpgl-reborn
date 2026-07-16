@@ -15,6 +15,7 @@ try:
         Ellipsoid,
         VariogramSearchTemplate,
         _c_array,
+        _check_cvar_error,
         checked_create,
         cont_point_set_t,
         ellipsoid_t,
@@ -22,6 +23,9 @@ try:
         hard_data_t,
         variogram_search_template_t,
         vector_t,
+    )
+    from geo_bsd.cvariogram import (
+        __strides as _cvar_strides,
     )
 
     CVAR_AVAILABLE = True
@@ -615,3 +619,269 @@ class TestCStackLayers:
         # Verify multiple layers were stacked — result should not be all zeros
         assert not np.all(result == 0), "Result should contain non-zero data from multiple layers"
         assert not np.any(np.isnan(result))
+
+
+# =============================================================================
+# F-212: cvariogram.py uncovered validation guard and error path tests
+# =============================================================================
+
+
+@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
+class TestCalcVariogramsValidation:
+    """F-212: Validation guard tests for CalcVariograms."""
+
+    def _make_ellipsoid_and_template(self, num_lags=3):
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
+            num_lags=num_lags, first_lag_distance=0.0, ellipsoid=ell,
+        )
+        return ell, templ
+
+    # --- dtype validation ---
+
+    def test_data_non_float32_raises(self):
+        """CalcVariograms raises TypeError when hard_data[0] is not float32."""
+        _, templ = self._make_ellipsoid_and_template()
+        bad_data = np.zeros((3, 3, 3), dtype="float64")
+        mask = np.ones((3, 3, 3), dtype="uint8")
+        with pytest.raises(TypeError, match="hard_data\\[0\\] must be a float32"):
+            CalcVariograms(templ, (bad_data, mask))
+
+    def test_mask_non_uint8_raises(self):
+        """CalcVariograms raises TypeError when hard_data[1] is not uint8."""
+        _, templ = self._make_ellipsoid_and_template()
+        data = np.zeros((3, 3, 3), dtype="float32")
+        bad_mask = np.ones((3, 3, 3), dtype="int32")
+        with pytest.raises(TypeError, match="hard_data\\[1\\] must be a uint8"):
+            CalcVariograms(templ, (data, bad_mask))
+
+    # --- ndim validation ---
+
+    def test_data_non_3d_raises(self):
+        """CalcVariograms raises ValueError when hard_data[0] is not 3D."""
+        _, templ = self._make_ellipsoid_and_template()
+        bad_data = np.zeros((10,), dtype="float32")
+        mask = np.zeros((10,), dtype="uint8")
+        with pytest.raises(ValueError, match="hard_data\\[0\\] must be 3-dimensional"):
+            CalcVariograms(templ, (bad_data, mask))
+
+    def test_mask_non_3d_raises(self):
+        """CalcVariograms raises ValueError when hard_data[1] is not 3D."""
+        _, templ = self._make_ellipsoid_and_template()
+        data = np.zeros((3, 3, 3), dtype="float32")
+        bad_mask = np.ones((10,), dtype="uint8")
+        with pytest.raises(ValueError, match="hard_data\\[1\\] must be 3-dimensional"):
+            CalcVariograms(templ, (data, bad_mask))
+
+    # --- shape validation ---
+
+    def test_zero_dimension_raises(self):
+        """CalcVariograms raises ValueError when any dimension is <= 0."""
+        _, templ = self._make_ellipsoid_and_template()
+        bad_data = np.zeros((3, 0, 3), dtype="float32")
+        bad_mask = np.ones((3, 0, 3), dtype="uint8")
+        with pytest.raises(ValueError, match="grid dimensions must be positive"):
+            CalcVariograms(templ, (bad_data, bad_mask))
+
+    def test_shape_mismatch_raises(self):
+        """CalcVariograms raises ValueError when data and mask shapes differ."""
+        _, templ = self._make_ellipsoid_and_template()
+        data = np.zeros((3, 3, 3), dtype="float32")
+        bad_mask = np.ones((4, 4, 3), dtype="uint8")
+        with pytest.raises(ValueError, match="does not match"):
+            CalcVariograms(templ, (data, bad_mask))
+
+
+@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
+class TestCalcVariogramsFromPointSetValidation:
+    """F-212: Validation guard tests for CalcVariogramsFromPointSet."""
+
+    def _make_ellipsoid_and_template(self, num_lags=3):
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
+            num_lags=num_lags, first_lag_distance=0.0, ellipsoid=ell,
+        )
+        return ell, templ
+
+    def _make_point_set(self, n=10):
+        np.random.seed(42)
+        return {
+            "X": np.random.rand(n).astype("float32") * 10,
+            "Y": np.random.rand(n).astype("float32") * 10,
+            "Z": np.random.rand(n).astype("float32") * 5,
+            "Property": np.random.rand(n).astype("float32") * 100,
+        }
+
+    def test_empty_point_set_raises(self):
+        """CalcVariogramsFromPointSet raises ValueError when point_set is empty."""
+        _, templ = self._make_ellipsoid_and_template()
+        ps = {
+            "X": np.array([], dtype="float32"),
+            "Y": np.array([], dtype="float32"),
+            "Z": np.array([], dtype="float32"),
+            "Property": np.array([], dtype="float32"),
+        }
+        with pytest.raises(ValueError, match="at least one point"):
+            CalcVariogramsFromPointSet(templ, ps, None)
+
+    def test_exceeds_max_point_set_size_raises(self):
+        """CalcVariogramsFromPointSet raises ValueError when size > MAX_POINT_SET_SIZE."""
+        from geo_bsd.cvariogram import MAX_POINT_SET_SIZE
+
+        _, templ = self._make_ellipsoid_and_template()
+        n = MAX_POINT_SET_SIZE + 1
+        ps = {
+            "X": np.zeros(n, dtype="float32"),
+            "Y": np.zeros(n, dtype="float32"),
+            "Z": np.zeros(n, dtype="float32"),
+            "Property": np.zeros(n, dtype="float32"),
+        }
+        with pytest.raises(ValueError, match="exceeds MAX_POINT_SET_SIZE"):
+            CalcVariogramsFromPointSet(templ, ps, None)
+
+    def test_wrong_dtype_raises(self):
+        """CalcVariogramsFromPointSet raises TypeError when coord array is not float32."""
+        _, templ = self._make_ellipsoid_and_template()
+        ps = {
+            "X": np.zeros(10, dtype="float64"),  # Wrong dtype
+            "Y": np.zeros(10, dtype="float32"),
+            "Z": np.zeros(10, dtype="float32"),
+            "Property": np.zeros(10, dtype="float32"),
+        }
+        with pytest.raises(TypeError, match="must be a float32"):
+            CalcVariogramsFromPointSet(templ, ps, None)
+
+    def test_coordinate_length_mismatch_raises(self):
+        """CalcVariogramsFromPointSet raises ValueError when coordinate arrays have mismatched lengths."""
+        _, templ = self._make_ellipsoid_and_template()
+        ps = {
+            "X": np.zeros(10, dtype="float32"),
+            "Y": np.zeros(15, dtype="float32"),  # Different length
+            "Z": np.zeros(10, dtype="float32"),
+            "Property": np.zeros(10, dtype="float32"),
+        }
+        with pytest.raises(ValueError, match="coordinate array length mismatch"):
+            CalcVariogramsFromPointSet(templ, ps, None)
+
+
+@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
+class TestCStackLayersValidation:
+    """F-212: Validation guard tests for CStackLayers."""
+
+    def _make_layer(self, nx=5, ny=5):
+        np.random.seed(42)
+        return np.random.rand(nx, ny, 1).astype("float32")
+
+    def _make_result(self, nx=5, ny=5, nz=10):
+        return np.zeros((nx, ny, nz), dtype="float32")
+
+    def test_layer_wrong_dtype_raises(self):
+        """CStackLayers raises TypeError when a layer is not float32."""
+        bad_layer = np.zeros((5, 5, 1), dtype="float64")
+        result = self._make_result()
+        with pytest.raises(TypeError, match="must be a float32"):
+            CStackLayers([bad_layer], [1], nz=5, scalez=1.0, blank_value=-99.0, result=result)
+
+    def test_result_wrong_dtype_raises(self):
+        """CStackLayers raises TypeError when result is not float32."""
+        layer = self._make_layer()
+        bad_result = np.zeros((5, 5, 10), dtype="float64")
+        with pytest.raises(TypeError, match="must be a float32"):
+            CStackLayers([layer], [1], nz=5, scalez=1.0, blank_value=-99.0, result=bad_result)
+
+    def test_non_finite_scalez_raises(self):
+        """CStackLayers raises ValueError when scalez is not finite."""
+        layer = self._make_layer()
+        result = self._make_result()
+        with pytest.raises(ValueError, match="scalez must be finite"):
+            CStackLayers([layer], [1], nz=5, scalez=float("inf"), blank_value=-99.0, result=result)
+
+    def test_negative_scalez_raises(self):
+        """CStackLayers raises ValueError when scalez <= 0."""
+        layer = self._make_layer()
+        result = self._make_result()
+        with pytest.raises(ValueError, match="scalez must be positive"):
+            CStackLayers([layer], [1], nz=5, scalez=0.0, blank_value=-99.0, result=result)
+
+    def test_non_finite_blank_value_raises(self):
+        """CStackLayers raises ValueError when blank_value is not finite."""
+        layer = self._make_layer()
+        result = self._make_result()
+        with pytest.raises(ValueError, match="blank_value must be finite"):
+            CStackLayers([layer], [1], nz=5, scalez=1.0, blank_value=float("nan"), result=result)
+
+    def test_nz_exceeds_result_shape_raises(self):
+        """CStackLayers raises ValueError when nz > result.shape[2]."""
+        layer = self._make_layer()
+        result = self._make_result(nz=3)
+        with pytest.raises(ValueError, match="nz.*exceeds result"):
+            CStackLayers([layer], [1], nz=5, scalez=1.0, blank_value=-99.0, result=result)
+
+    def test_marker_count_mismatch_raises(self):
+        """CStackLayers raises ValueError when len(markers) != len(layers)."""
+        layer = self._make_layer()
+        result = self._make_result()
+        with pytest.raises(ValueError, match="len\\(markers\\).*must match.*len\\(layers\\)"):
+            CStackLayers([layer, layer], [1], nz=5, scalez=1.0, blank_value=-99.0, result=result)
+
+    def test_layer_shape_mismatch_raises(self):
+        """CStackLayers raises ValueError when layers have mismatched shapes."""
+        l1 = self._make_layer(nx=5, ny=5)
+        l2 = self._make_layer(nx=6, ny=5)  # Different shape
+        result = self._make_result()
+        with pytest.raises(ValueError, match="does not match reference shape"):
+            CStackLayers([l1, l2], [1, 2], nz=5, scalez=1.0, blank_value=-99.0, result=result)
+
+
+@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
+class TestCvarStrides:
+    """F-212: __strides error path tests for unsupported ndim."""
+
+    def test_ndim_2_raises(self):
+        """__strides raises ValueError for ndim=2 (unsupported)."""
+        arr = np.zeros((3, 4), dtype="float32")
+        with pytest.raises(ValueError, match="unsupported ndim"):
+            _cvar_strides(arr)
+
+    def test_ndim_0_raises(self):
+        """__strides raises ValueError for ndim=0 (unsupported)."""
+        arr = np.array(3.14, dtype="float32")
+        with pytest.raises(ValueError, match="unsupported ndim"):
+            _cvar_strides(arr)
+
+
+@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
+class TestCvarCheckError:
+    """F-212: _check_cvar_error error detection tests."""
+
+    def test_check_cvar_error_no_error(self, monkeypatch):
+        """_check_cvar_error does NOT raise when C++ returns no error."""
+        import geo_bsd.cvariogram as cvmod
+        monkeypatch.setattr(cvmod.cvar, "cvar_get_last_error", lambda: None)
+        # Should not raise
+        _check_cvar_error("test_ctx")
+
+    def test_check_cvar_error_new_error_raises(self, monkeypatch):
+        """_check_cvar_error raises RuntimeError when C++ returns a NEW error."""
+        import geo_bsd.cvariogram as cvmod
+
+        # Simulate fresh thread-local state (no snapshot)
+        if hasattr(cvmod._cvar_error_local, "_cvar_error_snapshot"):
+            del cvmod._cvar_error_local._cvar_error_snapshot
+        monkeypatch.setattr(cvmod.cvar, "cvar_get_last_error",
+                            lambda: b"something went wrong")
+        with pytest.raises(RuntimeError, match="test_ctx failed"):
+            _check_cvar_error("test_ctx")
+
+    def test_check_cvar_error_stale_suppressed(self, monkeypatch):
+        """_check_cvar_error does NOT raise when error matches snapshot (stale)."""
+        import geo_bsd.cvariogram as cvmod
+
+        msg = b"stale error from previous call"
+        monkeypatch.setattr(cvmod.cvar, "cvar_get_last_error", lambda: msg)
+        # Set up thread-local snapshot matching the error
+        cvmod._cvar_error_local._cvar_error_snapshot = msg
+        # Should not raise (stale error suppressed)
+        _check_cvar_error("test_ctx")

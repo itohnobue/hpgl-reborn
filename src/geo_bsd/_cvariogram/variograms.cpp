@@ -20,14 +20,18 @@ namespace {
 }
 
 /// Exported: retrieves the last error message (thread-safe, C ABI).
+///
+/// Lifetime: The returned pointer is valid until the next call to
+/// cvar_get_last_error() from the same thread. Callers that need
+/// the error string beyond the next call should copy it.
 extern "C" const char * cvar_get_last_error(void)
 {
     try
     {
         std::lock_guard<std::mutex> lock(last_cvariogram_error_mutex);
-        thread_local std::string cached;
-        cached = last_cvariogram_error;
-        return cached.c_str();
+        thread_local char cached[1024];
+        snprintf(cached, sizeof(cached), "%s", last_cvariogram_error.c_str());
+        return cached;
     }
     catch (const std::exception & ex)
     {
@@ -290,146 +294,10 @@ void init_lag_list(variogram_search_template_t * templ, lag_t * lags, int count)
 	}
 }
 
-lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_count)
-{
-    try
-    {
-    if (!validate_ptr(templ, "templ (calc_lag_areas)")) return nullptr;
-    if (!validate_ptr(points_count, "points_count (calc_lag_areas)")) return nullptr;
-
-    if (templ->m_num_lags <= 0) {
-        fprintf(stderr, "[HPGL ERROR] calc_lag_areas: num_lags must be positive\n");
-        fflush(stderr);
-        cvar_set_last_error("calc_lag_areas: num_lags must be positive");
-        return nullptr;
-    }
-
-    search_template_window_t window;
-    calc_search_template_window(templ, &window);
-    int mini = (int) floor(window.m_min_i);
-    int minj = (int) floor(window.m_min_j);
-    int mink = (int) floor(window.m_min_k);
-
-    int maxi = (int) ceil(window.m_max_i);
-    int maxj = (int) ceil(window.m_max_j);
-    int maxk = (int) ceil(window.m_max_k);
-
-    lag_t * lags = (lag_t *) calloc(templ->m_num_lags, sizeof(lag_t));
-    if (!lags) {
-        fprintf(stderr, "[HPGL ERROR] calc_lag_areas: calloc(lags) failed\n");
-        fflush(stderr);
-        cvar_set_last_error("calc_lag_areas: calloc(lags) failed — out of memory");
-        return nullptr;
-    }
-    //lag_t * first_lag = lags;
-    //lag_t * last_lag = &lags[templ->m_num_lags - 1];
-
-    init_lag_list(templ, lags, templ->m_num_lags);
-
-    // M26: Pre-allocate with conservative upper bound (total iteration space)
-    // and fill in a single pass instead of counting first then re-iterating.
-    {
-        size_t span_i = static_cast<size_t>(maxi - mini + 1);
-        size_t span_j = static_cast<size_t>(maxj - minj + 1);
-        size_t span_k = static_cast<size_t>(maxk - mink + 1);
-        size_t max_points = static_cast<size_t>(templ->m_num_lags);
-        bool overflow = false;
-
-        // Overflow-safe multiplication
-        if (span_i > 0 && max_points > SIZE_MAX / span_i) overflow = true;
-        else max_points *= span_i;
-        if (!overflow && span_j > 0 && max_points > SIZE_MAX / span_j) overflow = true;
-        else if (!overflow) max_points *= span_j;
-        if (!overflow && span_k > 0 && max_points > SIZE_MAX / span_k) overflow = true;
-        else if (!overflow) max_points *= span_k;
-        // Ensure max_points fits in int for points_count output
-        if (!overflow && max_points > static_cast<size_t>(std::numeric_limits<int>::max()))
-            overflow = true;
-
-        if (overflow) {
-            free(lags);
-            fprintf(stderr, "[HPGL ERROR] calc_lag_areas: search template window too large\n");
-            fflush(stderr);
-            cvar_set_last_error("calc_lag_areas: search template window too large");
-            return nullptr;
-        }
-
-        lag_point_t * result = (lag_point_t *) calloc(max_points, sizeof(lag_point_t));
-        if (!result) {
-            free(lags);
-            fprintf(stderr, "[HPGL ERROR] calc_lag_areas: calloc(result) failed\n");
-            fflush(stderr);
-            cvar_set_last_error("calc_lag_areas: calloc(result) failed — out of memory");
-            return nullptr;
-        }
-
-        int current_point = 0;
-        vector_t vec;
-
-        for (int lag_idx = 0; lag_idx < templ->m_num_lags; ++lag_idx)
-        {
-            lag_t * lag = &lags[lag_idx];
-            for (int i = mini; i <= maxi; ++i)
-            {
-                for (int j = minj; j <= maxj; ++j)
-                {
-                    for (int k = mink; k <= maxk; ++k)
-                    {
-                        vec.m_data[0] = i;
-                        vec.m_data[1] = j;
-                        vec.m_data[2] = k;
-                        // Use directional projection onto the principal
-                        // anisotropy axis (direction1) for lag binning.
-                        // Lags are spaced along direction1 at intervals of
-                        // lag_separation; Euclidean distance is inappropriate
-                        // for anisotropic variograms.
-                        double dist = fabs(dot_product(&vec, &(templ->m_ellipsoid.m_direction1)));
-                        if (is_in_tunnel(templ, &vec)
-                                && lag->m_start <= dist
-                                && dist < lag->m_end)
-                        {
-                            // Upper-bound guard: should never trigger since
-                            // max_points >= total iteration count
-                            if (static_cast<size_t>(current_point) >= max_points) {
-                                free(lags);
-                                free(result);
-                                fprintf(stderr, "[HPGL ERROR] calc_lag_areas: buffer overflow\n");
-                                fflush(stderr);
-                                cvar_set_last_error("calc_lag_areas: internal buffer overflow");
-                                return nullptr;
-                            }
-                            lag_point_t * lp = &result[current_point++];
-                            lp->m_coords[0] = i;
-                            lp->m_coords[1] = j;
-                            lp->m_coords[2] = k;
-                            lp->m_lag_index = lag_idx;
-                        }
-                    }
-                }
-            }
-        }
-
-        *points_count = current_point;
-        free(lags);
-        return result;
-    }
-    }
-    catch (const std::exception & ex)
-    {
-        // Note: any calloc'd memory already allocated may leak here.
-        // Preventing the exception from crossing the extern "C" boundary
-        // takes priority; a broader RAII refactor would be needed for
-        // leak-free exception safety.
-        cvar_set_last_error(ex.what());
-        return nullptr;
-    }
-}
-
-
 struct lag_statistics_t
 {
 	double m_cov_sum;
-	int m_cov_count;
+	int64_t m_cov_count;
 };
 
 bool is_inside(hard_data_t * data, int x, int y, int z)
@@ -479,8 +347,10 @@ update_lags(
 		double dist,
 		double var)
 {
-	if (templ->m_lag_separation == 0)
+	if (templ->m_lag_separation == 0) {
+		cvar_set_last_error("update_lags: lag_separation is zero, cannot bin lags");
 		return;
+	}
 	int lag_min = (int) ceil( (dist - (templ->m_lag_width / 2) - templ->m_first_lag_distance) / templ->m_lag_separation);
 	if (lag_min >= lag_count)
 		return;
@@ -630,6 +500,19 @@ void calc_variograms_from_point_set(
 			point_set ? point_set->size : 0, MAX_POINT_SET_SIZE);
 		fflush(stderr);
 		cvar_set_last_error("calc_variograms_from_point_set: invalid point_set");
+		return;
+	}
+
+	// Validate member pointers to prevent null dereference at lines 668-670
+	if (point_set->xs == nullptr || point_set->ys == nullptr ||
+	    point_set->zs == nullptr || point_set->values == nullptr)
+	{
+		fprintf(stderr,
+			"[HPGL ERROR] calc_variograms_from_point_set: point_set member pointer is null (xs=%p ys=%p zs=%p values=%p)\n",
+			(void*)point_set->xs, (void*)point_set->ys,
+			(void*)point_set->zs, (void*)point_set->values);
+		fflush(stderr);
+		cvar_set_last_error("calc_variograms_from_point_set: null member pointer in point_set");
 		return;
 	}
 

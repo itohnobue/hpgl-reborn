@@ -2540,6 +2540,111 @@ class TestKrigingNegativeCases:
         with pytest.raises(CriticalValidationError, match="missing required key"):
             simple_cokriging_markII(krig_medium_grid, primary_data, sec_data, 0.8, (5, 5, 3), 12)
 
+    # ---- F-204: simple_cokriging_markI uncovered validation guards ----
+
+    def test_ck_markI_wrong_prop_type(
+        self, indicator_property_medium, krig_medium_grid, secondary_property_medium,
+        covariance_spherical,
+    ):
+        """F-204: simple_cokriging_markI raises TypeError when prop is IndProperty."""
+        with pytest.raises(TypeError, match="prop must be ContProperty"):
+            simple_cokriging_markI(
+                indicator_property_medium,
+                krig_medium_grid,
+                (5, 5, 3),
+                12,
+                covariance_spherical,
+                secondary_property_medium,
+                50.0,
+                40.0,
+                100.0,
+                0.8,
+            )
+
+    def test_ck_markI_empty_secondary(
+        self, continuous_property_medium, krig_medium_grid, covariance_spherical,
+    ):
+        """F-204: simple_cokriging_markI raises ValueError when secondary_data is empty."""
+        empty_data = np.array([], dtype="float32")
+        empty_mask = np.array([], dtype="uint8")
+        empty_secondary = ContProperty(empty_data, empty_mask)
+        with pytest.raises(ValueError, match="secondary_data.data is empty"):
+            simple_cokriging_markI(
+                continuous_property_medium,
+                krig_medium_grid,
+                (5, 5, 3),
+                12,
+                covariance_spherical,
+                empty_secondary,
+                50.0,
+                40.0,
+                100.0,
+                0.8,
+            )
+
+    # ---- F-205: simple_kriging uncovered validation guards ----
+
+    def test_sk_wrong_prop_type(self, indicator_property_medium, krig_medium_grid,
+                                  covariance_spherical):
+        """F-205: simple_kriging raises TypeError when prop is IndProperty."""
+        with pytest.raises(TypeError, match="prop must be ContProperty"):
+            simple_kriging(
+                indicator_property_medium,
+                krig_medium_grid,
+                (5, 5, 3),
+                12,
+                covariance_spherical,
+            )
+
+    def test_sk_empty_data(self, krig_medium_grid, covariance_spherical):
+        """F-205: simple_kriging raises ValueError when prop.data is empty."""
+        empty_data = np.array([], dtype="float32")
+        empty_mask = np.array([], dtype="uint8")
+        empty_prop = ContProperty(empty_data, empty_mask)
+        with pytest.raises(ValueError, match="prop.data is empty"):
+            simple_kriging(
+                empty_prop,
+                krig_medium_grid,
+                (5, 5, 3),
+                12,
+                covariance_spherical,
+            )
+
+    def test_sk_mismatched_data_size(self, krig_medium_grid, covariance_spherical):
+        """F-205: simple_kriging raises ValueError when prop.data size mismatches grid."""
+        wrong_data = np.random.rand(100).astype("float32") * 100  # grid is 500 cells
+        wrong_mask = np.ones(100, dtype="uint8")
+        wrong_prop = ContProperty(wrong_data, wrong_mask)
+        with pytest.raises(ValueError, match="does not match grid size"):
+            simple_kriging(
+                wrong_prop,
+                krig_medium_grid,
+                (5, 5, 3),
+                12,
+                covariance_spherical,
+            )
+
+    # ---- F-206: simple_kriging_weights error return path ----
+
+    def test_skw_degenerate_points_all_identical(self):
+        """F-206: simple_kriging_weights raises RuntimeError with degenerate (all identical) points.
+
+        All-identical neighbour points produce a singular covariance matrix,
+        causing the C++ function to return rc != 0 which triggers RuntimeError.
+        """
+        center = (0.0, 0.0, 0.0)
+        n_x = [0.0, 0.0, 0.0, 0.0, 0.0]
+        n_y = [0.0, 0.0, 0.0, 0.0, 0.0]
+        n_z = [0.0, 0.0, 0.0, 0.0, 0.0]
+        with pytest.raises(RuntimeError, match="simple_kriging_weights failed"):
+            simple_kriging_weights(
+                center,
+                n_x, n_y, n_z,
+                ranges=(5.0, 5.0, 3.0),
+                sill=1.0,
+                cov_type=covariance.spherical,
+            )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

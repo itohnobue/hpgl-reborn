@@ -1,5 +1,8 @@
 #include "stdafx.h"
 
+#include <cerrno>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "property_array.h"
@@ -25,6 +28,14 @@ namespace hpgl
 
 	void write_value(FILE * f, double value)
 	{
+		// Reject NaN and Inf before writing — these values cannot be
+		// read back correctly by parse routines, breaking round-trip.
+		if (!std::isfinite(value))
+		{
+			std::ostringstream oss;
+			oss << "Cannot write non-finite value (" << value << ") to file.";
+			throw hpgl_exception("write_value", oss.str());
+		}
 		if (fprintf(f, "%E\n", value) < 0)
 			throw hpgl_exception("write_value", "Error writing to file.");
 	}
@@ -37,12 +48,13 @@ namespace hpgl
 		FILE * f = fopen(filename, mode);
 		if (f == 0)
 		{
+			int open_errno = errno;
 			// Use basename to avoid leaking full filesystem path in error messages.
 			const char * bn = strrchr(filename, '/');
 			if (bn == nullptr) bn = filename;
 			else ++bn; // skip '/'
 			std::ostringstream oss;
-			oss << "Can't open file '" << bn << "'.";
+			oss << "Can't open file '" << bn << "': " << strerror(open_errno) << ".";
 			throw hpgl_exception("open_file_checked", oss.str());
 		}
 		return file_t(f, [](FILE* fp) {
@@ -61,20 +73,48 @@ namespace hpgl
 				)
 		{
 			blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
-			file_t f = open_file_checked(filename, "w+");
-			if (fprintf(f.get(), "%s\n", property_name) < 0)
-				throw hpgl_exception("write_property_cont", "Error writing property name.");
 
-			for (int i = 0, end_i = property.size(); i < end_i; ++i)
+			// Write to a temporary file first, then atomically rename.
+			// This prevents data loss if the process crashes mid-write:
+			// fopen("w+") would have truncated the original before any
+			// data was written, leaving a partial or empty file.
+			std::string tmp_filename = std::string(filename) + ".tmp";
 			{
-				if (property.is_informed(i))
-					write_value(f.get(), property.get_at(i));
-				else
-					write_value(f.get(), undefined_value);
-			}
+				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
+				if (fprintf(f.get(), "%s\n", property_name) < 0)
+					throw hpgl_exception("write_property_cont", "Error writing property name.");
 
-			if (fprintf(f.get(), "/\n") < 0)
-				throw hpgl_exception("write_property_cont", "Error writing end marker.");
+				for (int i = 0, end_i = property.size(); i < end_i; ++i)
+				{
+					if (property.is_informed(i))
+						write_value(f.get(), property.get_at(i));
+					else
+						write_value(f.get(), undefined_value);
+				}
+
+				if (fprintf(f.get(), "/\n") < 0)
+					throw hpgl_exception("write_property_cont", "Error writing end marker.");
+
+				// Explicit fflush — propagates write failures to the caller
+				// instead of silently swallowing them in the shared_ptr deleter.
+				if (fflush(f.get()) != 0)
+				{
+					int flush_errno = errno;
+					std::ostringstream oss;
+					oss << "fflush failed: " << strerror(flush_errno);
+					throw hpgl_exception("write_property_cont", oss.str());
+				}
+			}
+			// Atomic rename — data only reaches the target path after the
+			// complete file is written and flushed. rename() is atomic on
+			// macOS/Linux within the same filesystem.
+			if (std::rename(tmp_filename.c_str(), filename) != 0)
+			{
+				int rename_errno = errno;
+				std::ostringstream oss;
+				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
+				throw hpgl_exception("write_property_cont", oss.str());
+			}
 		}
 
 		void write_property_ind(
@@ -86,27 +126,48 @@ namespace hpgl
 				)
 		{
 			blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
-			file_t f = open_file_checked(filename, "w+");
-			if (fprintf(f.get(), "%s\n", property_name) < 0)
-				throw hpgl_exception("write_property_ind", "Error writing property name.");
 
-			for (int i = 0, end_i = property.size(); i < end_i; ++i)
+			// Write to a temporary file first, then atomically rename
+			// (same atomic-write pattern as write_property_cont).
+			std::string tmp_filename = std::string(filename) + ".tmp";
 			{
-				if (property.is_informed(i))
-				{
-					indicator_value_t val = property.get_at(i);
-					// Bounds check: invalid data produces undefined_value instead of UB
-					if (static_cast<size_t>(val) >= remap_table.size())
-						write_value(f.get(), undefined_value);
-					else
-						write_value(f.get(), remap_table[val]);
-				}
-				else
-					write_value(f.get(), undefined_value);
-			}
+				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
+				if (fprintf(f.get(), "%s\n", property_name) < 0)
+					throw hpgl_exception("write_property_ind", "Error writing property name.");
 
-			if (fprintf(f.get(), "/\n") < 0)
-				throw hpgl_exception("write_property_ind", "Error writing end marker.");
+				for (int i = 0, end_i = property.size(); i < end_i; ++i)
+				{
+					if (property.is_informed(i))
+					{
+						indicator_value_t val = property.get_at(i);
+						// Bounds check: invalid data produces undefined_value instead of UB
+						if (static_cast<size_t>(val) >= remap_table.size())
+							write_value(f.get(), undefined_value);
+						else
+							write_value(f.get(), remap_table[val]);
+					}
+					else
+						write_value(f.get(), undefined_value);
+				}
+
+				if (fprintf(f.get(), "/\n") < 0)
+					throw hpgl_exception("write_property_ind", "Error writing end marker.");
+
+				if (fflush(f.get()) != 0)
+				{
+					int flush_errno = errno;
+					std::ostringstream oss;
+					oss << "fflush failed: " << strerror(flush_errno);
+					throw hpgl_exception("write_property_ind", oss.str());
+				}
+			}
+			if (std::rename(tmp_filename.c_str(), filename) != 0)
+			{
+				int rename_errno = errno;
+				std::ostringstream oss;
+				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
+				throw hpgl_exception("write_property_ind", oss.str());
+			}
 		}
 	}
 
@@ -127,17 +188,38 @@ namespace hpgl
 				)
 		{
 			blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
-			file_t f = open_file_checked(filename, "w+");
 
-			int var_num = 1;
-			write_header(f.get(), var_num, property_name);
-
-			for (int i = 0, end_i = property.size(); i < end_i; ++i)
+			// Write to a temporary file first, then atomically rename
+			// (same atomic-write pattern as write_property_cont).
+			std::string tmp_filename = std::string(filename) + ".tmp";
 			{
-				if (property.is_informed(i))
-					write_value(f.get(), property.get_at(i));
-				else
-					write_value(f.get(), undefined_value);
+				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
+
+				int var_num = 1;
+				write_header(f.get(), var_num, property_name);
+
+				for (int i = 0, end_i = property.size(); i < end_i; ++i)
+				{
+					if (property.is_informed(i))
+						write_value(f.get(), property.get_at(i));
+					else
+						write_value(f.get(), undefined_value);
+				}
+
+				if (fflush(f.get()) != 0)
+				{
+					int flush_errno = errno;
+					std::ostringstream oss;
+					oss << "fflush failed: " << strerror(flush_errno);
+					throw hpgl_exception("write_gslib_property_cont_c", oss.str());
+				}
+			}
+			if (std::rename(tmp_filename.c_str(), filename) != 0)
+			{
+				int rename_errno = errno;
+				std::ostringstream oss;
+				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
+				throw hpgl_exception("write_gslib_property_cont_c", oss.str());
 			}
 		}
 
@@ -150,24 +232,45 @@ namespace hpgl
 				)
 		{
 			blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
-			file_t f = open_file_checked(filename, "w+");
 
-			int var_num = 1;
-			write_header(f.get(), var_num, property_name);
-
-			for (int i = 0, end_i = property.size(); i < end_i; ++i)
+			// Write to a temporary file first, then atomically rename
+			// (same atomic-write pattern as write_property_cont).
+			std::string tmp_filename = std::string(filename) + ".tmp";
 			{
-				if (property.is_informed(i))
+				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
+
+				int var_num = 1;
+				write_header(f.get(), var_num, property_name);
+
+				for (int i = 0, end_i = property.size(); i < end_i; ++i)
 				{
-					indicator_value_t val = property.get_at(i);
-					// Bounds check: invalid data produces undefined_value instead of UB
-					if (static_cast<size_t>(val) >= remap_table.size())
-						write_value(f.get(), undefined_value);
+					if (property.is_informed(i))
+					{
+						indicator_value_t val = property.get_at(i);
+						// Bounds check: invalid data produces undefined_value instead of UB
+						if (static_cast<size_t>(val) >= remap_table.size())
+							write_value(f.get(), undefined_value);
+						else
+							write_value(f.get(), remap_table[val]);
+					}
 					else
-						write_value(f.get(), remap_table[val]);
+						write_value(f.get(), undefined_value);
 				}
-				else
-					write_value(f.get(), undefined_value);
+
+				if (fflush(f.get()) != 0)
+				{
+					int flush_errno = errno;
+					std::ostringstream oss;
+					oss << "fflush failed: " << strerror(flush_errno);
+					throw hpgl_exception("write_gslib_property_ind_c", oss.str());
+				}
+			}
+			if (std::rename(tmp_filename.c_str(), filename) != 0)
+			{
+				int rename_errno = errno;
+				std::ostringstream oss;
+				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
+				throw hpgl_exception("write_gslib_property_ind_c", oss.str());
 			}
 		}
 

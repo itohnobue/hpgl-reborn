@@ -20,7 +20,6 @@ from numpy import (
     radians,
     repeat,
     reshape,
-    shape,
     sin,
     sum,
     vstack,
@@ -637,10 +636,28 @@ def CalcVariogramFunction(Point1, Point2, Result, Params):
     _verify_dict_keys(Params, ["HardData"], "Params")
     Values = Params["HardData"]
     NumValues = len(Values)
+
+    # Validate that input data does not contain NaN/Inf values.
+    for iv, arr in enumerate(Values):
+        if not numpy.all(numpy.isfinite(arr)):
+            raise ValueError(
+                f"CalcVariogramFunction: HardData[{iv}] contains NaN or Inf values"
+            )
+
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float64)
     else:
-        NumPoints = shape(Point1)[len(shape(Point1)) - 1]
+        # Normalize Point1/Point2 to handle both scalar (PointSetScanGridStyle),
+        # list (PointSetScanContStyle), and tuple-of-arrays (CubeScan) inputs.
+        if isinstance(Point1, tuple):
+            # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays
+            NumPoints = len(Point1[0])
+        else:
+            P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
+            P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()
+            NumPoints = len(P1)
+            Point1 = P1
+            Point2 = P2
 
         Values1 = zeros((NumValues, NumPoints))
         Values2 = zeros((NumValues, NumPoints))
@@ -666,6 +683,19 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
     Values = Params["HardData"]
     SoftData = Params["SoftData"]
     NumValues = len(Values)
+
+    # Validate that input data does not contain NaN/Inf values.
+    for iv, arr in enumerate(Values):
+        if not numpy.all(numpy.isfinite(arr)):
+            raise ValueError(
+                f"CalcCovarianceFunction: HardData[{iv}] contains NaN or Inf values"
+            )
+    for iv, arr in enumerate(SoftData):
+        if not numpy.all(numpy.isfinite(arr)):
+            raise ValueError(
+                f"CalcCovarianceFunction: SoftData[{iv}] contains NaN or Inf values"
+            )
+
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float64)
     else:
@@ -707,6 +737,19 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
     Values = Params["HardData"]
     SoftData = Params["SoftData"]
     NumValues = len(Values)
+
+    # Validate that input data does not contain NaN/Inf values.
+    for iv, arr in enumerate(Values):
+        if not numpy.all(numpy.isfinite(arr)):
+            raise ValueError(
+                f"CalcIndCorrelationFunction: HardData[{iv}] contains NaN or Inf values"
+            )
+    for iv, arr in enumerate(SoftData):
+        if not numpy.all(numpy.isfinite(arr)):
+            raise ValueError(
+                f"CalcIndCorrelationFunction: SoftData[{iv}] contains NaN or Inf values"
+            )
+
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float64)
     else:

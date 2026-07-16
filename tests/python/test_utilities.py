@@ -34,6 +34,7 @@ try:
         load_cont_property,
         load_ind_property,
         ordinary_kriging,
+        read_inc_file_byte,
         read_inc_file_float,
         set_output_handler,
         set_progress_handler,
@@ -287,6 +288,35 @@ class TestThreadManagement:
 
         # Restore original
         set_thread_num(original)
+
+    # ---- F-207: set_thread_num uncovered validation guards ----
+
+    def test_set_thread_num_type_error(self):
+        """F-207: set_thread_num raises TypeError for non-integer argument."""
+        with pytest.raises(TypeError, match="num must be an integer"):
+            set_thread_num("not_an_int")
+
+    def test_set_thread_num_value_error(self):
+        """F-207: set_thread_num raises ValueError when num < 1."""
+        with pytest.raises(ValueError, match="num must be at least 1"):
+            set_thread_num(0)
+
+    def test_set_thread_num_oversubscription_warning(self, caplog):
+        """F-207: set_thread_num warns when num > 4x CPU count."""
+        import os
+
+        cpu_count = os.cpu_count()
+        if cpu_count is None:
+            pytest.skip("os.cpu_count() returned None")
+        original = get_thread_num()
+        huge_num = cpu_count * 4 + 1
+        set_thread_num(huge_num)
+        # Restore original
+        set_thread_num(original)
+        # Verify the warning was logged
+        assert "exceeds 4x CPU count" in caplog.text, (
+            f"Expected oversubscription warning in log, got: {caplog.text}"
+        )
 
 
 # =============================================================================
@@ -998,6 +1028,76 @@ class TestGetGslibProperty:
         prop_dict = {"my_prop": np.array([1.0], dtype="float32")}
         with pytest.raises((KeyError, TypeError)):
             get_gslib_property(prop_dict, 123, -99.0)
+
+
+# =============================================================================
+# F-208: read_inc_file size validation guard tests
+# =============================================================================
+
+
+@pytest.mark.hpgl
+class TestReadIncFileSizeValidation:
+    """F-208: Tests for non-tuple size branches and c_int overflow checks in
+    read_inc_file_float and read_inc_file_byte."""
+
+    def test_read_float_non_tuple_size(self, tmp_path):
+        """F-208: read_inc_file_float accepts non-tuple (int) size."""
+        data = np.array([10.0, 20.0, 30.0], dtype="float32")
+        mask = np.ones(3, dtype="uint8")
+        prop = ContProperty(data, mask)
+        filename = str(tmp_path / "test_non_tuple.inc")
+        write_property(prop, filename, "test_non_tuple", -99.0)
+        # Pass size as int instead of tuple → exercises non-tuple branch
+        loaded = read_inc_file_float(filename, -99.0, 3)
+        assert isinstance(loaded, ContProperty)
+        assert loaded.data.size == 3
+
+    def test_read_float_overflow_size(self, tmp_path):
+        """F-208: read_inc_file_float raises ValueError when total_elements > c_int max.
+
+        Uses a non-tuple (int) size to bypass GridValidator.validate_grid_dimensions
+        which catches total grid size > 1e9 before the c_int overflow check.
+        """
+        data = np.array([1.0, 2.0], dtype="float32")
+        mask = np.ones(2, dtype="uint8")
+        prop = ContProperty(data, mask)
+        filename = str(tmp_path / "test_overflow.inc")
+        write_property(prop, filename, "test_overflow", -99.0)
+        # Non-tuple size > c_int max (2,147,483,647)
+        with pytest.raises(ValueError, match="exceeds c_int max"):
+            read_inc_file_float(filename, -99.0, 3000000000)
+
+    def test_read_byte_non_tuple_size(self, tmp_path):
+        """F-208: read_inc_file_byte accepts non-tuple (int) size."""
+        # Create a valid byte INC file
+        filename = str(tmp_path / "test_byte_non_tuple.inc")
+        with open(filename, "w") as f:
+            f.write("test_byte_non_tuple\n")
+            f.write("10 20 30\n")  # indicator values header
+            f.write("10 20 30\n")  # 3 values
+            f.write("/\n")
+        indicator_values = [10, 20, 30]
+        # Pass size as int → exercises non-tuple branch
+        loaded = read_inc_file_byte(filename, 255, 3, indicator_values)
+        assert isinstance(loaded, IndProperty)
+        assert loaded.data.size == 3
+
+    def test_read_byte_overflow_size(self, tmp_path):
+        """F-208: read_inc_file_byte raises ValueError when total_elements > c_int max.
+
+        Uses a non-tuple (int) size to bypass GridValidator.validate_grid_dimensions
+        which catches total grid size > 1e9 before the c_int overflow check.
+        """
+        filename = str(tmp_path / "test_byte_overflow.inc")
+        with open(filename, "w") as f:
+            f.write("test_byte_overflow\n")
+            f.write("10 20\n")
+            f.write("10 20\n")
+            f.write("/\n")
+        indicator_values = [10, 20]
+        # Non-tuple size > c_int max
+        with pytest.raises(ValueError, match="exceeds c_int max"):
+            read_inc_file_byte(filename, 255, 3000000000, indicator_values)
 
 
 if __name__ == "__main__":

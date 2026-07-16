@@ -29,6 +29,19 @@ namespace hpgl
 		}
 
 #ifdef _OPENMP
+		// OpenMP §2.5: calling omp_set_num_threads from within an active
+		// parallel region is undefined behaviour.  Guard against this.
+		// The caller should set the thread count before entering the
+		// parallel region; if we're already inside one, no-op with a
+		// diagnostic so that callers can detect the misuse.
+		if (omp_in_parallel()) {
+			fprintf(stderr,
+				"[HPGL WARNING] set_thread_num(%d) called from inside "
+				"a parallel region — ignored. Call before entering "
+				"the parallel region.\n", n_threads);
+			fflush(stderr);
+			return false;
+		}
 		// OpenMP handles invalid values (e.g., negative values already filtered)
 		// omp_set_num_threads is thread-safe with respect to OpenMP runtime
 		omp_set_num_threads(n_threads);

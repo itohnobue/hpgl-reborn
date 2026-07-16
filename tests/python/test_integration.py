@@ -124,11 +124,12 @@ class TestWorkflowIntegration:
             assert np.min(r_f64) >= -1.0, f"Realization {i} below CDF minimum"
             assert np.max(r_f64) <= 101.0, f"Realization {i} above CDF maximum"
 
-    def test_sgs_modifies_input_property_in_place(self):
-        """Test SGS modifies the input property array in-place (side-effect).
+    def test_sgs_returns_new_property_preserves_input(self):
+        """F-215: sgs_simulation returns a new ContProperty and does NOT mutate input data.
 
-        Verifies the identity (same object) and content change (data modified)
-        of the input property after SGS simulation.
+        sgs_simulation clones the input property internally (_clone_prop at sgs.py:168),
+        mutates the clone in C++, and returns the clone. The original prop.data values
+        are preserved (only shape may change via fix_shape).
         """
         grid = SugarboxGrid(x=10, y=10, z=5)
         np.random.seed(42)
@@ -145,9 +146,8 @@ class TestWorkflowIntegration:
             np.array([0.0, 0.5, 1.0], dtype="float32"),
         )
 
-        # Save original data copy and object identity
-        original_data = prop.data.copy()
-        prop_id_before = id(prop)
+        # Save original data values (flattened to handle potential reshaping)
+        original_values = prop.data.ravel().copy()
 
         result = sgs_simulation(
             prop=prop,
@@ -159,20 +159,31 @@ class TestWorkflowIntegration:
             seed=42,
         )
 
-        # Verify identity: same object reference (in-place modification)
-        prop_id_after = id(prop)
-        assert prop_id_before == prop_id_after, (
-            "SGS should modify the input property in-place (same object identity)"
+        # Verify result is a NEW ContProperty (not the same object as input)
+        assert result is not prop, (
+            "sgs_simulation should return a new ContProperty, not the input"
         )
 
-        # Verify content: data has been modified
-        assert not np.array_equal(original_data, prop.data), (
-            "SGS should modify the input property data in-place"
+        # Verify original data values are preserved (use Fortran-order ravel
+        # since fix_shape reshapes to Fortran-order 3D)
+        current_values = prop.data.ravel(order="F")
+        assert np.array_equal(original_values, current_values), (
+            "sgs_simulation should NOT mutate input property data values"
         )
 
-        # Verify the result is a valid ContProperty
+        # Verify result is a valid ContProperty with correct shape
         assert isinstance(result, ContProperty)
-        assert result.data.shape == prop.data.shape
+        expected_size = grid.x * grid.y * grid.z
+        assert result.data.size == expected_size, (
+            f"Result data size {result.data.size} != grid size {expected_size}"
+        )
+        # Result should have 3D shape after internal fix_shape
+        assert result.data.ndim == 3, (
+            f"Result data should be 3D after fix_shape, got ndim={result.data.ndim}"
+        )
+
+        # Verify result has finite values (valid simulation output)
+        assert np.all(np.isfinite(result.data)), "Result contains NaN or Inf"
 
 
 @pytest.mark.hpgl

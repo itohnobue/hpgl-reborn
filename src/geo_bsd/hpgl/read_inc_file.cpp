@@ -159,6 +159,18 @@ namespace hpgl
 		unsigned char * data_buffer,
 		unsigned char * mask_buffer)
 	{
+		// Validate undefined_value fits in unsigned char [0, 255] before
+		// processing. The write path (api.cpp:344) enforces this range;
+		// the read path must match to prevent out-of-range sentinel values
+		// (e.g. -999) from silently marking all cells as informed.
+		if (undefined_value < 0 || undefined_value > 255)
+		{
+			std::ostringstream oss;
+			oss << "undefined_value " << undefined_value
+			    << " out of range for unsigned char [0, 255]";
+			throw hpgl_exception("read_inc_file_byte", oss.str());
+		}
+
 		blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
 		FILE * file = fopen(file_name, "r");
 		if (file == 0)

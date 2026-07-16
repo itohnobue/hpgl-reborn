@@ -10,6 +10,7 @@ This module provides comprehensive input validation for all HPGL Python function
 from __future__ import annotations
 
 import logging
+import os
 import pathlib
 import warnings
 from functools import wraps
@@ -105,6 +106,11 @@ class ValidationWarning(ValidationError):
 
 class PathValidator:
     """Validates file paths to prevent directory traversal attacks"""
+
+    # Trusted base directory that callers SHOULD use instead of deriving
+    # basedir from the filename (self-referential basedir defeats symlink
+    # containment). Defaults to cwd realpath at import time.
+    DEFAULT_BASE_DIR: str = os.path.realpath(os.getcwd())
 
     @staticmethod
     def validate_filepath(
@@ -240,6 +246,67 @@ class PathValidator:
             basedir=basedir,
         )
 
+    @staticmethod
+    def safe_open_write(
+        filename: str | pathlib.Path,
+        basedir: str | pathlib.Path,
+        encoding: str = "utf-8",
+    ):
+        """Validate path for writing and immediately open with O_NOFOLLOW.
+
+        Validates the file path against a base directory, then opens it
+        atomically with ``O_NOFOLLOW`` to prevent TOCTOU (symlink race)
+        vulnerabilities. Returns a file object that must be closed by
+        the caller (use as a context manager).
+
+        Args:
+            filename: The file path to validate and open for writing.
+            basedir: Base directory for containment check (required).
+            encoding: Text encoding for the opened file.
+
+        Returns:
+            A text-mode file object opened for writing.
+
+        Raises:
+            CriticalValidationError: If path is invalid or outside basedir.
+            OSError: If the file cannot be opened.
+        """
+        safe_path = PathValidator.validate_filepath_in_basedir(
+            filename, basedir=basedir, must_exist=False
+        )
+        fd = os.open(safe_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW)
+        return os.fdopen(fd, "w", encoding=encoding)
+
+    @staticmethod
+    def safe_open_read(
+        filename: str | pathlib.Path,
+        basedir: str | pathlib.Path,
+        encoding: str = "utf-8",
+    ):
+        """Validate path for reading and immediately open with O_NOFOLLOW.
+
+        Validates the file path against a base directory, then opens it
+        atomically with ``O_NOFOLLOW`` to prevent TOCTOU (symlink race)
+        vulnerabilities. Returns a file object that must be closed by
+        the caller (use as a context manager).
+
+        Args:
+            filename: The file path to validate and open for reading.
+            basedir: Base directory for containment check (required).
+            encoding: Text encoding for the opened file.
+
+        Returns:
+            A text-mode file object opened for reading.
+
+        Raises:
+            CriticalValidationError: If path is invalid or outside basedir.
+            OSError: If the file cannot be opened.
+        """
+        safe_path = PathValidator.validate_filepath_in_basedir(
+            filename, basedir=basedir, must_exist=True
+        )
+        fd = os.open(safe_path, os.O_RDONLY | os.O_NOFOLLOW)
+        return os.fdopen(fd, "r", encoding=encoding)
 
 # ============================================================================
 # Grid and Array Validation

@@ -36,6 +36,13 @@ except (ImportError, OSError):
     covariance = _DummyCovarianceTypes()
 
 
+# F-211: __get_strides helper for ndim=2 (imported directly for testing)
+try:
+    from geo_bsd.geo import __get_strides as _get_strides_2d_test
+except (ImportError, OSError):
+    _get_strides_2d_test = None
+
+
 @pytest.mark.hpgl
 class TestSugarboxGrid:
     """Test SugarboxGrid class - represents 3D grid dimensions"""
@@ -583,6 +590,33 @@ class TestCheckFWA:
         arr.flags.writeable = False
         with pytest.raises(RuntimeError):
             checkFWA(arr)
+
+
+# =============================================================================
+# F-211: __get_strides ndim=2 branch test
+# =============================================================================
+
+
+@pytest.mark.skipif(_get_strides_2d_test is None, reason="HPGL library not available")
+class TestGetStrides:
+    """F-211: Test __get_strides helper function, specifically the ndim=2 branch."""
+
+    def test_ndim_2_strides(self):
+        """F-211: __get_strides returns correct Fortran-order strides for 2D array."""
+        arr = np.zeros((4, 5), dtype="float32", order="F")
+        strides = _get_strides_2d_test(arr)
+        # Fortran-order 2D: (1, shape[0], shape[0] * shape[1])
+        expected = (1, arr.shape[0], arr.shape[0] * arr.shape[1])
+        assert strides == expected, (
+            f"Expected {expected}, got {strides}"
+        )
+
+    def test_ndim_2_strides_non_square(self):
+        """F-211: __get_strides works for non-square 2D arrays."""
+        arr = np.zeros((3, 8), dtype="float32", order="F")
+        strides = _get_strides_2d_test(arr)
+        expected = (1, 3, 3 * 8)
+        assert strides == expected
 
 
 if __name__ == "__main__":

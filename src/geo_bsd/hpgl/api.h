@@ -154,6 +154,18 @@ struct hpgl_non_parametric_cdf_t
 	long long m_size;
 };
 
+/// Statistics collected during kriging computation.
+/// Populated by ordinary_kriging, simple_kriging, and lvm_kriging.
+/// Retrieved via hpgl_get_kriging_stats() after a kriging call.
+struct hpgl_kriging_stats_t
+{
+	unsigned long m_points_calculated;
+	unsigned long m_points_without_neighbours;
+	unsigned long m_points_singularity;
+	double m_mean;
+	double m_speed_nps;
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -172,6 +184,13 @@ hpgl_set_progress_handler(int (*handler)(char * stage, int percentage, void * pa
 
 HPGL_API int hpgl_set_thread_num(int n_threads);
 HPGL_API int hpgl_get_thread_num();
+
+/// Returns the kriging statistics from the most recent kriging call
+/// on the current thread. The returned struct is a copy — subsequent
+/// calls on the same thread do not invalidate it.
+/// Returns zero-initialized stats if no kriging call has been made.
+HPGL_API hpgl_kriging_stats_t
+hpgl_get_kriging_stats();
 
 HPGL_API int hpgl_read_inc_file_float(
 		char * filename,
@@ -321,6 +340,14 @@ hpgl_simple_cokriging_mark2(
 
 #ifdef __cplusplus
     }
+
+/// C++ helper: stores kriging statistics in thread-local storage.
+/// Called by ordinary_kriging, simple_kriging, and lvm_kriging
+/// after cont_kriging completes. Retrieve via hpgl_get_kriging_stats().
+namespace hpgl {
+	struct kriging_stats_t;
+	void set_kriging_stats(const kriging_stats_t & stats);
+}
 #endif
 
 #endif /* _API_H_ASDJLKJ123123L192301923LKAJSldsDFSDFsd123123 */

@@ -112,9 +112,6 @@ calc_search_template_window(
 		variogram_search_template_t * templ,
 		search_template_window_t * window);
 
-CVAR_API lag_point_t * 
-calc_lag_areas(variogram_search_template_t * templ, int * points_count);
-
 CVAR_API void 
 calc_variograms(
 		variogram_search_template_t * templ,

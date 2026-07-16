@@ -8,6 +8,7 @@
 #include "my_kriging_weights.h"
 #include "sugarbox_indexed_neighbour_lookup.h"
 #include "kriging_stats.h"
+#include "api.h"
 
 namespace hpgl
 {
@@ -41,6 +42,8 @@ namespace hpgl
 				ok_weight_calculator_t(),
 				output, report, stats, kriging_failure_handling::undefined_on_failure);
 		}
+
+		set_kriging_stats(stats);
 
 		std::ostringstream oss;
 		oss << stats;

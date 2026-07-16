@@ -54,7 +54,13 @@ namespace hpgl
 		}
 		inline bool operator<(const offset_3d_t & o)const
 		{
-			return this->length() < o.length();
+			// Lexicographic comparison on integer components (i, j, k)
+			// instead of float length. Float-length comparison violates
+			// strict weak ordering: distinct offsets can have equal
+			// lengths (e.g. (1,0,0) and (0,1,0)), and NaN breaks <.
+			if (m_vec[0] != o.m_vec[0]) return m_vec[0] < o.m_vec[0];
+			if (m_vec[1] != o.m_vec[1]) return m_vec[1] < o.m_vec[1];
+			return m_vec[2] < o.m_vec[2];
 		}
 	};
 

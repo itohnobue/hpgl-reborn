@@ -11,17 +11,25 @@ namespace hpgl
 		m_sill = 0;
 		m_nugget = 0;
 		m_covariance_type = covariance_type_t::COV_SPHERICAL;
-		set_ranges(0, 0, 0);
+		// Default to unit range (1,1,1) — range=0 is rejected by
+		// create_transform() (cov_model.h:44), so use a sane default
+		// that will be overwritten by the caller before use.
+		// Callers that omit set_ranges() will get a clear error from
+		// create_transform() rather than a confusing internal failure.
+		set_ranges(1, 1, 1);
 		set_angles(0, 0, 0);
 	}
 	void covariance_param_t::set_ranges(double range1, double range2, double range3)
 	{
-		if (!std::isfinite(range1) || range1 < 0.0)
-			throw hpgl_exception("covariance_param_t::set_ranges", "range1 must be >= 0 and finite");
-		if (!std::isfinite(range2) || range2 < 0.0)
-			throw hpgl_exception("covariance_param_t::set_ranges", "range2 must be >= 0 and finite");
-		if (!std::isfinite(range3) || range3 < 0.0)
-			throw hpgl_exception("covariance_param_t::set_ranges", "range3 must be >= 0 and finite");
+		// Range must be strictly positive — range=0 is rejected by
+		// create_transform() (cov_model.h:44), so validate consistently
+		// here to provide a clear error at the point of assignment.
+		if (!std::isfinite(range1) || range1 <= 0.0)
+			throw hpgl_exception("covariance_param_t::set_ranges", "range1 must be > 0 and finite");
+		if (!std::isfinite(range2) || range2 <= 0.0)
+			throw hpgl_exception("covariance_param_t::set_ranges", "range2 must be > 0 and finite");
+		if (!std::isfinite(range3) || range3 <= 0.0)
+			throw hpgl_exception("covariance_param_t::set_ranges", "range3 must be > 0 and finite");
 		m_ranges[0] = range1;
 		m_ranges[1] = range2;
 		m_ranges[2] = range3;
@@ -66,8 +74,8 @@ namespace hpgl
 			throw hpgl_exception("covariance_param_t::validate", "nugget must be <= sill");
 		for (int i = 0; i < 3; ++i)
 		{
-			if (!std::isfinite(m_ranges[i]) || m_ranges[i] < 0.0)
-				throw hpgl_exception("covariance_param_t::validate", "range must be >= 0 and finite");
+			if (!std::isfinite(m_ranges[i]) || m_ranges[i] <= 0.0)
+				throw hpgl_exception("covariance_param_t::validate", "range must be > 0 and finite");
 			if (!std::isfinite(m_angles[i]))
 				throw hpgl_exception("covariance_param_t::validate", "angle must be finite");
 		}

@@ -86,6 +86,17 @@ class TestTVEllipsoid:
         np.testing.assert_array_almost_equal(ell0.Direction1, ell360.Direction1, decimal=10)
         np.testing.assert_array_almost_equal(ell0.Direction2, ell360.Direction2, decimal=10)
 
+    # ---- F-209: TVEllipsoid negative ranges validation ----
+
+    def test_negative_ranges_raise_valueerror(self):
+        """F-209: TVEllipsoid raises ValueError for negative range values."""
+        with pytest.raises(ValueError, match="ranges must not be negative"):
+            TVEllipsoid(R1=-1, R2=5, R3=3)
+        with pytest.raises(ValueError, match="ranges must not be negative"):
+            TVEllipsoid(R1=10, R2=-5, R3=3)
+        with pytest.raises(ValueError, match="ranges must not be negative"):
+            TVEllipsoid(R1=10, R2=5, R3=-3)
+
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
 class TestTVVariogramSearchTemplate:
@@ -613,77 +624,66 @@ class TestVariogramNaNInfHandling:
     # ---- CalcVariogramFunction NaN/Inf ----
 
     def test_calc_variogram_nan_in_harddata(self):
-        """CalcVariogramFunction with NaN in HardData propagates NaN to result."""
+        """CalcVariogramFunction with NaN in HardData raises ValueError."""
         from geo_bsd.variogram import CalcVariogramFunction
 
         values = [np.array([np.nan, 2.0, 3.0], dtype="float32")]
         params = {"HardData": values}
-        # Initialize: Result=None creates zeros
-        result = CalcVariogramFunction(None, None, None, params)
-        # Compute with the NaN-containing data
-        result = CalcVariogramFunction([0], [1], result, params)
-        # NaN should propagate through the computation
-        # (1.5 should produce NaN_32 - 2.0 in squared = NaN)
-        assert np.any(np.isnan(result))
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcVariogramFunction(None, None, None, params)
 
     def test_calc_variogram_inf_in_harddata(self):
-        """CalcVariogramFunction with Inf in HardData propagates Inf to result."""
+        """CalcVariogramFunction with Inf in HardData raises ValueError."""
         from geo_bsd.variogram import CalcVariogramFunction
 
         values = [np.array([np.inf, 2.0, 3.0], dtype="float32")]
         params = {"HardData": values}
-        result = CalcVariogramFunction(None, None, None, params)
-        result = CalcVariogramFunction([0], [1], result, params)
-        # Inf should propagate
-        assert np.any(np.isinf(result)) or np.any(np.isnan(result))
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcVariogramFunction(None, None, None, params)
 
     # ---- CalcCovarianceFunction NaN/Inf ----
 
     def test_calc_covariance_nan_in_data(self):
-        """CalcCovarianceFunction with NaN in HardData or SoftData propagates NaN."""
+        """CalcCovarianceFunction with NaN in HardData or SoftData raises ValueError."""
         from geo_bsd.variogram import CalcCovarianceFunction
 
         values = [np.array([np.nan, 2.0, 3.0], dtype="float32")]
         soft = [np.array([1.0, 2.0, 3.0], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
-        result = CalcCovarianceFunction(None, None, None, params)
-        result = CalcCovarianceFunction(np.int64(0), np.int64(1), result, params)
-        assert np.any(np.isnan(result))
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcCovarianceFunction(None, None, None, params)
 
     def test_calc_covariance_inf_in_data(self):
-        """CalcCovarianceFunction with Inf in HardData propagates Inf."""
+        """CalcCovarianceFunction with Inf in HardData raises ValueError."""
         from geo_bsd.variogram import CalcCovarianceFunction
 
         values = [np.array([np.inf, 2.0, 3.0], dtype="float32")]
         soft = [np.array([1.0, 2.0, 3.0], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
-        result = CalcCovarianceFunction(None, None, None, params)
-        result = CalcCovarianceFunction(np.int64(0), np.int64(1), result, params)
-        assert np.any(np.isinf(result)) or np.any(np.isnan(result))
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcCovarianceFunction(None, None, None, params)
 
     # ---- CalcIndCorrelationFunction NaN/Inf ----
 
     def test_calc_ind_correlation_nan_in_data(self):
-        """CalcIndCorrelationFunction with NaN in HardData propagates NaN."""
+        """CalcIndCorrelationFunction with NaN in HardData raises ValueError."""
         from geo_bsd.variogram import CalcIndCorrelationFunction
 
         values = [np.array([np.nan, 1.0, 0.0], dtype="float32")]
         soft = [np.array([0.5, 0.5, 0.5], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
-        result = CalcIndCorrelationFunction(None, None, None, params)
-        result = CalcIndCorrelationFunction(np.int64(0), np.int64(1), result, params)
-        assert np.any(np.isnan(result))
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcIndCorrelationFunction(None, None, None, params)
 
     def test_calc_ind_correlation_inf_in_data(self):
-        """CalcIndCorrelationFunction with Inf in HardData propagates Inf."""
+        """CalcIndCorrelationFunction with Inf in HardData raises ValueError."""
         from geo_bsd.variogram import CalcIndCorrelationFunction
 
         values = [np.array([np.inf, 1.0, 0.0], dtype="float32")]
         soft = [np.array([0.5, 0.5, 0.5], dtype="float32")]
         params = {"HardData": values, "SoftData": soft}
-        result = CalcIndCorrelationFunction(None, None, None, params)
-        result = CalcIndCorrelationFunction(np.int64(0), np.int64(1), result, params)
-        assert np.any(np.isinf(result)) or np.any(np.isnan(result))
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcIndCorrelationFunction(None, None, None, params)
 
     # =========================================================================
     # F-38: Cross-path consistency — Python variogram vs C++ cvariogram

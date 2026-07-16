@@ -24,6 +24,8 @@ provides the user-facing Python API.
 
 """
 
+from __future__ import annotations
+
 import ctypes as C
 import hashlib
 import logging
@@ -202,6 +204,22 @@ class hpgl_non_parametric_cdf_t(C.Structure):
         ("values", C.POINTER(C.c_float)),
         ("probs", C.POINTER(C.c_float)),
         ("size", C.c_longlong),
+    ]
+
+
+class _HPGLKrigingStats(C.Structure):
+    """ctypes mirror of C hpgl_kriging_stats_t (api.h:160-167).
+
+    Fields use c_ulong for unsigned long (4 bytes on Windows, 8 bytes
+    on Unix — matching the platform C convention).
+    """
+
+    _fields_ = [
+        ("m_points_calculated", C.c_ulong),
+        ("m_points_without_neighbours", C.c_ulong),
+        ("m_points_singularity", C.c_ulong),
+        ("m_mean", C.c_double),
+        ("m_speed_nps", C.c_double),
     ]
 
 
@@ -559,3 +577,41 @@ _hpgl_so.hpgl_simple_cokriging_mark2.argtypes = [
     C.POINTER(__hpgl_cockriging_m2_params_t),
     C.POINTER(_HPGL_CONT_MASKED_ARRAY),
 ]
+
+try:
+    _hpgl_so.hpgl_get_kriging_stats.restype = _HPGLKrigingStats
+    _hpgl_so.hpgl_get_kriging_stats.argtypes = []
+    _HAS_KRIGING_STATS = True
+except AttributeError:
+    _HAS_KRIGING_STATS = False
+
+
+def get_kriging_stats() -> dict[str, int | float]:
+    """Return kriging statistics from the most recent kriging call as a dict.
+
+    Returns zero-initialized values if no kriging call has been made yet
+    on the current thread (matches C API contract — api.h:191).
+
+    Returns:
+        dict with keys: points_calculated, points_without_neighbours,
+        points_singularity, mean, speed_nps
+
+    Raises:
+        NotImplementedError: if the native library does not export
+            hpgl_get_kriging_stats (requires a library rebuild with
+            EX-006 fix applied).
+    """
+    if not _HAS_KRIGING_STATS:
+        raise NotImplementedError(
+            "hpgl_get_kriging_stats is not available in the current library build. "
+            "Rebuild the native library after applying the EX-006 fix "
+            "(set_kriging_stats integration)."
+        )
+    raw = _hpgl_so.hpgl_get_kriging_stats()
+    return {
+        "points_calculated": raw.m_points_calculated,
+        "points_without_neighbours": raw.m_points_without_neighbours,
+        "points_singularity": raw.m_points_singularity,
+        "mean": raw.m_mean,
+        "speed_nps": raw.m_speed_nps,
+    }

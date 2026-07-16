@@ -369,6 +369,12 @@ class ContProperty:
     """
 
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray):
+        # Use asarray() so lists/tuples are supported; ndim check must
+        # happen before require() which may change ndim.
+        if numpy.asarray(data).ndim not in (1, 3):
+            raise ValueError(
+                f"ContProperty data must be 1D or 3D, got {numpy.asarray(data).ndim}D"
+            )
         self.data = numpy.require(data, "float32", "F")
         self.mask = numpy.require(mask, "uint8", "F")
 
@@ -433,6 +439,12 @@ class IndProperty:
         if not 1 <= indicator_count <= 255:
             raise ValueError(
                 f"indicator_count must be 1-255, got {indicator_count}"
+            )
+        # Use asarray() so lists/tuples are supported; ndim check must
+        # happen before require() which may change ndim.
+        if numpy.asarray(data).ndim not in (1, 3):
+            raise ValueError(
+                f"IndProperty data must be 1D or 3D, got {numpy.asarray(data).ndim}D"
             )
         self.data = numpy.require(data, "uint8", "F")
         self.mask = numpy.require(mask, "uint8", "F")
@@ -585,17 +597,13 @@ class CovarianceModel:
 
 
 def _load_prop_cont_slow(filename, undefined_value):
-    # Security: Validate filename to prevent directory traversal attacks
-    safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
-    )
-
     values = []
     mask = []
     skipped_count = 0
     element_count = 0
-    # Use validated path and explicit encoding
-    with open(safe_path, encoding="utf-8") as f:
+    # Security: uses safe_open_read() which validates the path and opens
+    # atomically with O_NOFOLLOW to prevent TOCTOU symlink attacks.
+    with PathValidator.safe_open_read(filename, basedir=os.path.dirname(os.path.abspath(filename))) as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -626,7 +634,7 @@ def _load_prop_cont_slow(filename, undefined_value):
                     skipped_count += 1
     if skipped_count > 0:
         logger.warning(
-            "_load_prop_cont_slow: skipped %d non-numeric tokens in %s", skipped_count, safe_path
+            "_load_prop_cont_slow: skipped %d non-numeric tokens in %s", skipped_count, filename
         )
 
     return ContProperty(numpy.array(values, dtype="float32"), numpy.array(mask, dtype="uint8"))
@@ -649,19 +657,15 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
     for i in range(len(ind_values)):
         dict_map[ind_values[i]] = i
 
-    # Security: Validate filename to prevent directory traversal attacks
-    safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
-    )
-
     values = []
     mask = []
     skipped_parse = 0
     unknown_values = set()
     element_count = 0
 
-    # Use validated path and explicit encoding
-    with open(safe_path, encoding="utf-8") as f:
+    # Security: uses safe_open_read() which validates the path and opens
+    # atomically with O_NOFOLLOW to prevent TOCTOU symlink attacks.
+    with PathValidator.safe_open_read(filename, basedir=os.path.dirname(os.path.abspath(filename))) as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -695,13 +699,13 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
 
     if skipped_parse > 0:
         logger.warning(
-            "_load_prop_ind_slow: skipped %d unparseable tokens in %s", skipped_parse, safe_path
+            "_load_prop_ind_slow: skipped %d unparseable tokens in %s", skipped_parse, filename
         )
     if unknown_values:
         sorted_unknown = sorted(unknown_values, key=int)
         raise ValueError(
             f"_load_prop_ind_slow: unknown indicator value(s) {sorted_unknown} "
-            f"found in {safe_path}. Expected indicator values: {list(ind_values)}"
+            f"found in {filename}. Expected indicator values: {list(ind_values)}"
         )
 
     return IndProperty(
@@ -1161,8 +1165,6 @@ def set_thread_num(num):
     if num < 1:
         raise ValueError(f"set_thread_num: num must be at least 1, got {num}")
     # Sanity-check: warn if num exceeds available CPU count
-    import os
-
     cpu_count = os.cpu_count()
     if cpu_count is not None and num > cpu_count * 4:
         logger.warning(
@@ -1202,6 +1204,11 @@ def calc_mean(prop):
     ValueError
         If no informed values exist (all cells masked).
     """
+    if not isinstance(prop, ContProperty):
+        raise TypeError(
+            f"calc_mean: prop must be ContProperty, got {type(prop).__name__}"
+        )
+
     masked = numpy.ma.masked_where(prop.mask == 0, prop.data)
     if masked.count() == 0:
         raise ValueError("calc_mean: no informed values (all masked)")
@@ -1684,7 +1691,7 @@ def simple_cokriging_markI(
     secondary_variance,
     correlation_coef,
 ):
-    _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
+    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     if not isinstance(prop, ContProperty):
         raise TypeError(
@@ -1726,7 +1733,7 @@ def simple_cokriging_markI(
                     angles=_c_array(C.c_double, 3, cov_model.angles),
                     sill=cov_model.sill,
                     nugget=cov_model.nugget,
-                    radiuses=_c_array(C.c_int, 3, radiuses),
+                    radiuses=_c_array(C.c_int, 3, valid_radiuses),
                     max_neighbours=max_neighbours,
                     primary_mean=primary_mean,
                     secondary_mean=secondary_mean,

@@ -220,3 +220,15 @@ class TestCdfDataCreation:
         """CdfData raises ValueError when one array is empty and the other is not."""
         with pytest.raises(ValueError):
             CdfData([1.0, 2.0], [])
+
+    # ---- F-209: CdfData non-monotonic probability/value validation ----
+
+    def test_non_monotonic_probs_raises(self):
+        """F-209: CdfData raises ValueError for non-monotonically increasing probabilities."""
+        with pytest.raises(ValueError, match="probabilities must be monotonically"):
+            CdfData([1.0, 2.0, 3.0], [0.5, 0.3, 1.0])
+
+    def test_non_monotonic_values_raises(self):
+        """F-209: CdfData raises ValueError for non-monotonically increasing values."""
+        with pytest.raises(ValueError, match="values must be monotonically"):
+            CdfData([3.0, 2.0, 1.0], [0.33, 0.66, 1.0])

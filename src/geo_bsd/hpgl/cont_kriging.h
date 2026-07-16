@@ -97,25 +97,22 @@ namespace hpgl
 
 		// BLAS thread control: prevent oversubscription when BLAS internal
 		// threading combines with OpenMP parallel region threads.
-		// Each OpenMP thread may call LAPACK (dpotrf_/dpotrs_) which can
-		// spawn additional threads if BLAS is configured for multi-threading.
+		// Reference-counted: concurrent kriging calls safely share the
+		// process-wide BLAS thread count.
 #if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)
 		extern "C" void mkl_set_num_threads(int);
 		extern "C" int mkl_get_max_threads(void);
-		int _saved_blas_threads = mkl_get_max_threads();
-		mkl_set_num_threads(1);
+		detail::blas_thread_acquire(mkl_get_max_threads, mkl_set_num_threads);
 #elif defined(__linux__)
 		// OpenBLAS: limit internal threads to 1 so they don't multiply
 		// with OpenMP threads. Declared extern to avoid header dependency.
 		extern "C" void openblas_set_num_threads(int);
 		extern "C" int openblas_get_num_threads(void);
-		int _saved_blas_threads = openblas_get_num_threads();
-		openblas_set_num_threads(1);
+		detail::blas_thread_acquire(openblas_get_num_threads, openblas_set_num_threads);
 #else
 		// macOS Accelerate / other BLAS: no thread-count API available.
 		// Accelerate manages its own thread pool via GCD and does not
 		// oversubscribe with OpenMP in the same way.
-		// _saved_blas_threads not needed on this platform.
 #endif
 #pragma omp parallel
 {
@@ -189,17 +186,17 @@ namespace hpgl
 				report.next_lap(local_lap_count);
 			}
 		}
-#ifdef _OPENMP
-		if (report.cancelled())
-			#pragma omp cancel for
-#endif
+		// NOTE: No #pragma omp cancel for here — the for-loop worksharing
+		// construct has already ended, and OMP §2.17.1 requires the cancel
+		// directive to appear within the worksharing construct it targets.
+		// Cancellation is handled inside the loop body at lines 176-182.
 }	
 
 		// Restore BLAS thread count after parallel region completes
 #if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)
-		mkl_set_num_threads(_saved_blas_threads);
+		detail::blas_thread_restore(mkl_set_num_threads);
 #elif defined(__linux__)
-		openblas_set_num_threads(_saved_blas_threads);
+		detail::blas_thread_restore(openblas_set_num_threads);
 #endif
 
 		report.stop();
