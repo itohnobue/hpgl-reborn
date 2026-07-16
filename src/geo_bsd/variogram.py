@@ -275,17 +275,32 @@ def _CalcLagsAreas(VariogramSearchTemplate):
 
     Dist = power(power(GI, 2) + power(GJ, 2) + power(GK, 2), 0.5)
 
+    # Accumulate per-lag results in Python lists to avoid O(L²) vstack copies
+    idx_i_parts = []
+    idx_j_parts = []
+    idx_k_parts = []
+    lag_indexes_parts = []
+
     for i in Index:
         Filter = bitwise_and(LagStart[i] <= Dist, Dist < LagEnd[i])
         NumPoints = sum(Filter)
-        idx_i = vstack((idx_i, GI[Filter].reshape(NumPoints, 1)))
-        idx_j = vstack((idx_j, GJ[Filter].reshape(NumPoints, 1)))
-        idx_k = vstack((idx_k, GK[Filter].reshape(NumPoints, 1)))
-        lag_indexes = vstack((lag_indexes, ones((NumPoints, 1)) * i))
-    idx_i = reshape(idx_i[1:], len(idx_i[1:])).astype(int)
-    idx_j = reshape(idx_j[1:], len(idx_j[1:])).astype(int)
-    idx_k = reshape(idx_k[1:], len(idx_k[1:])).astype(int)
-    lag_indexes = reshape(lag_indexes[1:], len(lag_indexes[1:])).astype(int)
+        if NumPoints == 0:
+            continue
+        idx_i_parts.append(GI[Filter].reshape(NumPoints, 1))
+        idx_j_parts.append(GJ[Filter].reshape(NumPoints, 1))
+        idx_k_parts.append(GK[Filter].reshape(NumPoints, 1))
+        lag_indexes_parts.append(ones((NumPoints, 1), dtype=float32) * i)
+
+    if idx_i_parts:
+        idx_i = vstack(idx_i_parts).astype(int).ravel()
+        idx_j = vstack(idx_j_parts).astype(int).ravel()
+        idx_k = vstack(idx_k_parts).astype(int).ravel()
+        lag_indexes = vstack(lag_indexes_parts).astype(int).ravel()
+    else:
+        idx_i = zeros(0, dtype=int)
+        idx_j = zeros(0, dtype=int)
+        idx_k = zeros(0, dtype=int)
+        lag_indexes = zeros(0, dtype=int)
     return idx_i, idx_j, idx_k, lag_indexes, LagDistance
 
 

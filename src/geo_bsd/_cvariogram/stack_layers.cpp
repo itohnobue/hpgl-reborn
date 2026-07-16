@@ -15,6 +15,8 @@ cvar_stack_layers(
 		int blank_value,
 		float_data_t * result)
 {
+    try
+    {
 	if (thick_layers == nullptr)
 	{
 		cvar_set_last_error("cvar_stack_layers: thick_layers is null");
@@ -53,4 +55,9 @@ cvar_stack_layers(
 	layers.assign(thick_layers, thick_layers + layers_count);
 	
 	stack_layers(layers, layer_markers, nz, scalez, blank_value, *result);
+    }
+    catch (const std::exception & ex)
+    {
+        cvar_set_last_error(ex.what());
+    }
 }

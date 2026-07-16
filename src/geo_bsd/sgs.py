@@ -7,6 +7,7 @@ import numpy
 # Import validation framework
 from .cdf import CdfData
 from .geo import (
+    ContProperty,
     CovarianceModel,
     __checked_create,
     _clone_prop,
@@ -154,6 +155,12 @@ def sgs_simulation(
 
     # Validate min_neighbours
     ParameterValidator.validate_min_neighbors(min_neighbours, max_neighbours)
+
+    if not isinstance(prop, ContProperty):
+        raise TypeError(
+            f"sgs_simulation: expected ContProperty, got {type(prop).__name__}. "
+            "SGS requires continuous (float) property data."
+        )
 
     prop.fix_shape(grid)
     cov_model = normed_cov_model(cov_model)

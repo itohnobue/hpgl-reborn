@@ -32,6 +32,11 @@ int get_shape_volume(hpgl_shape_t * shape)
 	long long result = 1;
 	for (int i = 0; i < 3; ++i)
 	{
+		if (shape->m_data[i] > 0 && result > LLONG_MAX / shape->m_data[i])
+		{
+			set_last_exception_message("get_shape_volume: grid volume exceeds INT_MAX");
+			return -1;
+		}
 		result *= shape->m_data[i];
 	}
 	if (result > INT_MAX || result <= 0)

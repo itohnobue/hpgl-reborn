@@ -143,6 +143,7 @@ namespace hpgl
 		indicator_value_t m_value;
 	public:
 		typedef indicator_value_t value_type;
+		typedef node_index_t size_type;
 
 		indicator_array_adapter_t()
 		{}
@@ -156,6 +157,12 @@ namespace hpgl
 		{
 			m_prop = prop;
 			m_value = value;
+		}
+
+		inline size_type size()const
+		{
+			HPGL_CHECK(m_prop != nullptr, "indicator_array_adapter_t::size: null property pointer");
+			return m_prop->size();
 		}
 
 		indicator_value_t operator[](node_index_t index)const

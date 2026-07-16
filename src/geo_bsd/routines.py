@@ -116,6 +116,9 @@ def CubesFromVPCs(VPCs, NX, NY):
 
 
 def Cubes2PointSet(CubesDictionary, Mask):
+    if not CubesDictionary:
+        raise ValueError("Cubes2PointSet: CubesDictionary must not be empty")
+
     NX, NY, NZ = list(CubesDictionary.values())[0].shape
     grid_i, grid_j = mgrid[0:NX, 0:NY]
 
@@ -217,6 +220,9 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
         FileName, basedir=os.path.dirname(os.path.abspath(FileName))
     )
 
+    if not PointSet:
+        raise ValueError("SaveGSLIBPointSet: PointSet must not be empty")
+
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
     for Key in PointSet.keys():
@@ -278,6 +284,9 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g"):
     safe_path = PathValidator.validate_filepath_in_basedir(
         FileName, basedir=os.path.dirname(os.path.abspath(FileName))
     )
+
+    if not CubesDictionary:
+        raise ValueError("SaveGSLIBCubes: CubesDictionary must not be empty")
 
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])

@@ -17,7 +17,12 @@ namespace hpgl
 
 	node_index_t sugarbox_grid_t::size()const
 	{
-		return static_cast<node_index_t>(static_cast<long long>(m_x) * m_y * m_z);
+		long long product = static_cast<long long>(m_x) * m_y * m_z;
+		if (product > static_cast<long long>(std::numeric_limits<node_index_t>::max()))
+		{
+			HPGL_CHECK(false, "sugarbox_grid_t::size: grid dimensions product exceeds node_index_t max");
+		}
+		return static_cast<node_index_t>(product);
 	}
 
 

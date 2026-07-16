@@ -143,8 +143,8 @@ namespace hpgl
 		{
 			for (int j = i, end_j = end_i; j < end_j; ++j)
 			{
-				A[i*size + j] = covariances(coords[i], coords[j]);
-				A[j*size + i] = A[i*size + j];
+				A[static_cast<size_t>(i) * size + j] = covariances(coords[i], coords[j]);
+				A[static_cast<size_t>(j) * size + i] = A[static_cast<size_t>(i) * size + j];
 			}
 			b[i] = covariances(coords[i], center_coord);
 			// b2 preserves original RHS values for variance calculation;
@@ -318,8 +318,8 @@ namespace hpgl
 		{
 			for (int j = i, end_j = end_i; j < end_j; ++j)
 			{
-				ws.A[i*size + j] = covariances(coords[i], coords[j]);
-				ws.A[j*size + i] = ws.A[i*size + j];
+				ws.A[static_cast<size_t>(i) * size + j] = covariances(coords[i], coords[j]);
+				ws.A[static_cast<size_t>(j) * size + i] = ws.A[static_cast<size_t>(i) * size + j];
 			}
 			ws.b[i] = covariances(coords[i], center_coord);
 			ws.b2[i] = ws.b[i];
@@ -463,8 +463,8 @@ namespace hpgl
 		{
 			for (int j = i, end_j = end_i; j < end_j; ++j)
 			{
-				A[i*size + j] = covariances(coords[i], coords[j]);
-				A[j*size + i] = A[i*size + j];
+				A[static_cast<size_t>(i) * size + j] = covariances(coords[i], coords[j]);
+				A[static_cast<size_t>(j) * size + i] = A[static_cast<size_t>(i) * size + j];
 			}
 			b[i] = covariances(coords[i], center);
 			// b2 preserves original RHS values for variance calculation
@@ -755,8 +755,8 @@ namespace hpgl
 		{
 			for (int j = i, end_j = end_i; j < end_j; ++j)
 			{
-				ws.A[i*size + j] = covariances(coords[i], coords[j]);
-				ws.A[j*size + i] = ws.A[i*size + j];
+				ws.A[static_cast<size_t>(i) * size + j] = covariances(coords[i], coords[j]);
+				ws.A[static_cast<size_t>(j) * size + i] = ws.A[static_cast<size_t>(i) * size + j];
 			}
 			ws.b[i] = covariances(coords[i], center);
 			ws.b2[i] = ws.b[i];
@@ -1066,9 +1066,9 @@ namespace hpgl
 		{
 			for (int j = i; j < size; ++j)
 			{
-				A[i * size + j] =
+				A[static_cast<size_t>(i) * size + j] =
 					cov(coords[i], coords[j]) * (sigmas[i] * sigmas[j]);
-				A[j * size + i] = A[i * size + j];
+				A[static_cast<size_t>(j) * size + i] = A[static_cast<size_t>(i) * size + j];
 			}
 			b[i] = cov(coords[i], center) * (sigmas[i] * sigmac);
 		}
@@ -1232,9 +1232,9 @@ namespace hpgl
 		{
 			for (int j = i; j < size; ++j)
 			{
-				ws.A[i * size + j] =
+				ws.A[static_cast<size_t>(i) * size + j] =
 					cov(coords[i], coords[j]) * (ws.sigmas[i] * ws.sigmas[j]);
-				ws.A[j * size + i] = ws.A[i * size + j];
+				ws.A[static_cast<size_t>(j) * size + i] = ws.A[static_cast<size_t>(i) * size + j];
 			}
 			ws.b[i] = cov(coords[i], center) * (ws.sigmas[i] * sigmac);
 		}

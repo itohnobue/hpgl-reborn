@@ -6,6 +6,7 @@
 #include <time.h>
 #include <limits>
 #include <mutex>
+#include <random>
 #include <string>
 
 #include "api.h"
@@ -21,10 +22,18 @@ namespace {
 /// Exported: retrieves the last error message (thread-safe, C ABI).
 extern "C" const char * cvar_get_last_error(void)
 {
-    std::lock_guard<std::mutex> lock(last_cvariogram_error_mutex);
-    thread_local std::string cached;
-    cached = last_cvariogram_error;
-    return cached.c_str();
+    try
+    {
+        std::lock_guard<std::mutex> lock(last_cvariogram_error_mutex);
+        thread_local std::string cached;
+        cached = last_cvariogram_error;
+        return cached.c_str();
+    }
+    catch (const std::exception & ex)
+    {
+        cvar_set_last_error(ex.what());
+        return "";
+    }
 }
 
 /// Internal: stores an error message (thread-safe).
@@ -36,15 +45,32 @@ void cvar_set_last_error(const char * message)
 
 namespace {
 
-/// Seeds rand() once at first use with the current time.
+/// Per-thread RNG engine, seeded from std::random_device (mixed with time as
+/// entropy backup). Thread-safe by construction — each thread gets its own
+/// independent engine with no shared mutable state.
+thread_local std::mt19937 g_tls_rng(
+    []() -> std::mt19937::result_type {
+        std::random_device rd;
+        // Mix random_device entropy with time: on platforms where
+        // random_device is deterministic (e.g. older MinGW), time
+        // adds uniquification; on true-entropy platforms, the XOR
+        // is harmless.
+        auto seed = static_cast<std::mt19937::result_type>(
+            static_cast<std::mt19937::result_type>(rd()) ^
+            static_cast<std::mt19937::result_type>(time(nullptr)));
+        return seed;
+    }()
+);
+
+thread_local std::uniform_int_distribution<int> g_tls_percent_dist(0, 99);
+
+/// Backward-compatible entry point — kept so existing callers in
+/// calc_variograms compile unchanged.  The actual RNG is fully
+/// thread-safe via thread_local, so the body is a no-op.
 void seed_rand_once()
 {
-    static bool seeded = false;
-    if (!seeded)
-    {
-        srand(static_cast<unsigned int>(time(nullptr)));
-        seeded = true;
-    }
+    static std::once_flag init_flag;
+    std::call_once(init_flag, []() {});
 }
 
 /// Validates a non-null pointer. Sets error and returns false on null.
@@ -85,6 +111,8 @@ bool is_in_tunnel(
 		variogram_search_template_t * templ,
 		vector_t * vec)
 {
+    try
+    {
 	if (!validate_ptr(templ, "templ (is_in_tunnel)")) return false;
 	if (!validate_ptr(vec, "vec (is_in_tunnel)")) return false;
 
@@ -118,12 +146,20 @@ bool is_in_tunnel(
 	double dist = sqrt(s2*s2 + s3*s3);
 	bool result = (dist <= 1.0) && (templ->m_tol_distance * dist <= s1);
 	return result;
+    }
+    catch (const std::exception & ex)
+    {
+        cvar_set_last_error(ex.what());
+        return false;
+    }
 }
 
 bool is_in_tunnel_v(
 		variogram_search_template_t * templ,
 		vector_t * vec, bool * results, int count)
 {
+    try
+    {
 	if (!validate_ptr(templ, "templ (is_in_tunnel_v)")) return false;
 	if (!validate_ptr(vec, "vec (is_in_tunnel_v)")) return false;
 	if (!validate_ptr(results, "results (is_in_tunnel_v)")) return false;
@@ -133,6 +169,12 @@ bool is_in_tunnel_v(
 		results[i] = is_in_tunnel(templ, &(vec[i]));
 	}
 	return true;
+    }
+    catch (const std::exception & ex)
+    {
+        cvar_set_last_error(ex.what());
+        return false;
+    }
 }
 
 
@@ -170,6 +212,8 @@ void calc_search_template_window(
 		variogram_search_template_t * templ,
 		search_template_window_t * window)
 {
+    try
+    {
 	if (!validate_ptr(templ, "templ (calc_search_template_window)")) return;
 	if (!validate_ptr(window, "window (calc_search_template_window)")) return;
 
@@ -180,7 +224,7 @@ void calc_search_template_window(
 	
 	for (int i = 0; i < 2; ++i)
 		for (int j = -1; j < 3; j += 2)
-			for (int k = -1; k < 3; k+=2)
+			for (int k = -1; k < 3; k += 2)
 			{
 				vector_t DI = {0};
 				vector_t DJ = {0};
@@ -218,6 +262,11 @@ void calc_search_template_window(
 	window->m_max_j = maxj;
 	window->m_min_k = mink;
 	window->m_max_k = maxk;
+    }
+    catch (const std::exception & ex)
+    {
+        cvar_set_last_error(ex.what());
+    }
 }
 
 struct lag_t
@@ -243,6 +292,8 @@ void init_lag_list(variogram_search_template_t * templ, lag_t * lags, int count)
 
 lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_count)
 {
+    try
+    {
     if (!validate_ptr(templ, "templ (calc_lag_areas)")) return nullptr;
     if (!validate_ptr(points_count, "points_count (calc_lag_areas)")) return nullptr;
 
@@ -362,6 +413,16 @@ lag_point_t * calc_lag_areas(variogram_search_template_t * templ, int * points_c
         free(lags);
         return result;
     }
+    }
+    catch (const std::exception & ex)
+    {
+        // Note: any calloc'd memory already allocated may leak here.
+        // Preventing the exception from crossing the extern "C" boundary
+        // takes priority; a broader RAII refactor would be needed for
+        // leak-free exception safety.
+        cvar_set_last_error(ex.what());
+        return nullptr;
+    }
 }
 
 
@@ -450,6 +511,8 @@ void calc_variograms(
 		int result_length,
 		int percentToUse)		
 {
+    try
+    {
 	if (!validate_ptr(templ, "templ (calc_variograms)")) return;
 	if (!validate_ptr(data, "data (calc_variograms)")) return;
 	if (!validate_ptr(result_covariations, "result_covariations (calc_variograms)")) return;
@@ -515,7 +578,7 @@ void calc_variograms(
 									int z = z1 + vec.m_data[2];
 									if (is_inside(data, x,y,z) && mpx[moffset])
 									{
-										if ((rand() % 100) >= percentToUse)
+										if (g_tls_percent_dist(g_tls_rng) >= percentToUse)
 											continue;
 										// Directional projection onto the
 										// principal anisotropy axis for lag
@@ -542,6 +605,11 @@ void calc_variograms(
 
 	free(lag_stats);
 	//free(lags);
+    }
+    catch (const std::exception & ex)
+    {
+        cvar_set_last_error(ex.what());
+    }
 }
 
 void calc_variograms_from_point_set(
@@ -550,6 +618,8 @@ void calc_variograms_from_point_set(
 		float * result_covariations,
 		int result_length)
 {
+    try
+    {
 	if (!validate_ptr(templ, "templ (calc_variograms_from_point_set)")) return;
 	if (!validate_ptr(result_covariations, "result_covariations (calc_variograms_from_point_set)")) return;
 
@@ -627,5 +697,10 @@ void calc_variograms_from_point_set(
 
 	free(lag_stats);
 	free(lags);
+    }
+    catch (const std::exception & ex)
+    {
+        cvar_set_last_error(ex.what());
+    }
 }
 		

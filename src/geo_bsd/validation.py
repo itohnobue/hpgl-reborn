@@ -584,10 +584,13 @@ class ParameterValidator:
             seed: Seed value
 
         Raises:
-            ValidationWarning: If seed is negative (unusual but not necessarily wrong)
+            ValidationError: If seed is negative (C++ contract requires non-negative).
         """
         if seed < ValidationConstants.MIN_SEED:
-            validation_logger.warning(f"Seed value {seed} is negative")
+            raise ValidationError(
+                f"Seed value {seed} is negative (must be non-negative)",
+                "seed",
+            )
 
     @staticmethod
     def validate_indicator_count(count: int) -> None:

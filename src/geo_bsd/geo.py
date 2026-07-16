@@ -280,7 +280,25 @@ def _create_hpgl_ind_masked_array(prop, grid):
         sh = _create_hpgl_shape(prop.data.shape, __get_strides(prop.data))
         assert prop.data.strides == prop.mask.strides
     else:
-        sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
+        # Use actual NumPy strides if array is 3D, otherwise compute strides from grid
+        if prop.data.ndim == 3:
+            # Validate that the 3D data shape matches grid dimensions exactly.
+            # The total-product check below is not sufficient: shape (nz, ny, nx)
+            # with grid (nx, ny, nz) has the same product but swapped dimensions,
+            # causing the C++ reader to mis-index the data through wrong strides.
+            if (
+                prop.data.shape[0] != grid.x
+                or prop.data.shape[1] != grid.y
+                or prop.data.shape[2] != grid.z
+            ):
+                raise RuntimeError(
+                    f"3D data shape {prop.data.shape} does not match grid dimensions "
+                    f"({grid.x}, {grid.y}, {grid.z})"
+                )
+            sh = _create_hpgl_shape((grid.x, grid.y, grid.z), __get_strides(prop.data))
+        else:
+            # For 1D arrays, compute expected strides based on grid dimensions
+            sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
         if grid.x * grid.y * grid.z != prop.data.size:
             raise RuntimeError(
                 f"Invalid data size. Size of data = {prop.data.size}. "
@@ -434,6 +452,14 @@ class IndProperty:
             raise ValueError(
                 f"Data shape {self.data.shape} does not match mask shape {self.mask.shape}"
             )
+
+    def fix_shape(self, grid):
+        if self.data.ndim != 3:
+            if self.data.size == grid.x * grid.y * grid.z:
+                self.data = self.data.reshape((grid.x, grid.y, grid.z), order="F")
+        if self.mask.ndim != 3:
+            if self.mask.size == grid.x * grid.y * grid.z:
+                self.mask = self.mask.reshape((grid.x, grid.y, grid.z), order="F")
 
     def __getitem__(self, idx):
         if idx == 0:
@@ -1257,6 +1283,11 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     """
     valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
+    if not isinstance(prop, ContProperty):
+        raise TypeError(
+            f"ordinary_kriging: prop must be ContProperty, got {type(prop).__name__}"
+        )
+
     out_prop = _empty_clone(prop)
 
     okp = _HPGL_OK_PARAMS(
@@ -1327,6 +1358,11 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     failures explicitly.
     """
     valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
+
+    if not isinstance(prop, ContProperty):
+        raise TypeError(
+            f"simple_kriging: prop must be ContProperty, got {type(prop).__name__}"
+        )
 
     # Validate property data size against grid
     if prop.data.size == 0:
@@ -1413,6 +1449,11 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
     (:func:`simple_kriging_weights`) which can detect failures explicitly.
     """
     valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
+
+    if not isinstance(prop, ContProperty):
+        raise TypeError(
+            f"lvm_kriging: prop must be ContProperty, got {type(prop).__name__}"
+        )
 
     # Validate mean_data
     if not isinstance(mean_data, numpy.ndarray):
@@ -1508,6 +1549,11 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     """
     valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
+    if not isinstance(prop, IndProperty):
+        raise TypeError(
+            f"median_ik: prop must be IndProperty, got {type(prop).__name__}"
+        )
+
     # Validate marginal_probs
     if len(marginal_probs) != 2:
         raise ValueError("median_ik: marginal_probs must have exactly 2 elements")
@@ -1564,6 +1610,11 @@ def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
 def indicator_kriging(prop, grid, data, marginal_probs):
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+
+    if not isinstance(prop, IndProperty):
+        raise TypeError(
+            f"indicator_kriging: prop must be IndProperty, got {type(prop).__name__}"
+        )
 
     # Validate indicator count
     ParameterValidator.validate_indicator_count(len(data))
@@ -1634,6 +1685,11 @@ def simple_cokriging_markI(
     correlation_coef,
 ):
     _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
+
+    if not isinstance(prop, ContProperty):
+        raise TypeError(
+            f"simple_cokriging_markI: prop must be ContProperty, got {type(prop).__name__}"
+        )
 
     # Validate cokriging-specific parameters
     ParameterValidator.validate_correlation_coef(correlation_coef)

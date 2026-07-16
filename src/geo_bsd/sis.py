@@ -6,6 +6,7 @@ import numpy
 
 # Import validation framework
 from .geo import (
+    IndProperty,
     __checked_create,
     _c_array,
     _clone_prop,
@@ -154,6 +155,12 @@ def sis_simulation(
     out_prop, is_lvm, marginal_probs, mask = __prepare_sis(
         prop, data, marginal_probs, mask, use_harddata
     )
+
+    if not isinstance(out_prop, IndProperty):
+        raise TypeError(
+            f"sis_simulation: expected IndProperty, got {type(out_prop).__name__}. "
+            "SIS requires indicator (categorical) property data."
+        )
 
     # Update indicator_count to match the number of categories in data
     out_prop.indicator_count = len(data)

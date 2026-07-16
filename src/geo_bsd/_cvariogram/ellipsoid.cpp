@@ -1,3 +1,4 @@
+#include <exception>
 #include <math.h>
 #include <memory.h>
 #include <stdio.h>
@@ -43,6 +44,8 @@ void cpycol(double * m, vector_t * dest, int col)
 
 void fill_ellipsoid_directions(ellipsoid_t * ell, double azimuth, double dip, double rotation)
 {
+    try
+    {
 	if (ell == nullptr)
 	{
 		cvar_set_last_error("fill_ellipsoid_directions: ell is null");
@@ -81,5 +84,10 @@ void fill_ellipsoid_directions(ellipsoid_t * ell, double azimuth, double dip, do
 	cpycol(M, &(ell->m_direction1), 0);
 	cpycol(M, &(ell->m_direction2), 1);
 	cpycol(M, &(ell->m_direction3), 2);
+    }
+    catch (const std::exception & ex)
+    {
+        cvar_set_last_error(ex.what());
+    }
 }
 

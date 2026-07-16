@@ -207,25 +207,35 @@ namespace hpgl
 				// Batch progress updates to reduce critical section contention.
 				// Each thread accumulates laps locally and flushes in batches,
 				// reducing lock acquisitions from ~10M to ~10M/LP_BATCH_SIZE.
-				local_lap_count++;
-				if (local_lap_count >= LP_BATCH_SIZE)
-				{
-					#pragma omp critical
-					{
-						report.next_lap(local_lap_count);
-					}
-					local_lap_count = 0;
-				}
-			}
-			// Flush remaining laps for this thread
-			if (local_lap_count > 0)
+			local_lap_count++;
+			if (local_lap_count >= LP_BATCH_SIZE)
 			{
 				#pragma omp critical
 				{
 					report.next_lap(local_lap_count);
 				}
+				local_lap_count = 0;
+				if (report.cancelled()) {
+#ifdef _OPENMP
+					#pragma omp cancel for
+#endif
+					break;
+				}
 			}
 		}
+		// Flush remaining laps for this thread
+		if (local_lap_count > 0)
+		{
+			#pragma omp critical
+			{
+				report.next_lap(local_lap_count);
+			}
+		}
+#ifdef _OPENMP
+		if (report.cancelled())
+			#pragma omp cancel for
+#endif
+	}
 
 		// Restore BLAS thread count after parallel region completes
 #if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)

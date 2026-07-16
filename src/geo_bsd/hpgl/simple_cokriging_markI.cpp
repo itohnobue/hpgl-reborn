@@ -18,7 +18,7 @@ namespace hpgl
 {
 
 template<typename coord_t, typename primary_cov_model_t, typename cross_cov_model_t>
-void build_system(	
+bool build_system(	
 	const coord_t & center, 
 	const std::vector<coord_t> & coords,
 	const primary_cov_model_t & primary_cov,
@@ -31,7 +31,7 @@ void build_system(
 	if (coords.size() > static_cast<size_t>(std::numeric_limits<int>::max() - 1))
 	{
 		HPGL_LOG_STRING("Security: Coordinate count exceeds int max in build_system.");
-		return;
+		return false;
 	}
 
 	int neighbour_count = static_cast<int>(coords.size());
@@ -42,7 +42,7 @@ void build_system(
 	if (!detail::safe_multiply_size_t(ms, ms, matrix_elements))
 	{
 		HPGL_LOG_STRING("Security: Matrix size overflow in build_system.");
-		return;
+		return false;
 	}
 	A.resize(matrix_elements);
 
@@ -67,6 +67,8 @@ void build_system(
 	b[neighbour_count] = cross_cov(coord_t(0,0,0), coord_t(0,0,0));
 
 	A[matrix_size * matrix_size - 1] = secondary_variance;	
+
+	return true;
 }
 
 bool solve_system(std::vector<double> & A, std::vector<double> & b, std::vector<kriging_weight_t> & weights)
@@ -90,7 +92,8 @@ bool calc_weights(
 	std::vector<double> b;
 	
 	// build system
-	build_system(center, coords, primary_cov, cross_cov, secondary_variance, A, b);
+	if (!build_system(center, coords, primary_cov, cross_cov, secondary_variance, A, b))
+		return false;
 	// solve systemk
 	return solve_system(A, b, weights);
 }
