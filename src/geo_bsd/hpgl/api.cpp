@@ -527,6 +527,8 @@ HPGL_API void hpgl_ordinary_kriging(
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
 
+	if (params->m_max_neighbours < 0)
+		throw hpgl_exception("hpgl_ordinary_kriging", "m_max_neighbours cannot be negative");
 	ok_p.m_max_neighbours = params->m_max_neighbours;
 
 	hpgl::ordinary_kriging(in_prop, grid, ok_p, out_prop, true);
@@ -544,6 +546,8 @@ static void init_sk_params(hpgl_sk_params_t * params, hpgl::sk_params_t & sk_p)
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
 
+	if (params->m_max_neighbours < 0)
+		throw hpgl_exception("init_sk_params", "m_max_neighbours cannot be negative");
 	sk_p.m_max_neighbours = params->m_max_neighbours;
 
 	if (!params->m_automatic_mean)
@@ -713,6 +717,8 @@ HPGL_API void hpgl_lvm_kriging(
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
 
+	if (params->m_max_neighbours < 0)
+		throw hpgl_exception("hpgl_lvm_kriging", "m_max_neighbours cannot be negative");
 	ok_p.m_max_neighbours = params->m_max_neighbours;
 
 	cont_property_array_t out_prop(output_data, output_mask, out_size);
@@ -913,6 +919,8 @@ HPGL_API void hpgl_median_ik(
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
 
+	if (params->m_max_neighbours < 0)
+		throw hpgl_exception("hpgl_median_ik", "m_max_neighbours cannot be negative");
 	mik_p.m_max_neighbours = params->m_max_neighbours;
 	mik_p.m_marginal_probs[0] = params->m_marginal_probs[0];
 	mik_p.m_marginal_probs[1] = params->m_marginal_probs[1];
@@ -1134,6 +1142,8 @@ hpgl_simple_cokriging_mark1(
 				output_data->m_data, output_data->m_mask, size3);
 
 		neighbourhood_param_t np;
+		if (params->m_max_neighbours < 0)
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", "m_max_neighbours cannot be negative");
 		np.m_max_neighbours = params->m_max_neighbours;
 
 		covariance_param_t cp;
@@ -1232,6 +1242,8 @@ hpgl_simple_cokriging_mark2(
 		init_cov_params_base(secondary_cp, &params->m_secondary_cov_params);
 
 		neighbourhood_param_t np;
+		if (params->m_max_neighbours < 0)
+			throw hpgl_exception("hpgl_simple_cokriging_mark2", "m_max_neighbours cannot be negative");
 		np.m_max_neighbours = params->m_max_neighbours;
 		for (int i = 0; i < 3; ++i)
 		{

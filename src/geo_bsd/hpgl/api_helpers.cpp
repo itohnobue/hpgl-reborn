@@ -70,17 +70,20 @@ void init_sgs_params(hpgl_sgs_params_t * params, hpgl::sgs_params_t * params2)
 			params->m_angles[2]);
 	sgs_p.set_sill(params->m_sill);
 	sgs_p.set_nugget(params->m_nugget);
-	sgs_p.validate();
 	
 	sgs_p.set_radiuses(
 			params->m_radiuses[0],
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
 
+	if (params->m_max_neighbours < 0)
+		throw hpgl_exception("init_sgs_params", "m_max_neighbours cannot be negative");
 	sgs_p.m_max_neighbours = params->m_max_neighbours;
 	sgs_p.m_kriging_kind = (kriging_kind_t) params->m_kriging_kind;
 	sgs_p.m_seed = params->m_seed;
 	sgs_p.m_min_neighbours = params->m_min_neighbours;
+
+	sgs_p.validate();
 }
 
 void 
@@ -117,6 +120,8 @@ init_sis_params(
 										 p->m_radiuses[0],
 										 p->m_radiuses[1],
 										 p->m_radiuses[2]));
+		if (p->m_max_neighbours < 0)
+			throw hpgl_exception("init_sis_params", "m_max_neighbours cannot be negative");
 		ikp->m_neighbour_limits.push_back(p->m_max_neighbours);
 		ikp->m_marginal_probs.push_back(p->m_marginal_prob);
 		covariance_param_t cp;
@@ -132,6 +137,8 @@ init_sis_params(
 				p->m_radiuses[0],
 				p->m_radiuses[1],
 				p->m_radiuses[2]);
+		if (p->m_max_neighbours < 0)
+			throw hpgl_exception("init_sis_params", "m_max_neighbours cannot be negative");
 		nbp.m_max_neighbours = p->m_max_neighbours;
 		ikp->m_nb_params.push_back(nbp);
 	}

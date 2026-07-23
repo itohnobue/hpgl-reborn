@@ -1823,19 +1823,18 @@ class TestNaNInfInputHandling:
             )
 
     def test_cont_property_nan_data_construction(self):
-        """ContProperty with NaN data should be constructable but operations should handle it."""
+        """ContProperty rejects NaN data at construction."""
         data = np.array([1.0, np.nan, 3.0], dtype="float32")
         mask = np.ones(3, dtype="uint8")
-        prop = ContProperty(data, mask)
-        # The property is constructed; NaN-aware operations will detect NaN later
-        assert prop.data.shape == (3,)
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            ContProperty(data, mask)
 
     def test_cont_property_inf_data_construction(self):
-        """ContProperty with Inf data should be constructable."""
+        """ContProperty rejects Inf data at construction."""
         data = np.array([1.0, np.inf, 3.0], dtype="float32")
         mask = np.ones(3, dtype="uint8")
-        prop = ContProperty(data, mask)
-        assert prop.data.shape == (3,)
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            ContProperty(data, mask)
 
 
 if __name__ == "__main__":

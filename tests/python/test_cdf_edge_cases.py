@@ -179,18 +179,14 @@ class TestCalcCdfEdgeCases:
         assert np.all(np.diff(cdf.values) >= 0)
 
     def test_all_nan_informed_raises(self):
-        """calc_cdf raises ValueError when all informed values are NaN."""
-        prop = _make_prop([np.nan, np.nan, np.nan, np.nan], grid_shape=(2, 2, 1))
-        with pytest.raises(ValueError, match="no informed values after filtering NaN"):
-            calc_cdf(prop)
+        """ContProperty construction raises ValueError when all values are NaN."""
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            _make_prop([np.nan, np.nan, np.nan, np.nan], grid_shape=(2, 2, 1))
 
     def test_mixed_nan_and_finite(self):
-        """calc_cdf filters NaN values and computes CDF from finite remainder."""
-        prop = _make_prop([np.nan, 5.0, np.nan, 15.0], grid_shape=(2, 2, 1))
-        cdf = calc_cdf(prop)
-        assert cdf.values.size == 2
-        np.testing.assert_array_almost_equal(cdf.values, [5.0, 15.0])
-        np.testing.assert_array_almost_equal(cdf.probs, [0.5, 1.0], decimal=5)
+        """ContProperty construction raises ValueError when data contains NaN mixed with finite."""
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            _make_prop([np.nan, 5.0, np.nan, 15.0], grid_shape=(2, 2, 1))
 
 
 @pytest.mark.hpgl

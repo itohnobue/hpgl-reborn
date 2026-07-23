@@ -323,6 +323,11 @@ def _create_hpgl_ubyte_array(array, grid):
         sh = _create_hpgl_shape(array.shape, strides=__get_strides(array))
     else:
         sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
+        if grid.x * grid.y * grid.z != array.size:
+            raise RuntimeError(
+                f"Invalid data size. Size of data = {array.size}. "
+                f"Size of grid = {grid.x * grid.y * grid.z}"
+            )
 
     # Security: Keep array reference to prevent use-after-free
     result = _HPGL_UBYTE_ARRAY(data=array.ctypes.data_as(C.POINTER(C.c_ubyte)), shape=sh)
@@ -369,12 +374,16 @@ class ContProperty:
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray):
         # Use asarray() so lists/tuples are supported; ndim check must
         # happen before require() which may change ndim.
-        if numpy.asarray(data).ndim not in (1, 3):
+        ndarray = numpy.asarray(data)
+        if ndarray.ndim not in (1, 3):
             raise ValueError(
-                f"ContProperty data must be 1D or 3D, got {numpy.asarray(data).ndim}D"
+                f"ContProperty data must be 1D or 3D, got {ndarray.ndim}D"
             )
+        if not numpy.all(numpy.isfinite(ndarray)):
+            raise ValueError("ContProperty data contains NaN or Inf values")
         self.data = numpy.require(data, "float32", "F")
         self.mask = numpy.require(mask, "uint8", "F")
+        self.validate()
 
     def validate(self):
         checkFWA(self.data)
@@ -440,10 +449,14 @@ class IndProperty:
             )
         # Use asarray() so lists/tuples are supported; ndim check must
         # happen before require() which may change ndim.
-        if numpy.asarray(data).ndim not in (1, 3):
+        ndarray = numpy.asarray(data)
+        if ndarray.ndim not in (1, 3):
             raise ValueError(
-                f"IndProperty data must be 1D or 3D, got {numpy.asarray(data).ndim}D"
+                f"IndProperty data must be 1D or 3D, got {ndarray.ndim}D"
             )
+        # Validate NaN/Inf before uint8 conversion which silently maps NaN→0.
+        if not numpy.all(numpy.isfinite(numpy.asarray(ndarray, dtype=float))):
+            raise ValueError("IndProperty data contains NaN or Inf values")
         self.data = numpy.require(data, "uint8", "F")
         self.mask = numpy.require(mask, "uint8", "F")
         self.indicator_count = indicator_count
@@ -454,6 +467,7 @@ class IndProperty:
             )
         if data.shape != mask.shape:
             raise ValueError(f"Data shape {data.shape} does not match mask shape {mask.shape}")
+        self.validate()
 
     def validate(self):
         checkFWA(self.data)
@@ -1024,11 +1038,11 @@ def read_inc_file_float(filename, undefined_value, size):
     )
 
     # Validate size parameters
-    if isinstance(size, tuple) and len(size) == 3:
+    if isinstance(size, (tuple, list)) and len(size) == 3:
         GridValidator.validate_grid_dimensions(size[0], size[1], size[2])
 
     total_elements = (
-        size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+        size[0] * size[1] * size[2] if isinstance(size, (tuple, list)) and len(size) == 3 else size
     )
     if total_elements > 2147483647:
         raise ValueError(
@@ -1057,11 +1071,11 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
     )
 
     # Validate size parameters
-    if isinstance(size, tuple) and len(size) == 3:
+    if isinstance(size, (tuple, list)) and len(size) == 3:
         GridValidator.validate_grid_dimensions(size[0], size[1], size[2])
 
     total_elements = (
-        size[0] * size[1] * size[2] if isinstance(size, tuple) and len(size) == 3 else size
+        size[0] * size[1] * size[2] if isinstance(size, (tuple, list)) and len(size) == 3 else size
     )
     if total_elements > 2147483647:
         raise ValueError(
@@ -1332,6 +1346,9 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
             f"ordinary_kriging: prop must be ContProperty, got {type(prop).__name__}"
         )
 
+    if not numpy.all(numpy.isfinite(prop.data)):
+        raise ValueError("ordinary_kriging: prop.data contains NaN or Inf")
+
     out_prop = _empty_clone(prop)
 
     okp = _HPGL_OK_PARAMS(
@@ -1421,6 +1438,9 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     # Validate mean for NaN/Inf when explicitly provided
     if mean is not None and not numpy.isfinite(mean):
         raise ValueError(f"simple_kriging: mean must be finite, got {mean}")
+
+    if not numpy.all(numpy.isfinite(prop.data)):
+        raise ValueError("simple_kriging: prop.data contains NaN or Inf")
 
     out_prop = _empty_clone(prop)
 
@@ -1522,6 +1542,12 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
             f"lvm_kriging: prop.data size {prop.data.size} does not match "
             f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
         )
+
+    # Validate data for NaN/Inf before C++ call
+    if not numpy.all(numpy.isfinite(prop.data)):
+        raise ValueError("lvm_kriging: prop.data contains NaN or Inf")
+    if not numpy.all(numpy.isfinite(mean_data)):
+        raise ValueError("lvm_kriging: mean_data contains NaN or Inf")
 
     out_prop = _empty_clone(prop)
 
@@ -1770,6 +1796,11 @@ def simple_cokriging_markI(
             f"({grid.x}x{grid.y}x{grid.z})"
         )
 
+    if not numpy.all(numpy.isfinite(secondary_data.data)):
+        raise ValueError(
+            "simple_cokriging_markI: secondary_data.data contains NaN or Inf"
+        )
+
     out_prop = _empty_clone(prop)
 
     with _hpgl_error_guard("simple_cokriging_markI"):
@@ -1835,6 +1866,13 @@ def simple_cokriging_markII(
         if not numpy.isfinite(mean_val):
             raise ValueError(
                 f"simple_cokriging_markII: {label}_data['mean'] must be finite, got {mean_val}"
+            )
+
+    # Validate data arrays for NaN/Inf before C++ call
+    for label, d in [("primary", primary_data), ("secondary", secondary_data)]:
+        if not numpy.all(numpy.isfinite(d["data"].data)):
+            raise ValueError(
+                f"simple_cokriging_markII: {label}_data['data'] contains NaN or Inf"
             )
 
     out_prop = _empty_clone(primary_data["data"])

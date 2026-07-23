@@ -539,6 +539,11 @@ def LoadGslibFile(filename, property_size):
             )
 
     for dkey in result.keys():
+        if not numpy.all(numpy.isfinite(result[dkey])):
+            raise ValueError(
+                f"LoadGslibFile: property '{dkey}' contains non-finite "
+                f"values (NaN or Inf). GSLIB format does not support non-finite values."
+            )
         result[dkey] = result[dkey].reshape(property_size, order="F")
 
     return result

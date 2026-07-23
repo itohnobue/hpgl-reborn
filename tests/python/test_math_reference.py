@@ -396,16 +396,11 @@ class TestCDFAnalytical:
         np.testing.assert_allclose(cdf.probs[-1], 1.0)
 
     def test_cdf_nan_in_data(self):
-        """CDF with NaN in informed data — NaN values are filtered with a warning."""
+        """ContProperty rejects NaN in data at construction — no NaN reaches calc_cdf."""
         data = np.array([1.0, np.nan, 3.0, 4.0], dtype="float32")
         mask = np.ones(4, dtype="uint8")
-        prop = ContProperty(data, mask)
-        # calc_cdf now filters NaN values and issues a warning, producing NaN-free CDF
-        cdf = calc_cdf(prop)
-        assert len(cdf.values) == len(cdf.probs)
-        # Probabilities should be valid (no NaN survivors after filtering)
-        assert len(cdf.probs) > 0
-        assert not np.isnan(cdf.probs[-1])
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            ContProperty(data, mask)
 
 
 # =============================================================================

@@ -183,6 +183,15 @@ def sis_simulation(
                 f"Max deviation: {max_dev:.6e}, tolerance: {ValidationConstants.PROBABILITY_SUM_TOLERANCE}. "
                 f"Some cells have Σ P_i(cell) ≠ 1.0"
             )
+        # Per-cell probability range validation: each cell's probability
+        # for each indicator must be in [0, 1]. The sum check above ensures
+        # cells sum to ~1.0 but cannot catch cells like [1.5, -0.5] = 1.0.
+        for i in range(len(marginal_probs)):
+            if numpy.any(marginal_probs[i] < 0) or numpy.any(marginal_probs[i] > 1):
+                raise ValueError(
+                    f"sis_simulation: LVM per-cell probabilities must be in [0, 1]. "
+                    f"marginal_probs[{i}] contains values outside this range."
+                )
         for i in range(len(data)):
             GridValidator.validate_array_size(marginal_probs[i], (grid.x, grid.y, grid.z))
             if not numpy.all(numpy.isfinite(marginal_probs[i])):

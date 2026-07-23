@@ -73,9 +73,20 @@ bool build_system(
 
 bool solve_system(std::vector<double> & A, std::vector<double> & b, std::vector<kriging_weight_t> & weights)
 {
-	weights.resize(b.size());
-	// Cholesky decomposition (replaces Gaussian elimination for numerical stability)
-	return cholesky_old(&A[0], &b[0], &weights[0], static_cast<int>(b.size()));
+	int size = static_cast<int>(b.size());
+	weights.resize(static_cast<size_t>(size));
+
+	size_t sz = static_cast<size_t>(size);
+	std::vector<double> A_U(sz * sz, 0.0);
+	std::vector<double> A_L(sz * sz, 0.0);
+
+	bool solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
+	if (!solved) {
+		solved = gauss_solve(&A[0], &b[0], &weights[0], size);
+		return solved;
+	}
+	cholesky_solve(&A_L[0], &A_U[0], &b[0], &weights[0], size);
+	return true;
 }
 
 template<typename coord_t, typename primary_cov_model_t, typename cross_cov_model_t>

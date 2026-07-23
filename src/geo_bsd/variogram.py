@@ -492,6 +492,12 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
             f"{' with length ' + str(len(PointSetXYZ)) if hasattr(PointSetXYZ, '__len__') else ''}"
         )
     LI, LJ, LK, LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
+    if len(LagIndexes) == 0:
+        raise ValueError(
+            "PointSetScanGridStyle: _CalcLagsAreas returned empty LagIndexes — "
+            "no lag offsets found. Check search template parameters "
+            "(NumLags, LagSeparation, LagWidth, Ellipsoid ranges)."
+        )
     IMin, IMax = LI.min(), LI.max()
     JMin, JMax = LJ.min(), LJ.max()
     KMin, KMax = LK.min(), LK.max()

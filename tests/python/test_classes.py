@@ -223,13 +223,12 @@ class TestContProperty:
         prop.validate()
 
     def test_validate_with_shape_mismatch(self):
-        """Test validate() raises error when data and mask shapes don't match"""
+        """Test constructor raises ValueError when data and mask shapes don't match"""
         data = np.asfortranarray(np.ones((10, 10, 5), dtype="float32"))
         mask = np.asfortranarray(np.ones((10, 10, 3), dtype="uint8"))  # Different shape
-        prop = ContProperty(data, mask)
 
-        with pytest.raises(ValueError):
-            prop.validate()
+        with pytest.raises(ValueError, match="does not match mask shape"):
+            ContProperty(data, mask)
 
     def test_fix_shape_reshapes_flat_data(self):
         """Test fix_shape() reshapes flat array to 3D grid"""
