@@ -9,16 +9,14 @@
 #include <cmath>
 #include <mutex>
 
-// Use LAPACK compatibility header
-// Supports Intel MKL, OpenBLAS, and CLAPACK
-#include "lapack_compat.h"
-
+// Unified SPD solver entry point — provides handle_lapack_error,
+// lapack_spd_solve_1rhs, lapack_spd_solve_2rhs.  Also includes
+// lapack_compat.h, gauss_solver.h, and logging.h transitively.
+#include "solver_entry_point.h"
 
 #include "sugarbox_grid.h"
 #include "property_array.h"
 #include "typedefs.h"
-#include "gauss_solver.h"
-#include "logging.h"
 
 // ====================================================================
 // SECTION 1: LAPACK Integration
@@ -73,27 +71,6 @@ namespace hpgl
 
 	// SECURITY FIX: Safe allocation helper to prevent integer overflow
 	namespace detail {
-		// LAPACK error handler with proper error codes
-		inline void handle_lapack_error(int info, const char* operation, int matrix_size = -1) {
-			if (info == 0) return; // No error
-
-			char error_msg[256];
-			if (info < 0) {
-				// Invalid argument at position -info
-				snprintf(error_msg, sizeof(error_msg),
-					"LAPACK Error in %s: Invalid argument at position %d. Matrix size: %d",
-					operation, -info, matrix_size);
-			} else {
-				// Matrix is not positive definite or singular
-				snprintf(error_msg, sizeof(error_msg),
-					"LAPACK Error in %s: Matrix not positive definite or singular. Failed at diagonal %d. Matrix size: %d",
-					operation, info, matrix_size);
-			}
-			HPGL_LOG_STRING(error_msg);
-
-			// For now, log the error but don't throw exception (to maintain API compatibility)
-			// Consider throwing std::runtime_error(error_msg) in future versions
-		}
 		inline bool safe_multiply_size_t(size_t a, size_t b, size_t& result) {
 			if (a == 0 || b == 0) {
 				result = 0;
@@ -237,58 +214,15 @@ namespace hpgl
 
 #ifdef LAPACK_SOLVER
 
-		// std::cout << "LAPACK SOLVER MATRIX SIZE: " << size << std::endl;
-
-		// CLAPACK
-		bool system_solved = false;
-
-		integer info_dec = 100;
-		integer info_solve = 100;
-		integer size_lap = size;
-		integer b_size = 1;
-		char matrix_type = 'U';
-
-		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
-		// Save a copy of A before dpotrf_ modifies the upper triangle,
-		// so the fallback gauss_solve receives the original matrix.
+		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription.
+		// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →
+		// (on success) dpotrs_.  Handles all LAPACK calls, error reporting,
+		// and fallback logic.  weights[] receives the solution on success.
 		std::vector<double> A_backup(A);
-		// Cholesky decomposition
-		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
-		// Handle decomposition errors
-		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
-
-		if (info_dec != 0) {
-			// Fallback: dpotrf_ modified the upper triangle; use the
-			// saved original matrix for gauss_solve.
-			system_solved = gauss_solve(&A_backup[0], &b[0], &weights[0], size);
-			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-			// Compute SK variance on the fallback path (mirrors non-fallback
-			// variance block at lines 221-239).  b2 holds original RHS values.
-			if (calc_variance) {
-				if (system_solved) {
-					double cr0 = covariances(center_coord, center_coord);
-					variance = cr0;
-					for (int i = 0; i < size; i++)
-						variance -= weights[i] * b2[i];
-					if (variance < 0) variance = 0;
-				} else {
-					variance = -1;
-				}
-			}
-			return system_solved;
-		}
-
-		// Solve
-		for (size_t i = 0; i < static_cast<size_t>(size); i ++)
-			weights[i] = b[i];
-
-		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
-
-		// Handle solve errors
-		detail::handle_lapack_error(info_solve, "dpotrs_ (Cholesky solver)", size);
-
-		if (info_solve == 0) system_solved = true;
+		bool system_solved = detail::lapack_spd_solve_1rhs(
+			&A[0], size, &weights[0], &b[0],
+			&A_backup[0], "SK Cholesky");
 
 		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 
@@ -402,48 +336,15 @@ namespace hpgl
 #endif
 
 #ifdef LAPACK_SOLVER
-		bool system_solved = false;
-		integer info_dec = 100;
-		integer info_solve = 100;
-		integer size_lap = size;
-		integer b_size = 1;
-		char matrix_type = 'U';
-
-		// Save a copy of ws.A before dpotrf_ modifies the upper triangle,
-		// so the fallback gauss_solve receives the original matrix.
+		// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →
+		// (on success) dpotrs_.  weights[] receives the solution on success.
 		ws.A_backup.resize(matrix_size);
 		std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
-		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
-		detail::handle_lapack_error(info_dec, "dpotrf_ (Cholesky decomposition)", size);
 
-		if (info_dec != 0) {
-			// Fallback: dpotrf_ modified the upper triangle; use the
-			// saved original matrix for gauss_solve.
-			system_solved = gauss_solve(&ws.A_backup[0], &ws.b[0], &weights[0], size);
-			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-			// Compute SK variance on the fallback path (mirrors non-fallback
-			// variance block of the ws variant).  ws.b2 holds original RHS values.
-			if (calc_variance) {
-				if (system_solved) {
-					double cr0 = covariances(center_coord, center_coord);
-					variance = cr0;
-					for (int i = 0; i < size; i++)
-						variance -= weights[i] * ws.b2[i];
-					if (variance < 0) variance = 0;
-				} else {
-					variance = -1;
-				}
-			}
-			return system_solved;
-		}
+		bool system_solved = detail::lapack_spd_solve_1rhs(
+			&ws.A[0], size, &weights[0], &ws.b[0],
+			&ws.A_backup[0], "SK Cholesky (ws)");
 
-		for (size_t i = 0; i < static_cast<size_t>(size); i ++)
-			weights[i] = ws.b[i];
-
-		dpotrs_(&matrix_type, &size_lap, &b_size, &ws.A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
-		detail::handle_lapack_error(info_solve, "dpotrs_ (Cholesky solver)", size);
-
-		if (info_solve == 0) system_solved = true;
 		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
 #endif
 
@@ -592,100 +493,19 @@ namespace hpgl
 
 #ifdef LAPACK_SOLVER
 
-		// CLAPACK
-		bool system_solved = false;
-
-		integer info_dec = 100;
-		integer info_solve = 100;
-		integer size_lap = size;
-		char matrix_type = 'U';
-
-		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
-		// Save a copy of A before dpotrf_ modifies the upper triangle,
-		// so the fallback gauss_solve receives the original matrix.
+		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription.
+		// Unified SPD solver for OK (nrhs=2): backup → dpotrf_ →
+		// (on fail) two gauss_solve calls for both RHS →
+		// (on success) combined dpotrs_ with nrhs=2.
+		// sk_weights[] and ones_result[] receive solutions from either path.
 		std::vector<double> A_backup(A);
-		// Cholesky decomposition
-		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
-		// Handle decomposition errors
-		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
-
-		if (info_dec != 0) {
-			// Fallback: dpotrf_ modified the upper triangle; use the
-			// saved original matrix for gauss_solve.
-			// Solve both RHS (b→sk_weights, ones→ones_result) via gauss_solve.
-			// gauss_solve modifies A in-place, so use a second copy.
-			std::vector<double> A_backup2(A_backup);
-			system_solved = gauss_solve(&A_backup[0], &b[0], &sk_weights[0], size);
-			if (system_solved) {
-				system_solved = gauss_solve(&A_backup2[0], &ones[0], &ones_result[0], size);
-			}
-			// Compute OK weights from SK weights via Lagrange multiplier
-			double mu = 0.0;  // hoisted for variance computation below
-			if (system_solved) {
-				double SumSK = 0, SumOnes = 0;
-				for (int k = 0; k < size; k++) {
-					SumSK += sk_weights[k];
-					SumOnes += ones_result[k];
-				}
-				if (std::abs(SumOnes) < 1e-12) { system_solved = false; }
-				else {
-					mu = (SumSK - 1) / SumOnes;
-					if (std::abs(mu) > 1e10) { system_solved = false; }
-					else {
-						for (int k = 0; k < size; k++) {
-						weights[k] = sk_weights[k] - mu * ones_result[k];
-					}
-				}
-			}
-		}
-		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-		// Compute OK kriging variance on the fallback path (mirrors
-		// the non-fallback variance block at lines 548-567).  mu and
-		// weights are already computed above; b2 holds the original
-		// RHS values needed for the variance formula.
-		if (calc_variance) {
-			if (system_solved) {
-				double cr0 = covariances(center, center);
-				variance = cr0;
-				for (int i = 0; i < size; i++)
-					variance -= weights[i] * b2[i];
-				variance -= mu;
-				if (variance < 0) variance = 0;
-			} else {
-				variance = -1;
-			}
-		}
-		return system_solved;
-	}
-
-	// Solve both RHS vectors in a single dpotrs_ call (nrhs=2).
-		// LAPACK column-major layout: B[0..size-1] = sk_weights RHS,
-		// B[size..2*size-1] = ones RHS. After solve, B holds solutions
-		// in the same layout — halving the triangular solve overhead (~30% OK speedup).
-		integer two = 2;
-		std::vector<double> B(static_cast<size_t>(size) * 2);
-		for (int i = 0; i < size; ++i)
-		{
-			B[i] = b[i];              // Column 0: sk_weights RHS
-			B[i + size] = ones[i];    // Column 1: ones RHS
-		}
-
-		dpotrs_(&matrix_type, &size_lap, &two, &A[0], &size_lap, &B[0], &size_lap, &info_solve);
-
-		// Handle solve errors BEFORE extracting results — dpotrs_ writes
-		// to B on failure, so only extract when solve succeeded.
-		detail::handle_lapack_error(info_solve, "dpotrs_ (OK Cholesky solver)", size);
-
-		if (info_solve == 0) {
-			system_solved = true;
-			// Extract results from interleaved solution
-			for (int i = 0; i < size; ++i)
-			{
-				sk_weights[i] = B[i];
-				ones_result[i] = B[i + size];
-			}
-		}
+		bool system_solved = detail::lapack_spd_solve_2rhs(
+			&A[0], size,
+			&sk_weights[0], &b[0],
+			&ones_result[0], &ones[0],
+			&A_backup[0],
+			"OK Cholesky");
 
 #endif
 
@@ -877,91 +697,19 @@ namespace hpgl
 #endif
 
 #ifdef LAPACK_SOLVER
-		integer info_dec = 100;
-		integer info_solve = 100;
-		integer size_lap = size;
-		char matrix_type = 'U';
-
-		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
-		// Save a copy of ws.A before dpotrf_ modifies the upper triangle,
-		// so the fallback gauss_solve receives the original matrix.
+		// Unified SPD solver for OK (nrhs=2): backup → dpotrf_ →
+		// (on fail) two gauss_solve calls →
+		// (on success) combined dpotrs_ with nrhs=2.
+		// ws.sk_weights[] and ws.ones_result[] receive solutions.
 		ws.A_backup.resize(matrix_size);
 		std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
-		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
-		detail::handle_lapack_error(info_dec, "dpotrf_ (OK Cholesky decomposition)", size);
 
-		if (info_dec != 0) {
-			// Fallback: dpotrf_ modified the upper triangle; use the
-			// saved original matrix for gauss_solve.
-			// A_backup2 created BEFORE gauss_solve so it preserves the
-			// original matrix — gauss_solve modifies A_backup in-place.
-			std::vector<double> A_backup2(ws.A_backup);
-			system_solved = gauss_solve(&ws.A_backup[0], &ws.b[0], &ws.sk_weights[0], size);
-			if (system_solved) {
-				system_solved = gauss_solve(&A_backup2[0], &ws.ones[0], &ws.ones_result[0], size);
-			}
-			// Compute OK weights from SK weights via Lagrange multiplier
-			double mu = 0.0;  // hoisted for variance computation below
-			if (system_solved) {
-				double SumSK = 0, SumOnes = 0;
-				for (int k = 0; k < size; k++) {
-					SumSK += ws.sk_weights[k];
-					SumOnes += ws.ones_result[k];
-				}
-				if (std::abs(SumOnes) < 1e-12) { system_solved = false; }
-				else {
-					mu = (SumSK - 1) / SumOnes;
-					if (std::abs(mu) > 1e10) { system_solved = false; }
-					else {
-						for (int k = 0; k < size; k++) {
-						weights[k] = ws.sk_weights[k] - mu * ws.ones_result[k];
-					}
-				}
-			}
-		}
-		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-		// Compute OK kriging variance on the fallback path (mirrors
-		// the non-fallback variance block of the ws variant).  mu and
-		// weights are already computed above; ws.b2 holds the original
-		// RHS values needed for the variance formula.
-		if (calc_variance) {
-			if (system_solved) {
-				double cr0 = covariances(center, center);
-				variance = cr0;
-				for (int i = 0; i < size; i++)
-					variance -= weights[i] * ws.b2[i];
-				variance -= mu;
-				if (variance < 0) variance = 0;
-			} else {
-				variance = -1;
-			}
-		}
-		return system_solved;
-	}
-
-	// Solve both RHS vectors in a single dpotrs_ call (nrhs=2).
-		integer two = 2;
-		ws.B.resize(static_cast<size_t>(size) * 2);
-		for (int i = 0; i < size; ++i)
-		{
-			ws.B[i] = ws.b[i];              // Column 0: sk_weights RHS
-			ws.B[i + size] = ws.ones[i];    // Column 1: ones RHS
-		}
-
-		dpotrs_(&matrix_type, &size_lap, &two, &ws.A[0], &size_lap, &ws.B[0], &size_lap, &info_solve);
-
-		// Handle solve errors BEFORE extracting results — dpotrs_ writes
-		// to ws.B on failure, so only extract when solve succeeded.
-		detail::handle_lapack_error(info_solve, "dpotrs_ (OK Cholesky solver)", size);
-
-		if (info_solve == 0) {
-			system_solved = true;
-			for (int i = 0; i < size; ++i)
-			{
-				ws.sk_weights[i] = ws.B[i];
-				ws.ones_result[i] = ws.B[i + size];
-			}
-		}
+		system_solved = detail::lapack_spd_solve_2rhs(
+			&ws.A[0], size,
+			&ws.sk_weights[0], &ws.b[0],
+			&ws.ones_result[0], &ws.ones[0],
+			&ws.A_backup[0],
+			"OK Cholesky (ws)");
 #endif
 
 		double mu = 0.0;
@@ -1149,42 +897,14 @@ namespace hpgl
 
 #ifdef LAPACK_SOLVER
 
-		// CLAPACK
-		bool system_solved = false;
-
-		integer info_dec = 100;
-		integer info_solve = 100;
-		integer size_lap = size;
-		integer b_size = 1;
-		char matrix_type = 'U';
-
-		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription
-		// Save a copy of A before dpotrf_ modifies the upper triangle,
-		// so the fallback gauss_solve receives the original matrix.
+		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription.
+		// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →
+		// (on success) dpotrs_.  weights[] receives the solution on success.
 		std::vector<double> A_backup(A);
-		// Cholesky decomposition
-		dpotrf_(&matrix_type, &size_lap, &A[0], &size_lap, &info_dec);
 
-		// Handle decomposition errors
-		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
-
-		if (info_dec != 0) {
-			// Fallback: dpotrf_ modified the upper triangle; use the
-			// saved original matrix for gauss_solve.
-			system_solved = gauss_solve(&A_backup[0], &b[0], &weights[0], size);
-			return system_solved;
-		}
-
-		// Solve
-		for (size_t i = 0; i < size; i ++)
-			weights[i] = b[i];
-
-		dpotrs_(&matrix_type, &size_lap, &b_size, &A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
-
-		// Handle solve errors
-		detail::handle_lapack_error(info_solve, "dpotrs_ (Corellogram Cholesky solver)", size);
-
-		if (info_solve == 0) system_solved = true;
+		bool system_solved = detail::lapack_spd_solve_1rhs(
+			&A[0], size, &weights[0], &b[0],
+			&A_backup[0], "Corellogram Cholesky");
 
 #endif
 
@@ -1317,33 +1037,14 @@ namespace hpgl
 #endif
 
 #ifdef LAPACK_SOLVER
-		integer info_dec = 100;
-		integer info_solve = 100;
-		integer size_lap = size;
-		integer b_size = 1;
-		char matrix_type = 'U';
-
-		// Save a copy of ws.A before dpotrf_ modifies the upper triangle,
-		// so the fallback gauss_solve receives the original matrix.
+		// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →
+		// (on success) dpotrs_.  weights[] receives the solution on success.
 		ws.A_backup.resize(matrix_size);
 		std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
-		dpotrf_(&matrix_type, &size_lap, &ws.A[0], &size_lap, &info_dec);
-		detail::handle_lapack_error(info_dec, "dpotrf_ (Corellogram Cholesky decomposition)", size);
 
-		if (info_dec != 0) {
-			// Fallback: dpotrf_ modified the upper triangle; use the
-			// saved original matrix for gauss_solve.
-			system_solved = gauss_solve(&ws.A_backup[0], &ws.b[0], &weights[0], size);
-			return system_solved;
-		}
-
-		for (size_t i = 0; i < static_cast<size_t>(size); i ++)
-			weights[i] = ws.b[i];
-
-		dpotrs_(&matrix_type, &size_lap, &b_size, &ws.A[0],  &size_lap, &weights[0], &size_lap, &info_solve );
-		detail::handle_lapack_error(info_solve, "dpotrs_ (Corellogram Cholesky solver)", size);
-
-		if (info_solve == 0) system_solved = true;
+		system_solved = detail::lapack_spd_solve_1rhs(
+			&ws.A[0], size, &weights[0], &ws.b[0],
+			&ws.A_backup[0], "Corellogram Cholesky (ws)");
 #endif
 
 		return system_solved;

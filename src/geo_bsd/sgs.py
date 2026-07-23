@@ -1,27 +1,39 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
-import ctypes as C
-
 import numpy
 
 # Import validation framework
-from .cdf import CdfData
+from .config import SGSConfig
+from .ffi_adapter import (
+    _HPGL_KRIGING_KIND,
+    _HPGL_SGS_PARAMS,
+    call_sgs_lvm_simulation,
+    call_sgs_simulation,
+)
+from .ffi_adapter import (
+    create_cont_masked_array as _create_hpgl_cont_masked_array,
+)
+from .ffi_adapter import (
+    create_float_array as _create_hpgl_float_array,
+)
+from .ffi_adapter import (
+    create_ubyte_array as _create_hpgl_ubyte_array,
+)
 from .geo import (
     ContProperty,
     CovarianceModel,
-    __checked_create,
     _clone_prop,
-    _create_hpgl_cont_masked_array,
-    _create_hpgl_float_array,
-    _create_hpgl_ubyte_array,
     _empty_clone,
-    _hpgl_error_guard,
     _require_cont_data,
     _require_ind_data,
     accepts_tuple,
 )
-from .hpgl_wrap import _HPGL_KRIGING_KIND, _HPGL_SGS_PARAMS, _hpgl_so, hpgl_non_parametric_cdf_t
-from .validation import GridValidator, ParameterValidator
+from .validation import (
+    GridValidator,
+    ParameterValidator,
+    validate_kriging_params,
+    validate_simulation_params,
+)
 
 
 def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
@@ -37,21 +49,10 @@ def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
 
 
 def _create_hpgl_nonparam_cdf(cdf_data):
-    cd2 = cdf_data
-    if not isinstance(cdf_data, CdfData):
-        raise TypeError(
-            f"_create_hpgl_nonparam_cdf: expected CdfData, got {type(cdf_data).__name__}"
-        )
-    result = __checked_create(
-        hpgl_non_parametric_cdf_t,
-        values=cd2.values.ctypes.data_as(C.POINTER(C.c_float)),
-        probs=cd2.probs.ctypes.data_as(C.POINTER(C.c_float)),
-        size=cd2.values.size,
-    )
-    # Preserve references to numpy arrays to prevent garbage collection
-    # while C code holds pointers to the underlying data
-    result._array_refs = (cd2.values, cd2.probs)
-    return result
+    """Create hpgl_non_parametric_cdf_t from CdfData (delegates to adapter)."""
+    from .ffi_adapter import create_nonparam_cdf
+
+    return create_nonparam_cdf(cdf_data)
 
 
 def normed_cov_model(cov_model):
@@ -81,6 +82,7 @@ def sgs_simulation(
     use_harddata=True,
     mask=None,
     min_neighbours=0,
+    config=None,
     **params,
 ):
     """Performs Sequential Gaussian Simulation (SGS).
@@ -118,6 +120,10 @@ def sgs_simulation(
         If ``None``, all cells are simulated. Default: ``None``.
     min_neighbours : int, optional
         Minimum number of neighbours required for kriging. Default: ``0``.
+    config : SGSConfig or None, optional
+        Pre-configured SGS parameters as a frozen dataclass.  When provided,
+        its values override the corresponding keyword arguments above.
+        Default: ``None``.
 
     Returns:
     --------
@@ -134,33 +140,30 @@ def sgs_simulation(
             f"sgs_simulation() got unexpected keyword arguments: {', '.join(sorted(params.keys()))}"
         )
 
-    # Validate grid dimensions
-    GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+    # When config is provided, override parameter values from config
+    if config is not None:
+        if not isinstance(config, SGSConfig):
+            raise TypeError(
+                f"sgs_simulation: config must be SGSConfig, got {type(config).__name__}"
+            )
+        kriging_type = config.kriging_type
+        seed = config.seed
+        min_neighbours = config.min_neighbours
+        max_neighbours = config.max_neighbours
+        radiuses = config.radiuses
+        use_harddata = config.use_harddata
 
-    # Validate radiuses - convert to int for ctypes compatibility
-    valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
+    # Validate grid dimensions, radiuses, max_neighbours, covariance
+    valid_radiuses = validate_kriging_params(
+        grid, radiuses, max_neighbours, cov_model
+    )
     # Ensure radiuses are integers for ctypes (c_int * 3)
     valid_radiuses = tuple(int(r) for r in valid_radiuses)
 
-    # Validate max_neighbours
-    ParameterValidator.validate_max_neighbors(max_neighbours)
+    # Validate simulation-specific parameters
+    validate_simulation_params(seed=seed, min_neighbours=min_neighbours, max_neighbours=max_neighbours)
 
-    # Validate covariance model
-    ParameterValidator.validate_covariance_parameters(
-        cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
-    )
-
-    # Validate seed
-    ParameterValidator.validate_seed(seed)
-
-    # Validate min_neighbours
-    ParameterValidator.validate_min_neighbors(min_neighbours, max_neighbours)
-
-    if not isinstance(prop, ContProperty):
-        raise TypeError(
-            f"sgs_simulation: expected ContProperty, got {type(prop).__name__}. "
-            "SGS requires continuous (float) property data."
-        )
+    ParameterValidator.validate_property_type(prop, ContProperty, "sgs_simulation")
 
     prop.fix_shape(grid)
     cov_model = normed_cov_model(cov_model)
@@ -187,30 +190,20 @@ def sgs_simulation(
     )
 
     if cdf_data is None:
-        hpgl_cdf = None
+        _cdf_struct = None
     else:
         _cdf_struct = _create_hpgl_nonparam_cdf(cdf_data)
-        hpgl_cdf = C.byref(_cdf_struct)
 
     if mask is not None:
         _mask_struct = _create_hpgl_ubyte_array(mask, grid)
-        hpgl_mask = C.byref(_mask_struct)
     else:
-        hpgl_mask = None
+        _mask_struct = None
 
     if mean is None or numpy.isscalar(mean):
-        if mean is not None and not numpy.isfinite(mean):
-            raise ValueError(f"sgs_simulation: scalar mean must be finite, got {mean}")
+        if mean is not None:
+            ParameterValidator.validate_scalar_mean(mean, "sgs_simulation")
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
-        _c_mean = C.c_double(mean) if mean is not None else None
-        with _hpgl_error_guard("sgs_simulation"):
-            _hpgl_so.hpgl_sgs_simulation(
-                C.byref(_cont_marr),
-                C.byref(sgsp),
-                hpgl_cdf,
-                C.byref(_c_mean) if _c_mean is not None else None,
-                hpgl_mask,
-            )
+        call_sgs_simulation(_cont_marr, sgsp, _cdf_struct, mean, _mask_struct)
 
     else:
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
@@ -220,9 +213,6 @@ def sgs_simulation(
                 "sgs_simulation: LVM mean array contains NaN or Inf values"
             )
         _float_arr = _create_hpgl_float_array(mean, grid)
-        with _hpgl_error_guard("sgs_lvm_simulation"):
-            _hpgl_so.hpgl_sgs_lvm_simulation(
-                C.byref(_cont_marr), C.byref(sgsp), hpgl_cdf, C.byref(_float_arr), hpgl_mask
-            )
+        call_sgs_lvm_simulation(_cont_marr, sgsp, _cdf_struct, _float_arr, _mask_struct)
 
     return out_prop

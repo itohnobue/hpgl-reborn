@@ -1,26 +1,38 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
-import ctypes as C
-
 import numpy
 
 # Import validation framework
+from .config import SISConfig
+from .ffi_adapter import (
+    _HPGL_FLOAT_ARRAY,
+    _c_array,
+    call_sis_simulation,
+    call_sis_simulation_lvm,
+    create_ik_params,
+)
+from .ffi_adapter import (
+    create_float_array as _create_hpgl_float_array,
+)
+from .ffi_adapter import (
+    create_ind_masked_array as _create_hpgl_ind_masked_array,
+)
+from .ffi_adapter import (
+    create_ubyte_array as _create_hpgl_ubyte_array,
+)
 from .geo import (
     IndProperty,
-    __checked_create,
-    _c_array,
     _clone_prop,
-    _create_hpgl_float_array,
-    _create_hpgl_ind_masked_array,
-    _create_hpgl_ubyte_array,
     _empty_clone,
-    _hpgl_error_guard,
     _require_cont_data,
     _require_ind_data,
     accepts_tuple,
 )
-from .hpgl_wrap import _HPGL_FLOAT_ARRAY, _HPGL_IK_PARAMS, _hpgl_so
-from .validation import GridValidator, ParameterValidator, ValidationConstants
+from .validation import (
+    GridValidator,
+    ParameterValidator,
+    ValidationConstants,
+)
 
 
 def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
@@ -39,23 +51,8 @@ def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
 
 
 def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
-    ikps = []
-    assert len(data) == indicator_count
-    for i in range(indicator_count):
-        ikd = data[i]
-        ikp = __checked_create(
-            _HPGL_IK_PARAMS,
-            covariance_type=ikd["cov_model"].type,
-            ranges=(C.c_double * 3)(*ikd["cov_model"].ranges),
-            angles=(C.c_double * 3)(*ikd["cov_model"].angles),
-            sill=ikd["cov_model"].sill,
-            nugget=ikd["cov_model"].nugget,
-            radiuses=(C.c_int * 3)(*(int(r) for r in ikd["radiuses"])),
-            max_neighbours=ikd["max_neighbours"],
-            marginal_prob=0 if is_lvm else marginal_probs[i],
-        )
-        ikps.append(ikp)
-    return _c_array(_HPGL_IK_PARAMS, indicator_count, ikps)
+    """Create IK params array (delegates to consolidated adapter helper)."""
+    return create_ik_params(data, indicator_count, is_lvm, marginal_probs)
 
 
 @accepts_tuple("prop", 0)
@@ -68,6 +65,7 @@ def sis_simulation(
     use_correlogram=True,
     mask=None,
     use_harddata=True,
+    config=None,
     **params,
 ):
     """Performs Sequential Indicator Simulation (SIS).
@@ -96,6 +94,10 @@ def sis_simulation(
     use_harddata : bool, optional
         If ``True``, use source data values for simulation. If ``False``,
         ignore source data values. Default: ``True``.
+    config : SISConfig or None, optional
+        Pre-configured SIS parameters as a frozen dataclass.  When provided,
+        its values override the corresponding keyword arguments above.
+        Default: ``None``.
 
     Returns:
     --------
@@ -115,6 +117,25 @@ def sis_simulation(
         raise TypeError(
             f"sis_simulation() got unexpected keyword arguments: {', '.join(sorted(params.keys()))}"
         )
+
+    # When config is provided, override parameter values from config
+    if config is not None:
+        if not isinstance(config, SISConfig):
+            raise TypeError(
+                f"sis_simulation: config must be SISConfig, got {type(config).__name__}"
+            )
+        seed = config.seed
+        use_correlogram = config.use_correlogram
+        use_harddata = config.use_harddata
+        if config.marginal_probs is not None:
+            marginal_probs = list(config.marginal_probs)
+        # Apply config radiuses / max_neighbours to each indicator's data dict
+        # only if the dict doesn't already specify its own value
+        for ikd in data:
+            if "radiuses" not in ikd:
+                ikd["radiuses"] = config.radiuses
+            if "max_neighbours" not in ikd:
+                ikd["max_neighbours"] = config.max_neighbours
 
     # Validate grid dimensions
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
@@ -156,11 +177,7 @@ def sis_simulation(
         prop, data, marginal_probs, mask, use_harddata
     )
 
-    if not isinstance(out_prop, IndProperty):
-        raise TypeError(
-            f"sis_simulation: expected IndProperty, got {type(out_prop).__name__}. "
-            "SIS requires indicator (categorical) property data."
-        )
+    ParameterValidator.validate_property_type(out_prop, IndProperty, "sis_simulation")
 
     # Update indicator_count to match the number of categories in data
     out_prop.indicator_count = len(data)
@@ -202,23 +219,21 @@ def sis_simulation(
             means.append(_create_hpgl_float_array(marginal_probs[i], grid))
 
     if not is_lvm:
-        with _hpgl_error_guard("sis_simulation"):
-            _hpgl_so.hpgl_sis_simulation(
-                prop_2,
-                ikps,
-                len(data),
-                seed,
-                _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
-            )
+        call_sis_simulation(
+            prop_2,
+            ikps,
+            len(data),
+            seed,
+            _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
+        )
     else:
-        with _hpgl_error_guard("sis_simulation_lvm"):
-            _hpgl_so.hpgl_sis_simulation_lvm(
-                prop_2,
-                ikps,
-                _c_array(_HPGL_FLOAT_ARRAY, len(data), means),
-                len(data),
-                seed,
-                _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
-                use_correlogram,
-            )
+        call_sis_simulation_lvm(
+            prop_2,
+            ikps,
+            _c_array(_HPGL_FLOAT_ARRAY, len(data), means),
+            len(data),
+            seed,
+            _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
+            use_correlogram,
+        )
     return out_prop

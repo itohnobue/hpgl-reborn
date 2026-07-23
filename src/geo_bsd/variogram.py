@@ -27,6 +27,8 @@ from numpy import (
     zeros,
 )
 
+from .validation import GridValidator
+
 MAX_NUM_LAGS = 10000
 
 
@@ -404,6 +406,10 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     PY = PointSet["Y"]
     PZ = PointSet["Z"]
 
+    # Validate coordinate arrays for NaN/Inf (F-046).
+    # Corrupt coordinates produce wrong distances and garbled variogram lags.
+    GridValidator.validate_coordinate_arrays(PX, PY, PZ, "PointSet")
+
     MinX, MinY, MinZ, MaxX, MaxY, MaxZ = _CalcSearchTemplateWindow(VariogramSearchTemplate)
 
     LagIndex, LagDistance, LagStart, LagEnd = _CalcLagDistances(VariogramSearchTemplate)
@@ -505,6 +511,9 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
     PI = PointSetXYZ[0]
     PJ = PointSetXYZ[1]
     PK = PointSetXYZ[2]
+
+    # Validate coordinate arrays for NaN/Inf (F-046)
+    GridValidator.validate_coordinate_arrays(PI, PJ, PK, "PointSetXYZ")
 
     if Function is not None:
         Result = Function(0, 0, None, Params)

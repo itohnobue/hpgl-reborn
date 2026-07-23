@@ -76,17 +76,28 @@ bool solve_system(std::vector<double> & A, std::vector<double> & b, std::vector<
 	int size = static_cast<int>(b.size());
 	weights.resize(static_cast<size_t>(size));
 
+#ifdef LAPACK_SOLVER
+	// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →
+	// (on success) dpotrs_.  Replaces the HPGL-only cholesky_decomposition/
+	// cholesky_solve with LAPACK-accelerated Cholesky + gauss_solve fallback.
+	std::vector<double> A_backup(A);
+
+	return detail::lapack_spd_solve_1rhs(
+		&A[0], size, &weights[0], &b[0],
+		&A_backup[0], "Cokriging SPD solve");
+#else // HPGL_SOLVER
+	// Original HPGL internal solver (fallback for non-LAPACK builds)
 	size_t sz = static_cast<size_t>(size);
 	std::vector<double> A_U(sz * sz, 0.0);
 	std::vector<double> A_L(sz * sz, 0.0);
 
 	bool solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
 	if (!solved) {
-		solved = gauss_solve(&A[0], &b[0], &weights[0], size);
-		return solved;
+		return gauss_solve(&A[0], &b[0], &weights[0], size);
 	}
 	cholesky_solve(&A_L[0], &A_U[0], &b[0], &weights[0], size);
 	return true;
+#endif
 }
 
 template<typename coord_t, typename primary_cov_model_t, typename cross_cov_model_t>

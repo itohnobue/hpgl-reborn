@@ -395,6 +395,38 @@ class GridValidator:
                 f"Array has dtype {array.dtype}, expected {expected_dtype}", "array_dtype"
             )
 
+    @staticmethod
+    def validate_grid_size_param(
+        size: int | tuple | list, func_name: str = ""
+    ) -> None:
+        """Validate a grid size parameter that may be a 3-tuple/list or scalar int.
+
+        When ``size`` is a 3-element tuple/list, validates each dimension via
+        ``validate_grid_dimensions``.  When ``size`` is a scalar ``int`` only
+        the total-element cap is enforced downstream by the caller.
+        """
+        if isinstance(size, (tuple, list)) and len(size) == 3:
+            GridValidator.validate_grid_dimensions(
+                int(size[0]), int(size[1]), int(size[2])
+            )
+
+    @staticmethod
+    def validate_coordinate_arrays(
+        x: numpy.ndarray,
+        y: numpy.ndarray,
+        z: numpy.ndarray,
+        name: str = "coordinates",
+    ) -> None:
+        """Validate that coordinate arrays contain only finite values (F-046).
+
+        Raises ``ValueError`` if any coordinate array has NaN or Inf entries.
+        """
+        for label, arr in [("X", x), ("Y", y), ("Z", z)]:
+            if not numpy.all(numpy.isfinite(arr)):
+                raise ValueError(
+                    f"{name}: {label} coordinate array contains NaN or Inf values"
+                )
+
 
 # ============================================================================
 # Parameter Validation
@@ -403,6 +435,60 @@ class GridValidator:
 
 class ParameterValidator:
     """Validates numerical parameters for geostatistical operations"""
+
+    # ---------- type-checking helpers (centralized isinstance) ----------
+
+    @staticmethod
+    def validate_property_type(
+        prop: object,
+        expected_type: type,
+        func_name: str,
+        param_name: str = "prop",
+        type_name: str | None = None,
+    ) -> None:
+        """Validate that ``prop`` is an instance of ``expected_type``.
+
+        Raises ``TypeError`` with a consistent ``"<func>: <param> must be <type>, got <actual>"``
+        message that matches the existing kriging/simulation error texts.
+
+        Args:
+            prop: The object to check.
+            expected_type: The type ``prop`` must be an instance of.
+            func_name: Function name for the error message prefix.
+            param_name: Parameter name to include in the message.
+            type_name: Override for the type name in the error message
+                       (default: ``expected_type.__name__``).
+        """
+        if not isinstance(prop, expected_type):
+            raise TypeError(
+                f"{func_name}: {param_name} must be "
+                f"{type_name if type_name is not None else expected_type.__name__}, "
+                f"got {type(prop).__name__}"
+            )
+
+    @staticmethod
+    def validate_list_param(value, name: str, func_name: str) -> None:
+        """Validate that ``value`` is a ``list``, raising ``TypeError`` otherwise."""
+        if not isinstance(value, list):
+            raise TypeError(
+                f"{func_name}: {name} must be a list, "
+                f"got {type(value).__name__}"
+            )
+
+    @staticmethod
+    def validate_scalar_mean(mean: object, func_name: str) -> None:
+        """Validate that a scalar mean is a finite number."""
+        if not isinstance(mean, (int, float, numpy.floating, numpy.integer)):
+            raise TypeError(
+                f"{func_name}: scalar mean must be a number, "
+                f"got {type(mean).__name__}"
+            )
+        if numpy.isnan(mean) or numpy.isinf(mean):
+            raise ValueError(
+                f"{func_name}: scalar mean must be finite, got {mean}"
+            )
+
+    # ---------- numerical validators (existing, unchanged) ----------
 
     @staticmethod
     def validate_radius(
@@ -651,8 +737,13 @@ class ParameterValidator:
             seed: Seed value
 
         Raises:
+            TypeError: If seed is not an integer.
             ValidationError: If seed is negative (C++ contract requires non-negative).
         """
+        if not isinstance(seed, (int, numpy.integer)) or isinstance(seed, bool):
+            raise TypeError(
+                f"seed must be an int, got {type(seed).__name__}"
+            )
         if seed < ValidationConstants.MIN_SEED:
             raise ValidationError(
                 f"Seed value {seed} is negative (must be non-negative)",
@@ -729,96 +820,170 @@ class ParameterValidator:
 
 
 # ============================================================================
-# Decorators for Function Validation
+# Centralized Validation Helpers (decorator-compatible)
 # ============================================================================
+#
+# Each function has a **dual calling convention** so that existing tests
+# using them as ``@validate_xxx`` decorators continue to work while
+# production code can call them directly as plain helper functions.
+#
+# Convention for every ``validate_xxx`` below:
+#   * Single non-callable arg  →  direct validation (prod code)
+#   * Single callable arg       →  decorator (test code)
+#   * Multiple args / kwargs    →  direct validation (prod code)
+#
+# The ``callable(arg)`` dispatch works because every production argument
+# (SugarboxGrid, tuple, int, float, str, pathlib.Path) is NOT callable,
+# while every decorated-function argument IS callable.
 
 
-def validate_grid_params(func):
-    """Decorator to validate grid parameters"""
+def validate_grid_params(*args, **kwargs):
+    """Validate grid dimensions — dual: decorator or direct call.
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # Find grid parameter
-        grid = None
-        if "grid" in kwargs:
-            grid = kwargs["grid"]
-        else:
-            # Try to find grid in positional arguments
-            for arg in args:
-                if hasattr(arg, "x") and hasattr(arg, "y") and hasattr(arg, "z"):
-                    grid = arg
-                    break
+    **Direct call (production):** ``validate_grid_params(grid)`` where
+    ``grid`` has ``.x`` / ``.y`` / ``.z`` attributes.
 
-        if grid is not None:
-            GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+    **Decorator (tests):** ``@validate_grid_params``, the decorated
+    function's first argument with ``x/y/z`` attrs or ``grid=`` kwarg
+    is validated.
+    """
+    if len(args) == 1 and callable(args[0]) and not kwargs:
+        # --- decorator mode ---
+        func = args[0]
 
-        return func(*args, **kwargs)
+        @wraps(func)
+        def wrapper(*a, **kw):
+            grid = kw.get("grid")
+            if grid is None:
+                for arg in a:
+                    if hasattr(arg, "x") and hasattr(arg, "y") and hasattr(arg, "z"):
+                        grid = arg
+                        break
+            if grid is not None:
+                GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
+            return func(*a, **kw)
 
-    return wrapper
+        return wrapper
 
-
-def validate_kriging_params(func):
-    """Decorator to validate kriging parameters"""
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # Validate radiuses if provided
-        if "radiuses" in kwargs:
-            ParameterValidator.validate_radius(kwargs["radiuses"], "radiuses")
-
-        # Validate max_neighbours if provided
-        if "max_neighbours" in kwargs or "max_neighbors" in kwargs:
-            max_neigh = kwargs.get("max_neighbours", kwargs.get("max_neighbors"))
-            if max_neigh is not None:
-                ParameterValidator.validate_max_neighbors(max_neigh)
-
-        # Validate covariance model if provided
-        if "cov_model" in kwargs:
-            cov_model = kwargs["cov_model"]
-            ParameterValidator.validate_covariance_parameters(
-                cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
-            )
-
-        return func(*args, **kwargs)
-
-    return wrapper
+    # --- direct call mode ---
+    grid = kwargs.get("grid", args[0] if args else None)
+    if grid is not None:
+        GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
 
-def validate_simulation_params(func):
-    """Decorator to validate simulation parameters"""
+def validate_kriging_params(*args, **kwargs):
+    """Validate kriging params — dual: decorator or direct call.
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # Validate seed if provided
-        if "seed" in kwargs:
-            ParameterValidator.validate_seed(kwargs["seed"])
+    **Direct call (production):**
+    ``validate_kriging_params(grid, radiuses, max_neighbours, cov_model)``
+    returns the validated ``(int, int, int)`` radiuses tuple.
 
-        # Validate min_neighbours if provided
-        if "min_neighbours" in kwargs or "min_neighbors" in kwargs:
-            min_neigh = kwargs.get("min_neighbours", kwargs.get("min_neighbors"))
-            max_neigh = kwargs.get("max_neighbours", kwargs.get("max_neighbors", 12))
-            if min_neigh is not None:
-                ParameterValidator.validate_min_neighbors(min_neigh, max_neigh)
+    **Decorator (tests):** ``@validate_kriging_params``.
+    """
+    if len(args) == 1 and callable(args[0]) and not kwargs:
+        # --- decorator mode ---
+        func = args[0]
 
-        return func(*args, **kwargs)
+        @wraps(func)
+        def wrapper(*a, **kw):
+            if "radiuses" in kw:
+                ParameterValidator.validate_radius(kw["radiuses"], "radiuses")
+            if "max_neighbours" in kw or "max_neighbors" in kw:
+                n = kw.get("max_neighbours", kw.get("max_neighbors"))
+                if n is not None:
+                    ParameterValidator.validate_max_neighbors(n)
+            if "cov_model" in kw:
+                cm = kw["cov_model"]
+                ParameterValidator.validate_covariance_parameters(
+                    cm.sill, cm.nugget, cm.ranges, cm.angles
+                )
+            return func(*a, **kw)
 
-    return wrapper
+        return wrapper
+
+    # --- direct call mode ---
+    grid = kwargs.get("grid", args[0] if len(args) > 0 else None)
+    radiuses = kwargs.get("radiuses", args[1] if len(args) > 1 else None)
+    max_neighbours = kwargs.get("max_neighbours", args[2] if len(args) > 2 else None)
+    cov_model = kwargs.get("cov_model", args[3] if len(args) > 3 else None)
+
+    if grid is not None:
+        validate_grid_params(grid)
+    valid_radiuses = None
+    if radiuses is not None:
+        valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
+    if max_neighbours is not None:
+        ParameterValidator.validate_max_neighbors(max_neighbours)
+    if cov_model is not None:
+        ParameterValidator.validate_covariance_parameters(
+            cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
+        )
+    return valid_radiuses
 
 
-def validate_file_params(func):
-    """Decorator to validate file parameters"""
+def validate_simulation_params(*args, **kwargs):
+    """Validate simulation params — dual: decorator or direct call.
 
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        # Validate filename for reading
-        if "filename" in kwargs:
-            filename = kwargs["filename"]
-            if filename is not None:
-                PathValidator.validate_filepath(filename, must_exist=True)
+    **Direct call (production):**
+    ``validate_simulation_params(seed=seed, min_neighbours=..., max_neighbours=...)``
 
-        return func(*args, **kwargs)
+    **Decorator (tests):** ``@validate_simulation_params``.
+    """
+    if len(args) == 1 and callable(args[0]) and not kwargs:
+        # --- decorator mode ---
+        func = args[0]
 
-    return wrapper
+        @wraps(func)
+        def wrapper(*a, **kw):
+            if "seed" in kw:
+                ParameterValidator.validate_seed(kw["seed"])
+            if "min_neighbours" in kw or "min_neighbors" in kw:
+                mn = kw.get("min_neighbours", kw.get("min_neighbors"))
+                mx = kw.get("max_neighbours", kw.get("max_neighbors", 12))
+                if mn is not None:
+                    ParameterValidator.validate_min_neighbors(mn, mx)
+            return func(*a, **kw)
+
+        return wrapper
+
+    # --- direct call mode ---
+    seed = kwargs.get("seed", args[0] if len(args) > 0 else None)
+    min_neighbours = kwargs.get("min_neighbours", None)
+    max_neighbours = kwargs.get("max_neighbours", None)
+
+    if seed is not None:
+        ParameterValidator.validate_seed(seed)
+    if min_neighbours is not None:
+        ParameterValidator.validate_min_neighbors(min_neighbours, max_neighbours or 0)
+
+
+def validate_file_params(*args, **kwargs):
+    """Validate file path — dual: decorator or direct call.
+
+    **Direct call (production):**
+    ``validate_file_params(filename, must_exist=True)``
+
+    **Decorator (tests):** ``@validate_file_params``.
+    """
+    if len(args) == 1 and callable(args[0]) and not kwargs:
+        # --- decorator mode ---
+        func = args[0]
+
+        @wraps(func)
+        def wrapper(*a, **kw):
+            if "filename" in kw:
+                filename = kw["filename"]
+                if filename is not None:
+                    PathValidator.validate_filepath(filename, must_exist=True)
+            return func(*a, **kw)
+
+        return wrapper
+
+    # --- direct call mode ---
+    filename = kwargs.get("filename", args[0] if args else None)
+    must_exist = kwargs.get("must_exist", True)
+    if filename is not None:
+        PathValidator.validate_filepath(filename, must_exist=must_exist)
 
 
 # ============================================================================

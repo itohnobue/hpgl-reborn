@@ -8,6 +8,7 @@ import warnings
 import numpy as np
 
 from .cdf import calc_cdf
+from .config import GTSIMConfig
 from .geo import simple_kriging
 from .sgs import sgs_simulation
 
@@ -121,6 +122,7 @@ def gtsim_2ind(
     tk_mean=0.0,
     tk_std_dev=1.0,
     seed=3439275,
+    config=None,
 ):
     """
     Gaussian Truncated Simulation for 2 indicators (facies).
@@ -146,12 +148,27 @@ def gtsim_2ind(
     tk_std_dev : float, optional
         Standard deviation for threshold calculation (default: 1.0)
         For standard normal distribution, use 1.0
+    seed : int, optional
+        Seed for the random number generator (default: 3439275)
+    config : GTSIMConfig or None, optional
+        Pre-configured GTSIM parameters as a frozen dataclass.  When provided,
+        its values override the corresponding keyword arguments above.
+        Default: ``None``.
 
     Returns:
     --------
     ContProperty
         Simulated indicator property with binary values (0 or 1)
     """
+    # When config is provided, override parameter values from config
+    if config is not None:
+        if not isinstance(config, GTSIMConfig):
+            raise TypeError(
+                f"gtsim_2ind: config must be GTSIMConfig, got {type(config).__name__}"
+            )
+        tk_mean = config.tk_mean
+        tk_std_dev = config.tk_std_dev
+        seed = config.seed
     # prop must be continious!
 
     # 1. calculate pk_prop
