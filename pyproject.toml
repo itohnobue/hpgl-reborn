@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "hpgl"
-version = "1.6.0"
+version = "2.0.0"
 description = "High Performance Geostatistics Library - Modern C++ with Python bindings"
 readme = "readme.md"
 requires-python = ">=3.9"
@@ -34,7 +34,7 @@ keywords = [
     "geoscience",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: BSD License",
     "Operating System :: Microsoft :: Windows",
