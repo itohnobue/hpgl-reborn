@@ -1138,6 +1138,11 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     outp = _create_hpgl_cont_masked_array(out_prop, grid)
     call_ordinary_kriging(inp, okp, outp)
 
+    if not numpy.all(numpy.isfinite(out_prop.data)):
+        raise RuntimeError(
+            "ordinary_kriging: output data contains NaN or Inf after C++ computation"
+        )
+
     return out_prop
 
 
@@ -1228,6 +1233,11 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     call_simple_kriging(
         prop.data, prop.mask, sh, skp, out_prop[0], out_prop[1], sh
     )
+
+    if not numpy.all(numpy.isfinite(out_prop.data)):
+        raise RuntimeError(
+            "simple_kriging: output data contains NaN or Inf after C++ computation"
+        )
 
     return out_prop
 
@@ -1338,6 +1348,11 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
         sh,
     )
 
+    if not numpy.all(numpy.isfinite(out_prop.data)):
+        raise RuntimeError(
+            "lvm_kriging: output data contains NaN or Inf after C++ computation"
+        )
+
     return out_prop
 
 
@@ -1415,6 +1430,12 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
     call_median_ik(inp, miksp, outp)
+
+    if not numpy.all(numpy.isfinite(out_prop.data)):
+        raise RuntimeError(
+            "median_ik: output data contains NaN or Inf after C++ computation"
+        )
+
     return out_prop
 
 
@@ -1474,6 +1495,11 @@ def indicator_kriging(prop, grid, data, marginal_probs):
     params = __create_hpgl_ik_params(data, len(data), False, marginal_probs)
     call_indicator_kriging(inp, outp, params, len(data))
 
+    if not numpy.all(numpy.isfinite(out_prop.data)):
+        raise RuntimeError(
+            "indicator_kriging: output data contains NaN or Inf after C++ computation"
+        )
+
     return out_prop
 
 
@@ -1493,6 +1519,19 @@ def simple_cokriging_markI(
     valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     ParameterValidator.validate_property_type(prop, ContProperty, "simple_cokriging_markI")
+
+    # Validate primary property data (matching other kriging functions)
+    if prop.data.size == 0:
+        raise ValueError("simple_cokriging_markI: prop.data is empty")
+    expected_size = grid.x * grid.y * grid.z
+    if prop.data.size != expected_size:
+        raise ValueError(
+            f"simple_cokriging_markI: prop.data size {prop.data.size} does not match "
+            f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
+        )
+
+    if not numpy.all(numpy.isfinite(prop.data)):
+        raise ValueError("simple_cokriging_markI: prop.data contains NaN or Inf")
 
     # Validate cokriging-specific parameters
     ParameterValidator.validate_correlation_coef(correlation_coef)
@@ -1549,6 +1588,12 @@ def simple_cokriging_markI(
         correlation_coef=correlation_coef,
     )
     call_simple_cokriging_mark1(inp, sec, params, outp)
+
+    if not numpy.all(numpy.isfinite(out_prop.data)):
+        raise RuntimeError(
+            "simple_cokriging_markI: output data contains NaN or Inf after C++ computation"
+        )
+
     return out_prop
 
 
@@ -1638,6 +1683,12 @@ def simple_cokriging_markII(
         correlation_coef=correlation_coef,
     )
     call_simple_cokriging_mark2(inp, sec, params, outp)
+
+    if not numpy.all(numpy.isfinite(out_prop.data)):
+        raise RuntimeError(
+            "simple_cokriging_markII: output data contains NaN or Inf after C++ computation"
+        )
+
     return out_prop
 
 

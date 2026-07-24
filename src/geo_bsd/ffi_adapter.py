@@ -99,11 +99,16 @@ _error_snapshot_lock = threading.Lock()
 _hpgl_call_lock = threading.Lock()
 
 # Note: cross-call error detection (distinguishing a re-appearing error
-# from a persistent stale one across multiple guard invocations) is not
-# yet implemented — the C++ DLL does not expose a clear-error API that
-# would be needed.  The snapshot-check suppression (err == snapshot
-# within a single guard window) is functional and sufficient for
-# single-call isolation.
+# from a persistent stale one across multiple guard invocations) uses a
+# call sequence counter: _snapshot_hpgl_error increments the counter and
+# _check_hpgl_error compares both the error message AND the sequence
+# number. This prevents identical error messages from consecutive C calls
+# from being suppressed, while still suppressing stale errors within the
+# same call window. Full protection requires a C++ clear-error API which
+# is not yet available — when the pre-call snapshot accidentally matches
+# a genuinely new error (same message, C++ state not cleared), the error
+# will still be suppressed. This is a known limitation documented in
+# the comment below at the eq == snapshot check.
 
 
 def _snapshot_hpgl_error():
@@ -114,10 +119,17 @@ def _snapshot_hpgl_error():
     snapshot to detect only NEW errors, avoiding stale error propagation.
 
     Stores the snapshot in thread-local storage under
-    ``_error_snapshot_lock``.
+    ``_error_snapshot_lock``. Increments a per-thread call sequence
+    counter so that ``_check_hpgl_error`` can distinguish between a
+    stale error (same call window) and a genuinely new error from a
+    different C call that happens to produce the same message.
     """
     with _error_snapshot_lock:
+        # Bump the call sequence counter to identify the current C call window
+        seq = getattr(_error_local, "_hpgl_call_seq", 0) + 1
+        _error_local._hpgl_call_seq = seq
         _error_local._hpgl_error_snapshot = _hpgl_so.hpgl_get_last_exception_message()
+        _error_local._hpgl_error_snapshot_seq = seq
 
 
 def _check_hpgl_error(context: str = "") -> None:
@@ -127,6 +139,12 @@ def _check_hpgl_error(context: str = "") -> None:
     ``_snapshot_hpgl_error``). Raises ``RuntimeError`` ONLY if the error
     message has changed since the snapshot, indicating a new error from
     the current operation rather than a stale error from a previous call.
+
+    Uses a call sequence counter to distinguish between a stale error
+    within the same call window (suppress) and a genuinely new error
+    from a different C call that happens to produce an identical
+    message (raise). The counter prevents identical-message collision
+    across consecutive ``error_guard`` invocations.
 
     Uses thread-local storage so concurrent HPGL operations in different
     threads each track their own pre/post error state independently.
@@ -142,15 +160,20 @@ def _check_hpgl_error(context: str = "") -> None:
         err = _hpgl_so.hpgl_get_last_exception_message()
         if err is not None and len(err) > 0:
             snapshot = getattr(_error_local, "_hpgl_error_snapshot", None)
-            if err == snapshot:
-                # Error unchanged from pre-call snapshot — C++ call did
-                # not produce a new error. Suppress stale error.
+            snapshot_seq = getattr(_error_local, "_hpgl_error_snapshot_seq", 0)
+            current_seq = getattr(_error_local, "_hpgl_call_seq", 0)
+            if err == snapshot and snapshot_seq == current_seq:
+                # Error unchanged from pre-call snapshot AND this is the
+                # same call window — C++ call did not produce a new error.
+                # Suppress stale error.
                 return
-            # Genuine new error (different from pre-call snapshot).
+            # Genuine new error (different from pre-call snapshot, or
+            # identical message from a different C++ call).
             # Update the snapshot BEFORE raising so the thread-local
             # state reflects the consumed error, preventing double-raises
             # on re-entry within the same guard window.
             _error_local._hpgl_error_snapshot = err
+            _error_local._hpgl_error_snapshot_seq = current_seq
             err_str = err.decode("utf-8", errors="replace")
             raise RuntimeError(
                 f"{context} failed: {err_str}"

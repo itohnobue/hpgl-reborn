@@ -537,6 +537,14 @@ HPGL_API void hpgl_ordinary_kriging(
 	if (in_size != out_size)
 		throw hpgl_exception("hpgl_ordinary_kriging", "input and output shape volume mismatch");
 
+	// Validate m_data pointer before constructing property array.
+	// A null m_data pointer causes HPGL_CHECK→abort() (SIGABRT) which
+	// Python cannot catch (F-28).
+	if (input_data->m_data == nullptr)
+		throw hpgl_exception("hpgl_ordinary_kriging", "Null data pointer in input_data");
+	if (output_data->m_data == nullptr)
+		throw hpgl_exception("hpgl_ordinary_kriging", "Null data pointer in output_data");
+
 	cont_property_array_t in_prop(input_data->m_data, input_data->m_mask, in_size);
 	cont_property_array_t out_prop(output_data->m_data, output_data->m_mask, out_size);
 
@@ -793,6 +801,15 @@ hpgl_indicator_kriging(
 	if (out_data->m_indicator_count != indicator_count)
 		throw hpgl_exception("hpgl_indicator_kriging",
 			"out_data indicator_count mismatch with validated indicator_count");
+
+	// Validate m_data pointers before constructing property arrays.
+	// A null m_data pointer causes HPGL_CHECK→abort() (SIGABRT) which
+	// Python cannot catch (F-28).
+	if (in_data->m_data == nullptr)
+		throw hpgl_exception("hpgl_indicator_kriging", "Null data pointer in in_data");
+	if (out_data->m_data == nullptr)
+		throw hpgl_exception("hpgl_indicator_kriging", "Null data pointer in out_data");
+
 	indicator_property_array_t in_prop(in_data->m_data, in_data->m_mask, size, in_data->m_indicator_count);
 	indicator_property_array_t out_prop(out_data->m_data, out_data->m_mask, size2, out_data->m_indicator_count);
 
@@ -982,6 +999,14 @@ HPGL_API void hpgl_median_ik(
 	// m_indicator_count from the struct, and a stale value would produce
 	// wrong output.
 	out_data->m_indicator_count = 2;
+
+	// Validate m_data pointers before constructing property arrays.
+	// A null m_data pointer causes HPGL_CHECK→abort() (SIGABRT) which
+	// Python cannot catch (F-28).
+	if (in_data->m_data == nullptr)
+		throw hpgl_exception("hpgl_median_ik", "Null data pointer in in_data");
+	if (out_data->m_data == nullptr)
+		throw hpgl_exception("hpgl_median_ik", "Null data pointer in out_data");
 
 	indicator_property_array_t in_prop(
 			in_data->m_data,
@@ -1204,6 +1229,16 @@ hpgl_simple_cokriging_mark1(
 			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
 		}
 
+		// Validate m_data pointers before constructing property arrays.
+		// A null m_data pointer causes HPGL_CHECK→abort() (SIGABRT) which
+		// Python cannot catch (F-28).
+		if (input_data->m_data == nullptr)
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", "Null data pointer in input_data");
+		if (secondary_data->m_data == nullptr)
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", "Null data pointer in secondary_data");
+		if (output_data->m_data == nullptr)
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", "Null data pointer in output_data");
+
 		cont_property_array_t primary_prop(
 				input_data->m_data, input_data->m_mask, size);
 		cont_property_array_t secondary_prop(
@@ -1295,6 +1330,16 @@ hpgl_simple_cokriging_mark2(
 			oss << "Size of output data (" << size3 << ") is different from size of primary data (" << size << ")";
 			throw hpgl_exception("hpgl_simple_cokriging_mark2", oss.str());
 		}
+
+		// Validate m_data pointers before constructing property arrays.
+		// A null m_data pointer causes HPGL_CHECK→abort() (SIGABRT) which
+		// Python cannot catch (F-28).
+		if (primary_data->m_data == nullptr)
+			throw hpgl_exception("hpgl_simple_cokriging_mark2", "Null data pointer in primary_data");
+		if (secondary_data->m_data == nullptr)
+			throw hpgl_exception("hpgl_simple_cokriging_mark2", "Null data pointer in secondary_data");
+		if (output_data->m_data == nullptr)
+			throw hpgl_exception("hpgl_simple_cokriging_mark2", "Null data pointer in output_data");
 
 		cont_property_array_t primary_prop(
 				primary_data->m_data, primary_data->m_mask, size);

@@ -149,6 +149,11 @@ def sis_simulation(
     # Validate marginal probabilities
     if len(marginal_probs) == 0:
         raise ValueError("sis_simulation: marginal_probs must not be empty")
+    if len(marginal_probs) != len(data):
+        raise ValueError(
+            f"sis_simulation: marginal_probs length ({len(marginal_probs)}) "
+            f"must match data length ({len(data)})"
+        )
     is_lvm = not numpy.isscalar(marginal_probs[0])
     if not is_lvm:
         ParameterValidator.validate_probability_sum(marginal_probs)

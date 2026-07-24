@@ -200,8 +200,9 @@ namespace hpgl
 				{
 					variance -= weights[i] * b2[i];
 				}
-				// Clamp to zero — floating-point subtraction can produce small negatives
-				if (variance < 0) variance = 0;
+				// Clamp to zero — floating-point subtraction can produce small negatives.
+				// IEEE 754: NaN < 0 evaluates to false, so also guard against NaN/Inf.
+				if (!std::isfinite(variance) || variance < 0) variance = 0;
 			}
 			else
 			{
@@ -290,7 +291,9 @@ namespace hpgl
 				{
 					variance -= weights[i] * ws.b2[i];
 				}
-				if (variance < 0) variance = 0;
+				// Clamp to zero — floating-point subtraction can produce small negatives.
+				// IEEE 754: NaN < 0 evaluates to false, so also guard against NaN/Inf.
+				if (!std::isfinite(variance) || variance < 0) variance = 0;
 			}
 			else
 			{
@@ -437,8 +440,9 @@ namespace hpgl
 				}
 				// OK kriging variance: subtract the Lagrange multiplier (mu)
 				variance -= mu;
-				// Clamp to zero — floating-point subtraction can produce small negatives
-				if (variance < 0) variance = 0;
+				// Clamp to zero — floating-point subtraction can produce small negatives.
+				// IEEE 754: NaN < 0 evaluates to false, so also guard against NaN/Inf.
+				if (!std::isfinite(variance) || variance < 0) variance = 0;
 			}
 			else
 			{
@@ -578,8 +582,9 @@ namespace hpgl
 				}
 				// OK kriging variance: subtract the Lagrange multiplier (mu)
 				variance -= mu;
-				// Clamp to zero — floating-point subtraction can produce small negatives
-				if (variance < 0) variance = 0;
+				// Clamp to zero — floating-point subtraction can produce small negatives.
+				// IEEE 754: NaN < 0 evaluates to false, so also guard against NaN/Inf.
+				if (!std::isfinite(variance) || variance < 0) variance = 0;
 			}
 			else
 			{

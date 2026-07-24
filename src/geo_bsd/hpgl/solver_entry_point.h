@@ -119,6 +119,20 @@ inline bool lapack_spd_solve_1rhs(
 		}
 	}
 
+	// Pre-check: scan RHS vector B for NaN/Inf values before solver dispatch.
+	// dpotrs_ and gauss_solve do not validate RHS inputs and may silently
+	// produce NaN solutions (F-24).
+	for (int i = 0; i < size; ++i) {
+		if (!std::isfinite(B[i])) {
+			char error_msg[256];
+			snprintf(error_msg, sizeof(error_msg),
+				"LAPACK Error in %s: Non-finite value (NaN/Inf) in RHS vector B[%d]. Matrix size: %d",
+				label, i, size);
+			HPGL_LOG_STRING(error_msg);
+			return false;
+		}
+	}
+
 	integer info_dec = 100;
 	integer info_solve = 100;
 	integer size_lap = size;
@@ -203,6 +217,30 @@ inline bool lapack_spd_solve_2rhs(
 			char error_msg[256];
 			snprintf(error_msg, sizeof(error_msg),
 				"LAPACK Error in %s: Non-finite value (NaN/Inf) in covariance matrix A[%d]. Matrix size: %d",
+				label, i, size);
+			HPGL_LOG_STRING(error_msg);
+			return false;
+		}
+	}
+
+	// Pre-check: scan RHS vectors B0, B1 for NaN/Inf values before solver dispatch.
+	// dpotrs_ and gauss_solve do not validate RHS inputs and may silently
+	// produce NaN solutions (F-24).
+	for (int i = 0; i < size; ++i) {
+		if (!std::isfinite(B0[i])) {
+			char error_msg[256];
+			snprintf(error_msg, sizeof(error_msg),
+				"LAPACK Error in %s: Non-finite value (NaN/Inf) in RHS vector B0[%d]. Matrix size: %d",
+				label, i, size);
+			HPGL_LOG_STRING(error_msg);
+			return false;
+		}
+	}
+	for (int i = 0; i < size; ++i) {
+		if (!std::isfinite(B1[i])) {
+			char error_msg[256];
+			snprintf(error_msg, sizeof(error_msg),
+				"LAPACK Error in %s: Non-finite value (NaN/Inf) in RHS vector B1[%d]. Matrix size: %d",
 				label, i, size);
 			HPGL_LOG_STRING(error_msg);
 			return false;

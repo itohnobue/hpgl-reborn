@@ -79,7 +79,7 @@ class SGSConfig:
             )
 
         # -- min_neighbours --
-        if not isinstance(self.min_neighbours, int) or isinstance(self.min_neighbours, bool):
+        if not isinstance(self.min_neighbours, (int, numpy.integer)) or isinstance(self.min_neighbours, bool):
             raise TypeError(
                 f"SGSConfig: min_neighbours must be an int, "
                 f"got {type(self.min_neighbours).__name__}"
@@ -91,7 +91,7 @@ class SGSConfig:
             )
 
         # -- max_neighbours --
-        if not isinstance(self.max_neighbours, int) or isinstance(self.max_neighbours, bool):
+        if not isinstance(self.max_neighbours, (int, numpy.integer)) or isinstance(self.max_neighbours, bool):
             raise TypeError(
                 f"SGSConfig: max_neighbours must be an int, "
                 f"got {type(self.max_neighbours).__name__}"
@@ -193,7 +193,7 @@ class SISConfig:
             )
 
         # -- max_neighbours --
-        if not isinstance(self.max_neighbours, int) or isinstance(self.max_neighbours, bool):
+        if not isinstance(self.max_neighbours, (int, numpy.integer)) or isinstance(self.max_neighbours, bool):
             raise TypeError(
                 f"SISConfig: max_neighbours must be an int, "
                 f"got {type(self.max_neighbours).__name__}"
