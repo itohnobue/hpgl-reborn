@@ -27,6 +27,8 @@ set_output_handler, set_progress_handler
 
 **Submodules** (imported for side-effects; use their public API):
 variogram, cvariogram, routines, validation
+
+**Diagnostics**: get_kriging_stats (retrieve C++ kriging stats after a call)
 """
 
 # Import validation module for user convenience
@@ -44,6 +46,7 @@ except (ImportError, OSError) as e:
     )
     cvariogram = None  # type: ignore[assignment]
 from .cdf import *
+from .ffi_adapter import get_kriging_stats
 from .geo import *
 from .sgs import sgs_simulation
 from .sis import sis_simulation
@@ -75,6 +78,8 @@ __all__ = [
     # Simulation algorithms
     "sgs_simulation",
     "sis_simulation",
+    # Diagnostics
+    "get_kriging_stats",
     # CDF
     "calc_cdf",
     # Data classes

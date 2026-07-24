@@ -51,6 +51,8 @@ from .ffi_adapter import (
     call_write_inc_file_float,
     # Numpy array validation
     checkFWA,
+    # Kriging stats (diagnostic information from C++ kriging calls)
+    get_kriging_stats,
     hpgl_output_handler,
     hpgl_progress_handler,
 )
@@ -88,6 +90,14 @@ _progress_handler = None
 # Without these, the caller dropping param would create a dangling pointer.
 _output_handler_param = None
 _progress_handler_param = None
+
+# Kriging diagnostic stats from the most recent kriging/simulation call.
+# Populated by simple_kriging, lvm_kriging, and ordinary_kriging (wrappers
+# that call C++ functions which internally call set_kriging_stats()).
+# Callers can inspect geo_bsd.geo._last_kriging_stats after a kriging call
+# to detect partial solver failure (e.g. points_without_neighbours > 0).
+# Set to None if the native library does not export hpgl_get_kriging_stats.
+_last_kriging_stats: dict | None = None
 # Deferred cache of old CFUNCTYPE handler+param references to prevent
 # use-after-free in concurrent kriging calls. Kriging functions do NOT
 # hold _hpgl_call_lock, so an old CFUNCTYPE trampoline freed while C++
@@ -1098,13 +1108,13 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     The underlying C++ function (``hpgl_ordinary_kriging``) returns
     void — there is no per-cell error signal.  When kriging fails for
     individual grid cells (e.g. no neighbours, singular system), those
-    cells are silently filled with the global mean (``mean_on_failure``
-    fallback) and their output values are indistinguishable from cells
-    that were kriged successfully.  Callers who need to detect partial
-    results should compare output against the expected mean field or use
-    the weight-based API (:func:`simple_kriging_weights`) which can detect
-    failures explicitly.
+    cells are left as NaN (``undefined_on_failure`` fallback) and a
+    ``RuntimeError`` is raised by the post-call ``isfinite`` check.
+    Callers who need to detect the extent of partial failure can inspect
+    ``geo_bsd.geo._last_kriging_stats`` after the call, which is populated
+    from C++ ``kriging_stats_t`` via ``get_kriging_stats()``.
     """
+    global _last_kriging_stats
     valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     ParameterValidator.validate_property_type(prop, ContProperty, "ordinary_kriging")
@@ -1137,6 +1147,11 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     inp = _create_hpgl_cont_masked_array(prop, grid)
     outp = _create_hpgl_cont_masked_array(out_prop, grid)
     call_ordinary_kriging(inp, okp, outp)
+
+    try:
+        _last_kriging_stats = get_kriging_stats()
+    except (NotImplementedError, AttributeError):
+        pass
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1189,10 +1204,13 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     cells are silently filled with the global mean (``mean_on_failure``
     fallback) and their output values are indistinguishable from cells
     that were kriged successfully.  Callers who need to detect partial
-    results should compare output against the expected mean field or use
-    the weight-based API (:func:`simple_kriging_weights`) which can detect
+    results can inspect ``geo_bsd.geo._last_kriging_stats`` after the
+    call, which is populated from C++ ``kriging_stats_t`` via
+    ``get_kriging_stats()``.  For explicit failure detection, the
+    weight-based API (:func:`simple_kriging_weights`) also detects
     failures explicitly.
     """
+    global _last_kriging_stats
     valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     ParameterValidator.validate_property_type(prop, ContProperty, "simple_kriging")
@@ -1233,6 +1251,11 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     call_simple_kriging(
         prop.data, prop.mask, sh, skp, out_prop[0], out_prop[1], sh
     )
+
+    try:
+        _last_kriging_stats = get_kriging_stats()
+    except (NotImplementedError, AttributeError):
+        pass
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1288,10 +1311,11 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
     individual grid cells (e.g. no neighbours, singular system), those
     cells are silently filled with the local mean value and their output
     values are indistinguishable from cells that were kriged successfully.
-    Callers who need to detect partial results should compare output against
-    the ``mean_data`` field or use the weight-based API
-    (:func:`simple_kriging_weights`) which can detect failures explicitly.
+    Callers who need to detect partial results can inspect
+    ``geo_bsd.geo._last_kriging_stats`` after the call, which is populated
+    from C++ ``kriging_stats_t`` via ``get_kriging_stats()``.
     """
+    global _last_kriging_stats
     valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     ParameterValidator.validate_property_type(prop, ContProperty, "lvm_kriging")
@@ -1347,6 +1371,11 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
         out_prop.mask,
         sh,
     )
+
+    try:
+        _last_kriging_stats = get_kriging_stats()
+    except (NotImplementedError, AttributeError):
+        pass
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(

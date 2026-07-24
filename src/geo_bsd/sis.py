@@ -34,6 +34,17 @@ from .validation import (
     ValidationConstants,
 )
 
+# Simulation-specific failure statistics are NOT available in the current
+# C++ build: the SIS path tracks kriging_failures locally in
+# sequential_indicator_simulation.cpp but does NOT call set_kriging_stats().
+# Calling get_kriging_stats() here would return stale data from the last
+# continuous kriging call (SK/LVM/OK) — a different algorithm. We explicitly
+# set _last_kriging_stats = None after each SIS call as an honest sentinel:
+# "no simulation stats available."
+# Forward-compatible: when C++ is updated to call set_kriging_stats() in
+# the SIS path, the wiring can be re-enabled here.
+_last_kriging_stats: dict | None = None
+
 
 def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
     is_lvm = not numpy.isscalar(marginal_probs[0])
@@ -112,6 +123,8 @@ def sis_simulation(
         If marginal probabilities do not sum to 1.0 (non-LVM mode).
     RuntimeError
         If the underlying C++ simulation fails."""
+    global _last_kriging_stats
+
     # Raise on unexpected keyword arguments to catch parameter name typos
     if params:
         raise TypeError(
@@ -252,6 +265,16 @@ def sis_simulation(
             _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
             use_correlogram,
         )
+
+    # Simulation-specific failure statistics are NOT available in the
+    # current C++ build. The C++ SIS path tracks kriging_failures locally
+    # in sequential_indicator_simulation.cpp but does NOT call
+    # set_kriging_stats() — get_kriging_stats() would return stale data
+    # from the last continuous kriging call (SK/LVM/OK), a different
+    # algorithm. We set None as an honest sentinel: "no simulation stats
+    # available." When C++ is updated to call set_kriging_stats() in the
+    # SIS path, the wiring can be re-enabled here.
+    _last_kriging_stats = None
 
     # Validate output data for NaN/Inf after C++ computation.
     # C++ simulation can return NaN/Inf from degenerate matrices,

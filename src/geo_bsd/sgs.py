@@ -35,6 +35,17 @@ from .validation import (
     validate_simulation_params,
 )
 
+# Simulation-specific failure statistics are NOT available in the current
+# C++ build: the SGS path tracks kriging_failures locally in
+# sequential_simulation.h but does NOT call set_kriging_stats(). Calling
+# get_kriging_stats() here would return stale data from the last continuous
+# kriging call (SK/LVM/OK) — a different algorithm. We explicitly set
+# _last_kriging_stats = None after each SGS call as an honest sentinel:
+# "no simulation stats available."
+# Forward-compatible: when C++ is updated to call set_kriging_stats() in
+# the SGS path, the wiring can be re-enabled here.
+_last_kriging_stats: dict | None = None
+
 
 def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
     if use_harddata:
@@ -134,6 +145,8 @@ def sgs_simulation(
     -------
     CriticalValidationError
         If any parameter fails validation."""
+    global _last_kriging_stats
+
     # Raise on unexpected keyword arguments to catch parameter name typos
     if params:
         raise TypeError(
@@ -223,6 +236,16 @@ def sgs_simulation(
             )
         _float_arr = _create_hpgl_float_array(mean, grid)
         call_sgs_lvm_simulation(_cont_marr, sgsp, _cdf_struct, _float_arr, _mask_struct)
+
+    # Simulation-specific failure statistics are NOT available in the
+    # current C++ build. The C++ SGS path tracks kriging_failures locally
+    # in sequential_simulation.h but does NOT call set_kriging_stats() —
+    # get_kriging_stats() would return stale data from the last continuous
+    # kriging call (SK/LVM/OK), a different algorithm. We set None as an
+    # honest sentinel: "no simulation stats available." When C++ is updated
+    # to call set_kriging_stats() in the SGS path, the wiring can be
+    # re-enabled here.
+    _last_kriging_stats = None
 
     # Validate output data for NaN/Inf after C++ computation.
     # C++ simulation can return NaN/Inf from degenerate matrices,
