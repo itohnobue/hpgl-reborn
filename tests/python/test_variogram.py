@@ -89,13 +89,23 @@ class TestTVEllipsoid:
     # ---- F-209: TVEllipsoid negative ranges validation ----
 
     def test_negative_ranges_raise_valueerror(self):
-        """F-209: TVEllipsoid raises ValueError for negative range values."""
-        with pytest.raises(ValueError, match="ranges must not be negative"):
+        """F-209 / H-06: TVEllipsoid raises ValueError for negative range values."""
+        with pytest.raises(ValueError, match="ranges must be finite"):
             TVEllipsoid(R1=-1, R2=5, R3=3)
-        with pytest.raises(ValueError, match="ranges must not be negative"):
+        with pytest.raises(ValueError, match="ranges must be finite"):
             TVEllipsoid(R1=10, R2=-5, R3=3)
-        with pytest.raises(ValueError, match="ranges must not be negative"):
+        with pytest.raises(ValueError, match="ranges must be finite"):
             TVEllipsoid(R1=10, R2=5, R3=-3)
+
+    def test_nan_inf_ranges_raise_valueerror(self):
+        """H-06: NaN and Inf ranges must be rejected (not silently accepted)."""
+        for bad in [float("nan"), float("inf"), float("-inf")]:
+            with pytest.raises(ValueError, match="ranges must be finite"):
+                TVEllipsoid(bad, 1, 1)
+            with pytest.raises(ValueError, match="ranges must be finite"):
+                TVEllipsoid(1, bad, 1)
+            with pytest.raises(ValueError, match="ranges must be finite"):
+                TVEllipsoid(1, 1, bad)
 
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")

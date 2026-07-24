@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+import math
 import warnings
 
 import numpy
@@ -74,9 +75,10 @@ class TVEllipsoid:
     R3 = 1
 
     def __init__(self, R1, R2, R3, Azimut=0, Dip=0, Rotation=0):
-        if R1 < 0 or R2 < 0 or R3 < 0:
+        if not math.isfinite(R1) or R1 < 0 or not math.isfinite(R2) or R2 < 0 or not math.isfinite(R3) or R3 < 0:
             raise ValueError(
-                f"TVEllipsoid: ranges must not be negative, got R1={R1!r}, R2={R2!r}, R3={R3!r}"
+                f"TVEllipsoid: ranges must be finite and non-negative, "
+                f"got R1={R1!r}, R2={R2!r}, R3={R3!r}"
             )
         Azimut = radians(Azimut)
         Dip = radians(Dip)
