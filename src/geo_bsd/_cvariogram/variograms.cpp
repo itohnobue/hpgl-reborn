@@ -389,6 +389,11 @@ void calc_variograms(
 	if (!validate_ptr(data, "data (calc_variograms)")) return;
 	if (!validate_ptr(result_covariations, "result_covariations (calc_variograms)")) return;
 
+	if (templ->m_lag_separation == 0) {
+		cvar_set_last_error("calc_variograms: lag_separation is zero, cannot bin lags");
+		return;
+	}
+
 	seed_rand_once();
 
 	int lag_count = templ->m_num_lags <= result_length 
@@ -521,6 +526,11 @@ void calc_variograms_from_point_set(
 			(void*)point_set->zs, (void*)point_set->values);
 		fflush(stderr);
 		cvar_set_last_error("calc_variograms_from_point_set: null member pointer in point_set");
+		return;
+	}
+
+	if (templ->m_lag_separation == 0) {
+		cvar_set_last_error("calc_variograms_from_point_set: lag_separation is zero, cannot bin lags");
 		return;
 	}
 

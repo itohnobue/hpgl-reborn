@@ -2,6 +2,7 @@
 
 #include "cdf_utils.h"
 #include "hpgl_exception.h"
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -26,10 +27,12 @@ indicator_index_t most_probable_category(const std::vector<indicator_probability
 	//   pmf[0] = P_0, pmf[k] = P_k - P_{k-1} for k = 1..K-1
 	// Select the category with the maximum probability mass.
 	double max_mass = cdf[0];
+	if (!std::isfinite(max_mass)) max_mass = 0.0;
 	indicator_index_t max_idx = 0;
 	for (indicator_index_t i = 1; i < static_cast<indicator_index_t>(size); i++)
 	{
 		double mass = cdf[i] - cdf[i - 1];
+		if (!std::isfinite(mass)) mass = 0.0;
 		// Clamp negative mass (can arise from imperfect order relations correction)
 		if (mass < 0.0) mass = 0.0;
 		if (mass > max_mass)

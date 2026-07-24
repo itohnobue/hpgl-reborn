@@ -823,9 +823,21 @@ class ParameterValidator:
 # Centralized Validation Helpers (decorator-compatible)
 # ============================================================================
 #
-# Each function has a **dual calling convention** so that existing tests
-# using them as ``@validate_xxx`` decorators continue to work while
-# production code can call them directly as plain helper functions.
+# Each function below supports a **dual calling convention**: direct call
+# (production code uses this exclusively) and decorator (test code uses
+# this).  Both conventions are part of the stable public API.
+#
+# **Direct call (production):**  validate_xxx(grid, radiuses, ...)
+#   → Used by sgs_simulation, ordinary_kriging, simple_kriging, etc.
+#
+# **Decorator (tests):**  @validate_xxx
+#   → Used by test_validation.py to assert that the validation logic
+#     fires on decorated functions.  The decorator path is NOT used
+#     in production code but is tested for regression safety.
+#
+# These functions are NOT dead code — they are the canonical entry
+# points for all HPGL parameter validation and are kept as public API
+# with both conventions for backward compatibility.
 #
 # Convention for every ``validate_xxx`` below:
 #   * Single non-callable arg  →  direct validation (prod code)

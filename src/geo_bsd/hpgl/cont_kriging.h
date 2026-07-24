@@ -5,7 +5,9 @@
 #include "covariance_field.h"
 #include "progress_reporter.h"
 #include "kriging_stats.h"
+#include "output.h"
 #include <limits>
+#include <sstream>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -16,6 +18,18 @@
 #include "neighbourhood_lookup.h"
 #include "is_informed_predicate.h"
 #include "cov_model.h"
+
+// OpenBLAS thread-control API — file-scope declarations for macOS builds
+// where extern "C" is not permitted inside function bodies (Apple Clang).
+// Define HPGL_USE_OPENBLAS via CMake when building with -DBLA_VENDOR=OpenBLAS
+// on macOS.  Linux builds use the __linux__ code-path inside the function
+// (GCC accepts extern "C" at block scope as an extension).
+#ifdef HPGL_USE_OPENBLAS
+extern "C" {
+	void openblas_set_num_threads(int);
+	int openblas_get_num_threads(void);
+}
+#endif
 
 namespace hpgl
 {
@@ -109,6 +123,12 @@ namespace hpgl
 		extern "C" void openblas_set_num_threads(int);
 		extern "C" int openblas_get_num_threads(void);
 		detail::blas_thread_acquire(openblas_get_num_threads, openblas_set_num_threads);
+#elif defined(HPGL_USE_OPENBLAS)
+		// macOS OpenBLAS: limit internal threads to 1.  Declarations are
+		// at file scope (above) because Apple Clang rejects extern "C"
+		// inside function bodies.  Define HPGL_USE_OPENBLAS via CMake
+		// when building with -DBLA_VENDOR=OpenBLAS on macOS.
+		detail::blas_thread_acquire(openblas_get_num_threads, openblas_set_num_threads);
 #else
 		// macOS Accelerate / other BLAS: no thread-count API available.
 		// Accelerate manages its own thread pool via GCD and does not
@@ -196,6 +216,8 @@ namespace hpgl
 #if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)
 		detail::blas_thread_restore(mkl_set_num_threads);
 #elif defined(__linux__)
+		detail::blas_thread_restore(openblas_set_num_threads);
+#elif defined(HPGL_USE_OPENBLAS)
 		detail::blas_thread_restore(openblas_set_num_threads);
 #endif
 

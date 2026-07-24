@@ -738,13 +738,16 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
     else:
         # Normalize Point1/Point2 to handle both scalar (PointSetScanGridStyle),
         # list (PointSetScanContStyle), and tuple-of-arrays (CubeScan) inputs.
+        P1: numpy.ndarray
+        P2: numpy.ndarray
+        NumPoints: int
         if isinstance(Point1, tuple):
             # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays.
             # Convert multi-dimensional indices to flat indices for the
             # scalar-index loop below.
             NumPoints = len(Point1[0])
-            P1 = ravel_multi_index(Point1, Values[0].shape)
-            P2 = ravel_multi_index(Point2, Values[0].shape)
+            P1 = ravel_multi_index(Point1, Values[0].shape)  # type: ignore[assignment]
+            P2 = ravel_multi_index(Point2, Values[0].shape)  # type: ignore[assignment]
         else:
             P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
             P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()
@@ -800,13 +803,16 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
     else:
         # Normalize Point1/Point2 to handle both scalar (PointSetScanGridStyle),
         # list (PointSetScanContStyle), and tuple-of-arrays (CubeScan) inputs.
+        P1: numpy.ndarray
+        P2: numpy.ndarray
+        NumPoints: int
         if isinstance(Point1, tuple):
             # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays.
             # Convert multi-dimensional indices to flat indices for the
             # scalar-index loop below.
             NumPoints = len(Point1[0])
-            P1 = ravel_multi_index(Point1, Values[0].shape)
-            P2 = ravel_multi_index(Point2, Values[0].shape)
+            P1 = ravel_multi_index(Point1, Values[0].shape)  # type: ignore[assignment]
+            P2 = ravel_multi_index(Point2, Values[0].shape)  # type: ignore[assignment]
         else:
             P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
             P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()

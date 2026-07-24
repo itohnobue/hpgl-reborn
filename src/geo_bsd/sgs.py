@@ -194,6 +194,15 @@ def sgs_simulation(
     else:
         _cdf_struct = _create_hpgl_nonparam_cdf(cdf_data)
 
+    # Validate prop.data for NaN/Inf before C++ call.
+    # The ContProperty.data setter does NOT validate isfinite (only
+    # __init__ does), so NaN/Inf can reach this point via reassignment.
+    # All 7 kriging functions have this guard; SGS/SIS must match.
+    if not numpy.all(numpy.isfinite(prop.data)):
+        raise ValueError(
+            "sgs_simulation: prop.data contains NaN or Inf values"
+        )
+
     if mask is not None:
         _mask_struct = _create_hpgl_ubyte_array(mask, grid)
     else:
@@ -214,5 +223,14 @@ def sgs_simulation(
             )
         _float_arr = _create_hpgl_float_array(mean, grid)
         call_sgs_lvm_simulation(_cont_marr, sgsp, _cdf_struct, _float_arr, _mask_struct)
+
+    # Validate output data for NaN/Inf after C++ computation.
+    # C++ simulation can return NaN/Inf from degenerate matrices,
+    # zero neighbours, or division by zero.
+    # All 7 kriging functions have this check; SGS/SIS must match.
+    if not numpy.all(numpy.isfinite(out_prop.data)):
+        raise RuntimeError(
+            "sgs_simulation: output data contains NaN or Inf after C++ computation"
+        )
 
     return out_prop

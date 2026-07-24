@@ -748,3 +748,108 @@ class TestVariogramNaNInfHandling:
         assert variogram[0] >= 0
         # Variogram values should be finite
         assert np.all(np.isfinite(variogram)), "Variogram must be finite"
+
+
+# =============================================================================
+# M-P-30: CubeScan tuple-point path tests
+# =============================================================================
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestCubeScanTuplePointPath:
+    """Tests for variogram functions with tuple Point1/Point2 (CubeScan path, M-P-30).
+
+    The CubeScan function passes Point1/Point2 as tuples of 1D index arrays
+    (I, J, K). This exercises the ``isinstance(Point1, tuple)`` branch at
+    lines 689, 741, and 803 in variogram.py.
+    """
+
+    def test_calc_variogram_cube_scan_tuple_path(self):
+        """CalcVariogramFunction handles CubeScan tuple-point input (M-P-30).
+
+        Point1=(I, J, K) as tuple of 1D arrays triggers the CubeScan path.
+        """
+        from geo_bsd.variogram import CalcVariogramFunction
+
+        # Use 3D data so the tuple indices (I,J,K) resolve correctly
+        values = [np.arange(24, dtype="float32").reshape(4, 3, 2)]
+        params = {"HardData": values}
+        # Initialize result
+        result = CalcVariogramFunction(None, None, None, params)
+
+        # CubeScan tuple: I, J, K are 1D int arrays of matched point indices
+        I_arr = np.array([0, 1], dtype="int64")
+        J_arr = np.array([0, 0], dtype="int64")
+        K_arr = np.array([0, 0], dtype="int64")
+
+        result2 = CalcVariogramFunction((I_arr, J_arr, K_arr), (I_arr, J_arr, K_arr), result, params)
+        # With identical point pairs, variogram should be 0
+        n_vals = len(values)
+        variogram_vals = result2[:n_vals]
+        assert np.allclose(variogram_vals, 0.0, atol=1e-6), (
+            f"Identical points: variogram should be 0, got {variogram_vals}"
+        )
+
+    def test_calc_covariance_cube_scan_tuple_path(self):
+        """CalcCovarianceFunction handles CubeScan tuple-point input (M-P-30).
+
+        In the CubeScan context, Values[i] is a 1D array of grid points.
+        ravel_multi_index converts (I,J,K) → flat index into Values[0].shape.
+        """
+        from geo_bsd.variogram import CalcCovarianceFunction
+
+        # Use 1D data — in CubeScan, HardData values are flat 1D arrays
+        values = [np.arange(30, dtype="float32")]
+        soft = [np.arange(30, dtype="float32") * 0.5]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcCovarianceFunction(None, None, None, params)
+
+        # Use a single-element tuple to test the tuple isinstance path.
+        # With 1D arrays, ravel_multi_index needs shape, so wrap as 1D.
+        I_arr = np.array([0, 5], dtype="int64")
+        # ravel_multi_index expects shape matching Values[0].shape = (30,)
+        # so Point1/Point2 with 1 index axis matches 1D shape.
+        result2 = CalcCovarianceFunction(
+            (I_arr,), (I_arr,), result, params
+        )
+        assert np.all(np.isfinite(result2)), "CubeScan covariance should be finite"
+
+    def test_calc_ind_correlation_cube_scan_tuple_path(self):
+        """CalcIndCorrelationFunction handles CubeScan tuple-point input (M-P-30)."""
+        from geo_bsd.variogram import CalcIndCorrelationFunction
+
+        values = [np.array([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0], dtype="float32")]
+        soft = [np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], dtype="float32")]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcIndCorrelationFunction(None, None, None, params)
+
+        I_arr = np.array([0, 4], dtype="int64")
+        result2 = CalcIndCorrelationFunction(
+            (I_arr,), (I_arr,), result, params
+        )
+        assert np.all(np.isfinite(result2)), "CubeScan ind correlation should be finite"
+
+    def test_calc_variogram_cube_scan_different_points(self):
+        """CalcVariogramFunction CubeScan with different point pairs (M-P-30)."""
+        from geo_bsd.variogram import CalcVariogramFunction
+
+        values = [np.arange(24, dtype="float32").reshape(4, 3, 2)]
+        params = {"HardData": values}
+        result = CalcVariogramFunction(None, None, None, params)
+
+        # Point1 and Point2 are different points
+        P1_I = np.array([0, 0], dtype="int64")
+        P1_J = np.array([0, 0], dtype="int64")
+        P1_K = np.array([0, 0], dtype="int64")
+
+        P2_I = np.array([1, 2], dtype="int64")
+        P2_J = np.array([0, 0], dtype="int64")
+        P2_K = np.array([0, 0], dtype="int64")
+
+        result2 = CalcVariogramFunction(
+            (P1_I, P1_J, P1_K), (P2_I, P2_J, P2_K), result, params
+        )
+        assert np.all(np.isfinite(result2))
+        # Variogram for different points should accumulate pair count
+        count_idx = len(values) + len(values)  # pair count index
+        assert result2[count_idx] > 0, "Should have counted at least one pair"

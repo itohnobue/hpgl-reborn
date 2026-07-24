@@ -116,10 +116,11 @@ init_sis_params(
 		ikp->m_angles.push_back(angles);
 		ikp->m_sills.push_back(p->m_sill);
 		ikp->m_nuggets.push_back(p->m_nugget);
-		ikp->m_radiuses.push_back(sugarbox_search_ellipsoid_t(
-										 p->m_radiuses[0],
-										 p->m_radiuses[1],
-										 p->m_radiuses[2]));
+		{
+			neighbourhood_param_t tmp;
+			tmp.set_radiuses(p->m_radiuses[0], p->m_radiuses[1], p->m_radiuses[2]);
+			ikp->m_radiuses.push_back(tmp.m_radiuses);
+		}
 		if (p->m_max_neighbours < 0)
 			throw hpgl_exception("init_sis_params", "m_max_neighbours cannot be negative");
 		ikp->m_neighbour_limits.push_back(p->m_max_neighbours);
@@ -133,10 +134,7 @@ init_sis_params(
 		cp.validate();
 		ikp->m_cov_params.push_back(cp);
 		neighbourhood_param_t nbp;
-		nbp.m_radiuses = sugarbox_search_ellipsoid_t(
-				p->m_radiuses[0],
-				p->m_radiuses[1],
-				p->m_radiuses[2]);
+		nbp.set_radiuses(p->m_radiuses[0], p->m_radiuses[1], p->m_radiuses[2]);
 		if (p->m_max_neighbours < 0)
 			throw hpgl_exception("init_sis_params", "m_max_neighbours cannot be negative");
 		nbp.m_max_neighbours = p->m_max_neighbours;

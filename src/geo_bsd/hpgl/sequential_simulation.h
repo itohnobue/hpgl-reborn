@@ -112,6 +112,13 @@ namespace hpgl
 				kriging_failures, static_cast<unsigned long>(property.size()),
 				kriging_skipped);
 		}
+		if (kriging_skipped >= static_cast<unsigned long>(property.size()))
+		{
+			fprintf(stderr,
+				"HPGL: SGS produced no output — all %lu nodes were either already informed or masked out. "
+				"Check that the output property grid contains uninformed cells and the mask permits processing.\n",
+				static_cast<unsigned long>(property.size()));
+		}
 		{
 			std::ostringstream oss;
 			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";
@@ -157,7 +164,10 @@ namespace hpgl
 		kriging_ws_t<cont_value_t, sugarbox_location_t> ws;
 		unsigned long kriging_failures = 0;
 		unsigned long kriging_skipped = 0;
-		for (node_index_t counter = 0, counter_end = points_indexes.size(); counter < counter_end; ++counter)		
+		// report.next_lap() in the increment expression ensures laps are
+		// counted even when is_informed() causes a 'continue' (matching
+		// the regular do_sequential_gausian_simulation variant at line 68).
+		for (node_index_t counter = 0, counter_end = points_indexes.size(); counter < counter_end; ++counter, report.next_lap())		
 		{
 			node = points_indexes[path_gen.next()];
 			if(property.is_informed(node)) 
@@ -182,7 +192,6 @@ namespace hpgl
 			
 			property.set_at(node, value);
 			//neighbour_lookup.add_node(node);
-			report.next_lap();
 		}
 		report.stop();
 		if (kriging_failures > 0)

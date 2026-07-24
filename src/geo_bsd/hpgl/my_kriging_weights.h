@@ -1,8 +1,12 @@
 #ifndef __MY_KRIGING_WEIGHTS_H__B6211BC7_74C1_4D96_AB05_286A62D0F003
 #define __MY_KRIGING_WEIGHTS_H__B6211BC7_74C1_4D96_AB05_286A62D0F003
 
+#ifndef LAPACK_SOLVER
 #define LAPACK_SOLVER
+#endif
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <limits>
 #include <cmath>

@@ -104,11 +104,18 @@ _hpgl_call_lock = threading.Lock()
 # _check_hpgl_error compares both the error message AND the sequence
 # number. This prevents identical error messages from consecutive C calls
 # from being suppressed, while still suppressing stale errors within the
-# same call window. Full protection requires a C++ clear-error API which
-# is not yet available — when the pre-call snapshot accidentally matches
-# a genuinely new error (same message, C++ state not cleared), the error
-# will still be suppressed. This is a known limitation documented in
-# the comment below at the eq == snapshot check.
+# same call window.
+#
+# KNOWN LIMITATION — NO C++ CLEAR-ERROR API: The HPGL C++ shared library
+# stores the last exception message globally (thread_local) and does NOT
+# expose a ``hpgl_clear_last_exception_message()`` function. When the
+# pre-call snapshot accidentally matches a genuinely new error (same
+# message, C++ state not cleared), the error is suppressed. The sequence
+# counter mitigates this for consecutive calls but cannot help when a
+# fresh identical error arises after intervening calls that did NOT
+# change the C++ error state. A C++ clear-error API would be the correct
+# fix; without it, this is a documented limitation with an approximate
+# workaround.
 
 
 def _snapshot_hpgl_error():
@@ -166,6 +173,13 @@ def _check_hpgl_error(context: str = "") -> None:
                 # Error unchanged from pre-call snapshot AND this is the
                 # same call window — C++ call did not produce a new error.
                 # Suppress stale error.
+                #
+                # KNOWN LIMITATION: If the C++ call genuinely produces
+                # the EXACT SAME error message as the pre-call stale error,
+                # this check suppresses it. A C++ hpgl_clear_last_error()
+                # function does not exist; the sequence counter mitigates
+                # this for consecutive calls but not for the edge case
+                # described in the module-level comment above.
                 return
             # Genuine new error (different from pre-call snapshot, or
             # identical message from a different C++ call).

@@ -322,6 +322,11 @@ HPGL_API int hpgl_write_inc_file_float(
 		if (vol < 0) return -1;
 		property_writer_t writer;
 		writer.init(filename, name);
+		if (arr->m_data == nullptr)
+		{
+			hpgl::set_last_exception_message("hpgl_write_inc_file_float: Null data pointer in arr");
+			return -1;
+		}
 		cont_property_array_t prop(
 				arr->m_data,
 				arr->m_mask,
@@ -419,6 +424,11 @@ HPGL_API int hpgl_write_inc_file_byte(
 
 		property_writer_t writer;
 		writer.init(filename, name);
+		if (arr->m_data == nullptr)
+		{
+			hpgl::set_last_exception_message("hpgl_write_inc_file_byte: Null data pointer in arr");
+			return -1;
+		}
 		indicator_property_array_t prop(
 				arr->m_data,
 				arr->m_mask,
@@ -449,6 +459,11 @@ hpgl_write_gslib_cont_property(
 		using namespace hpgl;
 		int size = validate_shape_volume(get_shape_volume(&data->m_shape), "write_gslib_cont_property");
 		if (size < 0) return -1;
+		if (data->m_data == nullptr)
+		{
+			hpgl::set_last_exception_message("hpgl_write_gslib_cont_property: Null data pointer");
+			return -1;
+		}
 		sp_double_property_array_t prop = std::make_shared<cont_property_array_t>(data->m_data, data->m_mask, size);
 		hpgl::property_writer_t writer;
 		writer.init(filename, name);
@@ -485,6 +500,11 @@ hpgl_write_gslib_byte_property(
 		using namespace hpgl;
 		int size = validate_shape_volume(get_shape_volume(&data->m_shape), "write_gslib_byte_property");
 		if (size < 0) return -1;
+		if (data->m_data == nullptr)
+		{
+			hpgl::set_last_exception_message("hpgl_write_gslib_byte_property: Null data pointer");
+			return -1;
+		}
 		sp_byte_property_array_t prop = std::make_shared<indicator_property_array_t>(data->m_data, data->m_mask, size, data->m_indicator_count);
 		std::vector<unsigned char> remap_table;
 		init_remap_table(values, values_count, data->m_indicator_count, remap_table);
@@ -1265,10 +1285,10 @@ hpgl_simple_cokriging_mark1(
 				params->m_angles[0],
 				params->m_angles[1],
 				params->m_angles[2]);
-		for (int i = 0; i < 3; ++i)
-		{
-			np.m_radiuses[i] = params->m_radiuses[i];
-		}
+		np.set_radiuses(
+			params->m_radiuses[0],
+			params->m_radiuses[1],
+			params->m_radiuses[2]);
 
 		sugarbox_grid_t grid;
 		init_grid(grid, &input_data->m_shape);
@@ -1360,10 +1380,10 @@ hpgl_simple_cokriging_mark2(
 		if (params->m_max_neighbours < 0)
 			throw hpgl_exception("hpgl_simple_cokriging_mark2", "m_max_neighbours cannot be negative");
 		np.m_max_neighbours = params->m_max_neighbours;
-		for (int i = 0; i < 3; ++i)
-		{
-			np.m_radiuses[i] = params->m_radiuses[i];
-		}
+		np.set_radiuses(
+			params->m_radiuses[0],
+			params->m_radiuses[1],
+			params->m_radiuses[2]);
 
 		simple_cokriging_markII(
 				grid, primary_prop,

@@ -1414,6 +1414,17 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     if prop.indicator_count != 2:
         raise ValueError(f"median_ik: indicator_count must be 2, got {prop.indicator_count}")
 
+    # Validate prop.data for NaN/Inf before C++ call (defensive consistency).
+    # IndProperty uses uint8 data which cannot hold NaN/Inf natively,
+    # but the guard matches the pattern used by all kriging functions
+    # and future-proofs against potential dtype changes.
+    if not numpy.all(numpy.isfinite(
+        numpy.asarray(prop.data, dtype=numpy.float32)
+    )):
+        raise ValueError(
+            "median_ik: prop.data contains NaN or Inf values"
+        )
+
     out_prop = _empty_clone(prop)
 
     miksp = _HPGL_MEDIAN_IK_PARAMS(
@@ -1467,6 +1478,17 @@ def indicator_kriging(prop, grid, data, marginal_probs):
             ikd["cov_model"].nugget,
             ikd["cov_model"].ranges,
             ikd["cov_model"].angles,
+        )
+
+    # Validate prop.data for NaN/Inf before C++ call (defensive consistency).
+    # IndProperty uses uint8 data which cannot hold NaN/Inf natively,
+    # but the guard matches the pattern used by all kriging functions
+    # and future-proofs against potential dtype changes.
+    if not numpy.all(numpy.isfinite(
+        numpy.asarray(prop.data, dtype=numpy.float32)
+    )):
+        raise ValueError(
+            "indicator_kriging: prop.data contains NaN or Inf values"
         )
 
     if len(data) == 2:

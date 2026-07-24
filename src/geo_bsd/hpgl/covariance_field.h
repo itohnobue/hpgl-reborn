@@ -5,6 +5,7 @@
 #include "var_radix_utils.h"
 #include "cov_model.h"
 #include "sugarbox_grid.h"
+#include <algorithm>
 
 namespace hpgl
 {
@@ -52,6 +53,17 @@ namespace hpgl
 				}
 			}
 		}
+
+		// Sort by squared distance from origin (ascending) so that
+		// neighbour lookup iterates nearest cells first.  Without
+		// sorting, find() picks the first N vector positions in
+		// z,y,x iteration order, which may skip closer neighbours
+		// that happen to appear later in the unsorted list.
+		std::sort(vectors.begin(), vectors.end(),
+			[](const sugarbox_vector_t & a, const sugarbox_vector_t & b) {
+				return (a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
+				     < (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+			});
 	}
 
 	// type covariance_model_t:

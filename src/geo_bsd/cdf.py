@@ -24,8 +24,27 @@ class CdfData:
     """
 
     def __init__(self, values, probs):
+        # Warn if input arrays are higher precision than float32 — numpy.require
+        # silently downcasts, losing precision without notice.
+        for name, arr in (("values", numpy.asarray(values)), ("probs", numpy.asarray(probs))):
+            if arr.dtype == numpy.float64:
+                warnings.warn(
+                    f"CdfData: {name} is float64 and will be silently downcast "
+                    f"to float32 — potential precision loss.",
+                    stacklevel=2,
+                )
         self.values = numpy.require(values, "float32")
         self.probs = numpy.require(probs, "float32")
+
+        # Validate values and probs for NaN / Inf BEFORE range checks.
+        # NaN falsifies all three range/diff comparisons below
+        # (NaN < 0.0, NaN > 1.0, and numpy.diff with NaN are all False),
+        # so NaN passes the existing checks silently.
+        if not numpy.all(numpy.isfinite(self.values)):
+            raise ValueError("CdfData: values contain NaN or Inf")
+        if not numpy.all(numpy.isfinite(self.probs)):
+            raise ValueError("CdfData: probabilities contain NaN or Inf")
+
         if len(self.values) != len(self.probs):
             raise ValueError(
                 f"CdfData: values length ({len(self.values)}) "

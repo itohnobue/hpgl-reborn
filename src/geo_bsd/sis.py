@@ -184,6 +184,17 @@ def sis_simulation(
 
     ParameterValidator.validate_property_type(out_prop, IndProperty, "sis_simulation")
 
+    # Validate prop.data for NaN/Inf before C++ call (defensive consistency).
+    # IndProperty uses uint8 data which cannot hold NaN/Inf natively,
+    # but the guard matches the pattern used by all kriging functions
+    # and future-proofs against potential dtype changes.
+    if not numpy.all(numpy.isfinite(
+        numpy.asarray(prop.data, dtype=numpy.float32)
+    )):
+        raise ValueError(
+            "sis_simulation: prop.data contains NaN or Inf values"
+        )
+
     # Update indicator_count to match the number of categories in data
     out_prop.indicator_count = len(data)
     prop_2 = _create_hpgl_ind_masked_array(out_prop, grid)
@@ -241,4 +252,16 @@ def sis_simulation(
             _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
             use_correlogram,
         )
+
+    # Validate output data for NaN/Inf after C++ computation.
+    # C++ simulation can return NaN/Inf from degenerate matrices,
+    # zero neighbours, or division by zero.
+    # All 7 kriging functions have this check; SGS/SIS must match.
+    if not numpy.all(numpy.isfinite(
+        numpy.asarray(out_prop.data, dtype=numpy.float32)
+    )):
+        raise RuntimeError(
+            "sis_simulation: output data contains NaN or Inf after C++ computation"
+        )
+
     return out_prop

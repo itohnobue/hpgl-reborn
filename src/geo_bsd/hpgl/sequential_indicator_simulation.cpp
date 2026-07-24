@@ -79,6 +79,14 @@ void do_sis(
 
 	while (!path.end_of_path())	
 	{
+		if (reporter.cancelled())
+		{
+			// Match cancellation behaviour of parallel kriging loops
+			// (cont_kriging.h, indicator_kriging.h, median_ik.cpp) —
+			// those check report.cancelled(); single-threaded SIS
+			// previously lacked this check.
+			break;
+		}
 		node_index_t node = path.get_next();
 		reporter.next_lap();
 		if (property.is_informed(node))
