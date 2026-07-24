@@ -66,6 +66,12 @@ void do_sis(
 	// via clear() to avoid 1M+ heap allocations in the hot loop.
 	std::vector<indicator_probability_t> probs;
 
+	// Track kriging failures for visibility — SIS silently substitutes
+	// marginal probabilities on failure, which can bias results if
+	// failures are widespread.
+	unsigned long kriging_failures = 0;
+	unsigned long kriging_skipped = 0;
+
 	if(params.m_category_count == 2)
 	{
 		write("Only 2 indicators found, Median SIS will be performed.");
@@ -76,16 +82,25 @@ void do_sis(
 		node_index_t node = path.get_next();
 		reporter.next_lap();
 		if (property.is_informed(node))
+		{
+			++kriging_skipped;
 			continue;
+		}
 
 		// Bounds-guard: validate node index before mask access.
 		// node_index_t is signed int; path generator should produce valid
 		// indices but double-check in case mask is undersized.
 		if (node < 0 || node >= property.size())
+		{
+			++kriging_skipped;
 			continue;
+		}
 
 		if (mask[node] != 1)
+		{
+			++kriging_skipped;
 			continue;
+		}
 
 		probs.clear();
 
@@ -103,6 +118,7 @@ void do_sis(
 				if (ki_result != ki_result_t::KI_SUCCESS)
 				{
 					prob = marginal_probs[idx][node];
+					++kriging_failures;
 				}
 
 				// Clamp kriged probability to [0,1] before computing the
@@ -129,6 +145,7 @@ void do_sis(
 				if (ki_result != ki_result_t::KI_SUCCESS)
 				{
 					prob = marginal_probs[idx][node];
+					++kriging_failures;
 				}
 				probs.push_back(prob);
 			}
@@ -157,7 +174,14 @@ void do_sis(
 		property.set_at(node, sample(gen, probs));
 	}
 
-	reporter.stop();	
+	reporter.stop();
+	if (kriging_failures > 0)
+	{
+		fprintf(stderr,
+			"HPGL: SIS kriging failures: %lu indicator-estimate failures fell back to marginal probabilities (of %lu nodes, %lu skipped).\n",
+			kriging_failures, static_cast<unsigned long>(property.size()),
+			kriging_skipped);
+	}
 }
 
 struct no_mask_t

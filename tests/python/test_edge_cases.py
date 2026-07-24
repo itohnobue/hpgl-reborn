@@ -1252,6 +1252,23 @@ class TestSimulationEdgeCases:
         assert result.data.shape == (5, 5, 5)
         # All cells should have some result (simulated or original)
         assert np.all(np.isfinite(result.data))
+        # I2-F24: with zero search radius, SGS must draw from CDF for uninformed cells.
+        # Verify output values fall within the CDF range and reflect CDF-random behavior.
+        cdf_min = float(cdf_data.values[0])
+        cdf_max = float(cdf_data.values[-1])
+        uninformed = result.data[result.mask == 0] if np.any(result.mask == 0) else result.data
+        assert np.all(uninformed >= cdf_min), (
+            f"Simulation output below CDF min {cdf_min}"
+        )
+        assert np.all(uninformed <= cdf_max), (
+            f"Simulation output above CDF max {cdf_max}"
+        )
+        # With zero radius, uninformed cells get random CDF draws — verify
+        # they are not all identical (which would indicate degenerate behavior).
+        if len(uninformed) > 1:
+            assert np.std(uninformed.astype("float64")) > 0.0, (
+                "Zero-radius simulation should produce varied CDF-random output"
+            )
 
     def test_ik_with_indicator_count_1(self):
         """C009 — IK with indicator_count=1 (degenerate single-category case).

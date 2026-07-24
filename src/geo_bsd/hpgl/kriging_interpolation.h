@@ -229,13 +229,24 @@ namespace hpgl
 			double delta = CORRELOGRAM_DELTA;
 			double meanc = center_mean;
 
-			if(meanc == 0)
+			// NaN guard: NaN propagates through all comparisons and
+			// arithmetic, silently invalidating the correlogram weights.
+			// Fall back to safe default (0.0) and let the caller's NaN
+			// detection handle the downstream consequences.
+			if (std::isnan(meanc)) meanc = 0.0;
+
+			// Tolerance-based comparison prevents exact-float-equality
+			// failures when a mean arrives at 0.0 or 1.0 through
+			// numerically fragile paths (e.g., 1.0 + 0.0 == 1.0 exact,
+			// but 1.0 - 1e-16 rounds back to 1.0 which == 1.0 exact).
+			// Using the same pattern as my_kriging_weights.h:833-839.
+			if(meanc < delta)
 			{
-				meanc += delta;
+				meanc = delta;
 			}
-			if(meanc == 1)
+			if(meanc > 1.0 - delta)
 			{
-				meanc -= delta;
+				meanc = 1.0 - delta;
 			}
 
 			double sigmac = sqrt(meanc * (1 - meanc));
@@ -246,13 +257,15 @@ namespace hpgl
 			{
 				meani = means[i];
 
-				if(meani == 0)
+				if (std::isnan(meani)) meani = 0.0;
+
+				if(meani < delta)
 				{
-					meani += delta;
+					meani = delta;
 				}
-				if(meani == 1)
+				if(meani > 1.0 - delta)
 				{
-					meani -= delta;
+					meani = 1.0 - delta;
 				}
 
 				double sigma = sqrt(meani * (1 - meani));

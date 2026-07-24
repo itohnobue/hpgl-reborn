@@ -23,8 +23,11 @@ namespace hpgl
 	/// @return true if successful, false if n_threads is invalid
 	bool set_thread_num(int n_threads)
 	{
-		// Input validation
-		if (n_threads < 0) {
+		// Input validation: reject negative and zero, as OpenMP leaves 0
+		// implementation-defined.  The Python wrapper also rejects zero.
+		// Without this guard n_threads == 0 may silently map to
+		// implementation-specific threading on some OpenMP runtimes.
+		if (n_threads <= 0) {
 			return false;
 		}
 

@@ -105,6 +105,20 @@ inline bool lapack_spd_solve_1rhs(
 	double* A_orig,
 	const char* label)
 {
+	// Pre-check: scan A for NaN/Inf values before calling dpotrf_.
+	// dpotrf_ does not validate inputs and may silently produce NaN
+	// results or invoke undefined behavior on non-finite inputs.
+	for (int i = 0; i < size * size; ++i) {
+		if (!std::isfinite(A[i])) {
+			char error_msg[256];
+			snprintf(error_msg, sizeof(error_msg),
+				"LAPACK Error in %s: Non-finite value (NaN/Inf) in covariance matrix A[%d]. Matrix size: %d",
+				label, i, size);
+			HPGL_LOG_STRING(error_msg);
+			return false;
+		}
+	}
+
 	integer info_dec = 100;
 	integer info_solve = 100;
 	integer size_lap = size;
@@ -181,6 +195,20 @@ inline bool lapack_spd_solve_2rhs(
 	double* A_orig,
 	const char* label)
 {
+	// Pre-check: scan A for NaN/Inf values before calling dpotrf_.
+	// dpotrf_ does not validate inputs and may silently produce NaN
+	// results or invoke undefined behavior on non-finite inputs.
+	for (int i = 0; i < size * size; ++i) {
+		if (!std::isfinite(A[i])) {
+			char error_msg[256];
+			snprintf(error_msg, sizeof(error_msg),
+				"LAPACK Error in %s: Non-finite value (NaN/Inf) in covariance matrix A[%d]. Matrix size: %d",
+				label, i, size);
+			HPGL_LOG_STRING(error_msg);
+			return false;
+		}
+	}
+
 	integer info_dec = 100;
 	integer info_solve = 100;
 	integer size_lap = size;

@@ -554,9 +554,10 @@ class TestSGSNormalization:
         output_masked = result.data[result.mask > 0].astype("float64")
         input_mean = np.mean(input_masked)
         output_mean = np.mean(output_masked)
-        # Normalization should preserve mean within a reasonable tolerance
-        # of half the input standard deviation (generous for small sample)
-        tolerance = max(np.std(input_masked) * 0.5, 10.0)
+        # Normalization should preserve mean within a reasonable tolerance.
+        # Use 20% of standard deviation or 2.0 absolute minimum — tight enough
+        # to detect meaningful SGS bias while allowing for finite-sample variance.
+        tolerance = max(np.std(input_masked) * 0.2, 2.0)
         assert abs(output_mean - input_mean) < tolerance, (
             f"SGS normalization should preserve mean: input={input_mean:.1f}, output={output_mean:.1f}"
         )

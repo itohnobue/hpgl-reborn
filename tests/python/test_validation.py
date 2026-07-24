@@ -196,6 +196,74 @@ class TestPathValidator:
         )
         assert os.path.basename(result) == "new.txt"
 
+    # ---- safe_open_write / safe_open_read (I2-F04) ----
+
+    def test_safe_open_write_valid_path(self, tmp_path):
+        """safe_open_write creates/truncates a file inside basedir."""
+        basedir = tmp_path / "basedir"
+        basedir.mkdir()
+        filepath = basedir / "output.txt"
+
+        with PathValidator.safe_open_write(str(filepath), str(basedir)) as fh:
+            fh.write("hello world")
+
+        content = (basedir / "output.txt").read_text()
+        assert content == "hello world"
+
+    def test_safe_open_write_outside_basedir_raises(self, tmp_path):
+        """safe_open_write outside basedir raises CriticalValidationError."""
+        basedir = tmp_path / "allowed"
+        basedir.mkdir()
+        outside_file = tmp_path / "outside.txt"
+
+        with pytest.raises(CriticalValidationError, match="outside"):
+            PathValidator.safe_open_write(str(outside_file), str(basedir))
+
+    def test_safe_open_read_valid_path(self, tmp_path):
+        """safe_open_read opens an existing file inside basedir."""
+        basedir = tmp_path / "basedir"
+        basedir.mkdir()
+        filepath = basedir / "data.txt"
+        filepath.write_text("read me")
+
+        with PathValidator.safe_open_read(str(filepath), str(basedir)) as fh:
+            content = fh.read()
+
+        assert content == "read me"
+
+    def test_safe_open_read_outside_basedir_raises(self, tmp_path):
+        """safe_open_read outside basedir raises CriticalValidationError."""
+        basedir = tmp_path / "allowed"
+        basedir.mkdir()
+        outside_file = tmp_path / "outside.txt"
+        outside_file.write_text("data")
+
+        with pytest.raises(CriticalValidationError, match="outside"):
+            PathValidator.safe_open_read(str(outside_file), str(basedir))
+
+    def test_safe_open_write_nonexistent_dir_raises(self, tmp_path):
+        """safe_open_write to nonexistent basedir child — validate_filepath_in_basedir resolves parent dir for O_NOFOLLOW."""
+        basedir = tmp_path / "basedir"
+        basedir.mkdir()
+        filepath = basedir / "new_file.txt"
+
+        with PathValidator.safe_open_write(str(filepath), str(basedir)) as fh:
+            fh.write("created")
+
+        assert filepath.read_text() == "created"
+
+    def test_safe_open_read_file_in_basedir_after_write_works(self, tmp_path):
+        """Round-trip: write via safe_open_write, then read via safe_open_read."""
+        basedir = tmp_path / "datadir"
+        basedir.mkdir()
+        filepath = basedir / "roundtrip.txt"
+
+        with PathValidator.safe_open_write(str(filepath), str(basedir)) as fh:
+            fh.write("roundtrip data")
+
+        with PathValidator.safe_open_read(str(filepath), str(basedir)) as fh:
+            assert fh.read() == "roundtrip data"
+
 
 # =============================================================================
 # GridValidator Tests
@@ -281,6 +349,52 @@ class TestGridValidator:
         arr = np.array([], dtype="float64")
         with pytest.raises(CriticalValidationError):
             GridValidator.validate_array_dtype(arr, np.float32)
+
+    # ---- validate_coordinate_arrays (I2-F06) ----
+
+    def test_coordinate_arrays_finite_pass(self):
+        """All-finite coordinate arrays pass validation."""
+        x = np.array([1.0, 2.0, 3.0])
+        y = np.array([4.0, 5.0, 6.0])
+        z = np.array([7.0, 8.0, 9.0])
+        # Should not raise
+        GridValidator.validate_coordinate_arrays(x, y, z)
+
+    @pytest.mark.parametrize("axis_idx,make_bad", [
+        (0, lambda a: np.array([1.0, float("nan"), 3.0])),
+        (1, lambda a: np.array([1.0, float("nan"), 3.0])),
+        (2, lambda a: np.array([1.0, float("nan"), 3.0])),
+    ])
+    def test_coordinate_arrays_nan_raises(self, axis_idx, make_bad):
+        """NaN in any coordinate axis raises ValueError."""
+        bad = make_bad(None)
+        x = bad if axis_idx == 0 else np.array([1.0, 2.0, 3.0])
+        y = bad if axis_idx == 1 else np.array([4.0, 5.0, 6.0])
+        z = bad if axis_idx == 2 else np.array([7.0, 8.0, 9.0])
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            GridValidator.validate_coordinate_arrays(x, y, z)
+
+    @pytest.mark.parametrize("axis_idx,make_bad", [
+        (0, lambda a: np.array([1.0, float("inf"), 3.0])),
+        (1, lambda a: np.array([1.0, float("inf"), 3.0])),
+        (2, lambda a: np.array([1.0, float("inf"), 3.0])),
+    ])
+    def test_coordinate_arrays_inf_raises(self, axis_idx, make_bad):
+        """Inf in any coordinate axis raises ValueError."""
+        bad = make_bad(None)
+        x = bad if axis_idx == 0 else np.array([1.0, 2.0, 3.0])
+        y = bad if axis_idx == 1 else np.array([4.0, 5.0, 6.0])
+        z = bad if axis_idx == 2 else np.array([7.0, 8.0, 9.0])
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            GridValidator.validate_coordinate_arrays(x, y, z)
+
+    def test_coordinate_arrays_negative_inf_raises(self):
+        """-Inf in coordinates raises ValueError."""
+        x = np.array([1.0, -float("inf"), 3.0])
+        y = np.array([4.0, 5.0, 6.0])
+        z = np.array([7.0, 8.0, 9.0])
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            GridValidator.validate_coordinate_arrays(x, y, z)
 
 
 # =============================================================================
@@ -565,6 +679,119 @@ class TestParameterValidator:
         with pytest.raises(CriticalValidationError):
             ParameterValidator.validate_variance(float("nan"))
 
+    def test_variance_inf_raises(self):
+        """Inf variance raises (I2-F19 — untested)."""
+        with pytest.raises(CriticalValidationError, match="finite"):
+            ParameterValidator.validate_variance(float("inf"))
+
+    def test_variance_negative_inf_raises(self):
+        """-Inf variance raises."""
+        with pytest.raises(CriticalValidationError, match="finite"):
+            ParameterValidator.validate_variance(-float("inf"))
+
+    # ---- validate_seed edge cases (I2-F21) ----
+
+    def test_seed_negative_raises(self):
+        """Negative seed raises ValidationError (I2-F21 — untested)."""
+        with pytest.raises(ValidationError, match="negative"):
+            ParameterValidator.validate_seed(-1)
+
+    def test_seed_bool_raises(self):
+        """Bool seed raises TypeError (I2-F21 — untested)."""
+        with pytest.raises(TypeError, match="seed"):
+            ParameterValidator.validate_seed(True)  # type: ignore[arg-type]
+
+        with pytest.raises(TypeError, match="seed"):
+            ParameterValidator.validate_seed(False)  # type: ignore[arg-type]
+
+    def test_seed_non_int_raises(self):
+        """Non-integer seed raises TypeError."""
+        with pytest.raises(TypeError, match="seed"):
+            ParameterValidator.validate_seed("string")  # type: ignore[arg-type]
+
+        with pytest.raises(TypeError, match="seed"):
+            ParameterValidator.validate_seed(3.14)  # type: ignore[arg-type]
+
+    def test_seed_numpy_integer_accepted(self):
+        """NumPy integer seed is accepted."""
+        ParameterValidator.validate_seed(np.int32(42))
+        ParameterValidator.validate_seed(np.int64(0))
+
+    # ---- validate_property_type (I2-F18) ----
+
+    def test_validate_property_type_valid(self):
+        """Valid property type passes."""
+        prop = 42
+        ParameterValidator.validate_property_type(prop, int, "test_func", "my_param")
+
+    def test_validate_property_type_wrong_type_raises(self):
+        """Wrong type raises TypeError with descriptive message."""
+        prop = "not_an_int"
+        with pytest.raises(TypeError, match="test_func: my_param must be"):
+            ParameterValidator.validate_property_type(prop, int, "test_func", "my_param")
+
+    def test_validate_property_type_with_type_name_override(self):
+        """Custom type_name appears in error message."""
+        prop = [1, 2, 3]
+        with pytest.raises(TypeError, match="must be ContProperty"):
+            ParameterValidator.validate_property_type(
+                prop, dict, "my_func", "prop", type_name="ContProperty"
+            )
+
+    def test_validate_property_type_string_against_str(self):
+        """String property validated against str type."""
+        ParameterValidator.validate_property_type("hello", str, "test", "text_param")
+
+    # ---- validate_list_param (I2-F18) ----
+
+    def test_validate_list_param_valid(self):
+        """Valid list passes."""
+        ParameterValidator.validate_list_param([1, 2, 3], "my_list", "test_func")
+
+    def test_validate_list_param_tuple_raises(self):
+        """Tuple (not list) raises TypeError."""
+        with pytest.raises(TypeError, match="must be a list"):
+            ParameterValidator.validate_list_param((1, 2, 3), "my_list", "test_func")
+
+    def test_validate_list_param_string_raises(self):
+        """String raises TypeError."""
+        with pytest.raises(TypeError, match="must be a list"):
+            ParameterValidator.validate_list_param("abc", "my_list", "test_func")
+
+    # ---- validate_scalar_mean (I2-F18) ----
+
+    def test_validate_scalar_mean_valid_float(self):
+        """Valid float passes."""
+        ParameterValidator.validate_scalar_mean(3.14, "test_func")
+
+    def test_validate_scalar_mean_valid_int(self):
+        """Valid int passes."""
+        ParameterValidator.validate_scalar_mean(42, "test_func")
+
+    def test_validate_scalar_mean_numpy_scalar(self):
+        """NumPy float scalar passes."""
+        ParameterValidator.validate_scalar_mean(np.float64(2.5), "test_func")
+
+    def test_validate_scalar_mean_nan_raises(self):
+        """NaN mean raises ValueError."""
+        with pytest.raises(ValueError, match="scalar mean must be finite"):
+            ParameterValidator.validate_scalar_mean(float("nan"), "test_func")
+
+    def test_validate_scalar_mean_inf_raises(self):
+        """Inf mean raises ValueError."""
+        with pytest.raises(ValueError, match="scalar mean must be finite"):
+            ParameterValidator.validate_scalar_mean(float("inf"), "test_func")
+
+    def test_validate_scalar_mean_non_number_raises(self):
+        """Non-number mean raises TypeError."""
+        with pytest.raises(TypeError, match="scalar mean must be a number"):
+            ParameterValidator.validate_scalar_mean("bad", "test_func")
+
+    def test_validate_scalar_mean_bool_accepted(self):
+        """Bool is accepted (bool is an int subclass — numeric)."""
+        ParameterValidator.validate_scalar_mean(True, "test_func")
+        ParameterValidator.validate_scalar_mean(False, "test_func")
+
 
 # =============================================================================
 # ValidationContext Tests
@@ -677,6 +904,91 @@ class TestDecorators:
 
         with pytest.raises(CriticalValidationError):
             dummy_func(filename=str(nonexistent))
+
+    def test_validate_kriging_params_decorator_applies(self):
+        """validate_kriging_params decorator validates radiuses, max_neighbours, cov_model.
+
+        The decorator inspects kwargs for radiuses, max_neighbours, and
+        cov_model, calling the appropriate ParameterValidator methods.
+        """
+        class FakeCovModel:
+            def __init__(self):
+                self.sill = 1.0
+                self.nugget = 0.1
+                self.ranges = (5.0, 5.0, 3.0)
+                self.angles = (0.0, 0.0, 0.0)
+
+        @validate_kriging_params
+        def dummy_func(radiuses=None, max_neighbours=None, cov_model=None, **kwargs):
+            return (radiuses, max_neighbours, cov_model)
+
+        # Valid params: pass through the decorator
+        cov = FakeCovModel()
+        r, n, c = dummy_func(radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov)
+        assert r == (5, 5, 3)
+        assert n == 12
+        assert c is cov
+
+        # Invalid radius (negative): decorator raises
+        with pytest.raises(CriticalValidationError):
+            dummy_func(radiuses=(-1, 5, 3), max_neighbours=12)
+
+        # Invalid max_neighbours (0): decorator raises
+        with pytest.raises(CriticalValidationError):
+            dummy_func(max_neighbours=0)
+
+    def test_validate_simulation_params_decorator_applies(self):
+        """validate_simulation_params decorator validates seed, min_neighbours, max_neighbours.
+
+        The decorator inspects kwargs for seed, min_neighbours, and
+        max_neighbours, calling the appropriate ParameterValidator methods.
+        """
+        @validate_simulation_params
+        def dummy_func(seed=None, min_neighbours=None, max_neighbours=None, **kwargs):
+            return (seed, min_neighbours, max_neighbours)
+
+        # Valid params: pass through the decorator
+        s, mn, mx = dummy_func(seed=42, min_neighbours=4, max_neighbours=12)
+        assert s == 42
+        assert mn == 4
+        assert mx == 12
+
+        # Invalid seed (negative): decorator raises
+        with pytest.raises(ValidationError, match="negative"):
+            dummy_func(seed=-1)
+
+    def test_validate_simulation_params_direct_call(self):
+        """validate_simulation_params direct mode with min_neighbours uses consistent default (F-17).
+
+        When only min_neighbours is provided (without max_neighbours),
+        the max_neighbours default should be 12, not 0.
+        """
+        # Should not raise - min_neighbours <= 12
+        validate_simulation_params(min_neighbours=4, max_neighbours=12)
+
+        # min_neighbours > default max (12) should raise
+        with pytest.raises(CriticalValidationError):
+            validate_simulation_params(min_neighbours=20)
+
+    def test_validate_simulation_params_direct_call_default_max(self):
+        """Direct call with seed only — defaults work (F-17 verification)."""
+        validate_simulation_params(seed=42)
+
+    def test_validate_kriging_params_direct_call(self):
+        """validate_kriging_params direct mode returns radiuses tuple.
+
+        The dual calling convention supports direct call with grid, radiuses,
+        max_neighbours, and cov_model.
+        """
+        result = validate_kriging_params(
+            grid=None, radiuses=(5, 5, 3), max_neighbours=12, cov_model=None
+        )
+        assert result == (5, 5, 3)
+
+    def test_validate_kriging_params_direct_call_invalid_radius(self):
+        """validate_kriging_params direct mode raises on invalid radius."""
+        with pytest.raises(CriticalValidationError):
+            validate_kriging_params(radiuses=(-1, 5, 3), max_neighbours=12)
 
 
 if __name__ == "__main__":

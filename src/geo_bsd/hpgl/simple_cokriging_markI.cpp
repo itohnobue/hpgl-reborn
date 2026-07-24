@@ -321,6 +321,12 @@ void simple_cokriging_markI(
 	print_param("Secondary variance", secondary_variance);
 	print_param("Correllation coef", correlation_coef);
 
+	// Range validation: correlation_coef must be in [-1, 1].
+	// Python-side validation exists but the C API bypasses it.
+	if (correlation_coef < -1.0 || correlation_coef > 1.0)
+		throw hpgl_exception("simple_cokriging_markI",
+			"correlation_coef must be in [-1, 1]");
+
 	cov_model_t cov(primary_cov_params);	
 
 	cross_cov_model_mark_i_t<cov_model_t> cross_cov(correlation_coef, secondary_variance, &cov);
@@ -366,6 +372,12 @@ void simple_cokriging_markII(
 	print_param("Primary mean", primary_mean);
 	print_param("Secondary mean", secondary_mean);	
 	print_param("Correllation coef", correlation_coef);
+
+	// Range validation: correlation_coef must be in [-1, 1].
+	// Python-side validation exists but the C API bypasses it.
+	if (correlation_coef < -1.0 || correlation_coef > 1.0)
+		throw hpgl_exception("simple_cokriging_markII",
+			"correlation_coef must be in [-1, 1]");
 
 	cov_model_t primary_cov(primary_cov_params);	
 	cov_model_t secondary_cov(secondary_cov_params);	

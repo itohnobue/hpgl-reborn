@@ -113,15 +113,21 @@ class SGSConfig:
                 f"SGSConfig: radiuses must have 3 values, "
                 f"got {len(self.radiuses)}"
             )
+        import math
+
         for i, r in enumerate(self.radiuses):
             if not isinstance(r, (int, float)):
                 raise TypeError(
                     f"SGSConfig: radiuses[{i}] must be a number, "
                     f"got {type(r).__name__}"
                 )
-            if r <= 0:
+            if math.isnan(r) or math.isinf(r):
                 raise ValueError(
-                    f"SGSConfig: radiuses[{i}] must be positive, got {r}"
+                    f"SGSConfig: radiuses[{i}] must be finite, got {r}"
+                )
+            if r < 0:
+                raise ValueError(
+                    f"SGSConfig: radiuses[{i}] must be non-negative, got {r}"
                 )
 
         # -- use_harddata --
@@ -209,15 +215,21 @@ class SISConfig:
                 f"SISConfig: radiuses must have 3 values, "
                 f"got {len(self.radiuses)}"
             )
+        import math
+
         for i, r in enumerate(self.radiuses):
             if not isinstance(r, (int, float)):
                 raise TypeError(
                     f"SISConfig: radiuses[{i}] must be a number, "
                     f"got {type(r).__name__}"
                 )
-            if r <= 0:
+            if math.isnan(r) or math.isinf(r):
                 raise ValueError(
-                    f"SISConfig: radiuses[{i}] must be positive, got {r}"
+                    f"SISConfig: radiuses[{i}] must be finite, got {r}"
+                )
+            if r < 0:
+                raise ValueError(
+                    f"SISConfig: radiuses[{i}] must be non-negative, got {r}"
                 )
 
         # -- use_harddata --

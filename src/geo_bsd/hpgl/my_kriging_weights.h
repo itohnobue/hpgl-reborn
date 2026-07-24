@@ -1,7 +1,6 @@
 #ifndef __MY_KRIGING_WEIGHTS_H__B6211BC7_74C1_4D96_AB05_286A62D0F003
 #define __MY_KRIGING_WEIGHTS_H__B6211BC7_74C1_4D96_AB05_286A62D0F003
 
-//#define HPGL_SOLVER
 #define LAPACK_SOLVER
 
 #include <cstdio>
@@ -22,7 +21,7 @@
 // SECTION 1: LAPACK Integration
 // LAPACK error handling, safe allocation helpers, and Fortran
 // interface (dpotrf_/dpotrs_) used by all weight calculators below.
-// Solver selection: #define LAPACK_SOLVER or HPGL_SOLVER at file top.
+// Solver selection: #define LAPACK_SOLVER at file top.
 // ====================================================================
 
 namespace hpgl
@@ -102,10 +101,6 @@ namespace hpgl
 #ifdef LAPACK_SOLVER
 		std::vector<double> B;          // 2*size: combined OK RHS buffer
 #endif
-#ifdef HPGL_SOLVER
-		std::vector<double> A_U;        // size²: upper Cholesky factor
-		std::vector<double> A_L;        // size²: lower Cholesky factor
-#endif
 	};
 
 	// ================================================================
@@ -115,7 +110,7 @@ namespace hpgl
 	//                          multiplier correction).
 	// corellogramed_weights_3 — Correlogram kriging (pre-transform
 	//                            covariance by sigma_i * sigma_j).
-	// Each function selects solver via #ifdef HPGL_SOLVER / LAPACK_SOLVER.
+	// Each function uses LAPACK_SOLVER (dpotrf_ / dpotrs_ with gauss_solve fallback).
 	// ================================================================
 
 	template<typename covariances_t, bool calc_variance, typename coord_t>
@@ -175,42 +170,6 @@ namespace hpgl
 		}
 
 		HPGL_LOG_SYSTEM(&A[0], &b[0], size);
-
-#ifdef HPGL_SOLVER
-
-		// std::cout << "HPGL SOLVER MATRIX SIZE: " << size << std::endl;
-
-		// INTERNAL
-
-		std::vector<double> A_U(size*size,0.0);
-		std::vector<double> A_L(size*size,0.0);
-
-		//bool system_solved = gauss_solve(&A[0], &b[0], &weights[0], size);	
-		bool system_solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
-		if (!system_solved) {
-			// Fallback: Cholesky failed, try gauss_solve
-			// (mirrors the LAPACK_SOLVER path fallback at lines 200-218)
-			system_solved = gauss_solve(&A[0], &b[0], &weights[0], size);
-			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-			// Compute SK variance on the fallback path
-			if (calc_variance) {
-				if (system_solved) {
-					double cr0 = covariances(center_coord, center_coord);
-					variance = cr0;
-					for (int i = 0; i < size; i++)
-						variance -= weights[i] * b2[i];
-					if (variance < 0) variance = 0;
-				} else {
-					variance = -1;
-				}
-			}
-			return system_solved;
-		}
-		cholesky_solve(&A_L[0], &A_U[0], &b[0], &weights[0], size);
-
-		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-
-#endif
 
 #ifdef LAPACK_SOLVER
 
@@ -308,33 +267,6 @@ namespace hpgl
 
 		HPGL_LOG_SYSTEM(&ws.A[0], &ws.b[0], size);
 
-#ifdef HPGL_SOLVER
-		ws.A_U.resize(size*size);
-		ws.A_L.resize(size*size);
-		bool system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
-		if (!system_solved) {
-			// Fallback: Cholesky failed, try gauss_solve
-			// (mirrors the LAPACK_SOLVER path fallback for the ws variant)
-			system_solved = gauss_solve(&ws.A[0], &ws.b[0], &weights[0], size);
-			HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-			// Compute SK variance on the fallback path
-			if (calc_variance) {
-				if (system_solved) {
-					double cr0 = covariances(center_coord, center_coord);
-					variance = cr0;
-					for (int i = 0; i < size; i++)
-						variance -= weights[i] * ws.b2[i];
-					if (variance < 0) variance = 0;
-				} else {
-					variance = -1;
-				}
-			}
-			return system_solved;
-		}
-		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &weights[0], size);
-		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-#endif
-
 #ifdef LAPACK_SOLVER
 		// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →
 		// (on success) dpotrs_.  weights[] receives the solution on success.
@@ -431,68 +363,8 @@ namespace hpgl
 		std::vector<double> ones_result(size, 1);
 		std::vector<double> sk_weights(size);
 
-#ifdef HPGL_SOLVER
-
-		// INTERNAL
-		std::vector<double> A_U(size*size,0.0);
-		std::vector<double> A_L(size*size,0.0);
-		
-		bool system_solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
-		if (!system_solved) {
-			// Fallback: Cholesky failed, try gauss_solve on both RHS
-			// (mirrors the LAPACK_SOLVER path fallback at lines 486-532)
-			// A_backup2 created BEFORE gauss_solve so it preserves the
-			// original matrix — gauss_solve modifies A in-place.
-			std::vector<double> A_backup2(A);
-			system_solved = gauss_solve(&A[0], &b[0], &sk_weights[0], size);
-			if (system_solved) {
-				system_solved = gauss_solve(&A_backup2[0], &ones[0], &ones_result[0], size);
-			}
-			// Compute OK weights from SK weights via Lagrange multiplier
-			double mu = 0.0;  // hoisted for variance computation below
-			if (system_solved) {
-				double SumSK = 0, SumOnes = 0;
-				for (int k = 0; k < size; k++) {
-					SumSK += sk_weights[k];
-					SumOnes += ones_result[k];
-				}
-				if (std::abs(SumOnes) < 1e-12) { system_solved = false; }
-				else {
-					mu = (SumSK - 1) / SumOnes;
-					if (std::abs(mu) > 1e10) { system_solved = false; }
-					else {
-						for (int k = 0; k < size; k++) {
-						weights[k] = sk_weights[k] - mu * ones_result[k];
-					}
-				}
-			}
-		}
-		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-			// Compute OK kriging variance on the fallback path (mirrors
-			// the non-fallback variance block at lines 548-567).  mu and
-			// weights are already computed above; b2 holds the original
-			// RHS values needed for the variance formula.
-			if (calc_variance) {
-				if (system_solved) {
-					double cr0 = covariances(center, center);
-					variance = cr0;
-					for (int i = 0; i < size; i++)
-						variance -= weights[i] * b2[i];
-					variance -= mu;
-					if (variance < 0) variance = 0;
-				} else {
-					variance = -1;
-				}
-			}
-			return system_solved;
-		}
-
-		cholesky_solve(&A_L[0], &A_U[0], &b[0], &sk_weights[0], size);	
-		cholesky_solve(&A_L[0], &A_U[0], &ones[0], &ones_result[0], size);	
-#endif
 
 #ifdef LAPACK_SOLVER
-
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription.
 		// Unified SPD solver for OK (nrhs=2): backup → dpotrf_ →
 		// (on fail) two gauss_solve calls for both RHS →
@@ -641,60 +513,6 @@ namespace hpgl
 			ws.ones[i] = 1.0;
 
 		bool system_solved = false;
-
-#ifdef HPGL_SOLVER
-		ws.A_U.resize(size*size);
-		ws.A_L.resize(size*size);
-
-		system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
-		if (!system_solved) {
-			// Fallback: Cholesky failed, try gauss_solve on both RHS
-			// (mirrors the LAPACK_SOLVER path fallback for the ws variant)
-			// A_backup2 created BEFORE gauss_solve so it preserves the
-			// original matrix — gauss_solve modifies ws.A in-place.
-			std::vector<double> A_backup2(ws.A.begin(), ws.A.begin() + matrix_size);
-			system_solved = gauss_solve(&ws.A[0], &ws.b[0], &ws.sk_weights[0], size);
-			if (system_solved) {
-				system_solved = gauss_solve(&A_backup2[0], &ws.ones[0], &ws.ones_result[0], size);
-			}
-			// Compute OK weights from SK weights via Lagrange multiplier
-			double mu = 0.0;  // hoisted for variance computation below
-			if (system_solved) {
-				double SumSK = 0, SumOnes = 0;
-				for (int k = 0; k < size; k++) {
-					SumSK += ws.sk_weights[k];
-					SumOnes += ws.ones_result[k];
-				}
-				if (std::abs(SumOnes) < 1e-12) { system_solved = false; }
-				else {
-					mu = (SumSK - 1) / SumOnes;
-					if (std::abs(mu) > 1e10) { system_solved = false; }
-					else {
-						for (int k = 0; k < size; k++) {
-						weights[k] = ws.sk_weights[k] - mu * ws.ones_result[k];
-					}
-				}
-			}
-		}
-		HPGL_LOG_SYSTEM_SOLUTION(system_solved, &weights[0], size);
-		// Compute OK kriging variance on the fallback path
-		if (calc_variance) {
-			if (system_solved) {
-				double cr0 = covariances(center, center);
-				variance = cr0;
-				for (int i = 0; i < size; i++)
-					variance -= weights[i] * ws.b2[i];
-				variance -= mu;
-				if (variance < 0) variance = 0;
-			} else {
-				variance = -1;
-			}
-		}
-		return system_solved;
-	}
-		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &ws.sk_weights[0], size);
-		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.ones[0], &ws.ones_result[0], size);
-#endif
 
 #ifdef LAPACK_SOLVER
 		// Unified SPD solver for OK (nrhs=2): backup → dpotrf_ →
@@ -877,24 +695,6 @@ namespace hpgl
 			b[i] = cov(coords[i], center) * (sigmas[i] * sigmac);
 		}
 
-#ifdef HPGL_SOLVER
-
-		// INTERNAL
-		std::vector<double> A_U(size*size,0.0);
-		std::vector<double> A_L(size*size,0.0);
-		
-		//bool system_solved = gauss_solve(&A[0], &b[0], &weights[0], size);	
-		bool system_solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
-		if (!system_solved) {
-			// Fallback: Cholesky failed, try gauss_solve
-			// (mirrors the LAPACK_SOLVER path fallback)
-			system_solved = gauss_solve(&A[0], &b[0], &weights[0], size);
-			return system_solved;
-		}
-		cholesky_solve(&A_L[0], &A_U[0], &b[0], &weights[0], size);
-
-#endif
-
 #ifdef LAPACK_SOLVER
 
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription.
@@ -1021,20 +821,6 @@ namespace hpgl
 		}
 
 		bool system_solved = false;
-
-#ifdef HPGL_SOLVER
-		ws.A_U.resize(size*size);
-		ws.A_L.resize(size*size);
-
-		system_solved = cholesky_decomposition(&ws.A[0], &ws.A_U[0], &ws.A_L[0], size);
-		if (!system_solved) {
-			// Fallback: Cholesky failed, try gauss_solve
-			// (mirrors the LAPACK_SOLVER path fallback)
-			system_solved = gauss_solve(&ws.A[0], &ws.b[0], &weights[0], size);
-			return system_solved;
-		}
-		cholesky_solve(&ws.A_L[0], &ws.A_U[0], &ws.b[0], &weights[0], size);
-#endif
 
 #ifdef LAPACK_SOLVER
 		// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →

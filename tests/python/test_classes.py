@@ -69,9 +69,33 @@ class TestSugarboxGrid:
         assert grid.z == 100
 
     def test_dimensions_are_integers(self):
-        """Test that dimensions are stored as integers"""
+        """Test that dimensions are stored as integers (positive case).
+
+        SugarboxGrid constructor type hints declare ``int`` parameters. This
+        test verifies the expected contract: integer dimensions are preserved
+        as integers and the grid validates correctly.
+        """
+        grid = SugarboxGrid(x=10, y=20, z=5)
+        assert isinstance(grid.x, int)
+        assert isinstance(grid.y, int)
+        assert isinstance(grid.z, int)
+        assert grid.x == 10
+        assert grid.y == 20
+        assert grid.z == 5
+
+    def test_dimensions_float_input_behavior(self):
+        """Document that float grid dimensions pass validation silently.
+
+        Python does not enforce type hints at runtime, so float arguments
+        reach ``validate_grid_dimensions`` which casts via ``int()`` for
+        the size check (truncating) but stores the original float value.
+        This is a documentation-code gap: the API docs say ``int`` but the
+        implementation silently accepts ``float``.
+        """
         grid = SugarboxGrid(x=10.5, y=20.7, z=5.3)
-        # Python allows float to int assignment - verify values are stored
+        assert not isinstance(grid.x, int), "Float dimensions should be stored as-is"
+        assert not isinstance(grid.y, int)
+        assert not isinstance(grid.z, int)
         assert grid.x == 10.5
         assert grid.y == 20.7
         assert grid.z == 5.3

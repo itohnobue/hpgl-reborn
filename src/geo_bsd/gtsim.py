@@ -9,7 +9,7 @@ import numpy as np
 
 from .cdf import calc_cdf
 from .config import GTSIMConfig
-from .geo import simple_kriging
+from .geo import ContProperty, simple_kriging
 from .sgs import sgs_simulation
 
 logger = logging.getLogger(__name__)
@@ -52,9 +52,12 @@ def _norm_ppf(p):
     numpy.ndarray
         Standard normal quantiles returning Φ⁻¹(p).
     """
+    p = np.asarray(p, dtype=np.float64)
+    if np.any(~np.isfinite(p)):
+        raise ValueError("_norm_ppf: input contains NaN or Inf values")
     with np.errstate(divide="ignore", invalid="ignore"):
-        # Force a copy and clip to avoid log(0) and log(negative)
-        p = np.asarray(p, dtype=np.float64).clip(1e-15, 1.0 - 1e-15)
+        # Clip to avoid log(0) and log(negative)
+        p = p.clip(1e-15, 1.0 - 1e-15)
         # Split at 0.5 for numerical stability
         q = np.where(p > 0.5, 1.0 - p, p)
         upper = p > 0.5
@@ -106,6 +109,8 @@ def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
     # NOTE: modifies pk_prop.data in-place via pk_flat[:] assignment.
     # Uses ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
     pk_flat = pk_prop.data.ravel(order="K")
+    if np.any(~np.isfinite(pk_flat)):
+        raise ValueError("tk_calculation: pk_prop.data contains NaN or Inf values")
     # Compute inverse normal CDF: t = mean - std_dev * Φ⁻¹(p)
     z = _norm_ppf(pk_flat)
     pk_flat[:] = mean - std_dev * z
@@ -192,7 +197,24 @@ def gtsim_2ind(
         pk_prop = simple_kriging(prop, grid, **sk_params)
         logger.info("Done.")
     else:
+        if not isinstance(pk_prop, ContProperty):
+            raise TypeError(
+                "gtsim_2ind: pk_prop must be ContProperty, "
+                f"got {type(pk_prop).__name__}"
+            )
         logger.info("Using provided pk_prop.")
+
+    # Validate pk_prop regardless of source (SK or user-provided).
+    if not isinstance(pk_prop, ContProperty):
+        raise TypeError(
+            "gtsim_2ind: pk_prop must be ContProperty, "
+            f"got {type(pk_prop).__name__}"
+        )
+    pk_flat = pk_prop.data.ravel(order="K")
+    if np.any(~np.isfinite(pk_flat)):
+        raise ValueError("gtsim_2ind: pk_prop.data contains NaN or Inf values")
+    if np.any((pk_flat < 0.0) | (pk_flat > 1.0)):
+        raise ValueError("gtsim_2ind: pk_prop.data values must be in [0, 1]")
 
     # 2. calculate tk_prop
     # t0_prop = 0
@@ -244,9 +266,14 @@ def gtsim_2ind(
     # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
     prop1_flat = prop1.data.ravel(order="K")
     tk_flat = threshold_data.ravel(order="K")
-    # Vectorized thresholding. IEEE 754 NaN fails both >= and <, so
-    # NaN passes through to the ~mask branch and becomes 0 — this
-    # fixes the old for-loop which silently preserved NaN unchanged.
+    # Detect NaN/Inf early: IEEE 754 NaN fails both >= and <, silently
+    # landing in the ~mask branch where it becomes 0 — indistinguishable
+    # from a legitimate output 0. Reject NaN input to preserve correctness.
+    if np.any(~np.isfinite(prop1_flat)):
+        raise RuntimeError("gtsim_2ind: NaN or Inf in SGS output (prop1.data)")
+    if np.any(~np.isfinite(tk_flat)):
+        raise RuntimeError("gtsim_2ind: NaN or Inf in threshold data")
+    # Vectorized thresholding.
     mask = prop1_flat >= tk_flat
     prop1_flat[mask] = 1
     prop1_flat[~mask] = 0

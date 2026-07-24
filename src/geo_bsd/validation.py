@@ -954,7 +954,9 @@ def validate_simulation_params(*args, **kwargs):
     if seed is not None:
         ParameterValidator.validate_seed(seed)
     if min_neighbours is not None:
-        ParameterValidator.validate_min_neighbors(min_neighbours, max_neighbours or 0)
+        ParameterValidator.validate_min_neighbors(
+            min_neighbours, max_neighbours if max_neighbours is not None else 12
+        )
 
 
 def validate_file_params(*args, **kwargs):

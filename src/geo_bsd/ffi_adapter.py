@@ -98,6 +98,13 @@ _error_snapshot_lock = threading.Lock()
 # CFUNCTYPE/global state.
 _hpgl_call_lock = threading.Lock()
 
+# Note: cross-call error detection (distinguishing a re-appearing error
+# from a persistent stale one across multiple guard invocations) is not
+# yet implemented — the C++ DLL does not expose a clear-error API that
+# would be needed.  The snapshot-check suppression (err == snapshot
+# within a single guard window) is functional and sufficient for
+# single-call isolation.
+
 
 def _snapshot_hpgl_error():
     """Take a snapshot of the current HPGL C++ error state.
@@ -137,7 +144,7 @@ def _check_hpgl_error(context: str = "") -> None:
             snapshot = getattr(_error_local, "_hpgl_error_snapshot", None)
             if err == snapshot:
                 # Error unchanged from pre-call snapshot — C++ call did
-                # not produce a new error. Always suppress stale errors.
+                # not produce a new error. Suppress stale error.
                 return
             # Genuine new error (different from pre-call snapshot).
             # Update the snapshot BEFORE raising so the thread-local
@@ -297,6 +304,18 @@ def create_cont_masked_array(prop, grid):
         ``_HPGL_CONT_MASKED_ARRAY`` with pinned array references.
     """
     if grid is None:
+        # Validate that data and mask have compatible element strides.
+        # C++ indexes both arrays with the same stride values, so element
+        # strides (byte strides / itemsize) must match.  Byte strides
+        # naturally differ across float32 (4B) and uint8 (1B) even when
+        # the arrays have the same shape and layout.
+        data_es = tuple(s // prop.data.itemsize for s in prop.data.strides)
+        mask_es = tuple(s // prop.mask.itemsize for s in prop.mask.strides)
+        if data_es != mask_es:
+            raise ValueError(
+                f"create_cont_masked_array: data element strides {data_es} "
+                f"do not match mask element strides {mask_es}"
+            )
         sh = _create_hpgl_shape(prop.data.shape, __get_strides(prop.data))
     else:
         # Use actual NumPy strides if array is 3D, otherwise compute
@@ -353,7 +372,16 @@ def create_ind_masked_array(prop, grid):
     """
     if grid is None:
         sh = _create_hpgl_shape(prop.data.shape, __get_strides(prop.data))
-        assert prop.data.strides == prop.mask.strides
+        # Validate that data and mask have compatible element strides.
+        # C++ indexes both arrays with the same stride values, so element
+        # strides (byte strides / itemsize) must match.
+        data_es = tuple(s // prop.data.itemsize for s in prop.data.strides)
+        mask_es = tuple(s // prop.mask.itemsize for s in prop.mask.strides)
+        if data_es != mask_es:
+            raise ValueError(
+                f"create_ind_masked_array: data element strides {data_es} "
+                f"do not match mask element strides {mask_es}"
+            )
     else:
         # Use actual NumPy strides if array is 3D, otherwise compute
         # strides from grid.

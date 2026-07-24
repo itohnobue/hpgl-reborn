@@ -116,6 +116,30 @@ static void validate_shape_dims_or_throw(hpgl_shape_t * shape, const char * cont
 	}
 }
 
+/// Validates simulation_mask shape matches grid shape when mask is provided.
+/// Mismatched shapes cause out-of-bounds array access in simulation kernels.
+static void validate_simulation_mask_shape_or_throw(
+	hpgl_ubyte_array_t * simulation_mask,
+	hpgl_shape_t * grid_shape,
+	const char * context)
+{
+	if (simulation_mask != nullptr && simulation_mask->m_data != nullptr)
+	{
+		for (int i = 0; i < 3; ++i)
+		{
+			if (simulation_mask->m_shape.m_data[i] != grid_shape->m_data[i])
+			{
+				std::ostringstream oss;
+				oss << context << ": simulation_mask shape[" << i << "] ("
+				    << simulation_mask->m_shape.m_data[i]
+				    << ") != grid shape[" << i << "] ("
+				    << grid_shape->m_data[i] << ")";
+				throw hpgl::hpgl_exception(context, oss.str());
+			}
+		}
+	}
+}
+
 // Thread-local storage for kriging statistics — populated by the
 // kriging implementation functions (ordinary_kriging, simple_kriging,
 // lvm_kriging) and retrieved via hpgl_get_kriging_stats().
@@ -799,6 +823,12 @@ hpgl_sgs_simulation(
 
 	validate_shape_dims_or_throw(&data->m_shape, "sgs_simulation");
 
+	// Validate m_data pointer before constructing property array.
+	// The constructor stores nullptr silently; later operator[] access
+	// triggers HPGL_CHECK→abort() which Python cannot catch.
+	if (data->m_data == nullptr)
+		throw hpgl_exception("hpgl_sgs_simulation", "Null data pointer in cont_masked_array");
+
 	int size = get_shape_volume(&(data->m_shape));
 	validate_shape_volume_or_throw(size, "sgs_simulation");
 	cont_property_array_t prop(data->m_data, data->m_mask, size);
@@ -813,6 +843,11 @@ hpgl_sgs_simulation(
 		sgs_p.set_mean(*mean);
 	sgs_p.m_lvm = 0;
 	sgs_p.m_mean_kind = mean != 0 ? mean_kind_t::e_mean_stationary : mean_kind_t::e_mean_stationary_auto;
+
+	// Validate simulation mask shape matches grid shape to prevent
+	// out-of-bounds memory access in the simulation kernel.
+	validate_simulation_mask_shape_or_throw(simulation_mask, &data->m_shape, "hpgl_sgs_simulation");
+
 	hpgl::sequential_gaussian_simulation(
 			grid,
 		    sgs_p,
@@ -840,6 +875,12 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 
 	validate_shape_dims_or_throw(&data->m_shape, "sgs_lvm_simulation");
 	validate_shape_dims_or_throw(&means->m_shape, "sgs_lvm_simulation means");
+
+	// Validate m_data pointer before constructing property array.
+	// The constructor stores nullptr silently; later operator[] access
+	// triggers HPGL_CHECK→abort() which Python cannot catch.
+	if (data->m_data == nullptr)
+		throw hpgl_exception("hpgl_sgs_lvm_simulation", "Null data pointer in cont_masked_array");
 
 	int size = get_shape_volume(&(data->m_shape));
 	validate_shape_volume_or_throw(size, "sgs_lvm_simulation");
@@ -871,6 +912,10 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 
 	sgs_p.m_lvm = means->m_data;
 	sgs_p.m_mean_kind = mean_kind_t::e_mean_varying;
+
+	// Validate simulation mask shape matches grid shape to prevent
+	// out-of-bounds memory access in the simulation kernel.
+	validate_simulation_mask_shape_or_throw(simulation_mask, &data->m_shape, "hpgl_sgs_lvm_simulation");
 
 	hpgl::sequential_gaussian_simulation_lvm(
 			grid,
@@ -932,6 +977,12 @@ HPGL_API void hpgl_median_ik(
 		throw hpgl_exception("hpgl_median_ik",
 			"indicator_count must be 2 (median IK is defined for binary indicators)");
 
+	// Update out_data->m_indicator_count to match the actual indicator count
+	// used (2).  Downstream consumers (e.g. write_gslib_byte_property) read
+	// m_indicator_count from the struct, and a stale value would produce
+	// wrong output.
+	out_data->m_indicator_count = 2;
+
 	indicator_property_array_t in_prop(
 			in_data->m_data,
 			in_data->m_mask,
@@ -981,6 +1032,12 @@ hpgl_sis_simulation(
 		throw hpgl_exception("hpgl_sis_simulation",
 			"indicator_count must be positive");
 
+	// Validate m_data pointer before constructing property array.
+	// The constructor stores nullptr silently; later operator[] access
+	// triggers HPGL_CHECK→abort() which Python cannot catch.
+	if (data->m_data == nullptr)
+		throw hpgl_exception("hpgl_sis_simulation", "Null data pointer in ind_masked_array");
+
 	int size = get_shape_volume(&data->m_shape);
 	validate_shape_volume_or_throw(size, "sis_simulation");
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
@@ -992,6 +1049,10 @@ hpgl_sis_simulation(
 	init_sis_params(params, indicator_count, &ikp);
 
 	progress_reporter_t rep(size);
+
+	// Validate simulation mask shape matches grid shape to prevent
+	// out-of-bounds memory access in the simulation kernel.
+	validate_simulation_mask_shape_or_throw(simulation_mask, &data->m_shape, "hpgl_sis_simulation");
 
 	sequential_indicator_simulation(
 			prop,
@@ -1037,11 +1098,21 @@ hpgl_sis_simulation_lvm(
 
 	int size = get_shape_volume(&data->m_shape);
 	validate_shape_volume_or_throw(size, "sis_simulation_lvm");
+
+	// Validate indicator_count against reasonable range BEFORE expensive
+	// grid/params initialization to fail fast on invalid input.
+	if (indicator_count <= 0 || indicator_count > 1000000)
+		throw hpgl_exception("hpgl_sis_simulation_lvm",
+			"indicator_count out of reasonable range [1, 1000000]");
+
+	// Validate m_data pointer before constructing property array.
+	// The constructor stores nullptr silently; later operator[] access
+	// triggers HPGL_CHECK→abort() which Python cannot catch.
+	if (data->m_data == nullptr)
+		throw hpgl_exception("hpgl_sis_simulation_lvm", "Null data pointer in ind_masked_array");
+
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
 
-	// NOTE: indicator_count is validated below against the reasonable range
-	// [0, 1000000] in all builds to prevent out-of-bounds access from direct
-	// C callers. The Python caller (hpgl_wrap.py) also enforces this contract.
 	sugarbox_grid_t grid;
 	init_grid(grid, &data->m_shape);
 
@@ -1051,13 +1122,8 @@ hpgl_sis_simulation_lvm(
 	progress_reporter_t rep(size);
 
 	// Build means array from mean_data structs.
-	// NOTE: indicator_count is validated against the reasonable range [0, 1000000]
-	// below in all builds to prevent out-of-bounds access from direct C callers.
 	std::vector<const mean_t *> means;
 
-	if (indicator_count <= 0 || indicator_count > 1000000)
-		throw hpgl_exception("hpgl_sis_simulation_lvm",
-			"indicator_count out of reasonable range [1, 1000000]");
 	for (int i = 0; i < indicator_count; ++i)
 	{
 		if (mean_data[i].m_data == nullptr)
@@ -1080,6 +1146,10 @@ hpgl_sis_simulation_lvm(
 		}
 		means.push_back(mean_data[i].m_data);
 	}
+
+	// Validate simulation mask shape matches grid shape to prevent
+	// out-of-bounds memory access in the simulation kernel.
+	validate_simulation_mask_shape_or_throw(simulation_mask, &data->m_shape, "hpgl_sis_simulation_lvm");
 
 	sequential_indicator_simulation_lvm(
 			prop,

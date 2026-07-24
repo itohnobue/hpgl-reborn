@@ -229,10 +229,10 @@ namespace hpgl
 				report.next_lap(local_lap_count);
 			}
 		}
-#ifdef _OPENMP
-		if (report.cancelled())
-			#pragma omp cancel for
-#endif
+		// NOTE: No #pragma omp cancel for here — the for-loop worksharing
+		// construct has already ended, and OMP §2.17.1 requires the cancel
+		// directive to appear within the worksharing construct it targets.
+		// Cancellation is handled inside the loop body at lines 216-222.
 	}
 
 		// Restore BLAS thread count after parallel region completes

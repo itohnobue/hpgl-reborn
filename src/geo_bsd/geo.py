@@ -4,6 +4,7 @@ import functools
 import logging
 import math
 import os
+from typing import Any
 
 import numpy
 
@@ -87,6 +88,12 @@ _progress_handler = None
 # Without these, the caller dropping param would create a dangling pointer.
 _output_handler_param = None
 _progress_handler_param = None
+# Deferred cache of old CFUNCTYPE handler+param references to prevent
+# use-after-free in concurrent kriging calls. Kriging functions do NOT
+# hold _hpgl_call_lock, so an old CFUNCTYPE trampoline freed while C++
+# still uses it causes a crash. Keeping old handlers alive here ensures
+# the trampoline survives until replaced again on a subsequent call.
+_old_handler_refs: list[tuple[Any, Any]] = []
 
 
 class ContProperty:
@@ -112,6 +119,28 @@ class ContProperty:
         Mask array (uint8, Fortran order).
     """
 
+    @property
+    def data(self):
+        """Property values (float32, Fortran order)."""
+        return self._data
+
+    @data.setter
+    def data(self, val):
+        arr = numpy.require(val, "float32", "F")
+        checkFWA(arr)
+        self._data = arr
+
+    @property
+    def mask(self):
+        """Mask array (uint8, Fortran order)."""
+        return self._mask
+
+    @mask.setter
+    def mask(self, val):
+        arr = numpy.require(val, "uint8", "F")
+        checkFWA(arr)
+        self._mask = arr
+
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray):
         # Use asarray() so lists/tuples are supported; ndim check must
         # happen before require() which may change ndim.
@@ -122,8 +151,10 @@ class ContProperty:
             )
         if not numpy.all(numpy.isfinite(ndarray)):
             raise ValueError("ContProperty data contains NaN or Inf values")
-        self.data = numpy.require(data, "float32", "F")
-        self.mask = numpy.require(mask, "uint8", "F")
+        # Bypass property setters: validation is already done above,
+        # and self.validate() below covers F/W/A checks.
+        object.__setattr__(self, '_data', numpy.require(data, "float32", "F"))
+        object.__setattr__(self, '_mask', numpy.require(mask, "uint8", "F"))
         self.validate()
 
     def validate(self):
@@ -183,6 +214,28 @@ class IndProperty:
         Number of indicator categories.
     """
 
+    @property
+    def data(self):
+        """Indicator values (uint8, Fortran order)."""
+        return self._data
+
+    @data.setter
+    def data(self, val):
+        arr = numpy.require(val, "uint8", "F")
+        checkFWA(arr)
+        self._data = arr
+
+    @property
+    def mask(self):
+        """Mask array (uint8, Fortran order)."""
+        return self._mask
+
+    @mask.setter
+    def mask(self, val):
+        arr = numpy.require(val, "uint8", "F")
+        checkFWA(arr)
+        self._mask = arr
+
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray, indicator_count: int):
         if not 1 <= indicator_count <= 255:
             raise ValueError(
@@ -198,10 +251,12 @@ class IndProperty:
         # Validate NaN/Inf before uint8 conversion which silently maps NaN→0.
         if not numpy.all(numpy.isfinite(numpy.asarray(ndarray, dtype=float))):
             raise ValueError("IndProperty data contains NaN or Inf values")
-        self.data = numpy.require(data, "uint8", "F")
-        self.mask = numpy.require(mask, "uint8", "F")
+        # Bypass property setters: validation is already done above,
+        # and self.validate() below covers F/W/A checks.
+        object.__setattr__(self, '_data', numpy.require(data, "uint8", "F"))
+        object.__setattr__(self, '_mask', numpy.require(mask, "uint8", "F"))
         self.indicator_count = indicator_count
-        if numpy.sum(numpy.bitwise_and((mask > 0), (data >= indicator_count))) > 0:
+        if numpy.sum(numpy.bitwise_and((self.mask > 0), (self.data >= indicator_count))) > 0:
             raise RuntimeError(
                 "Property contains some indicators outside of [0..%s] range."
                 % (indicator_count - 1)
@@ -683,6 +738,37 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
             )
 
 
+def _validate_and_reshape_fallback(result, size, func_name):
+    """Reshape slow-parser fallback result to match expected grid dimensions.
+
+    When the fast C++ reader fails, the slow parser returns flat 1D arrays.
+    This function validates that the element count matches the expected grid
+    size and reshapes the result to 3D Fortran-order arrays.
+
+    Args:
+        result: A ``ContProperty`` or ``IndProperty`` from the slow parser.
+        size: Tuple ``(nx, ny, nz)`` or a scalar element count.
+        func_name: Name of the calling function for error messages.
+
+    Raises:
+        RuntimeError: If the slow parser read a different number of elements
+            than expected from the size parameter.
+    """
+    if isinstance(size, (tuple, list)) and len(size) == 3:
+        total = size[0] * size[1] * size[2]
+    else:
+        total = size
+    if result.data.size != total:
+        raise RuntimeError(
+            f"{func_name}: Slow parser read {result.data.size} elements, "
+            f"but expected {total} elements. "
+            f"The file may be corrupted or the size parameter is incorrect."
+        )
+    if isinstance(size, (tuple, list)) and len(size) == 3:
+        result.data = result.data.reshape((size[0], size[1], size[2]), order="F")
+        result.mask = result.mask.reshape((size[0], size[1], size[2]), order="F")
+
+
 def load_cont_property(filename, undefined_value, size=None):
     """Load a continuous property from an INC-format file.
 
@@ -739,13 +825,9 @@ def load_cont_property(filename, undefined_value, size=None):
                 "Python parser. C++ error: %s",
                 e,
             )
-            logger.warning(
-                "load_cont_property: Falling back to slow Python parser which "
-                "ignores the 'size' parameter (%s). The result may have "
-                "geometry-mismatched dimensions. Verify output data shape.",
-                size,
-            )
-            return _load_prop_cont_slow(safe_path, undefined_value)
+            result = _load_prop_cont_slow(safe_path, undefined_value)
+            _validate_and_reshape_fallback(result, size, "load_cont_property")
+            return result
 
 
 def read_inc_file_float(filename, undefined_value, size):
@@ -876,13 +958,9 @@ def load_ind_property(filename, undefined_value, indicator_values, size=None):
                 "Python parser. C++ error: %s",
                 e,
             )
-            logger.warning(
-                "load_ind_property: Falling back to slow Python parser which "
-                "ignores the 'size' parameter (%s). The result may have "
-                "geometry-mismatched dimensions. Verify output data shape.",
-                size,
-            )
-            return _load_prop_ind_slow(safe_path, undefined_value, indicator_values)
+            result = _load_prop_ind_slow(safe_path, undefined_value, indicator_values)
+            _validate_and_reshape_fallback(result, size, "load_ind_property")
+            return result
 
 
 def set_thread_num(num):
@@ -1030,6 +1108,16 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
 
     ParameterValidator.validate_property_type(prop, ContProperty, "ordinary_kriging")
+
+    # Validate property data size against grid
+    if prop.data.size == 0:
+        raise ValueError("ordinary_kriging: prop.data is empty")
+    expected_size = grid.x * grid.y * grid.z
+    if prop.data.size != expected_size:
+        raise ValueError(
+            f"ordinary_kriging: prop.data size {prop.data.size} does not match "
+            f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
+        )
 
     if not numpy.all(numpy.isfinite(prop.data)):
         raise ValueError("ordinary_kriging: prop.data contains NaN or Inf")
@@ -1490,6 +1578,12 @@ def simple_cokriging_markII(
                     f"simple_cokriging_markII: {label}_data missing required key '{key}'",
                     f"{label}_data",
                 )
+        if not isinstance(d["data"], ContProperty):
+            raise validation.CriticalValidationError(
+                f"simple_cokriging_markII: {label}_data['data'] must be a ContProperty, "
+                f"got {type(d['data']).__name__}",
+                f"{label}_data.data",
+            )
 
     # Validate both covariance models
     for _label, d in [("primary", primary_data), ("secondary", secondary_data)]:
@@ -1704,9 +1798,14 @@ def set_output_handler(handler, param):
             _h = new_h
             _output_handler_param = param
             call_set_output_handler(new_h, param)
-            # old_h / old_param go out of scope after the C++ atomic store
-            # has completed, preventing use-after-free.
-            del old_h, old_param
+            # Hold old handler references in deferred cache to prevent
+            # CFUNCTYPE trampoline use-after-free in concurrent kriging
+            # calls. Kriging functions do NOT hold _hpgl_call_lock, so
+            # the old CFUNCTYPE could still be invoked by C++ on another
+            # thread. Deferring deletion keeps the trampoline alive.
+            _old_handler_refs.append((old_h, old_param))
+            if len(_old_handler_refs) > 4:
+                _old_handler_refs.pop(0)
     finally:
         _hpgl_call_lock.release()
 
@@ -1757,9 +1856,12 @@ def set_progress_handler(handler, param):
             _progress_handler = new_h
             _progress_handler_param = param
             call_set_progress_handler(new_h, param)
-            # old_h / old_param go out of scope after the C++ atomic store
-            # has completed, preventing use-after-free.
-            del old_h, old_param
+            # Hold old handler references in deferred cache to prevent
+            # CFUNCTYPE trampoline use-after-free in concurrent kriging
+            # calls (same reasoning as set_output_handler).
+            _old_handler_refs.append((old_h, old_param))
+            if len(_old_handler_refs) > 4:
+                _old_handler_refs.pop(0)
     finally:
         _hpgl_call_lock.release()
 

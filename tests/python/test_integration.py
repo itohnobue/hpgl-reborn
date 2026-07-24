@@ -57,11 +57,26 @@ class TestWorkflowIntegration:
         assert not np.any(np.isinf(kriged.data.astype("float64")))
         assert kriged.data.shape == (500,)
 
-        # Use kriged result for simulation
-        cdf_data = CdfData(
-            np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype="float32"),
-            np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32"),
-        )
+        # Use kriged result for simulation with CDF derived from the actual data.
+        # Fixes I2-F23: the previous CDF was artificial (uniform [0,25,50,75,100])
+        # and could not detect normalization bugs — a CDF mismatched with the
+        # data distribution produces silently wrong simulation output.
+        kriged_values = kriged.data[mask > 0].astype("float64")
+        if len(kriged_values) > 0:
+            # Derive CDF values from kriged data percentiles
+            cdf_values = np.percentile(
+                kriged_values, np.linspace(0, 100, 5)
+            ).astype("float32")
+            cdf_probs = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32")
+        else:
+            cdf_values = np.array([0.0, 50.0, 100.0], dtype="float32")
+            cdf_probs = np.array([0.0, 0.5, 1.0], dtype="float32")
+        cdf_data = CdfData(cdf_values, cdf_probs)
+
+        # Verify CDF normalization is correct
+        assert cdf_data.probs[0] == 0.0, "CDF must start at probability 0"
+        assert cdf_data.probs[-1] == 1.0, "CDF must end at probability 1"
+        assert np.all(np.diff(cdf_data.probs) >= 0), "CDF probs must be monotonic"
 
         sim_result = sgs_simulation(
             prop=kriged,

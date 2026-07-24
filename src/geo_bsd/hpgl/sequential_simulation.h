@@ -63,18 +63,29 @@ namespace hpgl
 		report.start();
 		node_index_t node;
 		kriging_ws_t<cont_value_t, sugarbox_location_t> ws;
+		unsigned long kriging_failures = 0;
+		unsigned long kriging_skipped = 0;
 		for (node_index_t counter = 0, counter_end = property.size(); counter < counter_end; ++counter, report.next_lap())		
 		{
 			node = path_gen.next();
 			if(property.is_informed(node)) 
+			{
+				++kriging_skipped;
 				continue;
+			}
 
 			// Bounds-guard: validate node index before mask access
 			if (node < 0 || node >= property.size())
+			{
+				++kriging_skipped;
 				continue;
+			}
 
 			if (mask[node] != 1)
+			{
+				++kriging_skipped;
 				continue;
+			}
 
 			double variance = 0.0;						
 			sugarbox_location_t loc = grid[node];			
@@ -82,6 +93,9 @@ namespace hpgl
 			cont_value_t mean = 0.0f;
 			ki_result_t ki_result = kriging_interpolation_ws(property, is_informed_predicate_t<cont_property_array_t>(property), node, pcov, mp, 
 				neighbour_lookup, weight_calculator_sgs, mean, variance, ws);			
+
+			if (ki_result != ki_result_t::KI_SUCCESS)
+				++kriging_failures;
 
 			double value = ki_result == ki_result_t::KI_SUCCESS
 				? sample(gen, gaussian_cdf_t(mean, variance))
@@ -91,6 +105,13 @@ namespace hpgl
 			//neighbour_lookup.add_node(node);
 		}
 		report.stop();
+		if (kriging_failures > 0)
+		{
+			fprintf(stderr,
+				"HPGL: SGS kriging failures: %lu nodes fell back to marginal mean (of %lu total, %lu skipped).\n",
+				kriging_failures, static_cast<unsigned long>(property.size()),
+				kriging_skipped);
+		}
 		{
 			std::ostringstream oss;
 			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";
@@ -134,11 +155,16 @@ namespace hpgl
 		report.start();
 		node_index_t node;
 		kriging_ws_t<cont_value_t, sugarbox_location_t> ws;
+		unsigned long kriging_failures = 0;
+		unsigned long kriging_skipped = 0;
 		for (node_index_t counter = 0, counter_end = points_indexes.size(); counter < counter_end; ++counter)		
 		{
 			node = points_indexes[path_gen.next()];
 			if(property.is_informed(node)) 
+			{
+				++kriging_skipped;
 				continue;
+			}
 
 			double variance = 0.0;						
 			sugarbox_location_t loc = grid[node];			
@@ -146,6 +172,9 @@ namespace hpgl
 			cont_value_t mean = 0.0f;
 			ki_result_t ki_result = kriging_interpolation_ws(property, is_informed_predicate_t<cont_property_array_t>(property), node, pcov, mp, 
 				neighbour_lookup, weight_calculator_sgs, mean, variance, ws);			
+
+			if (ki_result != KI_SUCCESS)
+				++kriging_failures;
 
 			double value = ki_result == KI_SUCCESS 
 				? sample(gen, gaussian_cdf_t(mean, variance))
@@ -156,6 +185,13 @@ namespace hpgl
 			report.next_lap();
 		}
 		report.stop();
+		if (kriging_failures > 0)
+		{
+			fprintf(stderr,
+				"HPGL: SGS (in_points) kriging failures: %lu nodes fell back to marginal mean (of %lu total, %lu skipped).\n",
+				kriging_failures, static_cast<unsigned long>(points_indexes.size()),
+				kriging_skipped);
+		}
 		{
 			std::ostringstream oss;
 			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";

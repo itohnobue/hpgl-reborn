@@ -167,7 +167,10 @@ namespace hpgl
 		
 		double gaussian(double h)const
 		{
-			if(h < 0.0001)
+			// Range-relative near-zero threshold: prevents unit-dependent
+			// nugget-blind zone at micro-scales and overflow at macro-scales.
+			double near_zero = 1e-5 * m_params.m_ranges[0];
+			if(h < near_zero)
 			{
 				return m_params.m_sill;
 			}
@@ -179,8 +182,10 @@ namespace hpgl
 
 		double exponential(double h)const
 		{
-
-			if(h < 0.0001)
+			// Range-relative near-zero threshold: prevents unit-dependent
+			// nugget-blind zone at micro-scales and overflow at macro-scales.
+			double near_zero = 1e-5 * m_params.m_ranges[0];
+			if(h < near_zero)
 			{
 				return m_params.m_sill;
 			}
@@ -192,7 +197,10 @@ namespace hpgl
 
 		double spherical(double h)const
 		{
-			if(h < 0.0001)
+			// Range-relative near-zero threshold: prevents unit-dependent
+			// nugget-blind zone at micro-scales and overflow at macro-scales.
+			double near_zero = 1e-5 * m_params.m_ranges[0];
+			if(h < near_zero)
 			{
 				return m_params.m_sill;
 			}
