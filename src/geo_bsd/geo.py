@@ -1146,6 +1146,7 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
 
     inp = _create_hpgl_cont_masked_array(prop, grid)
     outp = _create_hpgl_cont_masked_array(out_prop, grid)
+    _last_kriging_stats = None
     call_ordinary_kriging(inp, okp, outp)
 
     try:
@@ -1248,6 +1249,7 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
 
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
+    _last_kriging_stats = None
     call_simple_kriging(
         prop.data, prop.mask, sh, skp, out_prop[0], out_prop[1], sh
     )
@@ -1360,6 +1362,7 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
+    _last_kriging_stats = None
     call_lvm_kriging(
         prop.data,
         prop.mask,
@@ -1470,6 +1473,8 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
     call_median_ik(inp, miksp, outp)
+    global _last_kriging_stats
+    _last_kriging_stats = None
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1545,6 +1550,8 @@ def indicator_kriging(prop, grid, data, marginal_probs):
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
     params = __create_hpgl_ik_params(data, len(data), False, marginal_probs)
     call_indicator_kriging(inp, outp, params, len(data))
+    global _last_kriging_stats
+    _last_kriging_stats = None
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1639,6 +1646,8 @@ def simple_cokriging_markI(
         correlation_coef=correlation_coef,
     )
     call_simple_cokriging_mark1(inp, sec, params, outp)
+    global _last_kriging_stats
+    _last_kriging_stats = None
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1734,6 +1743,8 @@ def simple_cokriging_markII(
         correlation_coef=correlation_coef,
     )
     call_simple_cokriging_mark2(inp, sec, params, outp)
+    global _last_kriging_stats
+    _last_kriging_stats = None
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
