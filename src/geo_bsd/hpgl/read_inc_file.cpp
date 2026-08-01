@@ -6,55 +6,127 @@
 #include <climits>
 #include <cerrno>
 #include <cstring>
+#include <cctype>
 
 namespace hpgl
 {
 	namespace {
-		/// Reads the next non-comment token from the file into buffer.
-		/// Skips "--" comment lines (bounded to 100KB per line to prevent
-		/// unbounded memory consumption from malicious input).
-		/// Returns true on success, false on EOF, throws on file error.
-		static bool read_next_token(FILE * file, char * buffer, int buffer_size, const char * func_name)
+		/// Line-aware token reader matching the Python slow parser semantics
+		/// (F-54): only a *line* starting with "/" is the end-of-data marker;
+		/// a mid-line "/" token is skipped like any unparseable token. Lines
+		/// starting with "--" are skipped whole (bounded to 100KB per line).
+		/// Tokens are returned one at a time in line order; returns false at
+		/// end-of-data (EOF or a "/" marker line).
+		class token_stream_t
 		{
-		start:
-			char fmt[16];
-			snprintf(fmt, sizeof(fmt), "%%%ds", buffer_size - 1);
-			if (fscanf(file, fmt, buffer) == EOF)
-				return false;
-			if (ferror(file))
-				throw hpgl_exception(func_name, "Error reading file.");
+		public:
+			explicit token_stream_t(FILE * file) : m_file(file), m_pos(0), m_len(0), m_at_end(false) {}
 
-			size_t len = strlen(buffer);
-			if (len >= 2 && buffer[0] == '-' && buffer[1] == '-')
+			bool next(char * buffer, size_t buffer_size, const char * func_name)
 			{
-				// Bounded comment-line skip (cap at 100KB, matching M15 pattern)
-				char skip_buf[256];
-				size_t total_skipped = 0;
-				const size_t MAX_COMMENT_LINE = 100ULL * 1024ULL;
-				while (fgets(skip_buf, static_cast<int>(sizeof(skip_buf)), file))
+				for (;;)
 				{
-					size_t slen = strlen(skip_buf);
-					total_skipped += slen;
-					if (total_skipped > MAX_COMMENT_LINE)
-						throw hpgl_exception(func_name, "Comment line exceeds 100KB limit.");
-					if (slen > 0 && skip_buf[slen - 1] == '\n')
-						break;
+					if (m_pos >= m_len)
+					{
+						if (!fill_line(func_name))
+							return false;
+					}
+					// Skip inter-token whitespace.
+					while (m_pos < m_len && isspace(static_cast<unsigned char>(m_line[m_pos])))
+						++m_pos;
+					if (m_pos >= m_len)
+						continue; // blank remainder of line — refill
+					size_t start = m_pos;
+					while (m_pos < m_len && !isspace(static_cast<unsigned char>(m_line[m_pos])))
+						++m_pos;
+					size_t tok_len = m_pos - start;
+					if (tok_len >= buffer_size)
+					{
+						// Token longer than the caller's buffer: split it the
+						// way fscanf("%Ns") did (hardening, no overflow).
+						tok_len = buffer_size - 1;
+						m_pos = start + tok_len;
+					}
+					memcpy(buffer, m_line + start, tok_len);
+					buffer[tok_len] = '\0';
+					// Comment token anywhere in the line skips the rest of the
+					// line (preserves the historical C++ reader behaviour).
+					if (tok_len >= 2 && buffer[0] == '-' && buffer[1] == '-')
+					{
+						m_pos = m_len;
+						continue;
+					}
+					return true;
 				}
-				goto start;
 			}
-			return true;
-		}
+
+		private:
+			FILE * m_file;
+			char m_line[512];
+			size_t m_pos;
+			size_t m_len;
+			bool m_at_end;
+
+			bool fill_line(const char * func_name)
+			{
+				for (;;)
+				{
+					if (m_at_end)
+						return false;
+					if (fgets(m_line, static_cast<int>(sizeof(m_line)), m_file) == nullptr)
+					{
+						if (ferror(m_file))
+							throw hpgl_exception(func_name, "Error reading file.");
+						m_at_end = true;
+						return false;
+					}
+					m_len = strlen(m_line);
+					m_pos = 0;
+					// Line-start comment: skip the whole line (bounded to 100KB).
+					if (m_len >= 2 && m_line[0] == '-' && m_line[1] == '-')
+					{
+						char skip_buf[256];
+						size_t total_skipped = m_len;
+						const size_t MAX_COMMENT_LINE = 100ULL * 1024ULL;
+						while (total_skipped > 0 && m_line[total_skipped - 1] != '\n')
+						{
+							if (fgets(skip_buf, static_cast<int>(sizeof(skip_buf)), m_file) == nullptr)
+								break;
+							size_t slen = strlen(skip_buf);
+							total_skipped += slen;
+							if (total_skipped > MAX_COMMENT_LINE)
+								throw hpgl_exception(func_name, "Comment line exceeds 100KB limit.");
+							if (slen > 0 && skip_buf[slen - 1] == '\n')
+								break;
+						}
+						continue;
+					}
+					// Line-start "/": end-of-data marker (matches the Python
+					// slow parser, which breaks on lines starting with "/").
+					if (m_len >= 1 && m_line[0] == '/')
+					{
+						m_at_end = true;
+						return false;
+					}
+					return true;
+				}
+			}
+		};
 
 		static void load_floats_into_vector(FILE * file, float * data, int size)
 		{
 			char buffer[256];
-			for (int i = 0; i < size; ++i)
+			token_stream_t tokens(file);
+			int i = 0;
+			while (i < size)
 			{
-				if (!read_next_token(file, buffer, static_cast<int>(sizeof(buffer)), "load_floats_into_vector"))
+				if (!tokens.next(buffer, static_cast<size_t>(sizeof(buffer)), "load_floats_into_vector"))
 					throw hpgl_exception("load_floats_into_vector", "Unexpected end of file.");
 
+				// Mid-line '/' token — the Python slow parser skips it; only a
+				// line-start '/' terminates (F-54).
 				if (strlen(buffer) >= 1 && buffer[0] == '/')
-					throw hpgl_exception("load_floats_into_vector", "Unexpected end of data.");
+					continue;
 
 				float value;
 				if (sscanf(buffer, "%f", &value) != 1)
@@ -71,6 +143,19 @@ namespace hpgl
 					throw hpgl_exception("load_floats_into_vector", oss.str());
 				}
 				data[i] = value;
+				++i;
+			}
+			// I2-56: validate the token count matches `size`. The slow parser
+			// reads every token and _validate_and_reshape_fallback raises on a
+			// count mismatch; the fast reader must not silently truncate.
+			while (tokens.next(buffer, static_cast<size_t>(sizeof(buffer)), "load_floats_into_vector"))
+			{
+				if (strlen(buffer) >= 1 && buffer[0] == '/')
+					continue; // mid-line '/' is skipped by the Python parser
+				std::ostringstream oss;
+				oss << "load_floats_into_vector: file contains more than " << size
+				    << " values (extra token '" << buffer << "')";
+				throw hpgl_exception("load_floats_into_vector", oss.str());
 			}
 		}
 
@@ -81,13 +166,16 @@ namespace hpgl
 			int size)
 		{
 			char buffer[256];
-			for (int i = 0; i < size; ++i)
+			token_stream_t tokens(file);
+			int i = 0;
+			while (i < size)
 			{
-				if (!read_next_token(file, buffer, static_cast<int>(sizeof(buffer)), "read_bytes"))
+				if (!tokens.next(buffer, static_cast<size_t>(sizeof(buffer)), "read_bytes"))
 					throw hpgl_exception("read_bytes", "Unexpected end of file.");
 
+				// Mid-line '/' token — the Python slow parser skips it (F-54).
 				if (strlen(buffer) >= 1 && buffer[0] == '/')
-					throw hpgl_exception("read_bytes", "Unexpected end of data.");
+					continue;
 
 				int value;
 				if (sscanf(buffer, "%d", &value) != 1)
@@ -104,6 +192,17 @@ namespace hpgl
 				}
 				data[i] = static_cast<unsigned char>(value);
 				mask[i] = value == undefined_value ? 0 : 1;
+				++i;
+			}
+			// I2-56: validate the token count matches `size`.
+			while (tokens.next(buffer, static_cast<size_t>(sizeof(buffer)), "read_bytes"))
+			{
+				if (strlen(buffer) >= 1 && buffer[0] == '/')
+					continue; // mid-line '/' is skipped by the Python parser
+				std::ostringstream oss;
+				oss << "read_bytes: file contains more than " << size
+				    << " values (extra token '" << buffer << "')";
+				throw hpgl_exception("read_bytes", oss.str());
 			}
 		}
 	}

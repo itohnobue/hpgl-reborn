@@ -16,7 +16,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 try:
     from geo_bsd.geo import (
         ContProperty,
-        SugarboxGrid,
         _validate_and_reshape_fallback,
         load_cont_property,
         read_inc_file_float,
@@ -43,13 +42,15 @@ class TestParserConsistency:
         prop_data = ContProperty(data, mask)
 
         filename = str(tmp_path / "consistency_1d.inc")
-        write_property(prop_data, filename, "test", -99.0)
+        # F-28: pass an explicit trusted base — the default (DEFAULT_BASE_DIR)
+        # is the process cwd, so writing to tmp_path requires an explicit base.
+        write_property(prop_data, filename, "test", -99.0, basedir=str(tmp_path))
 
         # Slow parser (no size)
-        slow_loaded = load_cont_property(filename, -99.0)
+        slow_loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
 
         # Fast parser (with size)
-        fast_loaded = read_inc_file_float(filename, -99.0, 5)
+        fast_loaded = read_inc_file_float(filename, -99.0, 5, basedir=str(tmp_path))
 
         # Data should match
         np.testing.assert_array_equal(slow_loaded.data, fast_loaded.data)
@@ -62,10 +63,11 @@ class TestParserConsistency:
         prop_data = ContProperty(data, mask)
 
         filename = str(tmp_path / "consistency_mask.inc")
-        write_property(prop_data, filename, "masked", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop_data, filename, "masked", -99.0, basedir=str(tmp_path))
 
-        slow = load_cont_property(filename, -99.0)
-        fast = read_inc_file_float(filename, -99.0, 8)
+        slow = load_cont_property(filename, -99.0, basedir=str(tmp_path))
+        fast = read_inc_file_float(filename, -99.0, 8, basedir=str(tmp_path))
 
         np.testing.assert_array_equal(slow.data, fast.data)
         np.testing.assert_array_equal(slow.mask, fast.mask)
@@ -77,13 +79,14 @@ class TestParserConsistency:
         prop_data = ContProperty(data, mask)
 
         filename = str(tmp_path / "consistency_repeat.inc")
-        write_property(prop_data, filename, "repeat", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop_data, filename, "repeat", -99.0, basedir=str(tmp_path))
 
         # Read twice with each parser
-        slow1 = load_cont_property(filename, -99.0)
-        slow2 = load_cont_property(filename, -99.0)
-        fast1 = read_inc_file_float(filename, -99.0, 5)
-        fast2 = read_inc_file_float(filename, -99.0, 5)
+        slow1 = load_cont_property(filename, -99.0, basedir=str(tmp_path))
+        slow2 = load_cont_property(filename, -99.0, basedir=str(tmp_path))
+        fast1 = read_inc_file_float(filename, -99.0, 5, basedir=str(tmp_path))
+        fast2 = read_inc_file_float(filename, -99.0, 5, basedir=str(tmp_path))
 
         assert np.array_equal(slow1.data, slow2.data)
         assert np.array_equal(fast1.data, fast2.data)
@@ -96,10 +99,11 @@ class TestParserConsistency:
         prop_data = ContProperty(data, mask)
 
         filename = str(tmp_path / "consistency_extreme.inc")
-        write_property(prop_data, filename, "extreme", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop_data, filename, "extreme", -99.0, basedir=str(tmp_path))
 
-        slow = load_cont_property(filename, -99.0)
-        fast = read_inc_file_float(filename, -99.0, 5)
+        slow = load_cont_property(filename, -99.0, basedir=str(tmp_path))
+        fast = read_inc_file_float(filename, -99.0, 5, basedir=str(tmp_path))
 
         # Values should be close (float precision may differ slightly)
         np.testing.assert_array_almost_equal(slow.data, fast.data, decimal=3)

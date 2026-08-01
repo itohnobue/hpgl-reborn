@@ -898,11 +898,19 @@ class TestSequentialIndicatorSimulationBasic:
     """Test basic SIS execution and parameter handling"""
 
     def test_sis_basic_execution_2indicator(
-        self, sample_indicator_property, sample_grid, sis_data_2indicator
+        self, sample_grid, sis_data_2indicator
     ):
-        """Test SIS with 2 indicators (median IK path)"""
+        """Test SIS with 2 indicators (median IK path).
+
+        Uses a 2-category property matching the 2-indicator data config
+        (F-24: indicator_count must match len(data) — a mismatch now raises).
+        """
+        data = np.random.RandomState(42).randint(0, 2, 500, dtype="uint8")
+        mask = np.ones(500, dtype="uint8")
+        mask[::10] = 0
+        prop = IndProperty(data, mask, 2)
         result = sis_simulation(
-            prop=sample_indicator_property,
+            prop=prop,
             grid=sample_grid,
             data=sis_data_2indicator,
             seed=42,
@@ -911,7 +919,7 @@ class TestSequentialIndicatorSimulationBasic:
 
         assert isinstance(result, IndProperty)
         assert result.indicator_count == 2
-        assert result.data.shape == sample_indicator_property.data.shape
+        assert result.data.shape == prop.data.shape
 
     def test_sis_basic_execution_3indicator(
         self, sample_indicator_property, sample_grid, sis_data_3indicator
@@ -929,11 +937,19 @@ class TestSequentialIndicatorSimulationBasic:
         assert result.indicator_count == 3
 
     def test_sis_basic_execution_5indicator(
-        self, sample_indicator_property, sample_grid, sis_data_5indicator
+        self, sample_grid, sis_data_5indicator
     ):
-        """Test SIS with 5 indicators"""
+        """Test SIS with 5 indicators.
+
+        Uses a 5-category property matching the 5-indicator data config
+        (F-24: indicator_count must match len(data) — a mismatch now raises).
+        """
+        data = np.random.RandomState(42).randint(0, 5, 500, dtype="uint8")
+        mask = np.ones(500, dtype="uint8")
+        mask[::10] = 0
+        prop = IndProperty(data, mask, 5)
         result = sis_simulation(
-            prop=sample_indicator_property,
+            prop=prop,
             grid=sample_grid,
             data=sis_data_5indicator,
             seed=42,
@@ -1164,10 +1180,18 @@ class TestSequentialIndicatorSimulationMinNeighbours:
         assert not np.any(np.isnan(result.data.astype("float64")))
         assert not np.any(np.isinf(result.data.astype("float64")))
 
-    def test_sis_with_alt_params(self, sample_indicator_property, sample_grid, sis_data_5indicator):
-        """Test SIS with 5-indicator data (was previously min_neighbours=4 test)"""
+    def test_sis_with_alt_params(self, sample_grid, sis_data_5indicator):
+        """Test SIS with 5-indicator data (was previously min_neighbours=4 test).
+
+        Uses a 5-category property matching the 5-indicator data config
+        (F-24: indicator_count must match len(data) — a mismatch now raises).
+        """
+        data = np.random.RandomState(42).randint(0, 5, 500, dtype="uint8")
+        mask = np.ones(500, dtype="uint8")
+        mask[::10] = 0
+        prop = IndProperty(data, mask, 5)
         result = sis_simulation(
-            prop=sample_indicator_property,
+            prop=prop,
             grid=sample_grid,
             data=sis_data_5indicator,
             seed=42,

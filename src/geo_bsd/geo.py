@@ -72,6 +72,7 @@ from .validation import (
     GridValidator,
     ParameterValidator,
     PathValidator,
+    ValidationConstants,
     validate_kriging_params,
 )
 
@@ -92,18 +93,27 @@ _output_handler_param = None
 _progress_handler_param = None
 
 # Kriging diagnostic stats from the most recent kriging/simulation call.
-# Populated by simple_kriging, lvm_kriging, and ordinary_kriging (wrappers
-# that call C++ functions which internally call set_kriging_stats()).
-# Callers can inspect geo_bsd.geo._last_kriging_stats after a kriging call
-# to detect partial solver failure (e.g. points_without_neighbours > 0).
-# Set to None if the native library does not export hpgl_get_kriging_stats.
+# SENTINEL CONTRACT: every kriging/simulation wrapper (ordinary_kriging,
+# simple_kriging, lvm_kriging, median_ik, indicator_kriging,
+# simple_cokriging_markI/II, sgs_simulation, sis_simulation) resets this
+# to None BEFORE its FFI call, so stale stats from a prior call never
+# survive an exception raised by the C++ call. Wrappers whose C++ function
+# calls set_kriging_stats() (SK/LVM/OK) then populate it via
+# get_kriging_stats(); paths that do not (median_ik, indicator_kriging,
+# cokriging, SGS, SIS) leave it None — an honest "no stats available"
+# sentinel. Callers can inspect geo_bsd.geo._last_kriging_stats after a
+# kriging call to detect partial solver failure (e.g.
+# points_without_neighbours > 0). Set to None if the native library does
+# not export hpgl_get_kriging_stats.
 _last_kriging_stats: dict | None = None
 # Deferred cache of old CFUNCTYPE handler+param references to prevent
-# use-after-free in concurrent kriging calls. Kriging functions do NOT
-# hold _hpgl_call_lock, so an old CFUNCTYPE trampoline freed while C++
-# still uses it causes a crash. Keeping old handlers alive here ensures
-# the trampoline survives until replaced again on a subsequent call.
+# use-after-free in concurrent kriging calls. Kriging/simulation FFI calls
+# hold _hpgl_call_lock (so a concurrent handler clear cannot run mid-call),
+# and both the set and clear paths defer the displaced CFUNCTYPE+param
+# here. The cache is a shared bounded FIFO across BOTH output and progress
+# handlers, so the bound accounts for both (4 generations each).
 _old_handler_refs: list[tuple[Any, Any]] = []
+_OLD_HANDLER_REFS_CAP = 8
 
 
 class ContProperty:
@@ -254,6 +264,7 @@ class IndProperty:
         # Use asarray() so lists/tuples are supported; ndim check must
         # happen before require() which may change ndim.
         ndarray = numpy.asarray(data)
+        mask_array = numpy.asarray(mask)
         if ndarray.ndim not in (1, 3):
             raise ValueError(
                 f"IndProperty data must be 1D or 3D, got {ndarray.ndim}D"
@@ -261,18 +272,33 @@ class IndProperty:
         # Validate NaN/Inf before uint8 conversion which silently maps NaN→0.
         if not numpy.all(numpy.isfinite(numpy.asarray(ndarray, dtype=float))):
             raise ValueError("IndProperty data contains NaN or Inf values")
+        # Validate values are in [0, 255] and integral BEFORE the uint8
+        # conversion: numpy.require(..., "uint8") silently wraps out-of-range
+        # values (256.0 → 0) and truncates fractional values (1.5 → 1), which
+        # would defeat the post-conversion range check below.
+        if numpy.any(ndarray < 0) or numpy.any(ndarray > 255):
+            raise ValueError(
+                "IndProperty data values must be in [0, 255], "
+                "got values outside the range"
+            )
+        if not numpy.all(numpy.equal(ndarray, numpy.floor(ndarray))):
+            raise ValueError(
+                "IndProperty data must contain integer values"
+            )
         # Bypass property setters: validation is already done above,
         # and self.validate() below covers F/W/A checks.
-        object.__setattr__(self, '_data', numpy.require(data, "uint8", "F"))
-        object.__setattr__(self, '_mask', numpy.require(mask, "uint8", "F"))
+        object.__setattr__(self, '_data', numpy.require(ndarray, "uint8", "F"))
+        object.__setattr__(self, '_mask', numpy.require(mask_array, "uint8", "F"))
         self.indicator_count = indicator_count
+        if ndarray.shape != mask_array.shape:
+            raise ValueError(
+                f"Data shape {ndarray.shape} does not match mask shape {mask_array.shape}"
+            )
         if numpy.sum(numpy.bitwise_and((self.mask > 0), (self.data >= indicator_count))) > 0:
             raise RuntimeError(
                 "Property contains some indicators outside of [0..%s] range."
                 % (indicator_count - 1)
             )
-        if data.shape != mask.shape:
-            raise ValueError(f"Data shape {data.shape} does not match mask shape {mask.shape}")
         self.validate()
 
     def validate(self):
@@ -434,16 +460,19 @@ class CovarianceModel:
         ParameterValidator.validate_covariance_parameters(sill, nugget, ranges, angles)
 
 
-def _load_prop_cont_slow(filename, undefined_value):
+def _load_prop_cont_slow(filename, undefined_value, basedir=None):
     values = []
     mask = []
     skipped_count = 0
     element_count = 0
     # Security: uses safe_open_read() which validates the path and opens
     # atomically with O_NOFOLLOW to prevent TOCTOU symlink attacks.
-    # Use realpath() so the basedir resolves any symlinks in the path,
-    # preventing symlink-based directory traversal escapes.
-    with PathValidator.safe_open_read(filename, basedir=os.path.dirname(os.path.realpath(filename))) as f:
+    # The basedir is the trusted base (DEFAULT_BASE_DIR unless the caller
+    # supplies an explicit one) — NOT the filename's own directory, which
+    # would defeat symlink containment (F-28).
+    if basedir is None:
+        basedir = PathValidator.DEFAULT_BASE_DIR
+    with PathValidator.safe_open_read(filename, basedir=basedir) as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -452,6 +481,11 @@ def _load_prop_cont_slow(filename, undefined_value):
             if line.strip().startswith("/"):
                 break
             for part in line.split():
+                # F-54: a mid-line '--' token is a comment in the C++ fast
+                # reader — it skips the rest of the line. Match that here so
+                # both parsers consume identical token streams.
+                if part.startswith("--"):
+                    break
                 # Count all token attempts (including non-numeric) for DoS protection.
                 # Prevents unbounded loop from malicious files with billions of
                 # unparseable tokens.
@@ -472,6 +506,14 @@ def _load_prop_cont_slow(filename, undefined_value):
                         mask.append(1)
                 except (ValueError, TypeError):
                     skipped_count += 1
+    # F-54 documented divergence: the C++ fast reader THROWS on unparseable
+    # junk tokens ("Error parsing 'X' string.") while this slow fallback
+    # SKIPS them with a warning. This is intentional — the slow parser is
+    # the lenient fallback (test_edge_cases.py documents the skip behavior)
+    # and legitimate HPGL-written files contain no junk tokens. Both paths
+    # agree on the token/terminator semantics that DO occur in legitimate
+    # files: line-start "/" ends the data, mid-line "/" is skipped, and a
+    # "--" token anywhere skips the rest of the line.
     if skipped_count > 0:
         logger.warning(
             "_load_prop_cont_slow: skipped %d non-numeric tokens in %s", skipped_count, filename
@@ -480,7 +522,7 @@ def _load_prop_cont_slow(filename, undefined_value):
     return ContProperty(numpy.array(values, dtype="float32"), numpy.array(mask, dtype="uint8"))
 
 
-def _load_prop_ind_slow(filename, undefined_value, ind_values):
+def _load_prop_ind_slow(filename, undefined_value, ind_values, basedir=None):
     # Validate that ind_values contains no duplicates. Duplicate indicator
     # values cause dict_map overwrites, silently corrupting the category
     # mapping when later entries overwrite earlier ones.
@@ -505,9 +547,12 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
 
     # Security: uses safe_open_read() which validates the path and opens
     # atomically with O_NOFOLLOW to prevent TOCTOU symlink attacks.
-    # Use realpath() so the basedir resolves any symlinks in the path,
-    # preventing symlink-based directory traversal escapes.
-    with PathValidator.safe_open_read(filename, basedir=os.path.dirname(os.path.realpath(filename))) as f:
+    # The basedir is the trusted base (DEFAULT_BASE_DIR unless the caller
+    # supplies an explicit one) — NOT the filename's own directory, which
+    # would defeat symlink containment (F-28).
+    if basedir is None:
+        basedir = PathValidator.DEFAULT_BASE_DIR
+    with PathValidator.safe_open_read(filename, basedir=basedir) as f:
         for line in f:
             if line.strip().startswith("--"):
                 continue
@@ -516,6 +561,11 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values):
             if line.strip().startswith("/"):
                 break
             for part in line.split():
+                # F-54: a mid-line '--' token is a comment in the C++ fast
+                # reader — it skips the rest of the line. Match that here so
+                # both parsers consume identical token streams.
+                if part.startswith("--"):
+                    break
                 # Count all token attempts (including non-numeric) for DoS protection.
                 # Prevents unbounded loop from malicious files with billions of
                 # unparseable tokens.
@@ -638,7 +688,9 @@ def accepts_tuple(arg_name, arg_pos):
 
 
 @accepts_tuple("prop", 0)
-def write_property(prop, filename, prop_name, undefined_value, indicator_values=None):
+def write_property(
+    prop, filename, prop_name, undefined_value, indicator_values=None, basedir=None
+):
     """Write a property to an INC-format file via the C++ backend.
 
     Supports both ``ContProperty`` and ``IndProperty``. The file is
@@ -657,6 +709,10 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
     indicator_values : list of int, optional
         Mapping of indicator categories to output values. Only used
         for ``IndProperty``.
+    basedir : str or pathlib.Path, optional
+        Trusted base directory for path containment. Defaults to
+        ``PathValidator.DEFAULT_BASE_DIR`` (the process working
+        directory at import time).
 
     Raises
     ------
@@ -667,9 +723,11 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
     --------
     write_gslib_property : Write property in GSLIB format.
     """
+    if basedir is None:
+        basedir = PathValidator.DEFAULT_BASE_DIR
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False
+        filename, basedir=basedir, must_exist=False
     )
 
     if indicator_values is None:
@@ -689,6 +747,17 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
                 + call_get_last_exception_message().decode("utf-8", errors="replace")
             )
     else:
+        # F-44: validate indicator values BEFORE the uint8 conversion so an
+        # out-of-range value raises a clear ValueError instead of a confusing
+        # numpy OverflowError or silent ctypes wrap (300 -> 44). The C++
+        # byte writer also rejects values outside [0, 255], but the Python
+        # guard surfaces the error before any file is created.
+        _validate_indicator_values(indicator_values, "write_property")
+        if not _is_valid_byte_value(undefined_value):
+            raise ValueError(
+                f"write_property: undefined_value must be an integer in [0, 255] "
+                f"for indicator (byte) properties, got {undefined_value!r}"
+            )
         # Security: Keep reference to indicator_values array
         ind_arr = numpy.array(indicator_values, dtype="uint8")
         marr = _create_hpgl_ind_masked_array(prop, None)
@@ -708,10 +777,14 @@ def write_property(prop, filename, prop_name, undefined_value, indicator_values=
 
 
 @accepts_tuple("prop", 0)
-def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_values=None):
+def write_gslib_property(
+    prop, filename, prop_name, undefined_value, indicator_values=None, basedir=None
+):
+    if basedir is None:
+        basedir = PathValidator.DEFAULT_BASE_DIR
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=False
+        filename, basedir=basedir, must_exist=False
     )
 
     if indicator_values is None:
@@ -733,6 +806,15 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
                 + call_get_last_exception_message().decode("utf-8", errors="replace")
             )
     else:
+        # F-44 + I2-55: validate indicator values and undefined_value before
+        # the FFI call — _c_array(c_ubyte, ...) silently wraps 300 -> 44 and
+        # the C++ byte writer rejects undefined values outside [0, 255].
+        _validate_indicator_values(indicator_values, "write_gslib_property")
+        if not _is_valid_byte_value(undefined_value):
+            raise ValueError(
+                f"write_gslib_property: undefined_value must be an integer in "
+                f"[0, 255] for indicator (byte) properties, got {undefined_value!r}"
+            )
         rc = call_write_gslib_byte_property(
             _create_hpgl_ind_masked_array(prop, None),
             safe_path.encode("utf-8"),
@@ -746,6 +828,46 @@ def write_gslib_property(prop, filename, prop_name, undefined_value, indicator_v
                 "write_gslib_property failed: "
                 + call_get_last_exception_message().decode("utf-8", errors="replace")
             )
+
+
+def _validate_indicator_values(indicator_values, func_name):
+    """Reject indicator values that the byte write path would corrupt (F-44).
+
+    Ports the seen-set duplicate check from the slow parser
+    (``_load_prop_ind_slow``) and adds a [0, 255] integrality check. The
+    ctypes ``_c_array(c_ubyte, ...)`` path wraps 300 -> 44 silently and
+    numpy 2.x raises a confusing ``OverflowError``; both are replaced by a
+    clear ``ValueError`` before any file is created.
+
+    Raises:
+        ValueError: If any value is not an integer in [0, 255] or a
+            duplicate is present.
+    """
+    seen = set()
+    for v in indicator_values:
+        if not _is_valid_byte_value(v):
+            raise ValueError(
+                f"{func_name}: indicator_values must be integers in [0, 255], "
+                f"got {v!r}"
+            )
+        iv = int(v)
+        if iv in seen:
+            raise ValueError(
+                f"{func_name}: duplicate indicator value {iv} in indicator_values. "
+                f"Each indicator value must be unique."
+            )
+        seen.add(iv)
+
+
+def _is_valid_byte_value(value):
+    """True if ``value`` is an integer (or integral float) in [0, 255]."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, numpy.integer)):
+        return 0 <= int(value) <= 255
+    if isinstance(value, (float, numpy.floating)):
+        return numpy.isfinite(value) and float(value).is_integer() and 0 <= value <= 255
+    return False
 
 
 def _validate_and_reshape_fallback(result, size, func_name):
@@ -779,7 +901,7 @@ def _validate_and_reshape_fallback(result, size, func_name):
         result.mask = result.mask.reshape((size[0], size[1], size[2]), order="F")
 
 
-def load_cont_property(filename, undefined_value, size=None):
+def load_cont_property(filename, undefined_value, size=None, basedir=None):
     """Load a continuous property from an INC-format file.
 
     If ``size`` is provided, uses the fast C++ reader with
@@ -794,11 +916,18 @@ def load_cont_property(filename, undefined_value, size=None):
         Value in the file that marks undefined/uninformed cells.
     size : tuple of int or None, optional
         Grid dimensions ``(nx, ny, nz)``. If None, uses slow parser.
+    basedir : str or pathlib.Path, optional
+        Trusted base directory for path containment. Defaults to
+        ``PathValidator.DEFAULT_BASE_DIR`` (the process working
+        directory at import time).
 
     Returns
     -------
     ContProperty
-        Loaded property with data and mask arrays.
+        Loaded property with data and mask arrays. When ``size`` is a
+        3-tuple, the arrays are reshaped to 3D Fortran order (matching
+        the fallback path's ``_validate_and_reshape_fallback`` so both
+        fast and slow paths return the same shape — F-55).
 
     Raises
     ------
@@ -814,9 +943,11 @@ def load_cont_property(filename, undefined_value, size=None):
     --------
     load_ind_property : Load indicator (categorical) property.
     """
+    if basedir is None:
+        basedir = PathValidator.DEFAULT_BASE_DIR
     # Validate filename for security
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
+        filename, basedir=basedir, must_exist=True
     )
 
     if size is None:
@@ -825,25 +956,33 @@ def load_cont_property(filename, undefined_value, size=None):
             "that loads entire file into memory unbounded. For large files (>100MB) "
             "specify size to use the fast C++ reader which uses pre-allocated buffers."
         )
-        return _load_prop_cont_slow(safe_path, undefined_value)
+        return _load_prop_cont_slow(safe_path, undefined_value, basedir=basedir)
     else:
         try:
-            return read_inc_file_float(safe_path, undefined_value, size)
+            result = read_inc_file_float(safe_path, undefined_value, size, basedir=basedir)
         except RuntimeError as e:
             logger.warning(
                 "load_cont_property: Fast C++ reader failed, falling back to slow "
                 "Python parser. C++ error: %s",
                 e,
             )
-            result = _load_prop_cont_slow(safe_path, undefined_value)
+            result = _load_prop_cont_slow(safe_path, undefined_value, basedir=basedir)
             _validate_and_reshape_fallback(result, size, "load_cont_property")
             return result
+        # F-55: normalize the fast-path result to the same shape the
+        # fallback returns — a 3-tuple size yields 3D Fortran arrays so
+        # the public contract is stable regardless of which path ran.
+        if isinstance(size, (tuple, list)) and len(size) == 3:
+            _validate_and_reshape_fallback(result, size, "load_cont_property")
+        return result
 
 
-def read_inc_file_float(filename, undefined_value, size):
+def read_inc_file_float(filename, undefined_value, size, basedir=None):
+    if basedir is None:
+        basedir = PathValidator.DEFAULT_BASE_DIR
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
+        filename, basedir=basedir, must_exist=True
     )
 
     # Validate size parameters
@@ -871,11 +1010,20 @@ def read_inc_file_float(filename, undefined_value, size):
     return ContProperty(data, mask)
 
 
-def read_inc_file_byte(filename, undefined_value, size, indicator_values):
+def read_inc_file_byte(filename, undefined_value, size, indicator_values, basedir=None):
+    if basedir is None:
+        basedir = PathValidator.DEFAULT_BASE_DIR
     # Security: Validate filename to prevent directory traversal attacks
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
+        filename, basedir=basedir, must_exist=True
     )
+
+    # F-44: validate indicator values before the uint8 conversion — numpy
+    # 2.x raises a confusing OverflowError for out-of-range values. The
+    # C++ reader validates undefined_value against [0, 255] itself, and a
+    # text sentinel such as -99 is legitimate input for the slow-parser
+    # fallback, so undefined_value is intentionally NOT range-checked here.
+    _validate_indicator_values(indicator_values, "read_inc_file_byte")
 
     # Validate size parameters
     GridValidator.validate_grid_size_param(size)
@@ -906,7 +1054,7 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values):
     return IndProperty(data, mask, len(indicator_values))
 
 
-def load_ind_property(filename, undefined_value, indicator_values, size=None):
+def load_ind_property(filename, undefined_value, indicator_values, size=None, basedir=None):
     """Load an indicator (categorical) property from an INC-format file.
 
     If ``size`` is provided, uses the fast C++ reader with
@@ -924,12 +1072,18 @@ def load_ind_property(filename, undefined_value, indicator_values, size=None):
         mapped to an internal category index starting from 0.
     size : tuple of int or None, optional
         Grid dimensions ``(nx, ny, nz)``. If None, uses slow parser.
+    basedir : str or pathlib.Path, optional
+        Trusted base directory for path containment. Defaults to
+        ``PathValidator.DEFAULT_BASE_DIR`` (the process working
+        directory at import time).
 
     Returns
     -------
     IndProperty
         Loaded indicator property with data, mask, and indicator_count
-        set to ``len(indicator_values)``.
+        set to ``len(indicator_values)``. When ``size`` is a 3-tuple, the
+        arrays are reshaped to 3D Fortran order (matching the fallback
+        path so both fast and slow paths return the same shape — F-55).
 
     Raises
     ------
@@ -947,9 +1101,11 @@ def load_ind_property(filename, undefined_value, indicator_values, size=None):
     --------
     load_cont_property : Load continuous property.
     """
+    if basedir is None:
+        basedir = PathValidator.DEFAULT_BASE_DIR
     # Validate filename for security
     safe_path = PathValidator.validate_filepath_in_basedir(
-        filename, basedir=os.path.dirname(os.path.abspath(filename)), must_exist=True
+        filename, basedir=basedir, must_exist=True
     )
 
     if size is None:
@@ -958,19 +1114,29 @@ def load_ind_property(filename, undefined_value, indicator_values, size=None):
             "that loads entire file into memory unbounded. For large files (>100MB) "
             "specify size to use the fast C++ reader which uses pre-allocated buffers."
         )
-        return _load_prop_ind_slow(safe_path, undefined_value, indicator_values)
+        return _load_prop_ind_slow(safe_path, undefined_value, indicator_values, basedir=basedir)
     else:
         try:
-            return read_inc_file_byte(safe_path, undefined_value, size, indicator_values)
+            result = read_inc_file_byte(
+                safe_path, undefined_value, size, indicator_values, basedir=basedir
+            )
         except RuntimeError as e:
             logger.warning(
                 "load_ind_property: Fast C++ reader failed, falling back to slow "
                 "Python parser. C++ error: %s",
                 e,
             )
-            result = _load_prop_ind_slow(safe_path, undefined_value, indicator_values)
+            result = _load_prop_ind_slow(
+                safe_path, undefined_value, indicator_values, basedir=basedir
+            )
             _validate_and_reshape_fallback(result, size, "load_ind_property")
             return result
+        # F-55: normalize the fast-path result to the same shape the
+        # fallback returns — a 3-tuple size yields 3D Fortran arrays so
+        # the public contract is stable regardless of which path ran.
+        if isinstance(size, (tuple, list)) and len(size) == 3:
+            _validate_and_reshape_fallback(result, size, "load_ind_property")
+        return result
 
 
 def set_thread_num(num):
@@ -1068,6 +1234,50 @@ def calc_mean(prop):
 _validate_kriging_params = validate_kriging_params
 
 
+def _check_kriging_failure_stats(stats, expected_calculated, func_name):
+    """Surface partial/total kriging solver failure from C++ stats (F-33).
+
+    SK/LVM kriging mean-fills on failure, so a call that failed everywhere
+    returns a finite mean-filled property that is indistinguishable from a
+    successful call. This consumes the C++ ``kriging_stats_t`` counters
+    (via ``_last_kriging_stats``) so the Python wrapper surfaces the failure:
+
+    * ``points_singularity > 0`` → RuntimeError: a singular kriging system
+      is a genuine numerical solver failure — the covariance model /
+      neighbourhood configuration produced a degenerate system and the
+      mean-fill masks it. This is the F-33 defect ("no raise on
+      points_singularity > 0").
+    * ``points_calculated < expected`` with zero singularity → a warning:
+      cells with no neighbours are mean-filled. This is the documented
+      ``mean_on_failure`` contract (e.g. pure-nugget covariance or sparse
+      data), so it is surfaced loudly but does not abort the call.
+
+    Args:
+        stats: The stats dict from ``get_kriging_stats()`` or None.
+        expected_calculated: Number of uninformed cells that kriging
+            should have calculated (``grid_size - informed_count``).
+        func_name: Name of the calling wrapper for messages.
+    """
+    if stats is None:
+        return
+    singular = int(stats.get("points_singularity", 0))
+    calculated = int(stats.get("points_calculated", 0))
+    if singular > 0:
+        raise RuntimeError(
+            f"{func_name}: kriging system was singular at {singular} point(s); "
+            f"those cells were mean-filled. A singular kriging system is a "
+            f"numerical solver failure — check the covariance model and "
+            f"neighbourhood configuration. stats={stats}"
+        )
+    if expected_calculated > 0 and calculated < expected_calculated:
+        missing = expected_calculated - calculated
+        logger.warning(
+            "%s: %d of %d cells could not be kriged (no neighbours in the "
+            "search radius) and were mean-filled; stats=%s",
+            func_name, missing, expected_calculated, stats,
+        )
+
+
 
 @accepts_tuple("prop", 0)
 def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
@@ -1108,14 +1318,19 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     The underlying C++ function (``hpgl_ordinary_kriging``) returns
     void — there is no per-cell error signal.  When kriging fails for
     individual grid cells (e.g. no neighbours, singular system), those
-    cells are left as NaN (``undefined_on_failure`` fallback) and a
-    ``RuntimeError`` is raised by the post-call ``isfinite`` check.
-    Callers who need to detect the extent of partial failure can inspect
+    cells are left as 0.0 with mask=0 (uninformed) under the
+    ``undefined_on_failure`` fallback and the call completes without
+    raising; a ``RuntimeError`` is only raised if the post-call
+    ``isfinite`` check detects a genuine solver-produced NaN.  Callers
+    who need to detect the extent of partial failure can inspect
     ``geo_bsd.geo._last_kriging_stats`` after the call, which is populated
     from C++ ``kriging_stats_t`` via ``get_kriging_stats()``.
     """
     global _last_kriging_stats
-    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
+    valid_radiuses = _validate_kriging_params(
+        grid, radiuses, max_neighbours, cov_model,
+        min_radius=ValidationConstants.MIN_KRIGING_RADIUS,
+    )
 
     ParameterValidator.validate_property_type(prop, ContProperty, "ordinary_kriging")
 
@@ -1147,7 +1362,8 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     inp = _create_hpgl_cont_masked_array(prop, grid)
     outp = _create_hpgl_cont_masked_array(out_prop, grid)
     _last_kriging_stats = None
-    call_ordinary_kriging(inp, okp, outp)
+    with _hpgl_call_lock:
+        call_ordinary_kriging(inp, okp, outp)
 
     try:
         _last_kriging_stats = get_kriging_stats()
@@ -1212,7 +1428,10 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     failures explicitly.
     """
     global _last_kriging_stats
-    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
+    valid_radiuses = _validate_kriging_params(
+        grid, radiuses, max_neighbours, cov_model,
+        min_radius=ValidationConstants.MIN_KRIGING_RADIUS,
+    )
 
     ParameterValidator.validate_property_type(prop, ContProperty, "simple_kriging")
 
@@ -1250,14 +1469,27 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
     _last_kriging_stats = None
-    call_simple_kriging(
-        prop.data, prop.mask, sh, skp, out_prop[0], out_prop[1], sh
-    )
+    with _hpgl_call_lock:
+        call_simple_kriging(
+            prop.data, prop.mask, sh, skp, out_prop[0], out_prop[1], sh
+        )
 
     try:
         _last_kriging_stats = get_kriging_stats()
     except (NotImplementedError, AttributeError):
         pass
+
+    # F-33: surface partial/total solver failure. Simple Kriging mean-fills
+    # failed cells with finite means that pass the isfinite gate below, so
+    # without this check a call that failed everywhere is indistinguishable
+    # from success.
+    if _last_kriging_stats is not None:
+        _check_kriging_failure_stats(
+            _last_kriging_stats,
+            expected_calculated=grid.x * grid.y * grid.z
+            - int(numpy.sum(prop.mask > 0)),
+            func_name="simple_kriging",
+        )
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1318,7 +1550,10 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
     from C++ ``kriging_stats_t`` via ``get_kriging_stats()``.
     """
     global _last_kriging_stats
-    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
+    valid_radiuses = _validate_kriging_params(
+        grid, radiuses, max_neighbours, cov_model,
+        min_radius=ValidationConstants.MIN_KRIGING_RADIUS,
+    )
 
     ParameterValidator.validate_property_type(prop, ContProperty, "lvm_kriging")
 
@@ -1363,22 +1598,35 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
     _last_kriging_stats = None
-    call_lvm_kriging(
-        prop.data,
-        prop.mask,
-        sh,
-        mean_data,
-        sh,
-        okp,
-        out_prop.data,
-        out_prop.mask,
-        sh,
-    )
+    with _hpgl_call_lock:
+        call_lvm_kriging(
+            prop.data,
+            prop.mask,
+            sh,
+            mean_data,
+            sh,
+            okp,
+            out_prop.data,
+            out_prop.mask,
+            sh,
+        )
 
     try:
         _last_kriging_stats = get_kriging_stats()
     except (NotImplementedError, AttributeError):
         pass
+
+    # F-33: surface partial/total solver failure. LVM Kriging mean-fills
+    # failed cells with finite local means that pass the isfinite gate
+    # below, so without this check a call that failed everywhere is
+    # indistinguishable from success.
+    if _last_kriging_stats is not None:
+        _check_kriging_failure_stats(
+            _last_kriging_stats,
+            expected_calculated=grid.x * grid.y * grid.z
+            - int(numpy.sum(prop.mask > 0)),
+            func_name="lvm_kriging",
+        )
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1429,7 +1677,10 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     RuntimeError
         If the C++ computation produces an error.
     """
-    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
+    valid_radiuses = _validate_kriging_params(
+        grid, radiuses, max_neighbours, cov_model,
+        min_radius=ValidationConstants.MIN_KRIGING_RADIUS,
+    )
 
     ParameterValidator.validate_property_type(prop, IndProperty, "median_ik")
 
@@ -1472,9 +1723,10 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
 
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
-    call_median_ik(inp, miksp, outp)
     global _last_kriging_stats
     _last_kriging_stats = None
+    with _hpgl_call_lock:
+        call_median_ik(inp, miksp, outp)
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1503,9 +1755,17 @@ def indicator_kriging(prop, grid, data, marginal_probs):
         ParameterValidator.validate_probability(p, f"marginal_probs[{i}]")
     ParameterValidator.validate_probability_sum(marginal_probs)
 
-    # Validate per-indicator parameters
-    for i, ikd in enumerate(data):
-        ParameterValidator.validate_radius(ikd["radiuses"], f"data[{i}].radiuses")
+    # Validate per-indicator parameters. In the 2-category case only
+    # data[0] is used (the median_ik redirect below discards data[1]),
+    # so skip validating the unused entry — rejecting an invalid radius
+    # in the ignored data[1] would contradict the documented
+    # "data[1] is ignored" contract (see redirect warning below).
+    validate_entries = data[:1] if len(data) == 2 else data
+    for i, ikd in enumerate(validate_entries):
+        ParameterValidator.validate_radius(
+            ikd["radiuses"], f"data[{i}].radiuses",
+            min_radius=ValidationConstants.MIN_KRIGING_RADIUS,
+        )
         ParameterValidator.validate_max_neighbors(ikd["max_neighbours"])
         ParameterValidator.validate_covariance_parameters(
             ikd["cov_model"].sill,
@@ -1549,9 +1809,10 @@ def indicator_kriging(prop, grid, data, marginal_probs):
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
     params = __create_hpgl_ik_params(data, len(data), False, marginal_probs)
-    call_indicator_kriging(inp, outp, params, len(data))
     global _last_kriging_stats
     _last_kriging_stats = None
+    with _hpgl_call_lock:
+        call_indicator_kriging(inp, outp, params, len(data))
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1574,7 +1835,10 @@ def simple_cokriging_markI(
     secondary_variance,
     correlation_coef,
 ):
-    valid_radiuses = _validate_kriging_params(grid, radiuses, max_neighbours, cov_model)
+    valid_radiuses = _validate_kriging_params(
+        grid, radiuses, max_neighbours, cov_model,
+        min_radius=ValidationConstants.MIN_KRIGING_RADIUS,
+    )
 
     ParameterValidator.validate_property_type(prop, ContProperty, "simple_cokriging_markI")
 
@@ -1645,9 +1909,10 @@ def simple_cokriging_markI(
         secondary_variance=secondary_variance,
         correlation_coef=correlation_coef,
     )
-    call_simple_cokriging_mark1(inp, sec, params, outp)
     global _last_kriging_stats
     _last_kriging_stats = None
+    with _hpgl_call_lock:
+        call_simple_cokriging_mark1(inp, sec, params, outp)
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1664,7 +1929,9 @@ def simple_cokriging_markII(
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
     # Validate radiuses and max_neighbours
-    ParameterValidator.validate_radius(radiuses, "radiuses")
+    ParameterValidator.validate_radius(
+        radiuses, "radiuses", min_radius=ValidationConstants.MIN_KRIGING_RADIUS
+    )
     ParameterValidator.validate_max_neighbors(max_neighbours)
 
     # Validate correlation coefficient
@@ -1742,9 +2009,10 @@ def simple_cokriging_markII(
         secondary_mean=secondary_data["mean"],
         correlation_coef=correlation_coef,
     )
-    call_simple_cokriging_mark2(inp, sec, params, outp)
     global _last_kriging_stats
     _last_kriging_stats = None
+    with _hpgl_call_lock:
+        call_simple_cokriging_mark2(inp, sec, params, outp)
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1806,15 +2074,16 @@ def simple_kriging_weights(
 
     weights = numpy.array([0] * len(n_x), dtype="float32")
 
-    rc = call_simple_kriging_weights(
-        _c_array(c_float, 3, center_point),
-        numpy.array(n_x, dtype="float32"),
-        numpy.array(n_y, dtype="float32"),
-        numpy.array(n_z, dtype="float32"),
-        len(n_x),
-        covp,
-        weights,
-    )
+    with _hpgl_call_lock:
+        rc = call_simple_kriging_weights(
+            _c_array(c_float, 3, center_point),
+            numpy.array(n_x, dtype="float32"),
+            numpy.array(n_y, dtype="float32"),
+            numpy.array(n_z, dtype="float32"),
+            len(n_x),
+            covp,
+            weights,
+        )
     if rc != 0:
         raise RuntimeError(
             "simple_kriging_weights failed: "
@@ -1899,9 +2168,17 @@ def set_output_handler(handler, param):
     _hpgl_call_lock.acquire()
     try:
         if handler is None:
+            old_h = _h
+            old_param = _output_handler_param
             call_set_output_handler(None, None)
             _h = None
             _output_handler_param = None
+            # Defer the cleared CFUNCTYPE+param so a concurrent kriging
+            # call cannot invoke a freed trampoline (mirror the set path).
+            if old_h is not None:
+                _old_handler_refs.append((old_h, old_param))
+                if len(_old_handler_refs) > _OLD_HANDLER_REFS_CAP:
+                    _old_handler_refs.pop(0)
         else:
             # Keep old handler objects alive during the transition so the
             # CFUNCTYPE thunk is not freed while C++ may still reference it.
@@ -1913,11 +2190,12 @@ def set_output_handler(handler, param):
             call_set_output_handler(new_h, param)
             # Hold old handler references in deferred cache to prevent
             # CFUNCTYPE trampoline use-after-free in concurrent kriging
-            # calls. Kriging functions do NOT hold _hpgl_call_lock, so
-            # the old CFUNCTYPE could still be invoked by C++ on another
-            # thread. Deferring deletion keeps the trampoline alive.
+            # calls. Kriging/simulation FFI calls hold _hpgl_call_lock, so
+            # a concurrent clear cannot run mid-call; deferring deletion
+            # additionally keeps the trampoline alive across the
+            # replacement (and the C++ read-then-invoke window).
             _old_handler_refs.append((old_h, old_param))
-            if len(_old_handler_refs) > 4:
+            if len(_old_handler_refs) > _OLD_HANDLER_REFS_CAP:
                 _old_handler_refs.pop(0)
     finally:
         _hpgl_call_lock.release()
@@ -1957,9 +2235,17 @@ def set_progress_handler(handler, param):
     _hpgl_call_lock.acquire()
     try:
         if handler is None:
+            old_h = _progress_handler
+            old_param = _progress_handler_param
             call_set_progress_handler(None, None)
             _progress_handler = None
             _progress_handler_param = None
+            # Defer the cleared CFUNCTYPE+param so a concurrent simulation
+            # call cannot invoke a freed trampoline (mirror the set path).
+            if old_h is not None:
+                _old_handler_refs.append((old_h, old_param))
+                if len(_old_handler_refs) > _OLD_HANDLER_REFS_CAP:
+                    _old_handler_refs.pop(0)
         else:
             # Keep old handler objects alive during the transition so the
             # CFUNCTYPE thunk is not freed while C++ may still reference it.
@@ -1970,10 +2256,10 @@ def set_progress_handler(handler, param):
             _progress_handler_param = param
             call_set_progress_handler(new_h, param)
             # Hold old handler references in deferred cache to prevent
-            # CFUNCTYPE trampoline use-after-free in concurrent kriging
+            # CFUNCTYPE trampoline use-after-free in concurrent simulation
             # calls (same reasoning as set_output_handler).
             _old_handler_refs.append((old_h, old_param))
-            if len(_old_handler_refs) > 4:
+            if len(_old_handler_refs) > _OLD_HANDLER_REFS_CAP:
                 _old_handler_refs.pop(0)
     finally:
         _hpgl_call_lock.release()

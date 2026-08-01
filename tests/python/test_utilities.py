@@ -456,10 +456,12 @@ class TestIOContinuousProperty:
 
         # Write to file
         filename = str(tmp_path / "test_prop.inc")
-        write_property(prop, filename, "test_prop", -99.0)
+        # F-28: pass an explicit trusted base — the default (DEFAULT_BASE_DIR)
+        # is the process cwd, so writing to tmp_path requires an explicit base.
+        write_property(prop, filename, "test_prop", -99.0, basedir=str(tmp_path))
 
         # Read back
-        loaded = load_cont_property(filename, -99.0)
+        loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
 
         # Check data matches (considering mask)
         assert isinstance(loaded, ContProperty)
@@ -478,7 +480,8 @@ class TestIOContinuousProperty:
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "test_gslib.dat")
-        write_gslib_property(prop, filename, "test_gslib", -999.0)
+        # F-28: pass an explicit trusted base.
+        write_gslib_property(prop, filename, "test_gslib", -999.0, basedir=str(tmp_path))
 
         # Check file exists and has expected content
         assert Path(filename).exists()
@@ -499,10 +502,11 @@ class TestIOContinuousProperty:
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "test_manual.inc")
-        write_property(prop, filename, "test_prop", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "test_prop", -99.0, basedir=str(tmp_path))
 
         size = (6, 1, 1)  # 6 elements
-        loaded = read_inc_file_float(filename, -99.0, size)
+        loaded = read_inc_file_float(filename, -99.0, size, basedir=str(tmp_path))
 
         assert isinstance(loaded, ContProperty)
         assert loaded.data.size == 6
@@ -519,7 +523,8 @@ class TestIOContinuousProperty:
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "created_file.inc")
-        write_property(prop, filename, "created", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "created", -99.0, basedir=str(tmp_path))
 
         # Check file exists
         assert Path(filename).exists()
@@ -532,7 +537,8 @@ class TestIOContinuousProperty:
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "3d_prop.inc")
-        write_property(prop, filename, "3d_test", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "3d_test", -99.0, basedir=str(tmp_path))
 
         # Verify file was created and contains expected data
         assert Path(filename).exists()
@@ -559,9 +565,10 @@ class TestIOIndicatorProperty:
         prop = IndProperty(data, mask, 3)
 
         filename = str(tmp_path / "test_ind.inc")
-        write_property(prop, filename, "test_ind", 255, indicator_values)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "test_ind", 255, indicator_values, basedir=str(tmp_path))
 
-        loaded = load_ind_property(filename, 255, indicator_values)
+        loaded = load_ind_property(filename, 255, indicator_values, basedir=str(tmp_path))
 
         assert isinstance(loaded, IndProperty)
         assert loaded.indicator_count == 3
@@ -579,7 +586,8 @@ class TestIOIndicatorProperty:
 
         indicator_values = [10, 20, 30]
         # The slow loader will read all 6 values (excluding 255 which is masked)
-        loaded = _load_prop_ind_slow(filename, 255, indicator_values)
+        # F-28: pass an explicit trusted base.
+        loaded = _load_prop_ind_slow(filename, 255, indicator_values, basedir=str(tmp_path))
 
         assert isinstance(loaded, IndProperty)
         assert loaded.indicator_count == 3
@@ -595,7 +603,8 @@ class TestIOIndicatorProperty:
         prop = IndProperty(data, mask, 2)
 
         filename = str(tmp_path / "ind_gslib.dat")
-        write_gslib_property(prop, filename, "ind_test", 255, indicator_values)
+        # F-28: pass an explicit trusted base.
+        write_gslib_property(prop, filename, "ind_test", 255, indicator_values, basedir=str(tmp_path))
 
         # Check file was created
         assert Path(filename).exists()
@@ -609,9 +618,10 @@ class TestIOIndicatorProperty:
         prop = IndProperty(data, mask, 3)
 
         filename = str(tmp_path / "mapped_ind.inc")
-        write_property(prop, filename, "mapped", 255, indicator_values)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "mapped", 255, indicator_values, basedir=str(tmp_path))
 
-        loaded = load_ind_property(filename, 255, indicator_values)
+        loaded = load_ind_property(filename, 255, indicator_values, basedir=str(tmp_path))
 
         # Check indicator count is preserved
         assert loaded.indicator_count == 3
@@ -628,9 +638,10 @@ class TestUndefinedValueHandling:
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "undefined_test.inc")
-        write_property(prop, filename, "undef", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "undef", -99.0, basedir=str(tmp_path))
 
-        loaded = load_cont_property(filename, -99.0)
+        loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
 
         # Undefined values should be masked
         assert loaded.mask[1] == 0
@@ -645,9 +656,10 @@ class TestUndefinedValueHandling:
         prop = IndProperty(data, mask, 2)
 
         filename = str(tmp_path / "undef_ind.inc")
-        write_property(prop, filename, "undef_ind", 255, indicator_values)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "undef_ind", 255, indicator_values, basedir=str(tmp_path))
 
-        loaded = load_ind_property(filename, 255, indicator_values)
+        loaded = load_ind_property(filename, 255, indicator_values, basedir=str(tmp_path))
 
         assert isinstance(loaded, IndProperty)
 
@@ -752,7 +764,7 @@ class TestFileFormats:
             f.write("-- Another comment\n")
             f.write("4.0 5.0 6.0\n")
 
-        loaded = load_cont_property(filename, -99.0)
+        loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
 
         assert isinstance(loaded, ContProperty)
         assert loaded.data.size >= 6
@@ -764,11 +776,12 @@ class TestFileFormats:
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "gslib_with_name.dat")
-        write_gslib_property(prop, filename, "MyProperty", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_gslib_property(prop, filename, "MyProperty", -99.0, basedir=str(tmp_path))
 
         # File should exist and be readable
         assert Path(filename).exists()
-        loaded = load_cont_property(filename, -99.0)
+        loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
         assert isinstance(loaded, ContProperty)
 
     def test_multiple_properties_same_file(self, tmp_path):
@@ -784,11 +797,12 @@ class TestFileFormats:
         filename1 = str(tmp_path / "prop1.inc")
         filename2 = str(tmp_path / "prop2.inc")
 
-        write_property(prop1, filename1, "prop1", -99.0)
-        write_property(prop2, filename2, "prop2", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop1, filename1, "prop1", -99.0, basedir=str(tmp_path))
+        write_property(prop2, filename2, "prop2", -99.0, basedir=str(tmp_path))
 
-        loaded1 = load_cont_property(filename1, -99.0)
-        loaded2 = load_cont_property(filename2, -99.0)
+        loaded1 = load_cont_property(filename1, -99.0, basedir=str(tmp_path))
+        loaded2 = load_cont_property(filename2, -99.0, basedir=str(tmp_path))
 
         assert isinstance(loaded1, ContProperty)
         assert isinstance(loaded2, ContProperty)
@@ -819,9 +833,10 @@ class TestEdgeCases:
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "large_undef.inc")
-        write_property(prop, filename, "large_undef", -1e10)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "large_undef", -1e10, basedir=str(tmp_path))
 
-        loaded = load_cont_property(filename, -1e10)
+        loaded = load_cont_property(filename, -1e10, basedir=str(tmp_path))
         assert isinstance(loaded, ContProperty)
 
     def test_negative_values_in_data(self, tmp_path):
@@ -831,9 +846,10 @@ class TestEdgeCases:
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "negative.inc")
-        write_property(prop, filename, "negative", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "negative", -99.0, basedir=str(tmp_path))
 
-        loaded = load_cont_property(filename, -99.0)
+        loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
 
         # Negative values should be preserved
         assert loaded.data[0] < 0
@@ -847,9 +863,10 @@ class TestEdgeCases:
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "small.inc")
-        write_property(prop, filename, "small", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "small", -99.0, basedir=str(tmp_path))
 
-        loaded = load_cont_property(filename, -99.0)
+        loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
 
         # Small values should be preserved approximately
         assert loaded.data[0] > 0
@@ -862,9 +879,10 @@ class TestEdgeCases:
 
         # Test with -999 (common alternative)
         filename = str(tmp_path / "alt_undef.inc")
-        write_property(prop, filename, "alt_undef", -999.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "alt_undef", -999.0, basedir=str(tmp_path))
 
-        loaded = load_cont_property(filename, -999.0)
+        loaded = load_cont_property(filename, -999.0, basedir=str(tmp_path))
         assert isinstance(loaded, ContProperty)
 
 
@@ -927,7 +945,9 @@ class TestWritePropertyErrorPaths:
         filename = str(tmp_path / "test.inc")
 
         with pytest.raises(TypeError, match="indicator_values must be a list"):
-            write_property(prop, filename, "test", 255, indicator_values="not_a_list")
+            # F-28: pass an explicit trusted base.
+            write_property(prop, filename, "test", 255, indicator_values="not_a_list",
+                           basedir=str(tmp_path))
 
     def test_write_gslib_property_invalid_indicator_values_type(self, tmp_path):
         """write_gslib_property raises TypeError when indicator_values is not a list."""
@@ -937,7 +957,9 @@ class TestWritePropertyErrorPaths:
         filename = str(tmp_path / "test.dat")
 
         with pytest.raises(TypeError, match="indicator_values must be a list"):
-            write_gslib_property(prop, filename, "test", 255, indicator_values=123)
+            # F-28: pass an explicit trusted base.
+            write_gslib_property(prop, filename, "test", 255, indicator_values=123,
+                                 basedir=str(tmp_path))
 
     def test_write_property_none_indicator_values(self, tmp_path):
         """write_property with indicator_values=None defaults to empty list (no error)."""
@@ -947,7 +969,8 @@ class TestWritePropertyErrorPaths:
         filename = str(tmp_path / "test.inc")
 
         # indicator_values=None should default to [] and not raise
-        write_property(prop, filename, "test", 255)  # No indicator_values
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "test", 255, basedir=str(tmp_path))  # No indicator_values
         assert Path(filename).exists()
 
 
@@ -1046,9 +1069,10 @@ class TestReadIncFileSizeValidation:
         mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
         filename = str(tmp_path / "test_non_tuple.inc")
-        write_property(prop, filename, "test_non_tuple", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "test_non_tuple", -99.0, basedir=str(tmp_path))
         # Pass size as int instead of tuple → exercises non-tuple branch
-        loaded = read_inc_file_float(filename, -99.0, 3)
+        loaded = read_inc_file_float(filename, -99.0, 3, basedir=str(tmp_path))
         assert isinstance(loaded, ContProperty)
         assert loaded.data.size == 3
 
@@ -1062,23 +1086,27 @@ class TestReadIncFileSizeValidation:
         mask = np.ones(2, dtype="uint8")
         prop = ContProperty(data, mask)
         filename = str(tmp_path / "test_overflow.inc")
-        write_property(prop, filename, "test_overflow", -99.0)
+        # F-28: pass an explicit trusted base.
+        write_property(prop, filename, "test_overflow", -99.0, basedir=str(tmp_path))
         # Non-tuple size > c_int max (2,147,483,647)
         with pytest.raises(ValueError, match="exceeds c_int max"):
-            read_inc_file_float(filename, -99.0, 3000000000)
+            read_inc_file_float(filename, -99.0, 3000000000, basedir=str(tmp_path))
 
     def test_read_byte_non_tuple_size(self, tmp_path):
         """F-208: read_inc_file_byte accepts non-tuple (int) size."""
-        # Create a valid byte INC file
+        # Create a valid byte INC file. The data section must contain EXACTLY
+        # `size` values: I2-56 made the C++ fast reader reject extra tokens
+        # (matching the slow parser's count validation), so a file with more
+        # values than requested is now an error, not silent truncation.
         filename = str(tmp_path / "test_byte_non_tuple.inc")
         with open(filename, "w") as f:
             f.write("test_byte_non_tuple\n")
-            f.write("10 20 30\n")  # indicator values header
             f.write("10 20 30\n")  # 3 values
             f.write("/\n")
         indicator_values = [10, 20, 30]
         # Pass size as int → exercises non-tuple branch
-        loaded = read_inc_file_byte(filename, 255, 3, indicator_values)
+        # F-28: pass an explicit trusted base.
+        loaded = read_inc_file_byte(filename, 255, 3, indicator_values, basedir=str(tmp_path))
         assert isinstance(loaded, IndProperty)
         assert loaded.data.size == 3
 
@@ -1097,7 +1125,7 @@ class TestReadIncFileSizeValidation:
         indicator_values = [10, 20]
         # Non-tuple size > c_int max
         with pytest.raises(ValueError, match="exceeds c_int max"):
-            read_inc_file_byte(filename, 255, 3000000000, indicator_values)
+            read_inc_file_byte(filename, 255, 3000000000, indicator_values, basedir=str(tmp_path))
 
 
 if __name__ == "__main__":

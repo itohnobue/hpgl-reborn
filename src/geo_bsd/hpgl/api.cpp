@@ -116,6 +116,46 @@ static void validate_shape_dims_or_throw(hpgl_shape_t * shape, const char * cont
 	}
 }
 
+/// Hard upper bound on m_max_neighbours accepted by the C API.
+/// The neighbour lookups reserve O(max_neighbours) per grid node
+/// (sugarbox_neighbour_lookup.h:40-42), so an unbounded value (e.g.
+/// 2e9, which passes the `< 0` check) causes ~32GB of heap reserve.
+/// The bound is aligned with the internal cokriging system-size limit
+/// (simple_cokriging_markI.cpp build_system: ms > 100000). PR-07:
+/// previously 1e7, which admitted the (1e5, 1e7] range that the solver
+/// silently degraded to mean-fill (KI_SINGULARITY); the API must reject
+/// beyond the solver's safe limit with a clear error.
+static const int MAX_NEIGHBOURS_UPPER_BOUND = 100000;
+
+/// Validates m_max_neighbours for a C API kriging/simulation entry point.
+/// Throws hpgl_exception (caught by the caller's try/catch) on negative or
+/// pathologically large values.
+static void validate_max_neighbours_or_throw(int max_neighbours, const char * context)
+{
+	if (max_neighbours < 0)
+	{
+		std::ostringstream oss;
+		oss << context << ": m_max_neighbours cannot be negative";
+		throw hpgl::hpgl_exception("C API", oss.str());
+	}
+	if (max_neighbours > MAX_NEIGHBOURS_UPPER_BOUND)
+	{
+		std::ostringstream oss;
+		oss << context << ": m_max_neighbours " << max_neighbours
+		    << " exceeds maximum allowed (" << MAX_NEIGHBOURS_UPPER_BOUND << ")";
+		throw hpgl::hpgl_exception("C API", oss.str());
+	}
+}
+
+// Defined in neighbourhood_param.cpp — rejects a zero-radius search
+// neighbourhood on kriging paths (F-34). Simulation paths (SGS zero-radius
+// CDF draw) are intentionally exempt.
+namespace hpgl {
+	void validate_kriging_radiuses_or_throw(
+			const sugarbox_search_ellipsoid_t & radiuses,
+			const char * context);
+}
+
 /// Validates simulation_mask shape matches grid shape when mask is provided.
 /// Mismatched shapes cause out-of-bounds array access in simulation kernels.
 static void validate_simulation_mask_shape_or_throw(
@@ -318,6 +358,7 @@ HPGL_API int hpgl_write_inc_file_float(
 	try
 	{
 		using namespace hpgl;
+		validate_shape_dims_or_throw(&(arr->m_shape), "write_inc_file_float");
 		int vol = validate_shape_volume(get_shape_volume(&(arr->m_shape)), "write_inc_file_float");
 		if (vol < 0) return -1;
 		property_writer_t writer;
@@ -353,9 +394,13 @@ void init_remap_table(unsigned char * values, int values_count, int indicator_co
 		throw hpgl::hpgl_exception("init_remap_table",
 			"indicator_count exceeds unsigned char max (255)");
 
-	if (values == nullptr)
+	if (values == nullptr || values_count == 0)
 	{
 		// No remap table provided: use identity mapping [0, 1, 2, ...]
+		// values_count == 0 also means "no remap values" — the Python layer
+		// passes a non-null pointer even for an empty numpy array, so the
+		// null-check alone cannot detect the documented identity default
+		// (F-05).
 		for (int i = 0; i < indicator_count; ++i)
 			remap_table.push_back(i);
 		return;
@@ -405,6 +450,7 @@ HPGL_API int hpgl_write_inc_file_byte(
 	try
 	{
 		using namespace hpgl;
+		validate_shape_dims_or_throw(&(arr->m_shape), "write_inc_file_byte");
 		int vol = validate_shape_volume(get_shape_volume(&(arr->m_shape)), "write_inc_file_byte");
 		if (vol < 0) return -1;
 		std::vector<unsigned char> remap_table;
@@ -457,6 +503,7 @@ hpgl_write_gslib_cont_property(
 	try
 	{
 		using namespace hpgl;
+		validate_shape_dims_or_throw(&data->m_shape, "write_gslib_cont_property");
 		int size = validate_shape_volume(get_shape_volume(&data->m_shape), "write_gslib_cont_property");
 		if (size < 0) return -1;
 		if (data->m_data == nullptr)
@@ -498,6 +545,7 @@ hpgl_write_gslib_byte_property(
 	try
 	{
 		using namespace hpgl;
+		validate_shape_dims_or_throw(&data->m_shape, "write_gslib_byte_property");
 		int size = validate_shape_volume(get_shape_volume(&data->m_shape), "write_gslib_byte_property");
 		if (size < 0) return -1;
 		if (data->m_data == nullptr)
@@ -578,9 +626,9 @@ HPGL_API void hpgl_ordinary_kriging(
 			params->m_radiuses[0],
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
+	validate_kriging_radiuses_or_throw(ok_p.m_radiuses, "hpgl_ordinary_kriging");
 
-	if (params->m_max_neighbours < 0)
-		throw hpgl_exception("hpgl_ordinary_kriging", "m_max_neighbours cannot be negative");
+	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_ordinary_kriging");
 	ok_p.m_max_neighbours = params->m_max_neighbours;
 
 	hpgl::ordinary_kriging(in_prop, grid, ok_p, out_prop, true);
@@ -597,9 +645,9 @@ static void init_sk_params(hpgl_sk_params_t * params, hpgl::sk_params_t & sk_p)
 			params->m_radiuses[0],
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
+	validate_kriging_radiuses_or_throw(sk_p.m_radiuses, "init_sk_params");
 
-	if (params->m_max_neighbours < 0)
-		throw hpgl_exception("init_sk_params", "m_max_neighbours cannot be negative");
+	validate_max_neighbours_or_throw(params->m_max_neighbours, "init_sk_params");
 	sk_p.m_max_neighbours = params->m_max_neighbours;
 
 	if (!params->m_automatic_mean)
@@ -768,9 +816,9 @@ HPGL_API void hpgl_lvm_kriging(
 			params->m_radiuses[0],
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
+	validate_kriging_radiuses_or_throw(ok_p.m_radiuses, "hpgl_lvm_kriging");
 
-	if (params->m_max_neighbours < 0)
-		throw hpgl_exception("hpgl_lvm_kriging", "m_max_neighbours cannot be negative");
+	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_lvm_kriging");
 	ok_p.m_max_neighbours = params->m_max_neighbours;
 
 	cont_property_array_t out_prop(output_data, output_mask, out_size);
@@ -830,6 +878,21 @@ hpgl_indicator_kriging(
 	if (out_data->m_data == nullptr)
 		throw hpgl_exception("hpgl_indicator_kriging", "Null data pointer in out_data");
 
+	// PR-05 (F-34): reject a zero search radius on the indicator kriging
+	// path. An all-zero ellipsoid yields an empty neighbourhood and every
+	// node silently degrades to mean/noise fill. Each indicator category
+	// carries its own search radius (init_sis_params pushes one ellipsoid
+	// per category). Simulation paths (SIS zero-radius CDF draw) are
+	// intentionally exempt — the guard lives on kriging entry points only.
+	for (int i = 0; i < indicator_count; ++i)
+	{
+		sugarbox_search_ellipsoid_t radiuses(
+				params[i].m_radiuses[0],
+				params[i].m_radiuses[1],
+				params[i].m_radiuses[2]);
+		validate_kriging_radiuses_or_throw(radiuses, "hpgl_indicator_kriging");
+	}
+
 	indicator_property_array_t in_prop(in_data->m_data, in_data->m_mask, size, in_data->m_indicator_count);
 	indicator_property_array_t out_prop(out_data->m_data, out_data->m_mask, size2, out_data->m_indicator_count);
 
@@ -874,6 +937,7 @@ hpgl_sgs_simulation(
 	init_grid(grid, &(data->m_shape));
 
 	sgs_params_t sgs_p;
+	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_sgs_simulation");
 	init_sgs_params(params, &sgs_p);
 
 	if (mean != 0)
@@ -927,6 +991,7 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	init_grid(grid, &(data->m_shape));
 
 	sgs_params_t sgs_p;
+	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_sgs_lvm_simulation");
 	init_sgs_params(params, &sgs_p);
 
 	// Defensive: ensure means data pointer is valid before use
@@ -1000,9 +1065,9 @@ HPGL_API void hpgl_median_ik(
 			params->m_radiuses[0],
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
+	validate_kriging_radiuses_or_throw(mik_p.m_radiuses, "hpgl_median_ik");
 
-	if (params->m_max_neighbours < 0)
-		throw hpgl_exception("hpgl_median_ik", "m_max_neighbours cannot be negative");
+	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_median_ik");
 	mik_p.m_max_neighbours = params->m_max_neighbours;
 	mik_p.m_marginal_probs[0] = params->m_marginal_probs[0];
 	mik_p.m_marginal_probs[1] = params->m_marginal_probs[1];
@@ -1090,6 +1155,9 @@ hpgl_sis_simulation(
 	sugarbox_grid_t grid;
 	init_grid(grid, &data->m_shape);
 
+	for (int i = 0; i < indicator_count; ++i)
+		validate_max_neighbours_or_throw(params[i].m_max_neighbours, "hpgl_sis_simulation");
+
 	ik_params_t ikp;
 	init_sis_params(params, indicator_count, &ikp);
 
@@ -1160,6 +1228,9 @@ hpgl_sis_simulation_lvm(
 
 	sugarbox_grid_t grid;
 	init_grid(grid, &data->m_shape);
+
+	for (int i = 0; i < indicator_count; ++i)
+		validate_max_neighbours_or_throw(params[i].m_max_neighbours, "hpgl_sis_simulation_lvm");
 
 	ik_params_t ikp;
 	init_sis_params(params, indicator_count, &ikp);
@@ -1267,8 +1338,7 @@ hpgl_simple_cokriging_mark1(
 				output_data->m_data, output_data->m_mask, size3);
 
 		neighbourhood_param_t np;
-		if (params->m_max_neighbours < 0)
-			throw hpgl_exception("hpgl_simple_cokriging_mark1", "m_max_neighbours cannot be negative");
+		validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_simple_cokriging_mark1");
 		np.m_max_neighbours = params->m_max_neighbours;
 
 		covariance_param_t cp;
@@ -1289,6 +1359,7 @@ hpgl_simple_cokriging_mark1(
 			params->m_radiuses[0],
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
+		validate_kriging_radiuses_or_throw(np.m_radiuses, "hpgl_simple_cokriging_mark1");
 
 		sugarbox_grid_t grid;
 		init_grid(grid, &input_data->m_shape);
@@ -1377,13 +1448,13 @@ hpgl_simple_cokriging_mark2(
 		init_cov_params_base(secondary_cp, &params->m_secondary_cov_params);
 
 		neighbourhood_param_t np;
-		if (params->m_max_neighbours < 0)
-			throw hpgl_exception("hpgl_simple_cokriging_mark2", "m_max_neighbours cannot be negative");
+		validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_simple_cokriging_mark2");
 		np.m_max_neighbours = params->m_max_neighbours;
 		np.set_radiuses(
 			params->m_radiuses[0],
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
+		validate_kriging_radiuses_or_throw(np.m_radiuses, "hpgl_simple_cokriging_mark2");
 
 		simple_cokriging_markII(
 				grid, primary_prop,

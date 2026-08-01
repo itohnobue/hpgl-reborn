@@ -372,12 +372,16 @@ def test_simple_cokriging_mark1_legacy():
     # Generate synthetic secondary data correlated with primary
     np.random.seed(42)
     primary_mean = calc_mean(prop_cont)
+    # F-55: load_cont_property with a 3-tuple size now returns 3D arrays on
+    # both parser paths; ravel for the flat-array arithmetic below.
+    prim_data_flat = prop_cont.data.ravel(order="F")
+    prim_mask_flat = prop_cont.mask.ravel(order="F")
     sec_data_arr = np.where(
-        prop_cont.mask == 1,
-        prop_cont.data * 0.97 + np.random.randn(BIG_SIZE).astype("float32") * 0.5,
+        prim_mask_flat == 1,
+        prim_data_flat * 0.97 + np.random.randn(BIG_SIZE).astype("float32") * 0.5,
         -99.0,
     ).astype("float32")
-    sec_mask = prop_cont.mask.copy()
+    sec_mask = prim_mask_flat.copy()
     sec_data = ContProperty(sec_data_arr, sec_mask)
     secondary_mean = calc_mean(sec_data)
 
@@ -422,12 +426,16 @@ def test_simple_cokriging_mark2_legacy():
     # Generate synthetic secondary data
     np.random.seed(42)
     primary_mean = calc_mean(prop_cont)
+    # F-55: load_cont_property with a 3-tuple size now returns 3D arrays on
+    # both parser paths; ravel for the flat-array arithmetic below.
+    prim_data_flat = prop_cont.data.ravel(order="F")
+    prim_mask_flat = prop_cont.mask.ravel(order="F")
     sec_data_arr = np.where(
-        prop_cont.mask == 1,
-        prop_cont.data * 0.97 + np.random.randn(BIG_SIZE).astype("float32") * 0.5,
+        prim_mask_flat == 1,
+        prim_data_flat * 0.97 + np.random.randn(BIG_SIZE).astype("float32") * 0.5,
         -99.0,
     ).astype("float32")
-    sec_mask = prop_cont.mask.copy()
+    sec_mask = prim_mask_flat.copy()
     sec_data = ContProperty(sec_data_arr, sec_mask)
     secondary_mean = calc_mean(sec_data)
 

@@ -64,6 +64,10 @@ void covariance_field_t::init(
 	m_ydiameter = (yradius * 2 + 1);
 	m_zdiameter = (zradius * 2 + 1);
 
+	// PR-06: keep the exact model for out-of-box covariance fallback in
+	// operator() (F-21 sibling). See covariance_field.h.
+	m_exact_model = cov;
+
 	double threshold = cov(
 		sugarbox_location_t(0,0,0), 
 		sugarbox_location_t(0,0,0)) / 100;

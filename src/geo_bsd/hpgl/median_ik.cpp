@@ -116,9 +116,16 @@ void median_ik_for_two_indicators(
 				local_lap_count = 0;
 				if (report.cancelled()) {
 #ifdef _OPENMP
+					// OpenMP §2.11.2: break is forbidden inside a
+					// worksharing-loop construct. Use cancel-for to
+					// prevent new iterations; the current iteration
+					// finishes naturally (no more real work after
+					// this check). In single-threaded builds (no
+					// OpenMP), the plain 'break' is standard-conformant.
 					#pragma omp cancel for
-#endif
+#else
 					break;
+#endif
 				}
 			}
 		}

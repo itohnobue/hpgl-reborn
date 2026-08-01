@@ -34,6 +34,16 @@ class ValidationConstants:
     MAX_GRID_DIMENSION = 10000000
     MAX_GRID_SIZE = 1000000000  # 1 billion cells
 
+    # Total values allowed in a single pure-Python GSLIB load
+    # (grid cells x property count). Bounds the worst case to the same
+    # footprint a single MAX_GRID_SIZE property already permits.
+    MAX_GSLIB_VALUES = 1000000000
+
+    # Volume cap for the pure-Python ellipse-mask moving-average loop.
+    # The cubical-mask path is vectorized and unbounded; only the
+    # per-cell Python loop needs this DoS bound.
+    MAX_MOVING_AVERAGE_VOLUME = 1000000
+
     # Neighbor count limits
     MIN_NEIGHBORS = 1
     MAX_NEIGHBORS = 1000
@@ -42,6 +52,14 @@ class ValidationConstants:
     # Radius limits
     MIN_RADIUS = 0.0
     MAX_RADIUS = 1000000.0
+
+    # Positive minimum search radius for the kriging path (SK/LVM/etc.).
+    # Radius 0 is still accepted globally (MIN_RADIUS=0.0) because the
+    # documented SGS zero-radius CDF-draw behavior depends on it; the
+    # kriging path passes MIN_KRIGING_RADIUS to validate_radius so a
+    # zero-radius kriging search (which silently mean-fills every node)
+    # is rejected instead.
+    MIN_KRIGING_RADIUS = 1.0
 
     # Covariance parameter limits
     MIN_SILL = 1e-6
@@ -492,7 +510,9 @@ class ParameterValidator:
 
     @staticmethod
     def validate_radius(
-        radius: float | int | tuple, name: str = "radius"
+        radius: float | int | tuple,
+        name: str = "radius",
+        min_radius: float | None = None,
     ) -> tuple[float, float, float]:
         """
         Validates radius parameters.
@@ -500,6 +520,11 @@ class ParameterValidator:
         Args:
             radius: Single value or tuple of (rx, ry, rz)
             name: Parameter name for error messages
+            min_radius: Optional lower bound override. When ``None``,
+                ``ValidationConstants.MIN_RADIUS`` is used. The kriging
+                path passes ``MIN_KRIGING_RADIUS`` so a zero-radius
+                search (which silently mean-fills) is rejected while the
+                SGS zero-radius CDF-draw behavior keeps working.
 
         Returns:
             Tuple of (rx, ry, rz) - preserves int type when input is int
@@ -516,12 +541,13 @@ class ParameterValidator:
                 f"Radius must be a number or tuple of 3 numbers, got {type(radius)}", name
             )
 
+        lower_bound = ValidationConstants.MIN_RADIUS if min_radius is None else min_radius
         for i, r in enumerate(vals):
             if numpy.isnan(r) or numpy.isinf(r):
                 raise CriticalValidationError(f"{name}[{i}] is NaN or infinite", name)
-            if r < ValidationConstants.MIN_RADIUS:
+            if r < lower_bound:
                 raise CriticalValidationError(
-                    f"{name}[{i}] = {r} is less than minimum {ValidationConstants.MIN_RADIUS}", name
+                    f"{name}[{i}] = {r} is less than minimum {lower_bound}", name
                 )
             if r > ValidationConstants.MAX_RADIUS:
                 raise CriticalValidationError(
@@ -544,9 +570,15 @@ class ParameterValidator:
             max_neighbors: Maximum number of neighbors
 
         Raises:
+            TypeError: If max_neighbors is not an int (bool excluded).
             CriticalValidationError: If max_neighbors is invalid
             ValidationWarning: If max_neighbors is unusually large
         """
+        if not isinstance(max_neighbors, (int, numpy.integer)) or isinstance(max_neighbors, bool):
+            raise TypeError(
+                f"max_neighbors must be an int, got {type(max_neighbors).__name__}"
+            )
+
         if max_neighbors < ValidationConstants.MIN_NEIGHBORS:
             raise CriticalValidationError(
                 f"Max neighbors {max_neighbors} is less than minimum {ValidationConstants.MIN_NEIGHBORS}",
@@ -891,6 +923,12 @@ def validate_kriging_params(*args, **kwargs):
     returns the validated ``(int, int, int)`` radiuses tuple.
 
     **Decorator (tests):** ``@validate_kriging_params``.
+
+    An optional ``min_radius`` keyword is forwarded to
+    ``ParameterValidator.validate_radius`` — the kriging path passes
+    ``ValidationConstants.MIN_KRIGING_RADIUS`` so zero-radius kriging
+    (which silently mean-fills) is rejected while SGS zero-radius
+    CDF-draw keeps working.
     """
     if len(args) == 1 and callable(args[0]) and not kwargs:
         # --- decorator mode ---
@@ -899,7 +937,10 @@ def validate_kriging_params(*args, **kwargs):
         @wraps(func)
         def wrapper(*a, **kw):
             if "radiuses" in kw:
-                ParameterValidator.validate_radius(kw["radiuses"], "radiuses")
+                ParameterValidator.validate_radius(
+                    kw["radiuses"], "radiuses",
+                    min_radius=kw.get("min_radius"),
+                )
             if "max_neighbours" in kw or "max_neighbors" in kw:
                 n = kw.get("max_neighbours", kw.get("max_neighbors"))
                 if n is not None:
@@ -918,12 +959,15 @@ def validate_kriging_params(*args, **kwargs):
     radiuses = kwargs.get("radiuses", args[1] if len(args) > 1 else None)
     max_neighbours = kwargs.get("max_neighbours", args[2] if len(args) > 2 else None)
     cov_model = kwargs.get("cov_model", args[3] if len(args) > 3 else None)
+    min_radius = kwargs.get("min_radius", None)
 
     if grid is not None:
         validate_grid_params(grid)
     valid_radiuses = None
     if radiuses is not None:
-        valid_radiuses = ParameterValidator.validate_radius(radiuses, "radiuses")
+        valid_radiuses = ParameterValidator.validate_radius(
+            radiuses, "radiuses", min_radius=min_radius
+        )
     if max_neighbours is not None:
         ParameterValidator.validate_max_neighbors(max_neighbours)
     if cov_model is not None:

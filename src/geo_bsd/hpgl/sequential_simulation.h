@@ -65,6 +65,7 @@ namespace hpgl
 		kriging_ws_t<cont_value_t, sugarbox_location_t> ws;
 		unsigned long kriging_failures = 0;
 		unsigned long kriging_skipped = 0;
+		unsigned long kriging_ndmin_skipped = 0;
 		for (node_index_t counter = 0, counter_end = property.size(); counter < counter_end; ++counter, report.next_lap())		
 		{
 			node = path_gen.next();
@@ -94,6 +95,18 @@ namespace hpgl
 			ki_result_t ki_result = kriging_interpolation_ws(property, is_informed_predicate_t<cont_property_array_t>(property), node, pcov, mp, 
 				neighbour_lookup, weight_calculator_sgs, mean, variance, ws);			
 
+			// GSLIB ndmin semantics (F-14): when fewer than
+			// m_min_neighbours conditioning data are available, leave the
+			// node unsimulated instead of simulating from the marginal
+			// distribution. Previously m_min_neighbours was stored/printed
+			// but never wired into the simulation logic.
+			if (params.m_min_neighbours > 0
+				&& ws.indices.size() < static_cast<size_t>(params.m_min_neighbours))
+			{
+				++kriging_ndmin_skipped;
+				continue;
+			}
+
 			if (ki_result != ki_result_t::KI_SUCCESS)
 				++kriging_failures;
 
@@ -111,6 +124,12 @@ namespace hpgl
 				"HPGL: SGS kriging failures: %lu nodes fell back to marginal mean (of %lu total, %lu skipped).\n",
 				kriging_failures, static_cast<unsigned long>(property.size()),
 				kriging_skipped);
+		}
+		if (kriging_ndmin_skipped > 0)
+		{
+			fprintf(stderr,
+				"HPGL: SGS ndmin: %lu nodes left unsimulated (fewer than %d conditioning data).\n",
+				kriging_ndmin_skipped, params.m_min_neighbours);
 		}
 		if (kriging_skipped >= static_cast<unsigned long>(property.size()))
 		{

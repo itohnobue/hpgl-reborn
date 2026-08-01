@@ -126,8 +126,19 @@ strict-config = true
 logging.level = "INFO"
 
 [tool.scikit-build.sdist]
+# Explicit inclusion mode: only files matching `include` are shipped, and
+# `exclude` patterns WIN over `include`. In the default mode include wins, so
+# the broad `src/` include re-added stale compiled artifacts (.dylib/.so/.pyc)
+# that the excludes tried to remove (I2-44). The build-critical root files
+# (pyproject.toml, CMakeLists.txt, CMakePresets.json) are listed explicitly
+# because nothing is included by default in this mode.
+inclusion-mode = "explicit"
+
 # Include these files in source distribution
 include = [
+    "pyproject.toml",
+    "CMakeLists.txt",
+    "CMakePresets.json",
     "license.txt",
     "readme.md",
     "src/",
@@ -165,8 +176,11 @@ build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
 skip = "*-win32 *-manylinux_i686 pp*"
 
 # Testing commands
-# Verify not just import but that the native library loaded and key API is present
-test-command = "python -c \"import hpgl; v = hpgl.__version__; assert v, 'no version'; assert hasattr(hpgl, 'simple_kriging'), 'API missing'; print(f'hpgl {v} OK')\""
+# Verify not just import but that the native library loaded and key API is present.
+# The wheel installs the source package as `geo_bsd` (importable top-level
+# package) — the distribution name is `hpgl`, so `importlib.metadata.version`
+# still resolves it (I2-07: align with the actual import name).
+test-command = "python -c \"import geo_bsd; v = geo_bsd.__version__; assert v, 'no version'; assert hasattr(geo_bsd, 'simple_kriging'), 'API missing'; print(f'geo_bsd {v} OK')\""
 
 # Environment variables
 environment = { CMAKE_BUILD_PARALLEL_LEVEL = "4" }

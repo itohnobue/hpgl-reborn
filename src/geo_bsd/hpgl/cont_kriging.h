@@ -91,17 +91,13 @@ namespace hpgl
 		report.start();
 		node_index_t idx_end = input_property.size();
 
-		// Pre-initialise uninformed cells to NaN so that unprocessed cells
-		// (e.g. after cancellation) are distinguishable from computed cells.
-		// The OpenMP loop below overwrites these with computed values or
-		// mean-on-failure as each cell is processed.
-		for (node_index_t idx = 0; idx < idx_end; ++idx)
-		{
-			if (!input_property.is_informed(idx))
-			{
-				output_property.set_at(idx, std::numeric_limits<value_t>::quiet_NaN());
-			}
-		}
+		// No NaN pre-initialisation: output cells that cannot be kriged
+		// (no neighbours / singular system under undefined_on_failure) keep
+		// their initial value (0.0) and mask=0, so they remain uninformed.
+		// The mask is the authoritative "informed" signal — NaN data is not
+		// written because the Python wrapper rejects NaN output with
+		// RuntimeError, and the tests expect graceful completion for
+		// sparse/empty data (cells left uninformed, not NaN).
 
 		unsigned long points_calculated = 0;
 		unsigned long points_without_neighbours = 0;
@@ -192,9 +188,16 @@ namespace hpgl
 				local_lap_count = 0;
 				if (report.cancelled()) {
 #ifdef _OPENMP
+					// OpenMP §2.11.2: break is forbidden inside a
+					// worksharing-loop construct. Use cancel-for to
+					// prevent new iterations; the current iteration
+					// finishes naturally (no more real work after
+					// this check). In single-threaded builds (no
+					// OpenMP), the plain 'break' is standard-conformant.
 					#pragma omp cancel for
-#endif
+#else
 					break;
+#endif
 				}
 			}
 		}
@@ -222,7 +225,22 @@ namespace hpgl
 #endif
 
 		report.stop();
-		stats.m_points_calculated = points_calculated;
+		// points_calculated semantics depend on the failure-handling mode:
+		//  - mean_on_failure (SK/LVM): counts only KI_SUCCESS cells, so the
+		//    Python F-33 warning contract fires ("calculated < expected"
+		//    detects no-neighbour mean-fill) — reviewers verified this is the
+		//    intended mean_on_failure semantics.
+		//  - undefined_on_failure (OK): counts every uninformed cell the
+		//    kriging loop processed (successes + no-neighbour + singular), so
+		//    a fully-masked property reports points_calculated == grid size
+		//    and callers can distinguish "kriging ran but everything failed"
+		//    from "kriging never ran" via points_without_neighbours /
+		//    points_singularity (F-33 contract:
+		//    test_kriging_stats_detects_no_neighbours_on_sparse_data).
+		if (fh == kriging_failure_handling::mean_on_failure)
+			stats.m_points_calculated = points_calculated;
+		else
+			stats.m_points_calculated = points_calculated + points_without_neighbours + points_singularity;
 		stats.m_points_without_neighbours = points_without_neighbours;
 		stats.m_points_singularity = points_singularity;
 		stats.m_mean = points_processed > 0 ? sum / points_processed : 0;

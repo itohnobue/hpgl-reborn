@@ -78,6 +78,20 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # OpenMP
 if(HPGL_USE_OPENMP)
+    # macOS/AppleClang: CMake's FindOpenMP does not search the Homebrew
+    # prefix by default, so HPGL_USE_OPENMP=ON silently degraded to a
+    # serial build on Apple Silicon/Intel even though libomp is installed
+    # (production-check gap: wheels built on macOS shipped without OpenMP).
+    # Point OpenMP_ROOT at the Homebrew libomp installation when present.
+    if(APPLE AND NOT DEFINED OpenMP_ROOT)
+        foreach(_brew_prefix "/opt/homebrew/opt/libomp" "/usr/local/opt/libomp")
+            if(EXISTS "${_brew_prefix}/include/omp.h")
+                set(OpenMP_ROOT "${_brew_prefix}" CACHE PATH "Homebrew libomp prefix" FORCE)
+                message(STATUS "OpenMP: using Homebrew libomp at ${_brew_prefix}")
+                break()
+            endif()
+        endforeach()
+    endif()
     find_package(OpenMP)
     if(OpenMP_FOUND)
         message(STATUS "OpenMP found - version ${OpenMP_CXX_VERSION}")
@@ -281,10 +295,12 @@ endif()
 
 # OpenMP support
 if(HPGL_USE_OPENMP AND OpenMP_FOUND)
+    # OpenMP::OpenMP_CXX propagates the compiler flags (e.g. -Xclang -fopenmp
+    # on AppleClang) via its interface; adding ${OpenMP_CXX_FLAGS} manually
+    # passed the flag string as ONE quoted argument ("-Xclang -fopenmp"),
+    # which clang++ rejects as "unknown argument". The imported target is
+    # sufficient and correct.
     target_link_libraries(hpgl_core PUBLIC OpenMP::OpenMP_CXX)
-    target_compile_options(hpgl_core PUBLIC
-        $<$<COMPILE_LANGUAGE:CXX>:${OpenMP_CXX_FLAGS}>
-    )
 endif()
 
 # ============================================================================
@@ -345,11 +361,9 @@ if(HPGL_BUILD_VARIOGRAM)
     # OpenMP support for cvariogram module
     # The variogram computation contains an O(n²) double loop in
     # calc_variograms_from_point_set that benefits from parallelization.
+    # OpenMP::OpenMP_CXX propagates the compile flags; see hpgl_core block.
     if(HPGL_USE_OPENMP AND OpenMP_FOUND)
         target_link_libraries(hpgl_variogram PUBLIC OpenMP::OpenMP_CXX)
-        target_compile_options(hpgl_variogram PUBLIC
-            $<$<COMPILE_LANGUAGE:CXX>:${OpenMP_CXX_FLAGS}>
-        )
     endif()
 endif()
 
@@ -359,14 +373,27 @@ endif()
 
 include(GNUInstallDirs)
 
+# Python package destination for wrapper scripts AND native libraries.
+# Wheel builds (scikit-build-core, detected via SKBUILD) install into the
+# importable top-level package directory (${SKBUILD_PLATLIB_DIR} = wheel
+# root = site-packages when installed), named after the source package
+# (geo_bsd). Standalone installs keep the historical ${CMAKE_INSTALL_LIBDIR}
+# layout. Native libraries MUST be co-located with the wrapper scripts so
+# that _safe_load_library() (which searches ref_path.parent) can find them.
+if(SKBUILD)
+    set(HPGL_PYTHON_DEST ${SKBUILD_PLATLIB_DIR}/geo_bsd)
+else()
+    set(HPGL_PYTHON_DEST ${CMAKE_INSTALL_LIBDIR}/hpgl)
+endif()
+
 # Install core library
 # Native library must be co-located with Python wrapper scripts so that
 # _safe_load_library() (which searches ref_path.parent) can find it.
 install(TARGETS hpgl_core
     EXPORT hpglTargets
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
-    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
+    ARCHIVE DESTINATION ${HPGL_PYTHON_DEST}
+    LIBRARY DESTINATION ${HPGL_PYTHON_DEST}
+    RUNTIME DESTINATION ${HPGL_PYTHON_DEST}
 )
 
 # Install headers
@@ -377,11 +404,16 @@ install(DIRECTORY
 )
 
 # Install Python wrapper scripts
+# NOTE: every module imported unconditionally by __init__.py / geo.py / sgs.py /
+# sis.py / gtsim.py MUST be listed here (config.py and ffi_adapter.py were
+# previously omitted — F-10: import hpgl failed with ModuleNotFoundError).
 if(HPGL_BUILD_PYTHON)
     install(FILES
         src/geo_bsd/__init__.py
         src/geo_bsd/cdf.py
+        src/geo_bsd/config.py
         src/geo_bsd/cvariogram.py
+        src/geo_bsd/ffi_adapter.py
         src/geo_bsd/geo.py
         src/geo_bsd/gtsim.py
         src/geo_bsd/hpgl_wrap.py
@@ -390,16 +422,16 @@ if(HPGL_BUILD_PYTHON)
         src/geo_bsd/sis.py
         src/geo_bsd/validation.py
         src/geo_bsd/variogram.py
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
+        DESTINATION ${HPGL_PYTHON_DEST}
     )
 endif()
 
 # Install variogram module
 if(HPGL_BUILD_VARIOGRAM)
     install(TARGETS hpgl_variogram
-        RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
+        RUNTIME DESTINATION ${HPGL_PYTHON_DEST}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/hpgl
+        LIBRARY DESTINATION ${HPGL_PYTHON_DEST}
     )
 endif()
 

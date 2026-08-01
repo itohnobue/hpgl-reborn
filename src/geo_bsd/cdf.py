@@ -128,4 +128,13 @@ def calc_cdf(prop):
     for i in range(size):
         probs[i] = last_prob + counts[i] / full_count
         last_prob = probs[i]
+    # F-04: the final cumulative probability is exactly 1.0 (sum of counts
+    # == full_count). A p=1.0 CDF value feeds the SGS back-transform where
+    # the C++ inverse maps it to the median — silently destroying the max
+    # datum. Clamp the last value to the largest float32 strictly below
+    # 1.0 (nextafter), matching cpp-A's tail-saturation convention in
+    # gaussian_distribution.h/non_parametric_cdf.h, so the max datum maps
+    # to a large-but-finite normal score instead of the median.
+    if size > 0 and probs[-1] >= 1.0:
+        probs[-1] = float(numpy.nextafter(numpy.float32(1.0), numpy.float32(0.0)))
     return CdfData(values=values, probs=probs)

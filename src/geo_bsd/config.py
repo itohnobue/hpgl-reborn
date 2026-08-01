@@ -129,6 +129,11 @@ class SGSConfig:
                 raise ValueError(
                     f"SGSConfig: radiuses[{i}] must be non-negative, got {r}"
                 )
+            if not float(r).is_integer():
+                raise ValueError(
+                    f"SGSConfig: radiuses[{i}] = {r} is not an integer "
+                    f"(radius must be a whole number of grid cells)"
+                )
 
         # -- use_harddata --
         if not isinstance(self.use_harddata, bool):
@@ -230,6 +235,11 @@ class SISConfig:
             if r < 0:
                 raise ValueError(
                     f"SISConfig: radiuses[{i}] must be non-negative, got {r}"
+                )
+            if not float(r).is_integer():
+                raise ValueError(
+                    f"SISConfig: radiuses[{i}] = {r} is not an integer "
+                    f"(radius must be a whole number of grid cells)"
                 )
 
         # -- use_harddata --

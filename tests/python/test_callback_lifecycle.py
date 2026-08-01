@@ -1,7 +1,8 @@
 """Tests for HPGL callback handler lifecycle — M-P-07, M-P-08.
 
 Covers:
-- M-P-07: _old_handler_refs CFUNCTYPE deferred-deletion cache cap of 4
+- M-P-07: _old_handler_refs CFUNCTYPE deferred-deletion cache cap (8 — shared
+  across output AND progress handlers; I2-57b raised the bound from 4)
 - M-P-08: Callback exception, non-callable TypeError, handler cleared after use
 """
 
@@ -31,7 +32,7 @@ except (ImportError, OSError):
 
 
 # =============================================================================
-# M-P-07: _old_handler_refs CFUNCTYPE cache cap of 4
+# M-P-07: _old_handler_refs CFUNCTYPE cache cap (8 — both handler types)
 # =============================================================================
 
 
@@ -48,8 +49,9 @@ class TestOldHandlerRefsCache:
     def test_register_handlers_more_than_four_times(self):
         """Register handlers >4 times — cache doesn't overflow/crash (M-P-07).
 
-        The _old_handler_refs list is capped at 4 entries. After the 5th
-        registration, the oldest entry is evicted (pop(0)).
+        The _old_handler_refs list is a shared bounded FIFO across both
+        output and progress handlers. The bound is 8 (4 generations per
+        handler type; I2-57b). After 7 registrations all entries fit.
         """
         handlers = []
 
@@ -63,11 +65,12 @@ class TestOldHandlerRefsCache:
             set_output_handler(h, f"param_{i}")
 
         # Handler was registered 7 times — verify no crash/error
-        # After 7 sets, _old_handler_refs is capped at 4 entries
+        # After 7 sets, _old_handler_refs is capped at 8 entries
         from geo_bsd import geo
-        # The cache should have at most 4 entries
-        assert len(geo._old_handler_refs) <= 4, (
-            f"_old_handler_refs should be capped at 4, got {len(geo._old_handler_refs)}"
+        # The cache should have at most 8 entries
+        assert len(geo._old_handler_refs) <= geo._OLD_HANDLER_REFS_CAP, (
+            f"_old_handler_refs should be capped at {geo._OLD_HANDLER_REFS_CAP}, "
+            f"got {len(geo._old_handler_refs)}"
         )
 
     def test_handler_refs_cache_survives_mixed_registration(self):
@@ -87,8 +90,9 @@ class TestOldHandlerRefsCache:
             set_progress_handler(make_progress(i), i)
 
         from geo_bsd import geo
-        assert len(geo._old_handler_refs) <= 4, (
-            f"Cache should be capped at 4 after mixed registration, got {len(geo._old_handler_refs)}"
+        assert len(geo._old_handler_refs) <= geo._OLD_HANDLER_REFS_CAP, (
+            f"Cache should be capped at {geo._OLD_HANDLER_REFS_CAP} after mixed "
+            f"registration, got {len(geo._old_handler_refs)}"
         )
 
 

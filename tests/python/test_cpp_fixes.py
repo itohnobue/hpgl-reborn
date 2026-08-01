@@ -28,7 +28,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 # ==============================================================================
 
 try:
-    import geo_bsd
     from geo_bsd.geo import (
         ContProperty,
         CovarianceModel,
@@ -556,12 +555,23 @@ class TestKrigingFailureTracking:
     def test_kriging_stats_after_sgs_simulation(
         self, small_cont_prop, small_grid, sample_cov_model
     ):
-        """After SGS simulation, kriging stats are not populated."""
+        """After SGS simulation, kriging stats are not populated.
+
+        Deterministic by construction: SGS does not call set_kriging_stats()
+        in the current C++ build, so the C++ stats must be UNCHANGED by the
+        call. Snapshotting before/after removes the test-order dependency
+        (a prior kriging test may have left points_calculated > 0, which is
+        stale data SGS must not touch). When the C++ SGS path is updated to
+        call set_kriging_stats(), this assertion will fail and the contract
+        can be re-assessed.
+        """
         from geo_bsd.hpgl_wrap import _HAS_KRIGING_STATS, get_kriging_stats
         from geo_bsd.sgs import sgs_simulation
 
         if not _HAS_KRIGING_STATS:
             pytest.skip("hpgl_get_kriging_stats not available in this library build")
+
+        stats_before = dict(get_kriging_stats())
 
         sgs_simulation(
             prop=small_cont_prop,
@@ -574,17 +584,9 @@ class TestKrigingFailureTracking:
             kriging_type="sk",
         )
 
-        stats = get_kriging_stats()
-        if stats["points_calculated"] > 0:
-            pytest.skip(
-                "SGS does not populate kriging stats in the current C++ build; "
-                "points_calculated > 0 indicates stale stats from a prior kriging call "
-                "(test-order dependency). When C++ SGS path calls set_kriging_stats(), "
-                "re-enable the assert."
-            )
-        assert stats["points_calculated"] == 0, (
-            f"Expected zero points_calculated (SGS does not produce kriging stats), "
-            f"got {stats}"
+        stats_after = dict(get_kriging_stats())
+        assert stats_after == stats_before, (
+            f"SGS must not modify kriging stats; got {stats_before} -> {stats_after}"
         )
 
     def test_kriging_stats_detects_no_neighbours_on_sparse_data(
@@ -765,11 +767,22 @@ class TestSampleFunctionNaNDetection:
     """
 
     def test_sis_2indicator_non_lvm_completes(
-        self, small_ind_prop, small_grid, sis_data_2ind
+        self, small_grid, sis_data_2ind
     ):
-        """2-indicator SIS (non-LVM) exercises sample() path via median_ik redirect."""
+        """2-indicator SIS (non-LVM) exercises sample() path.
+
+        Uses a 2-category property matching the 2-indicator data config
+        (F-24: indicator_count must match len(data) — a mismatch now raises).
+        """
+        # Create 2-category indicator property matching sis_data_2ind
+        size = 5 * 5 * 3
+        data = np.random.RandomState(44).randint(0, 2, size, dtype="uint8")
+        mask = np.ones(size, dtype="uint8")
+        mask[::10] = 0
+        prop2 = IndProperty(data, mask, 2)
+
         result = sis_simulation(
-            prop=small_ind_prop,
+            prop=prop2,
             grid=small_grid,
             data=sis_data_2ind,
             seed=42,

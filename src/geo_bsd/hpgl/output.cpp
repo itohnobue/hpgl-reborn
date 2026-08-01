@@ -11,14 +11,17 @@ struct output_handler_pair_t {
 	void * param;
 };
 static output_handler_pair_t s_output_pair{nullptr, nullptr};
-static std::mutex s_output_pair_mutex;
+// Recursive: the pair mutex is held across the handler invocation (F-16) so a
+// concurrent setter cannot free the trampoline mid-invoke; a handler that itself
+// calls hpgl_set_output_handler re-enters on the same thread and must not deadlock.
+static std::recursive_mutex s_output_pair_mutex;
 
 struct progress_handler_pair_t {
 	int (*handler)(char * stage, int percentage, void * param);
 	void * param;
 };
 static progress_handler_pair_t s_progress_pair{nullptr, nullptr};
-static std::mutex s_progress_pair_mutex;
+static std::recursive_mutex s_progress_pair_mutex;
 
 // Mutex serializes handler invocations from concurrent threads.
 // The write() and update_progress() handlers may be called from
@@ -27,26 +30,45 @@ static std::mutex s_progress_pair_mutex;
 // or interleave output.
 static std::mutex s_handler_mutex;
 
+// Thread-local reentrancy guard (F-53). A Python output/progress handler that
+// calls back into HPGL (e.g. a kriging call that itself emits write()/
+// update_progress()) would re-enter this module on the same thread. Re-invoking
+// the handler would recurse forever; re-locking s_handler_mutex would deadlock.
+// While set, reentrant calls fall back to the default std::cout path.
+static thread_local bool t_in_handler = false;
+
 
 namespace hpgl
 {
 	void write(const char * str)
 	{
-		int (*h)(char*, void*) = nullptr;
-		void *p = nullptr;
+		if (t_in_handler)
 		{
-			std::lock_guard<std::mutex> lock(s_output_pair_mutex);
-			h = s_output_pair.handler;
-			p = s_output_pair.param;
+			// Reentrant call from within a handler invocation on this thread.
+			// Fall back to the default stream instead of re-invoking the
+			// handler (which would recurse forever) or re-locking the
+			// invocation mutex (which would self-deadlock).
+			std::cout << "[LOG2]";
+			std::cout << str;
+			std::cout.flush();
+			return;
 		}
-		if (h)
+		// Lock order: s_handler_mutex first, then the pair mutex (consistent
+		// with update_progress, so a handler calling a setter on another pair
+		// cannot deadlock against a concurrent invocation on that pair).
+		std::lock_guard<std::mutex> hlock(s_handler_mutex);
+		// Hold the pair mutex across the invocation (F-16): hpgl_set_output_handler
+		// blocks until the handler call completes, so a concurrent clear cannot
+		// free the trampoline/param we are about to call.
+		std::lock_guard<std::recursive_mutex> lock(s_output_pair_mutex);
+		if (s_output_pair.handler)
 		{
-			std::lock_guard<std::mutex> lock(s_handler_mutex);
-			h(const_cast<char*>(str), p);
+			t_in_handler = true;
+			s_output_pair.handler(const_cast<char*>(str), s_output_pair.param);
+			t_in_handler = false;
 		}
 		else
 		{
-			std::lock_guard<std::mutex> lock(s_handler_mutex);
 			std::cout << "[LOG2]";
 			std::cout << str;
 			std::cout.flush();
@@ -60,21 +82,39 @@ namespace hpgl
 
 	int update_progress(const char * stage, int percentage)
 	{
-		int (*ph)(char*, int, void*) = nullptr;
-		void *pp = nullptr;
+		if (t_in_handler)
 		{
-			std::lock_guard<std::mutex> lock(s_progress_pair_mutex);
-			ph = s_progress_pair.handler;
-			pp = s_progress_pair.param;
+			// Reentrant call from within a handler invocation on this thread
+			// (F-53) — fall back to the default stream (same semantics as the
+			// no-handler path below).
+			if (percentage == 0)
+			{
+				std::cout << stage << ": ";
+			}
+			else if (percentage == -1)
+			{
+				std::cout << "Done.\n";
+			}
+			else
+			{
+				std::cout << percentage << "%... ";
+			}
+			std::cout.flush();
+			return 0;
 		}
-		if (ph)
+		// Lock order: s_handler_mutex first, then the pair mutex (see write()).
+		std::lock_guard<std::mutex> hlock(s_handler_mutex);
+		// Hold the pair mutex across the invocation (F-16), same rationale as write().
+		std::lock_guard<std::recursive_mutex> lock(s_progress_pair_mutex);
+		if (s_progress_pair.handler)
 		{
-			std::lock_guard<std::mutex> lock(s_handler_mutex);
-			return ph(const_cast<char*>(stage), percentage, pp);
+			t_in_handler = true;
+			int rc = s_progress_pair.handler(const_cast<char*>(stage), percentage, s_progress_pair.param);
+			t_in_handler = false;
+			return rc;
 		}
 		else
 		{
-			std::lock_guard<std::mutex> lock(s_handler_mutex);
 			if (percentage == 0)
 			{
 				std::cout << stage << ": ";
@@ -95,14 +135,14 @@ namespace hpgl
 
 HPGL_API void hpgl_set_output_handler(int (*handler)(char * data, void * param), void * param)
 {
-	std::lock_guard<std::mutex> lock(s_output_pair_mutex);
+	std::lock_guard<std::recursive_mutex> lock(s_output_pair_mutex);
 	s_output_pair.handler = handler;
 	s_output_pair.param = param;
 }
 
 HPGL_API void hpgl_set_progress_handler(int (*handler)(char * stage, int percentage, void * param), void * param)
 {
-	std::lock_guard<std::mutex> lock(s_progress_pair_mutex);
+	std::lock_guard<std::recursive_mutex> lock(s_progress_pair_mutex);
 	s_progress_pair.handler = handler;
 	s_progress_pair.param = param;
 }

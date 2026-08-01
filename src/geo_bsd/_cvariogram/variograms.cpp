@@ -15,6 +15,20 @@
 namespace {
     constexpr int MAX_POINT_SET_SIZE = 1000000;
 
+    // F-38: magnitude caps on template parameters. These mirror the Python
+    // wrapper caps (cvariogram.py / validation.py MAX_RADIUS) so a
+    // pathological template (e.g. lag_separation=1e6 with num_lags=10000)
+    // fails fast instead of looping ~1e11 times in the search window.
+    constexpr double MAX_LAG_SEPARATION = 1e6;
+    constexpr double MAX_FIRST_LAG_DISTANCE = 1e6;
+    constexpr double MAX_TEMPLATE_RADIUS = 1e6;   // R1/R2/R3
+    constexpr int MAX_NUM_LAGS = 10000;
+    // Mirrors variogram.py MAX_WINDOW_VOLUME: bounds the total number of
+    // integer offsets in the search window, so even per-parameter values
+    // under the individual caps cannot combine into an effectively-infinite
+    // window loop (lag_sep * num_lags * R2 * R3 product guard).
+    constexpr double MAX_WINDOW_VOLUME = 100000000.0;
+
     /// Thread-safe error storage for the cvariogram module.
     std::string last_cvariogram_error;
     std::mutex last_cvariogram_error_mutex;
@@ -48,6 +62,20 @@ void cvar_set_last_error(const char * message)
     last_cvariogram_error = message;
 }
 
+/// Exported: clears the last error (thread-safe, C ABI).
+///
+/// The Python wrapper snapshots the C-side error before each computation and
+/// suppresses a post-call error identical to the snapshot (stale suppression).
+/// Because the C-side error was never cleared, two consecutive identical
+/// failures were both suppressed after the first raise. Python calls this
+/// after a successful computation so the snapshot is empty on the next call
+/// and consecutive identical failures are no longer suppressed (F-37).
+extern "C" void cvar_clear_last_error(void)
+{
+    std::lock_guard<std::mutex> lock(last_cvariogram_error_mutex);
+    last_cvariogram_error.clear();
+}
+
 namespace {
 
 /// Per-thread RNG engine, seeded from std::random_device (mixed with time as
@@ -68,6 +96,96 @@ thread_local std::mt19937 g_tls_rng(
 );
 
 thread_local std::uniform_int_distribution<int> g_tls_percent_dist(0, 99);
+
+/// Validates template geometry before the expensive search loop (F-38/F-40).
+///
+/// Returns true when the template is usable. On a degenerate template
+/// (zero/NaN range, zero/NaN direction vector, non-finite lag parameters) or
+/// a parameter that exceeds the magnitude caps, sets the module error and
+/// returns false so callers fail loudly instead of silently producing an
+/// all-zero variogram or looping ~1e11 times.
+bool validate_template(variogram_search_template_t * templ)
+{
+    if (templ == nullptr)
+    {
+        cvar_set_last_error("validate_template: templ is null");
+        return false;
+    }
+
+    const double R1 = templ->m_ellipsoid.m_R1;
+    const double R2 = templ->m_ellipsoid.m_R2;
+    const double R3 = templ->m_ellipsoid.m_R3;
+
+    // F-40: degenerate ranges (zero or NaN) silently return false from
+    // is_in_tunnel and produce an all-zero variogram with no error.
+    if (!std::isfinite(R1) || !std::isfinite(R2) || !std::isfinite(R3) ||
+        R1 <= 0.0 || R2 <= 0.0 || R3 <= 0.0)
+    {
+        cvar_set_last_error("variogram template: ellipsoid ranges must be finite and positive");
+        return false;
+    }
+
+    // F-40: zero or NaN direction vectors make every tunnel test false
+    // (silent all-zero). Check all three vectors for finiteness and norm.
+    const vector_t * dirs[3] = {
+        &templ->m_ellipsoid.m_direction1,
+        &templ->m_ellipsoid.m_direction2,
+        &templ->m_ellipsoid.m_direction3
+    };
+    for (int d = 0; d < 3; ++d)
+    {
+        double norm2 = 0.0;
+        for (int c = 0; c < 3; ++c)
+        {
+            const double v = dirs[d]->m_data[c];
+            if (!std::isfinite(v))
+            {
+                cvar_set_last_error("variogram template: direction vectors must be finite");
+                return false;
+            }
+            norm2 += v * v;
+        }
+        if (norm2 == 0.0)
+        {
+            cvar_set_last_error("variogram template: direction vectors must be non-zero");
+            return false;
+        }
+    }
+
+    // F-38: magnitude caps mirror the Python wrapper so a pathological
+    // template cannot drive an effectively-infinite search-window loop.
+    if (!std::isfinite(templ->m_lag_separation) ||
+        templ->m_lag_separation <= 0.0 ||
+        templ->m_lag_separation > MAX_LAG_SEPARATION)
+    {
+        cvar_set_last_error("variogram template: lag_separation must be in (0, 1e6]");
+        return false;
+    }
+    if (!std::isfinite(templ->m_first_lag_distance) ||
+        templ->m_first_lag_distance < 0.0 ||
+        templ->m_first_lag_distance > MAX_FIRST_LAG_DISTANCE)
+    {
+        cvar_set_last_error("variogram template: first_lag_distance must be in [0, 1e6]");
+        return false;
+    }
+    if (!std::isfinite(templ->m_lag_width) || templ->m_lag_width <= 0.0)
+    {
+        cvar_set_last_error("variogram template: lag_width must be finite and positive");
+        return false;
+    }
+    if (templ->m_num_lags <= 0 || templ->m_num_lags > MAX_NUM_LAGS)
+    {
+        cvar_set_last_error("variogram template: num_lags must be in [1, 10000]");
+        return false;
+    }
+    if (R1 > MAX_TEMPLATE_RADIUS || R2 > MAX_TEMPLATE_RADIUS || R3 > MAX_TEMPLATE_RADIUS)
+    {
+        cvar_set_last_error("variogram template: ellipsoid ranges must not exceed 1e6");
+        return false;
+    }
+
+    return true;
+}
 
 /// Backward-compatible entry point — kept so existing callers in
 /// calc_variograms compile unchanged.  The actual RNG is fully
@@ -123,7 +241,7 @@ bool is_in_tunnel(
 
 	// M22: Guard against zero direction vectors — if any ellipsoid
 	// direction is the zero vector, is_in_tunnel returns true for ALL
-	// input vectors (degenerate case). Bail early.
+	// input vectors (degenerate case). Bail early and signal (F-40).
 	if ((templ->m_ellipsoid.m_direction1.m_data[0] == 0.0
 	  && templ->m_ellipsoid.m_direction1.m_data[1] == 0.0
 	  && templ->m_ellipsoid.m_direction1.m_data[2] == 0.0)
@@ -133,16 +251,30 @@ bool is_in_tunnel(
 	 || (templ->m_ellipsoid.m_direction3.m_data[0] == 0.0
 	  && templ->m_ellipsoid.m_direction3.m_data[1] == 0.0
 	  && templ->m_ellipsoid.m_direction3.m_data[2] == 0.0))
+	{
+		cvar_set_last_error("is_in_tunnel: ellipsoid direction vector is zero");
 		return false;
+	}
 
 	double ss1 = fabs(dot_product(vec, &(templ->m_ellipsoid.m_direction1)));
 	double ss2 = fabs(dot_product(vec, &(templ->m_ellipsoid.m_direction2)));
 	double ss3 = fabs(dot_product(vec, &(templ->m_ellipsoid.m_direction3)));
 
+	// F-40: NaN range (NaN angles flow into direction vectors / ranges)
+	// silently returned false before; signal instead.
+	if (!std::isfinite(ss1) || !std::isfinite(ss2) || !std::isfinite(ss3))
+	{
+		cvar_set_last_error("is_in_tunnel: direction vectors or ranges contain NaN");
+		return false;
+	}
+
 	if (templ->m_ellipsoid.m_R1 == 0 ||
 	    templ->m_ellipsoid.m_R2 == 0 ||
 	    templ->m_ellipsoid.m_R3 == 0)
+	{
+		cvar_set_last_error("is_in_tunnel: ellipsoid range must be non-zero");
 		return false;
+	}
 
 	double s1 = ss1 / templ->m_ellipsoid.m_R1;
 	double s2 = ss2 / templ->m_ellipsoid.m_R2;
@@ -236,13 +368,12 @@ void calc_search_template_window(
 				vector_t DK = {0};
 				vector_t V = {0};
 
-				vec_by_scalar(&templ->m_ellipsoid.m_direction1, templ->m_lag_separation, &DI);
-				vec_by_scalar(&DI, templ->m_num_lags, &DI);
-				// Account for first_lag_distance offset so the window
-				// covers the actual lag range, not just 0..num_lags*lag_sep.
-				vector_t first_lag;
-				vec_by_scalar(&templ->m_ellipsoid.m_direction1, templ->m_first_lag_distance, &first_lag);
-				sum_vec(&DI, &first_lag, &DI);
+				// F-61: include half the lag width in the window extent so the
+				// window covers the full lag band, matching the Python
+				// reference _CalcSearchTemplateWindow (variogram.py).
+				vec_by_scalar(&templ->m_ellipsoid.m_direction1,
+					templ->m_lag_separation * templ->m_num_lags
+						+ templ->m_first_lag_distance + templ->m_lag_width / 2.0, &DI);
 				vec_by_scalar(&DI, i, &DI);
 
 				vec_by_scalar(&templ->m_ellipsoid.m_direction2, templ->m_ellipsoid.m_R2, &DJ);
@@ -389,10 +520,10 @@ void calc_variograms(
 	if (!validate_ptr(data, "data (calc_variograms)")) return;
 	if (!validate_ptr(result_covariations, "result_covariations (calc_variograms)")) return;
 
-	if (templ->m_lag_separation == 0) {
-		cvar_set_last_error("calc_variograms: lag_separation is zero, cannot bin lags");
-		return;
-	}
+	// F-38/F-40: reject degenerate or oversized templates before the
+	// search loop so we fail loudly instead of looping ~1e11 times or
+	// silently returning an all-zero variogram.
+	if (!validate_template(templ)) return;
 
 	seed_rand_once();
 
@@ -418,6 +549,21 @@ void calc_variograms(
 
 	search_template_window_t window;
 	calc_search_template_window(templ, &window);	
+
+	// F-38: bound the total number of window offsets. Even with each
+	// individual parameter under its cap, lag_sep * num_lags * R2 * R3 can
+	// produce ~1e11 loop iterations (pre-fix: effectively infinite hang).
+	double window_volume =
+		(std::ceil(window.m_max_i) - std::floor(window.m_min_i) + 1.0) *
+		(std::ceil(window.m_max_j) - std::floor(window.m_min_j) + 1.0) *
+		(std::ceil(window.m_max_k) - std::floor(window.m_min_k) + 1.0);
+	if (window_volume > MAX_WINDOW_VOLUME)
+	{
+		cvar_set_last_error("calc_variograms: search window volume exceeds maximum (1e8)");
+		free(lag_stats);
+		lag_stats = nullptr;
+		return;
+	}
 
 	for (int i2 = (int)floor(window.m_min_i); i2 <= (int)ceil(window.m_max_i); ++i2)
 		for (int j2 = (int)floor(window.m_min_j); j2 <= (int)ceil(window.m_max_j); ++j2)
@@ -474,6 +620,11 @@ void calc_variograms(
 				}
 			}
 
+	// F-40 convergence: an empty lag set (zero pairs found in the search
+	// template) is a legitimate outcome for a VALID template on sparse data
+	// (e.g. first_lag_distance beyond the maximum data separation). Degenerate
+	// templates are already rejected by validate_template() above; do not
+	// treat zero pairs as an error here.
 	for (int i = 0; i < lag_count; ++i)
 	{
 		if (lag_stats[i].m_cov_count > 0)
@@ -529,10 +680,9 @@ void calc_variograms_from_point_set(
 		return;
 	}
 
-	if (templ->m_lag_separation == 0) {
-		cvar_set_last_error("calc_variograms_from_point_set: lag_separation is zero, cannot bin lags");
-		return;
-	}
+	// F-38/F-40: reject degenerate or oversized templates before the
+	// O(n^2) pair loop.
+	if (!validate_template(templ)) return;
 
 	int lag_count = templ->m_num_lags <= result_length 
 		? templ->m_num_lags
@@ -592,6 +742,9 @@ void calc_variograms_from_point_set(
 		}
 	}
 
+	// F-40 convergence: an empty lag set (no valid pairs) is a legitimate
+	// outcome for a VALID template on sparse data; degenerate templates are
+	// already rejected by validate_template() above. Do not signal an error.
 	for (int i = 0; i < lag_count; ++i)
 	{
 		if (lag_stats[i].m_cov_count == 0)

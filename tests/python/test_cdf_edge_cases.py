@@ -33,7 +33,9 @@ class TestCalcCdfDuplicateValues:
         cdf = calc_cdf(prop)
         assert cdf.values.size == 1
         assert cdf.values[0] == 5.0
-        assert cdf.probs[0] == 1.0
+        # F-04: last CDF probability must be strictly below 1.0 so the max
+        # datum does not map to p=1.0 in the SGS back-transform.
+        assert cdf.probs[0] < 1.0
 
     def test_two_groups_of_duplicates(self):
         prop = _make_prop([1.0] * 4 + [2.0] * 4, grid_shape=(2, 2, 2))
@@ -61,14 +63,16 @@ class TestCalcCdfSingleValue:
         cdf = calc_cdf(prop)
         assert cdf.values.size == 1
         assert cdf.values[0] == 42.0
-        assert cdf.probs[0] == 1.0
+        # F-04: last CDF probability must be strictly below 1.0.
+        assert cdf.probs[0] < 1.0
 
     def test_single_value_many_cells(self):
         prop = _make_prop([7.0] * 27, grid_shape=(3, 3, 3))
         cdf = calc_cdf(prop)
         assert cdf.values.size == 1
         assert cdf.values[0] == 7.0
-        assert cdf.probs[0] == 1.0
+        # F-04: last CDF probability must be strictly below 1.0.
+        assert cdf.probs[0] < 1.0
 
 
 @pytest.mark.hpgl

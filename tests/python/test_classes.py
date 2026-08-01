@@ -37,8 +37,12 @@ except (ImportError, OSError):
 
 
 # F-211: __get_strides helper for ndim=2 (imported directly for testing)
+# NOTE: __get_strides lives in ffi_adapter.py (it was moved there during
+# the FFI adapter refactor). Importing from geo_bsd.geo raises ImportError,
+# which the skipif guard below would treat as "library not available" and
+# skip the tests entirely — a stale test artifact (the library IS available).
 try:
-    from geo_bsd.geo import __get_strides as _get_strides_2d_test
+    from geo_bsd.ffi_adapter import __get_strides as _get_strides_2d_test
 except (ImportError, OSError):
     _get_strides_2d_test = None
 

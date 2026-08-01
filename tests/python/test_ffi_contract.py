@@ -213,15 +213,24 @@ class TestHPGLWrapContract:
         )
 
     def test_hpgl_call_lock_exists(self):
-        """F-123: Global call lock exists in geo.py for cross-thread safety."""
+        """F-123: Global call lock exists in geo.py for cross-thread safety.
+
+        PR-02: the lock is a reentrant RLock (a handler invoked by C++ during
+        a locked kriging FFI call can call set_output_handler on the same
+        thread without self-deadlocking). The contract is "a lock exists that
+        serializes C++ calls across threads" — both Lock and RLock satisfy it;
+        RLock additionally preserves same-thread reentrancy.
+        """
         from geo_bsd import geo
 
         assert hasattr(geo, "_hpgl_call_lock"), (
             "geo._hpgl_call_lock must exist for serializing C++ calls"
         )
-        assert isinstance(geo._hpgl_call_lock, type(threading.Lock())), (
-            "_hpgl_call_lock must be a threading.Lock"
-        )
+        import _thread
+
+        assert isinstance(
+            geo._hpgl_call_lock, (_thread.LockType, _thread.RLock)
+        ), "_hpgl_call_lock must be a threading.Lock or threading.RLock"
 
 
 class TestCVariogramContract:

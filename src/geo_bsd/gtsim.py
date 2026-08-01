@@ -213,8 +213,14 @@ def gtsim_2ind(
     pk_flat = pk_prop.data.ravel(order="K")
     if np.any(~np.isfinite(pk_flat)):
         raise ValueError("gtsim_2ind: pk_prop.data contains NaN or Inf values")
+    # Kriging with negative weights can produce probabilities slightly
+    # outside [0, 1] (e.g. -0.04 or 1.02). These are legitimate kriging
+    # overshoots, not invalid inputs: GSLIB's gtsim clamps probabilities
+    # before the inverse-CDF threshold calculation. Clamp rather than
+    # reject so partially-informed data works (a hard reject previously
+    # made gtsim_2ind unusable with realistic partially-informed props).
     if np.any((pk_flat < 0.0) | (pk_flat > 1.0)):
-        raise ValueError("gtsim_2ind: pk_prop.data values must be in [0, 1]")
+        np.clip(pk_flat, 0.0, 1.0, out=pk_flat)
 
     # 2. calculate tk_prop
     # t0_prop = 0

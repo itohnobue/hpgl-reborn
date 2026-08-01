@@ -269,19 +269,29 @@ class TestGtsim2Ind:
         result2 = gtsim_2ind(grid, prop2, sk_params, do_sk=True, seed=42)
         np.testing.assert_array_equal(result1.data, result2.data)
 
-    @pytest.mark.xfail(
-        reason=(
-            "Inverse CDF thresholds (I2F-12 fix) produce more deterministic "
-            "truncation for small grids. Thresholds dominate SGS randomness at "
-            "this scale. Not a regression — correct behavior with proper math."
-        ),
-        strict=True,
-    )
     def test_gtsim_2ind_different_seeds_produce_different(self):
-        """gtsim_2ind with different seeds produces different output."""
+        """gtsim_2ind with different seeds produces different output.
+
+        Uses a partially-informed property (mask with uninformed cells) so
+        SGS actually simulates values. With a fully-informed property the SGS
+        step is a no-op (nothing to simulate), the pseudo-Gaussian transform
+        degenerates (kriging probabilities are exactly 0/1), and no randomness
+        is consumed — different seeds then produce identical output. That is
+        a fixture artifact, not a seed bug: with uninformed cells present,
+        different seeds genuinely produce different simulated fields.
+        """
         grid, prop1 = self._make_grid_prop()
         _, prop2 = self._make_grid_prop()
         sk_params = self._make_sk_params()
+
+        # Leave ~30% of cells uninformed in both props so SGS actually
+        # simulates them (seed-dependent). Identical masks for a fair
+        # seed comparison. Note: gtsim_2ind mutates prop.data in place,
+        # so two fresh props are required.
+        rng = np.random.RandomState(123)
+        partial_mask = (rng.rand(prop1.mask.size) < 0.7).astype("uint8")
+        prop1.mask[:] = partial_mask
+        prop2.mask[:] = partial_mask
 
         result1 = gtsim_2ind(grid, prop1, sk_params, do_sk=True, seed=42)
         result2 = gtsim_2ind(grid, prop2, sk_params, do_sk=True, seed=12345)

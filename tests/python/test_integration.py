@@ -214,19 +214,22 @@ class TestIOIntegration:
 
         # Write property
         output_file = tmp_path / "test_output.inc"
-        write_property(prop, str(output_file), "TestProperty", -999.0)
+        # F-28: pass an explicit trusted base — the default (DEFAULT_BASE_DIR)
+        # is the process cwd, so writing to tmp_path requires an explicit base.
+        write_property(prop, str(output_file), "TestProperty", -999.0, basedir=str(tmp_path))
 
         # Verify file was created
         assert output_file.exists()
 
         # Read back and verify data integrity
-        read_prop = load_cont_property(str(output_file), -999.0, (10, 10, 5))
+        read_prop = load_cont_property(str(output_file), -999.0, (10, 10, 5), basedir=str(tmp_path))
         assert isinstance(read_prop, ContProperty)
-        # Data is returned as 1D Fortran-order array of total grid size
-        assert read_prop.data.shape == (500,)
-        # Informed cells should match original data
+        # F-55: a 3-tuple size normalizes both parser paths to 3D Fortran
+        # order, so the fast-path result is (10, 10, 5), not 1D (500,).
+        assert read_prop.data.shape == (10, 10, 5)
+        # Informed cells should match original data (compare in flat order)
         informed = mask.astype(bool)
-        np.testing.assert_array_equal(read_prop.data[informed], data[informed])
+        np.testing.assert_array_equal(read_prop.data.ravel(order="F")[informed], data[informed])
 
 
 # =============================================================================

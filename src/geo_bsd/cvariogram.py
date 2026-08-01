@@ -31,8 +31,32 @@ _cvar_call_lock = threading.Lock()
 cvar.cvar_get_last_error.restype = C.c_char_p
 cvar.cvar_get_last_error.argtypes = []
 
+# PR-01: clear the process-global C++ error after the guard consumes it.
+# cvar_clear_last_error is exported by fresh builds only; the prototype is
+# guarded so a stale library (predating the symbol) still imports — the
+# freshness check (hpgl_wrap._EXPECTED_LIBRARY_SYMBOLS) warns on staleness.
+if hasattr(cvar, "cvar_clear_last_error"):
+    cvar.cvar_clear_last_error.restype = None
+    cvar.cvar_clear_last_error.argtypes = []
+
 MAX_NUM_LAGS = 10000
 MAX_POINT_SET_SIZE = 1_000_000
+
+# F-38: magnitude caps on search-geometry parameters. Without caps, absurd
+# values (e.g. lag_separation=1e6 with num_lags=10000) drive the C++
+# search-window loop in variograms.cpp calc_search_template_window to an
+# effectively unbounded number of iterations (a hang). These Python-side
+# caps reject the degenerate inputs at the FFI boundary; cpp-C owns the
+# C++ work-based bound.
+MAX_LAG_SEPARATION = 100000.0
+MAX_FIRST_LAG_DISTANCE = 100000.0
+MAX_LAG_WIDTH = 100000.0
+MAX_TOL_DISTANCE = 1000.0
+MAX_ELLIPSOID_RANGE = 100000.0
+# Total lag extent bound: lag_separation * num_lags + first_lag_distance.
+# Keeps the C++ search window (which spans ~2x this extent per axis) from
+# iterating an unbounded number of cells.
+MAX_TOTAL_LAG_EXTENT = 1000000.0
 
 
 @contextlib.contextmanager
@@ -69,9 +93,36 @@ def _snapshot_cvar_error():
     Stores the snapshot in thread-local storage under _cvar_error_snapshot_lock.
     The lock protects the snapshot write against concurrent snapshot reads
     in _check_cvar_error.
+
+    F-37: mirrors the ffi_adapter raised-flag reset. When the previous call
+    window RAISED, the C++ global error is treated as consumed (it was
+    cleared by _check_cvar_error's clear-on-consume; the flag also covers
+    stale libraries that lack cvar_clear_last_error) so a fresh identical
+    error in a new call window raises instead of being suppressed as stale.
     """
     with _cvar_error_snapshot_lock:
-        _cvar_error_local._cvar_error_snapshot = cvar.cvar_get_last_error()
+        if getattr(_cvar_error_local, "_cvar_last_check_raised", False):
+            _cvar_error_local._cvar_error_snapshot = None
+            _cvar_error_local._cvar_last_check_raised = False
+        else:
+            _cvar_error_local._cvar_error_snapshot = cvar.cvar_get_last_error()
+
+
+def _clear_cvar_error():
+    """Reset the C++ cvariogram error after the guard consumes it (PR-01).
+
+    The C++ ``last_cvariogram_error`` is process-global and is never cleared
+    on success — a failure followed by a successful call would otherwise
+    false-raise on the stale error forever. ``cvar_clear_last_error`` is
+    exported by fresh builds; when the deployed library predates it (stale
+    binary, detected by hpgl_wrap's freshness check), this falls back to a
+    no-op and the thread-local snapshot/flag logic still suppresses stale
+    errors (pre-fix behavior).
+    """
+    try:
+        cvar.cvar_clear_last_error()
+    except AttributeError:
+        pass
 
 
 def _check_cvar_error(context=""):
@@ -90,6 +141,13 @@ def _check_cvar_error(context=""):
     _cvar_error_snapshot_lock, preventing races between concurrent calls
     to this function that access the same thread-local snapshot.
 
+    PR-01: consumes the C++ error on every path (suppress and raise),
+    mirroring ffi_adapter's F-07 clear-on-consume. The C++ error is
+    process-global and never cleared on success, so without this a
+    failure-then-success sequence raises a spurious RuntimeError on the
+    next call (the post-raise snapshot reset alone cannot clear the C++
+    state).
+
     Args:
         context: Description of the operation being checked (e.g. "CalcVariograms")
 
@@ -101,9 +159,20 @@ def _check_cvar_error(context=""):
         if err is not None and len(err) > 0:
             snapshot = getattr(_cvar_error_local, "_cvar_error_snapshot", None)
             if err == snapshot:
-                # Same error as pre-call snapshot — stale, suppress.
+                # Same error as pre-call snapshot — stale, suppress. Consume
+                # the C++ error so the next call starts from a clean state.
+                _cvar_error_local._cvar_last_check_raised = False
+                _clear_cvar_error()
                 return
             err_str = err.decode("utf-8", errors="replace")
+            # Update the snapshot BEFORE raising so re-entry within the
+            # same guard window does not double-raise (F-37).
+            _cvar_error_local._cvar_error_snapshot = err
+            _cvar_error_local._cvar_last_check_raised = True
+            # Consume the C++ error before raising so a later call that
+            # SUCCEEDS does not see a stale error, while a later call that
+            # fails with the identical message raises (PR-01).
+            _clear_cvar_error()
             raise RuntimeError(
                 f"{context} failed: {err_str}" if context else f"cvariogram error: {err_str}"
             )
@@ -250,6 +319,26 @@ def _c_array(t, size, values):
 
 class Ellipsoid:
     def __init__(self, R1, R2, R3, azimuth, dip, rotation):
+        # I2-01: mirror variogram.py TVEllipsoid validation — NaN/Inf and
+        # negative ranges pass into C++ where is_in_tunnel is NaN-blind
+        # (variograms.cpp:142-149) and silently produce an all-zero
+        # variogram. Angles must be finite too (NaN angle → NaN direction
+        # vector → silent all-zero).
+        for name, val in (("R1", R1), ("R2", R2), ("R3", R3)):
+            if not numpy.isfinite(val) or val < 0:
+                raise ValueError(
+                    f"Ellipsoid: {name} must be finite and non-negative, got {val!r}"
+                )
+        for name, val in (("azimuth", azimuth), ("dip", dip), ("rotation", rotation)):
+            if not numpy.isfinite(val):
+                raise ValueError(f"Ellipsoid: {name} must be finite, got {val!r}")
+        # F-38: magnitude caps — huge radii inflate the C++ search window
+        # and can hang the variogram scan.
+        for name, val in (("R1", R1), ("R2", R2), ("R3", R3)):
+            if val > MAX_ELLIPSOID_RANGE:
+                raise ValueError(
+                    f"Ellipsoid: {name} ({val!r}) exceeds maximum {MAX_ELLIPSOID_RANGE}"
+                )
         vec = checked_create(vector_t, data=_c_array(C.c_double, 3, (0, 0, 0)))
         self.ell = checked_create(
             ellipsoid_t, direction1=vec, direction2=vec, direction3=vec, R1=R1, R2=R2, R3=R3
@@ -266,6 +355,59 @@ class VariogramSearchTemplate:
             raise ValueError(
                 f"VariogramSearchTemplate: num_lags {num_lags} exceeds maximum {MAX_NUM_LAGS}"
             )
+        # I2-01: mirror variogram.py TVVariogramSearchTemplate validation —
+        # NaN/Inf/zero/negative geometry must not reach C++ (NaN blindspots
+        # produce silent all-zero variograms). num_lags <= 0 is validated at
+        # CalcVariograms call time (existing contract).
+        if not numpy.isfinite(lag_width) or lag_width <= 0:
+            raise ValueError(
+                f"VariogramSearchTemplate: lag_width must be finite and positive, got {lag_width!r}"
+            )
+        if not numpy.isfinite(lag_separation) or lag_separation <= 0:
+            raise ValueError(
+                f"VariogramSearchTemplate: lag_separation must be finite and positive, "
+                f"got {lag_separation!r}"
+            )
+        if not numpy.isfinite(tol_distance) or tol_distance <= 0:
+            raise ValueError(
+                f"VariogramSearchTemplate: tol_distance must be finite and positive, "
+                f"got {tol_distance!r}"
+            )
+        if not numpy.isfinite(first_lag_distance) or first_lag_distance < 0:
+            raise ValueError(
+                f"VariogramSearchTemplate: first_lag_distance must be finite and "
+                f"non-negative, got {first_lag_distance!r}"
+            )
+        # F-38: magnitude caps — the C++ search window extent is
+        # ~2*(lag_separation*num_lags + first_lag_distance) per axis, so
+        # unbounded values hang the variogram scan.
+        if lag_width > MAX_LAG_WIDTH:
+            raise ValueError(
+                f"VariogramSearchTemplate: lag_width ({lag_width!r}) exceeds maximum "
+                f"{MAX_LAG_WIDTH}"
+            )
+        if lag_separation > MAX_LAG_SEPARATION:
+            raise ValueError(
+                f"VariogramSearchTemplate: lag_separation ({lag_separation!r}) exceeds "
+                f"maximum {MAX_LAG_SEPARATION}"
+            )
+        if tol_distance > MAX_TOL_DISTANCE:
+            raise ValueError(
+                f"VariogramSearchTemplate: tol_distance ({tol_distance!r}) exceeds maximum "
+                f"{MAX_TOL_DISTANCE}"
+            )
+        if first_lag_distance > MAX_FIRST_LAG_DISTANCE:
+            raise ValueError(
+                f"VariogramSearchTemplate: first_lag_distance ({first_lag_distance!r}) "
+                f"exceeds maximum {MAX_FIRST_LAG_DISTANCE}"
+            )
+        if lag_separation * num_lags + first_lag_distance > MAX_TOTAL_LAG_EXTENT:
+            raise ValueError(
+                f"VariogramSearchTemplate: total lag extent "
+                f"(lag_separation*num_lags + first_lag_distance = "
+                f"{lag_separation * num_lags + first_lag_distance}) exceeds maximum "
+                f"{MAX_TOTAL_LAG_EXTENT}"
+            )
         self.templ = checked_create(
             variogram_search_template_t,
             lag_width=lag_width,
@@ -281,11 +423,46 @@ class VariogramSearchTemplate:
         self.first_lag_distance = first_lag_distance
 
 
+def _validate_template_not_degenerate(templ, context):
+    """F-40: reject templates the C++ tunnel filter silently degenerates.
+
+    The C++ ``is_in_tunnel`` (variograms.cpp:127-145) returns false for a
+    zero ellipsoid range and for zero direction vectors — so such templates
+    produce a silent all-zero variogram (no C++ error is set). A legitimate
+    all-zero variogram (e.g. constant data) is still returned; only the
+    degenerate TEMPLATE is rejected here.
+
+    Args:
+        templ: the ``variogram_search_template_t`` ctypes struct.
+        context: operation name for the error message.
+
+    Raises:
+        ValueError: If any ellipsoid range is zero or any direction vector
+            is the zero vector.
+    """
+    ell = templ.ellipsoid
+    if ell.R1 == 0 or ell.R2 == 0 or ell.R3 == 0:
+        raise ValueError(
+            f"{context}: degenerate search template — ellipsoid range is zero "
+            f"(R1={ell.R1}, R2={ell.R2}, R3={ell.R3}); the C++ tunnel filter "
+            f"accepts no pairs and returns an all-zero variogram"
+        )
+    for name in ("direction1", "direction2", "direction3"):
+        vec = getattr(ell, name)
+        if all(vec.data[j] == 0.0 for j in range(3)):
+            raise ValueError(
+                f"{context}: degenerate search template — ellipsoid {name} is the "
+                f"zero vector; the C++ tunnel filter accepts no pairs and returns "
+                f"an all-zero variogram"
+            )
+
+
 def CalcVariograms(templ, hard_data, percent=100):
     if templ.num_lags <= 0:
         raise ValueError("CalcVariograms: num_lags must be positive")
     if percent < 1 or percent > 100:
         raise ValueError(f"CalcVariograms: percent must be in [1, 100], got {percent}")
+    _validate_template_not_degenerate(templ.templ, "CalcVariograms")
     if not isinstance(hard_data[0], numpy.ndarray) or hard_data[0].dtype != numpy.float32:
         raise TypeError(
             f"CalcVariograms: hard_data[0] must be a float32 ndarray, got {type(hard_data[0]).__name__}"
@@ -345,6 +522,7 @@ def CalcVariograms(templ, hard_data, percent=100):
 def CalcVariogramsFromPointSet(templ, point_set, variogram):
     if templ.num_lags <= 0:
         raise ValueError("CalcVariogramsFromPointSet: num_lags must be positive")
+    _validate_template_not_degenerate(templ.templ, "CalcVariogramsFromPointSet")
     for key in ("X", "Y", "Z", "Property"):
         if key not in point_set:
             raise ValueError(f"CalcVariogramsFromPointSet: point_set missing required key '{key}'")
@@ -439,6 +617,19 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
                     f"CStackLayers: layer {i} shape {layer.shape[:2]} does not match "
                     f"reference shape {ref_shape}"
                 )
+    # Validate result is 3D before indexing shape[2] below
+    if result.ndim != 3:
+        raise ValueError(f"CStackLayers: result must be 3-dimensional, got {result.ndim}d")
+    # F-06: the C++ stack_layers writes result cells at [0, nx) x [0, ny)
+    # per layer (stack_layers.h:29-32,57,71). A result whose x/y dims are
+    # smaller than the layer dims is a heap OOB WRITE — reject it instead
+    # of only validating nz.
+    ref_shape = layers[0].shape[:2]
+    if result.shape[0] != ref_shape[0] or result.shape[1] != ref_shape[1]:
+        raise ValueError(
+            f"CStackLayers: result x/y shape {result.shape[:2]} does not match "
+            f"layer shape {ref_shape}"
+        )
     # Validate nz fits within result array dimensions
     if nz > result.shape[2]:
         raise ValueError(f"CStackLayers: nz ({nz}) exceeds result.shape[2] ({result.shape[2]})")
@@ -459,6 +650,15 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
             f"CStackLayers: result must be a float32 ndarray, "
             f"got {type(result).__name__}"
         )
+    # F-08: non-contiguous/sliced layer arrays produce strides-based
+    # map_index values beyond the C++ cumulative_k buffer (OOB write,
+    # stack_layers.h:33,38-39). Copy layers to contiguous float32; a
+    # sliced view is copied, so the C++ sees a safe contiguous buffer.
+    # The result is the OUTPUT buffer — it must already be contiguous
+    # (a non-contiguous result would also OOB-write), so reject it.
+    layers = [numpy.ascontiguousarray(layer) for layer in layers]
+    if not (result.flags["C_CONTIGUOUS"] or result.flags["F_CONTIGUOUS"]):
+        raise ValueError("CStackLayers: result must be a contiguous float32 array")
     layers2 = []
     for layer in layers:
         layers2.append(_create_float_data(layer))

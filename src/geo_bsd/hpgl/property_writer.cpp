@@ -10,6 +10,11 @@
 #include "locale_keeper.h"
 #include "hpgl_exception.h"
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace hpgl
 {
 	void property_writer_t :: init(
@@ -45,25 +50,65 @@ namespace hpgl
 		typedef std::shared_ptr<FILE> file_t;
 		file_t open_file_checked(const char * filename, const char * mode)
 		{
-		FILE * f = fopen(filename, mode);
-		if (f == 0)
+			auto throw_open_error = [filename]() {
+				int open_errno = errno;
+				// Use basename to avoid leaking full filesystem path in error messages.
+				const char * bn = strrchr(filename, '/');
+				if (bn == nullptr) bn = filename;
+				else ++bn; // skip '/'
+				std::ostringstream oss;
+				oss << "Can't open file '" << bn << "': " << strerror(open_errno) << ".";
+				throw hpgl_exception("open_file_checked", oss.str());
+			};
+#ifdef _WIN32
+			FILE * f = fopen(filename, mode);
+			if (f == 0)
+				throw_open_error();
+#else
+			// Open the temp path without following symlinks (I2-58). Plain
+			// fopen("w+") follows an attacker-placed symlink at <target>.tmp
+			// and writes through it, defeating the Python layer's O_NOFOLLOW
+			// path validation. Mirrors validation.py safe_open_write
+			// (O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW). Callers always pass "w+",
+			// which requires a read-write fd for fdopen compatibility.
+			int flags = O_RDWR | O_CREAT | O_TRUNC | O_NOFOLLOW;
+			int fd = open(filename, flags, 0666);
+			if (fd < 0)
+				throw_open_error();
+			FILE * f = fdopen(fd, mode);
+			if (f == 0)
+			{
+				int fdopen_errno = errno;
+				close(fd);
+				errno = fdopen_errno;
+				throw_open_error();
+			}
+#endif
+			return file_t(f, [](FILE* fp) {
+				if (fflush(fp) != 0)
+					fprintf(stderr, "HPGL: fflush failed — buffered data may be lost\n");
+				if (fclose(fp) != 0)
+					fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");
+			});
+		}
+
+		/// RAII guard that removes the temp file unless the atomic rename
+		/// succeeded. Any throw path (write_value failure, fflush failure,
+		/// rename failure) previously left <file>.tmp on disk (F-52).
+		class tmp_file_guard_t
 		{
-			int open_errno = errno;
-			// Use basename to avoid leaking full filesystem path in error messages.
-			const char * bn = strrchr(filename, '/');
-			if (bn == nullptr) bn = filename;
-			else ++bn; // skip '/'
-			std::ostringstream oss;
-			oss << "Can't open file '" << bn << "': " << strerror(open_errno) << ".";
-			throw hpgl_exception("open_file_checked", oss.str());
-		}
-		return file_t(f, [](FILE* fp) {
-			if (fflush(fp) != 0)
-				fprintf(stderr, "HPGL: fflush failed — buffered data may be lost\n");
-			if (fclose(fp) != 0)
-				fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");
-		});
-		}
+		public:
+			explicit tmp_file_guard_t(const std::string & path) : m_path(path) {}
+			~tmp_file_guard_t()
+			{
+				if (m_armed)
+					std::remove(m_path.c_str());
+			}
+			void disarm() { m_armed = false; }
+		private:
+			std::string m_path;
+			bool m_armed = true;
+		};
 
 		void write_property_cont(
 				const char * filename,
@@ -79,6 +124,7 @@ namespace hpgl
 			// fopen("w+") would have truncated the original before any
 			// data was written, leaving a partial or empty file.
 			std::string tmp_filename = std::string(filename) + ".tmp";
+			tmp_file_guard_t tmp_guard(tmp_filename);
 			{
 				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
 				if (fprintf(f.get(), "%s\n", property_name) < 0)
@@ -115,6 +161,7 @@ namespace hpgl
 				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
 				throw hpgl_exception("write_property_cont", oss.str());
 			}
+			tmp_guard.disarm();
 		}
 
 		void write_property_ind(
@@ -130,6 +177,7 @@ namespace hpgl
 			// Write to a temporary file first, then atomically rename
 			// (same atomic-write pattern as write_property_cont).
 			std::string tmp_filename = std::string(filename) + ".tmp";
+			tmp_file_guard_t tmp_guard(tmp_filename);
 			{
 				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
 				if (fprintf(f.get(), "%s\n", property_name) < 0)
@@ -168,6 +216,7 @@ namespace hpgl
 				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
 				throw hpgl_exception("write_property_ind", oss.str());
 			}
+			tmp_guard.disarm();
 		}
 	}
 
@@ -192,6 +241,7 @@ namespace hpgl
 			// Write to a temporary file first, then atomically rename
 			// (same atomic-write pattern as write_property_cont).
 			std::string tmp_filename = std::string(filename) + ".tmp";
+			tmp_file_guard_t tmp_guard(tmp_filename);
 			{
 				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
 
@@ -221,6 +271,7 @@ namespace hpgl
 				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
 				throw hpgl_exception("write_gslib_property_cont_c", oss.str());
 			}
+			tmp_guard.disarm();
 		}
 
 		void write_gslib_property_ind_c(
@@ -236,6 +287,7 @@ namespace hpgl
 			// Write to a temporary file first, then atomically rename
 			// (same atomic-write pattern as write_property_cont).
 			std::string tmp_filename = std::string(filename) + ".tmp";
+			tmp_file_guard_t tmp_guard(tmp_filename);
 			{
 				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
 
@@ -272,6 +324,7 @@ namespace hpgl
 				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
 				throw hpgl_exception("write_gslib_property_ind_c", oss.str());
 			}
+			tmp_guard.disarm();
 		}
 
 

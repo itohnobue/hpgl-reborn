@@ -3,10 +3,12 @@
 import numpy
 
 # Import validation framework
+from . import geo as _geo_module
 from .config import SGSConfig
 from .ffi_adapter import (
     _HPGL_KRIGING_KIND,
     _HPGL_SGS_PARAMS,
+    _hpgl_call_lock,
     call_sgs_lvm_simulation,
     call_sgs_simulation,
 )
@@ -40,11 +42,12 @@ from .validation import (
 # sequential_simulation.h but does NOT call set_kriging_stats(). Calling
 # get_kriging_stats() here would return stale data from the last continuous
 # kriging call (SK/LVM/OK) — a different algorithm. We explicitly set
-# _last_kriging_stats = None after each SGS call as an honest sentinel:
-# "no simulation stats available."
+# geo._last_kriging_stats (the documented inspection point in geo.py) to
+# None BEFORE the FFI call as an honest sentinel: "no simulation stats
+# available." Resetting before the call is exception-safe — stale stats
+# from a prior kriging call never survive an error raised by C++.
 # Forward-compatible: when C++ is updated to call set_kriging_stats() in
 # the SGS path, the wiring can be re-enabled here.
-_last_kriging_stats: dict | None = None
 
 
 def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
@@ -145,7 +148,11 @@ def sgs_simulation(
     -------
     CriticalValidationError
         If any parameter fails validation."""
-    global _last_kriging_stats
+    # Reset the documented kriging-stats inspection point BEFORE the FFI
+    # call (exception-safe): SGS does not populate stats, so a successful
+    # call leaves it None; a C++ error leaves it None instead of a stale
+    # dict from a prior kriging call (see module comment).
+    _geo_module._last_kriging_stats = None
 
     # Raise on unexpected keyword arguments to catch parameter name typos
     if params:
@@ -225,7 +232,8 @@ def sgs_simulation(
         if mean is not None:
             ParameterValidator.validate_scalar_mean(mean, "sgs_simulation")
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
-        call_sgs_simulation(_cont_marr, sgsp, _cdf_struct, mean, _mask_struct)
+        with _hpgl_call_lock:
+            call_sgs_simulation(_cont_marr, sgsp, _cdf_struct, mean, _mask_struct)
 
     else:
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
@@ -235,17 +243,12 @@ def sgs_simulation(
                 "sgs_simulation: LVM mean array contains NaN or Inf values"
             )
         _float_arr = _create_hpgl_float_array(mean, grid)
-        call_sgs_lvm_simulation(_cont_marr, sgsp, _cdf_struct, _float_arr, _mask_struct)
+        with _hpgl_call_lock:
+            call_sgs_lvm_simulation(_cont_marr, sgsp, _cdf_struct, _float_arr, _mask_struct)
 
-    # Simulation-specific failure statistics are NOT available in the
-    # current C++ build. The C++ SGS path tracks kriging_failures locally
-    # in sequential_simulation.h but does NOT call set_kriging_stats() —
-    # get_kriging_stats() would return stale data from the last continuous
-    # kriging call (SK/LVM/OK), a different algorithm. We set None as an
-    # honest sentinel: "no simulation stats available." When C++ is updated
-    # to call set_kriging_stats() in the SGS path, the wiring can be
-    # re-enabled here.
-    _last_kriging_stats = None
+    # geo._last_kriging_stats was reset to None before the FFI call above
+    # (see module comment) — SGS does not populate stats in the current
+    # C++ build, so it remains None as an honest sentinel.
 
     # Validate output data for NaN/Inf after C++ computation.
     # C++ simulation can return NaN/Inf from degenerate matrices,

@@ -56,7 +56,15 @@ namespace hpgl
 		// Uses rational approximation from Abramowitz & Stegun (1964)
 		//
 		// Numerical stability notes:
-		// - For p <= 0 or p >= 1: returns mean to avoid inf/nan
+		// - For p outside (0, 1): saturates the tails — clamps p into the
+		//   open interval so the quantile tends to the largest/smallest
+		//   finite value instead of collapsing to the mean. Returning the
+		//   mean for p >= 1.0 (e.g. a float32 CDF rounding the max datum's
+		//   cumulative probability to exactly 1.0f, or an LVM mean below
+		//   the data minimum mapping to p = 0.0) corrupts those values to
+		//   the median on round-trip (F-04, I2-27). This mirrors
+		//   non_parametric_cdf_2_t::inverse, which clamps to the endpoint
+		//   values rather than a central value.
 		// - For extreme p values (p < 1e-150): clamps to avoid underflow
 		//   Rationale: When p2 < 1e-154, p2*p2 < 1e-308 (underflows to 0)
 		//              This causes log(1/0) = inf, sqrt(inf) = inf
@@ -69,12 +77,12 @@ namespace hpgl
 			if (m_var == 0.0)
 				return m_mean;
 
-			// Input validation: p must be in (0, 1)
-			if (p <= 0.0 || p >= 1.0)
-			{
-				// Return mean for extreme probabilities to avoid numerical instability
-				return m_mean;
-			}
+			// Input validation: p must be in (0, 1). Saturate the tails
+			// instead of returning the mean — see the notes above.
+			if (p <= 0.0)
+				p = 1e-12;
+			else if (p >= 1.0)
+				p = 1.0 - 1e-12;
 
 			double ps[] = {-0.322232431088, -1.0, -0.342242088547,
 				-0.0204231210245, -0.453642210148e-4};

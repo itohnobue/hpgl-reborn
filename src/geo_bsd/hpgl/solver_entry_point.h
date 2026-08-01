@@ -108,11 +108,15 @@ inline bool lapack_spd_solve_1rhs(
 	// Pre-check: scan A for NaN/Inf values before calling dpotrf_.
 	// dpotrf_ does not validate inputs and may silently produce NaN
 	// results or invoke undefined behavior on non-finite inputs.
-	for (int i = 0; i < size * size; ++i) {
+	// I2-23: size*size must be computed in size_t — the signed-int
+	// product overflows for size > 46340, wraps negative, and silently
+	// skips the NaN scan.
+	const size_t n_elements = static_cast<size_t>(size) * static_cast<size_t>(size);
+	for (size_t i = 0; i < n_elements; ++i) {
 		if (!std::isfinite(A[i])) {
 			char error_msg[256];
 			snprintf(error_msg, sizeof(error_msg),
-				"LAPACK Error in %s: Non-finite value (NaN/Inf) in covariance matrix A[%d]. Matrix size: %d",
+				"LAPACK Error in %s: Non-finite value (NaN/Inf) in covariance matrix A[%zu]. Matrix size: %d",
 				label, i, size);
 			HPGL_LOG_STRING(error_msg);
 			return false;
@@ -212,11 +216,15 @@ inline bool lapack_spd_solve_2rhs(
 	// Pre-check: scan A for NaN/Inf values before calling dpotrf_.
 	// dpotrf_ does not validate inputs and may silently produce NaN
 	// results or invoke undefined behavior on non-finite inputs.
-	for (int i = 0; i < size * size; ++i) {
+	// I2-23: size*size must be computed in size_t — the signed-int
+	// product overflows for size > 46340, wraps negative, and silently
+	// skips the NaN scan.
+	const size_t n_elements = static_cast<size_t>(size) * static_cast<size_t>(size);
+	for (size_t i = 0; i < n_elements; ++i) {
 		if (!std::isfinite(A[i])) {
 			char error_msg[256];
 			snprintf(error_msg, sizeof(error_msg),
-				"LAPACK Error in %s: Non-finite value (NaN/Inf) in covariance matrix A[%d]. Matrix size: %d",
+				"LAPACK Error in %s: Non-finite value (NaN/Inf) in covariance matrix A[%zu]. Matrix size: %d",
 				label, i, size);
 			HPGL_LOG_STRING(error_msg);
 			return false;

@@ -96,7 +96,14 @@ _error_snapshot_lock = threading.Lock()
 # (set_output_handler, set_progress_handler) and thread count changes
 # (set_thread_num) where concurrent access could produce inconsistent
 # CFUNCTYPE/global state.
-_hpgl_call_lock = threading.Lock()
+#
+# PR-02: RLock (reentrant) — C++ invokes user output/progress handlers on
+# the calling thread DURING kriging/simulation FFI calls that hold this
+# lock. A handler that calls set_output_handler/set_progress_handler (or
+# re-enters a kriging call) would self-deadlock on a plain Lock; RLock
+# allows the same thread to re-acquire while preserving cross-thread
+# exclusion.
+_hpgl_call_lock = threading.RLock()
 
 # Note: cross-call error detection (distinguishing a re-appearing error
 # from a persistent stale one across multiple guard invocations) uses a
@@ -108,7 +115,7 @@ _hpgl_call_lock = threading.Lock()
 #
 # KNOWN LIMITATION — NO C++ CLEAR-ERROR API: The HPGL C++ shared library
 # stores the last exception message globally (thread_local) and does NOT
-# expose a ``hpgl_clear_last_exception_message()`` function. When the
+# expose a C ABI ``hpgl_clear_last_exception_message()`` function. When the
 # pre-call snapshot accidentally matches a genuinely new error (same
 # message, C++ state not cleared), the error is suppressed. The sequence
 # counter mitigates this for consecutive calls but cannot help when a
@@ -116,6 +123,15 @@ _hpgl_call_lock = threading.Lock()
 # change the C++ error state. A C++ clear-error API would be the correct
 # fix; without it, this is a documented limitation with an approximate
 # workaround.
+#
+# F-07: _check_hpgl_error CONSUMES the C++ error after each guard (raise or
+# suppress) by resetting it to empty via the exported C++ setter
+# (hpgl::set_last_exception_message, Itanium-mangled on macOS/Linux). This
+# makes the "stale" state self-cleaning: a second distinct call that FAILS
+# with the identical message raises (the pre-call snapshot is clean), while
+# a successful call never sees a stale error. Platforms where the setter is
+# not dynamically exported (e.g. Windows MSVC) fall back to the
+# snapshot/seq suppression (pre-fix behavior).
 
 
 def _snapshot_hpgl_error():
@@ -172,14 +188,9 @@ def _check_hpgl_error(context: str = "") -> None:
             if err == snapshot and snapshot_seq == current_seq:
                 # Error unchanged from pre-call snapshot AND this is the
                 # same call window — C++ call did not produce a new error.
-                # Suppress stale error.
-                #
-                # KNOWN LIMITATION: If the C++ call genuinely produces
-                # the EXACT SAME error message as the pre-call stale error,
-                # this check suppresses it. A C++ hpgl_clear_last_error()
-                # function does not exist; the sequence counter mitigates
-                # this for consecutive calls but not for the edge case
-                # described in the module-level comment above.
+                # Suppress stale error, then consume it so the next call
+                # starts from a clean C++ error state (F-07).
+                _clear_hpgl_error()
                 return
             # Genuine new error (different from pre-call snapshot, or
             # identical message from a different C++ call).
@@ -188,6 +199,10 @@ def _check_hpgl_error(context: str = "") -> None:
             # on re-entry within the same guard window.
             _error_local._hpgl_error_snapshot = err
             _error_local._hpgl_error_snapshot_seq = current_seq
+            # Consume the C++ error before raising so a later call that
+            # succeeds does not see a stale error, while a later call that
+            # FAILS with the identical message raises (F-07).
+            _clear_hpgl_error()
             err_str = err.decode("utf-8", errors="replace")
             raise RuntimeError(
                 f"{context} failed: {err_str}"
@@ -212,6 +227,28 @@ def error_guard(context: str = ""):
     _snapshot_hpgl_error()
     yield
     _check_hpgl_error(context)
+
+
+def _clear_hpgl_error() -> None:
+    """Reset the C++ thread-local error after the guard consumes it (F-07).
+
+    The C ABI exposes only ``hpgl_get_last_exception_message`` (read); the
+    C++ ``hpgl::set_last_exception_message(const char*)`` symbol IS exported
+    with Itanium C++ mangling on macOS/Linux and is callable through ctypes.
+    Consuming the error lets a later call start from a clean state: a second
+    distinct call that fails with the IDENTICAL message raises (previously
+    silently suppressed), while a successful call does not see a stale error.
+
+    Falls back to a no-op when the symbol is unavailable (e.g. Windows MSVC
+    builds) — the snapshot/seq logic then still suppresses the stale error.
+    """
+    try:
+        setter = _hpgl_so["_ZN4hpgl26set_last_exception_messageEPKc"]
+        setter.argtypes = [C.c_char_p]
+        setter.restype = None
+        setter(b"")
+    except (AttributeError, KeyError, TypeError):
+        pass
 
 
 # ============================================================================
@@ -247,11 +284,38 @@ def _c_array(ar_type, size, values):
         raise RuntimeError(
             f"{len(values)} values specified for array of {size} elements"
         )
+    if ar_type is C.c_ubyte:
+        _validate_ubyte_values(values)
     result = (ar_type * size)(*values)
     # Preserve references to input values to prevent garbage collection
     # while C code holds pointers to the underlying data
     result._array_refs = tuple(values)
     return result
+
+
+def _validate_ubyte_values(values):
+    """Reject values that ctypes would silently corrupt in a ``c_ubyte`` array.
+
+    ctypes array construction ``(c_ubyte * n)(*values)`` does NOT
+    range-check Python ints: 300 wraps to 44 and 1.5 truncates to 1 with
+    no error (F-44). On the GSLIB/INC write paths those corrupted values
+    go straight to the on-disk file — silent data corruption. Validate
+    integrality and the [0, 255] byte range before constructing.
+
+    Raises:
+        ValueError: If any value is not an integer in [0, 255].
+    """
+    for v in values:
+        if isinstance(v, (int, numpy.integer)):
+            ok = 0 <= int(v) <= 255
+        elif isinstance(v, (float, numpy.floating)):
+            ok = numpy.isfinite(v) and float(v).is_integer() and 0 <= v <= 255
+        else:
+            ok = False
+        if not ok:
+            raise ValueError(
+                f"_c_array(c_ubyte): values must be integers in [0, 255], got {v!r}"
+            )
 
 
 def _create_hpgl_shape(shape, strides=None):

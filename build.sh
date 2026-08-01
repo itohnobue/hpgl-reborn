@@ -177,6 +177,15 @@ fi
 # Copy main hpgl library
 HPGL_LIB=$(find "$SEARCH_DIR" -maxdepth 3 \( -name "libhpgl${SHARED_EXT}" -o -name "hpgl${SHARED_EXT}" \) 2>/dev/null | head -1)
 if [[ -n "$HPGL_LIB" ]]; then
+    # Remove stale library variants that shadow the fresh build (F-03/I2-43):
+    # the Python loader searches lib-{name} BEFORE {name}, so a leftover
+    # libhpgl.dylib (or a stale cross-platform hpgl.so/hpgl.dylib) silently
+    # wins at runtime over the freshly copied binary. Delete all variants,
+    # then copy the fresh build so the search order cannot resolve to a stale
+    # file.
+    find "$RUNTIME_DIR" -maxdepth 1 \
+        \( -name "libhpgl.*" -o -name "hpgl.so" -o -name "hpgl.dylib" \) \
+        -delete 2>/dev/null || true
     cp "$HPGL_LIB" "${RUNTIME_DIR}/hpgl${SHARED_EXT}"
     echo "  $(basename "$HPGL_LIB") -> ${RUNTIME_DIR}/hpgl${SHARED_EXT}"
 else
@@ -186,6 +195,11 @@ fi
 # Copy variogram library
 VARIO_LIB=$(find "$SEARCH_DIR" -maxdepth 3 -name "_cvariogram${SHARED_EXT}" 2>/dev/null | head -1)
 if [[ -n "$VARIO_LIB" ]]; then
+    # Remove stale lib_cvariogram.* and cross-platform leftovers (same
+    # shadowing defect as the main library — repeat regression I2-43).
+    find "$RUNTIME_DIR" -maxdepth 1 \
+        \( -name "lib_cvariogram.*" -o -name "_cvariogram.so" -o -name "_cvariogram.dylib" \) \
+        -delete 2>/dev/null || true
     cp "$VARIO_LIB" "${RUNTIME_DIR}/_cvariogram${SHARED_EXT}"
     echo "  $(basename "$VARIO_LIB") -> ${RUNTIME_DIR}/_cvariogram${SHARED_EXT}"
 else
@@ -198,10 +212,14 @@ echo "Build completed successfully!"
 echo "========================================"
 echo ""
 
-# Post-build smoke test: verify the native library loads via Python.
+# Post-build smoke test: verify the FRESH native library loads via Python.
+# _HAS_KRIGING_STATS is only True for builds exporting hpgl_get_kriging_stats —
+# the stale Jun-27 binary predates that API and reports False (I2-47), so this
+# assert catches a stale-lib shadow that a plain "does it load" check misses.
+# The resolved library path is printed so a shadowing regression is visible.
 # Use uv if available (project standard), fall back to system python.
 echo "Smoke test: verifying library load..."
-SMOKE_CMD="import sys; sys.path.insert(0, '${RUNTIME_DIR}/..'); from geo_bsd import hpgl_wrap; print('  hpgl shared library loaded successfully')"
+SMOKE_CMD="import sys; sys.path.insert(0, '${RUNTIME_DIR}/..'); from geo_bsd import hpgl_wrap; assert hpgl_wrap._HAS_KRIGING_STATS, 'stale library loaded (_HAS_KRIGING_STATS=False)'; print('  hpgl shared library loaded:', hpgl_wrap._hpgl_so._name)"
 if command -v uv &>/dev/null; then
     if uv run python -c "$SMOKE_CMD" 2>/dev/null; then
         echo "  Smoke test: PASSED"

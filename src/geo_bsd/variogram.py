@@ -31,6 +31,8 @@ from numpy import (
 from .validation import GridValidator
 
 MAX_NUM_LAGS = 10000
+MAX_POINT_SET_SIZE = 1_000_000
+MAX_WINDOW_VOLUME = 100_000_000
 
 
 class TVEllipsoid:
@@ -79,6 +81,23 @@ class TVEllipsoid:
             raise ValueError(
                 f"TVEllipsoid: ranges must be finite and non-negative, "
                 f"got R1={R1!r}, R2={R2!r}, R3={R3!r}"
+            )
+        if not math.isfinite(Azimut) or not math.isfinite(Dip) or not math.isfinite(Rotation):
+            raise ValueError(
+                f"TVEllipsoid: angles must be finite, got "
+                f"Azimut={Azimut!r}, Dip={Dip!r}, Rotation={Rotation!r}"
+            )
+        if not 0 <= Azimut <= 360:
+            raise ValueError(
+                f"TVEllipsoid: Azimut must be in [0, 360], got {Azimut!r}"
+            )
+        if not -90 <= Dip <= 90:
+            raise ValueError(
+                f"TVEllipsoid: Dip must be in [-90, 90], got {Dip!r}"
+            )
+        if not -90 <= Rotation <= 90:
+            raise ValueError(
+                f"TVEllipsoid: Rotation must be in [-90, 90], got {Rotation!r}"
             )
         Azimut = radians(Azimut)
         Dip = radians(Dip)
@@ -142,7 +161,7 @@ class TVVariogramSearchTemplate:
     def __init__(
         self, LagWidth, LagSeparation, TolDistance, NumLags, Ellipsoid, FirstLagDistance=0
     ):
-        if NumLags <= 0:
+        if not math.isfinite(NumLags) or NumLags <= 0:
             raise ValueError(
                 f"TVVariogramSearchTemplate: NumLags must be positive, got {NumLags}"
             )
@@ -150,19 +169,19 @@ class TVVariogramSearchTemplate:
             raise ValueError(
                 f"TVVariogramSearchTemplate: NumLags {NumLags} exceeds maximum {MAX_NUM_LAGS}"
             )
-        if LagWidth <= 0:
+        if not math.isfinite(LagWidth) or LagWidth <= 0:
             raise ValueError(
                 f"TVVariogramSearchTemplate: LagWidth must be positive, got {LagWidth}"
             )
-        if LagSeparation <= 0:
+        if not math.isfinite(LagSeparation) or LagSeparation <= 0:
             raise ValueError(
                 f"TVVariogramSearchTemplate: LagSeparation must be positive, got {LagSeparation}"
             )
-        if TolDistance <= 0:
+        if not math.isfinite(TolDistance) or TolDistance <= 0:
             raise ValueError(
                 f"TVVariogramSearchTemplate: TolDistance must be positive, got {TolDistance}"
             )
-        if FirstLagDistance < 0:
+        if not math.isfinite(FirstLagDistance) or FirstLagDistance < 0:
             raise ValueError(
                 f"TVVariogramSearchTemplate: FirstLagDistance must be non-negative, got {FirstLagDistance}"
             )
@@ -278,6 +297,13 @@ def _CalcLagsAreas(VariogramSearchTemplate):
     MaxI = int(ceil(MaxI))
     MaxJ = int(ceil(MaxJ))
     MaxK = int(ceil(MaxK))
+
+    WindowVolume = (MaxI - MinI + 1) * (MaxJ - MinJ + 1) * (MaxK - MinK + 1)
+    if WindowVolume > MAX_WINDOW_VOLUME:
+        raise ValueError(
+            f"_CalcLagsAreas: search window volume {WindowVolume} exceeds "
+            f"maximum {MAX_WINDOW_VOLUME}. Reduce Ellipsoid ranges or NumLags."
+        )
 
     idx_i = zeros([])
     idx_j = zeros([])
@@ -412,6 +438,12 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     # Corrupt coordinates produce wrong distances and garbled variogram lags.
     GridValidator.validate_coordinate_arrays(PX, PY, PZ, "PointSet")
 
+    if len(PX) > MAX_POINT_SET_SIZE:
+        raise ValueError(
+            f"PointSetScanContStyle: point set size {len(PX)} exceeds "
+            f"MAX_POINT_SET_SIZE ({MAX_POINT_SET_SIZE})"
+        )
+
     MinX, MinY, MinZ, MaxX, MaxY, MaxZ = _CalcSearchTemplateWindow(VariogramSearchTemplate)
 
     LagIndex, LagDistance, LagStart, LagEnd = _CalcLagDistances(VariogramSearchTemplate)
@@ -517,6 +549,12 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
     # Validate coordinate arrays for NaN/Inf (F-046)
     GridValidator.validate_coordinate_arrays(PI, PJ, PK, "PointSetXYZ")
 
+    if len(PI) > MAX_POINT_SET_SIZE:
+        raise ValueError(
+            f"PointSetScanGridStyle: point set size {len(PI)} exceeds "
+            f"MAX_POINT_SET_SIZE ({MAX_POINT_SET_SIZE})"
+        )
+
     if Function is not None:
         Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
@@ -582,6 +620,11 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
         Distance values for each lag center.
     """
     _verify_shape(Mask, 3, "Mask")
+    # Normalize integer (e.g. uint8) masks to boolean: "non-zero indicates an
+    # informed cell". Without this, Mask1 & Mask2 stays uint8 and is used as an
+    # integer fancy index in the slicing below, inflating pair counts or
+    # raising IndexError (F-01).
+    Mask = Mask != 0
     NI, NJ, NK = Mask.shape
 
     LI, LJ, LK, LagIndexes, LagDistance = _CalcLagsAreas(VariogramSearchTemplate)
@@ -745,8 +788,10 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
         NumPoints: int
         if isinstance(Point1, tuple):
             # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays.
-            # Convert multi-dimensional indices to flat indices for the
-            # scalar-index loop below.
+            # Flatten the multi-dimensional indices to flat indices that match
+            # the C-order ravel of the value arrays (F-02). numpy.take with a
+            # flat index array indexes the raveled array regardless of whether
+            # Values[i] is 1D or 3D.
             NumPoints = len(Point1[0])
             P1 = ravel_multi_index(Point1, Values[0].shape)  # type: ignore[assignment]
             P2 = ravel_multi_index(Point2, Values[0].shape)  # type: ignore[assignment]
@@ -756,23 +801,21 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
             NumPoints = len(P1)
 
         # Accumulate covariances across all point pairs in the batch
-        for idx in range(NumPoints):
-            p1 = P1[idx]
-            p2 = P2[idx]
-            Values1 = zeros(NumValues)
-            Values2 = zeros(NumValues)
-            SoftValues1 = zeros(NumValues)
-            SoftValues2 = zeros(NumValues)
-            for i in range(NumValues):
-                Values1[i] = Values[i][p1]
-                Values2[i] = Values[i][p2]
-                SoftValues1[i] = SoftData[i][p1]
-                SoftValues2[i] = SoftData[i][p2]
-            Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2))
-            Result[NumValues + 0 : NumValues + NumValues] = (
-                Result[NumValues + 0 : NumValues + NumValues] + Covariances
-            )
-            Result[NumValues + NumValues] += 1
+        # (vectorized, mirroring CalcVariogramFunction).
+        Values1 = zeros((NumValues, NumPoints))
+        Values2 = zeros((NumValues, NumPoints))
+        SoftValues1 = zeros((NumValues, NumPoints))
+        SoftValues2 = zeros((NumValues, NumPoints))
+        for i in range(NumValues):
+            Values1[i] = numpy.take(Values[i], P1)
+            Values2[i] = numpy.take(Values[i], P2)
+            SoftValues1[i] = numpy.take(SoftData[i], P1)
+            SoftValues2[i] = numpy.take(SoftData[i], P2)
+        Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2))
+        Result[NumValues + 0 : NumValues + NumValues] = (
+            Result[NumValues + 0 : NumValues + NumValues] + Covariances.sum(axis=1)
+        )
+        Result[NumValues + NumValues] += NumPoints
 
         # Normalize after all pairs accumulated; guard against empty lags
         if Result[NumValues + NumValues] > 0:
@@ -810,8 +853,10 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
         NumPoints: int
         if isinstance(Point1, tuple):
             # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays.
-            # Convert multi-dimensional indices to flat indices for the
-            # scalar-index loop below.
+            # Flatten the multi-dimensional indices to flat indices that match
+            # the C-order ravel of the value arrays (F-02). numpy.take with a
+            # flat index array indexes the raveled array regardless of whether
+            # Values[i] is 1D or 3D.
             NumPoints = len(Point1[0])
             P1 = ravel_multi_index(Point1, Values[0].shape)  # type: ignore[assignment]
             P2 = ravel_multi_index(Point2, Values[0].shape)  # type: ignore[assignment]
@@ -821,31 +866,29 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
             NumPoints = len(P1)
 
         # Accumulate indicator correlations across all point pairs in the batch
-        for idx in range(NumPoints):
-            p1 = P1[idx]
-            p2 = P2[idx]
-            Values1 = zeros(NumValues)
-            Values2 = zeros(NumValues)
-            SoftValues1 = zeros(NumValues)
-            SoftValues2 = zeros(NumValues)
-            for i in range(NumValues):
-                Values1[i] = Values[i][p1]
-                Values2[i] = Values[i][p2]
-                SoftValues1[i] = SoftData[i][p1]
-                SoftValues2[i] = SoftData[i][p2]
+        # (vectorized, mirroring CalcVariogramFunction).
+        Values1 = zeros((NumValues, NumPoints))
+        Values2 = zeros((NumValues, NumPoints))
+        SoftValues1 = zeros((NumValues, NumPoints))
+        SoftValues2 = zeros((NumValues, NumPoints))
+        for i in range(NumValues):
+            Values1[i] = numpy.take(Values[i], P1)
+            Values2[i] = numpy.take(Values[i], P2)
+            SoftValues1[i] = numpy.take(SoftData[i], P1)
+            SoftValues2[i] = numpy.take(SoftData[i], P2)
 
-            # Guard negative/NaN before sqrt to prevent silent NaN propagation.
-            # NaN <= 0 is False, so denom[denom <= 0] alone misses NaN.
-            product = SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1 - SoftValues2)
-            invalid = (product <= 0) | numpy.isnan(product)
-            product[invalid] = 1.0
-            denom = product**0.5
+        # Guard negative/NaN before sqrt to prevent silent NaN propagation.
+        # NaN <= 0 is False, so denom[denom <= 0] alone misses NaN.
+        product = SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1 - SoftValues2)
+        invalid = (product <= 0) | numpy.isnan(product)
+        product[invalid] = 1.0
+        denom = product**0.5
 
-            Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2) / denom)
-            Result[NumValues + 0 : NumValues + NumValues] = (
-                Result[NumValues + 0 : NumValues + NumValues] + Covariances
-            )
-            Result[NumValues + NumValues] += 1
+        Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2) / denom)
+        Result[NumValues + 0 : NumValues + NumValues] = (
+            Result[NumValues + 0 : NumValues + NumValues] + Covariances.sum(axis=1)
+        )
+        Result[NumValues + NumValues] += NumPoints
 
         # Normalize after all pairs accumulated; guard against empty lags
         if Result[NumValues + NumValues] > 0:

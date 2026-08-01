@@ -3,10 +3,12 @@
 import numpy
 
 # Import validation framework
+from . import geo as _geo_module
 from .config import SISConfig
 from .ffi_adapter import (
     _HPGL_FLOAT_ARRAY,
     _c_array,
+    _hpgl_call_lock,
     call_sis_simulation,
     call_sis_simulation_lvm,
     create_ik_params,
@@ -39,11 +41,12 @@ from .validation import (
 # sequential_indicator_simulation.cpp but does NOT call set_kriging_stats().
 # Calling get_kriging_stats() here would return stale data from the last
 # continuous kriging call (SK/LVM/OK) — a different algorithm. We explicitly
-# set _last_kriging_stats = None after each SIS call as an honest sentinel:
-# "no simulation stats available."
+# set geo._last_kriging_stats (the documented inspection point in geo.py)
+# to None BEFORE the FFI call as an honest sentinel: "no simulation stats
+# available." Resetting before the call is exception-safe — stale stats
+# from a prior kriging call never survive an error raised by C++.
 # Forward-compatible: when C++ is updated to call set_kriging_stats() in
 # the SIS path, the wiring can be re-enabled here.
-_last_kriging_stats: dict | None = None
 
 
 def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
@@ -123,7 +126,11 @@ def sis_simulation(
         If marginal probabilities do not sum to 1.0 (non-LVM mode).
     RuntimeError
         If the underlying C++ simulation fails."""
-    global _last_kriging_stats
+    # Reset the documented kriging-stats inspection point BEFORE the FFI
+    # call (exception-safe): SIS does not populate stats, so a successful
+    # call leaves it None; a C++ error leaves it None instead of a stale
+    # dict from a prior kriging call (see module comment).
+    _geo_module._last_kriging_stats = None
 
     # Raise on unexpected keyword arguments to catch parameter name typos
     if params:
@@ -208,8 +215,16 @@ def sis_simulation(
             "sis_simulation: prop.data contains NaN or Inf values"
         )
 
-    # Update indicator_count to match the number of categories in data
-    out_prop.indicator_count = len(data)
+    # Validate indicator_count against the clone's configured value instead
+    # of silently overriding it. The number of categories in data must match
+    # prop.indicator_count — a mismatch would create an inconsistent output
+    # contract (lost categories) between the property struct passed to C++
+    # and the IK params array.
+    if len(data) != out_prop.indicator_count:
+        raise ValueError(
+            f"sis_simulation: len(data) ({len(data)}) does not match "
+            f"prop.indicator_count ({out_prop.indicator_count})"
+        )
     prop_2 = _create_hpgl_ind_masked_array(out_prop, grid)
 
     ikps = __create_hpgl_ik_params(data, len(data), is_lvm, marginal_probs)
@@ -248,33 +263,29 @@ def sis_simulation(
             means.append(_create_hpgl_float_array(marginal_probs[i], grid))
 
     if not is_lvm:
-        call_sis_simulation(
-            prop_2,
-            ikps,
-            len(data),
-            seed,
-            _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
-        )
+        with _hpgl_call_lock:
+            call_sis_simulation(
+                prop_2,
+                ikps,
+                len(data),
+                seed,
+                _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
+            )
     else:
-        call_sis_simulation_lvm(
-            prop_2,
-            ikps,
-            _c_array(_HPGL_FLOAT_ARRAY, len(data), means),
-            len(data),
-            seed,
-            _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
-            use_correlogram,
-        )
+        with _hpgl_call_lock:
+            call_sis_simulation_lvm(
+                prop_2,
+                ikps,
+                _c_array(_HPGL_FLOAT_ARRAY, len(data), means),
+                len(data),
+                seed,
+                _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
+                use_correlogram,
+            )
 
-    # Simulation-specific failure statistics are NOT available in the
-    # current C++ build. The C++ SIS path tracks kriging_failures locally
-    # in sequential_indicator_simulation.cpp but does NOT call
-    # set_kriging_stats() — get_kriging_stats() would return stale data
-    # from the last continuous kriging call (SK/LVM/OK), a different
-    # algorithm. We set None as an honest sentinel: "no simulation stats
-    # available." When C++ is updated to call set_kriging_stats() in the
-    # SIS path, the wiring can be re-enabled here.
-    _last_kriging_stats = None
+    # geo._last_kriging_stats was reset to None before the FFI call above
+    # (see module comment) — SIS does not populate stats in the current
+    # C++ build, so it remains None as an honest sentinel.
 
     # Validate output data for NaN/Inf after C++ computation.
     # C++ simulation can return NaN/Inf from degenerate matrices,

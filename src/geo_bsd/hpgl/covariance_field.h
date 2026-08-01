@@ -6,6 +6,7 @@
 #include "cov_model.h"
 #include "sugarbox_grid.h"
 #include <algorithm>
+#include <optional>
 
 namespace hpgl
 {
@@ -124,6 +125,15 @@ class covariance_field_t
 	int m_ydiameter;
 	int m_zdiameter;
 	std::vector<sugarbox_vector_t> m_vectors;
+	// PR-06 (F-21 sibling): exact model fallback for pairs beyond the
+	// precomputed box. The box table truncates data-to-data covariance to 0
+	// for neighbour pairs farther apart than the search radius, while the RHS
+	// (data-to-target) stays exact — an internally inconsistent kriging
+	// system on the median_ik path. Storing the source model lets operator()
+	// return the exact covariance for out-of-box pairs (GSLIB cova3
+	// behavior), mirroring precalculated_covariances_t (precalculated_covariance.h).
+	// cov_model_t is not default-constructible, hence std::optional.
+	std::optional<cov_model_t> m_exact_model;
 	void init(int xradius, 
 			int yradius, 
 			int zradius, 
@@ -156,7 +166,14 @@ public:
 		if (vec[0] < - m_xradius || vec[0] > m_xradius 
 			|| vec[1] < - m_yradius || vec[1] > m_yradius 
 			|| vec[2] < - m_zradius || vec[2] > m_zradius )
+		{
+			// PR-06: exact covariance beyond the search box — do not
+			// truncate to 0, which makes the data-to-data LHS inconsistent
+			// with the exact RHS in median_ik kriging systems (F-21 sibling).
+			if (m_exact_model.has_value())
+				return (*m_exact_model)(loc1, loc2);
 			return 0;
+		}
 		else
 			return value(vec[0], vec[1], vec[2]);
 	}

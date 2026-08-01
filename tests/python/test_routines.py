@@ -342,7 +342,9 @@ class TestSaveGSLIBPointSet:
             "Z": np.array([0, 0], dtype="int32"),
             "Property": np.array([10.5, 20.5], dtype="float32"),
         }
-        SaveGSLIBPointSet(point_set, fpath, "Test Point Set")
+        # F-28: pass an explicit trusted base — the default (DEFAULT_BASE_DIR)
+        # is the process cwd, so writing to tmp_path requires an explicit base.
+        SaveGSLIBPointSet(point_set, fpath, "Test Point Set", basedir=str(tmp_path))
         assert os.path.exists(fpath)
         content = open(fpath).read()
         assert "Test Point Set" in content
@@ -380,7 +382,9 @@ class TestSaveGSLIBCubes:
             "Property1": np.ones((2, 2, 2), dtype="float32"),
             "Property2": np.ones((2, 2, 2), dtype="float32") * 2,
         }
-        SaveGSLIBCubes(cubes, fpath, "Test Cubes")
+        # F-28: pass an explicit trusted base — the default (DEFAULT_BASE_DIR)
+        # is the process cwd, so writing to tmp_path requires an explicit base.
+        SaveGSLIBCubes(cubes, fpath, "Test Cubes", basedir=str(tmp_path))
         assert os.path.exists(fpath)
         content = open(fpath).read()
         assert "Test Cubes" in content
@@ -492,7 +496,9 @@ class TestLoadGslibFile:
         fpath = tmp_path / "test.gslib"
         content = "Test Data\n2\nX\nY\n0 10.0\n1 20.0\n2 30.0\n3 40.0\n"
         fpath.write_text(content)
-        result = LoadGslibFile(str(fpath), property_size=(2, 2, 1))
+        # F-28: pass an explicit trusted base — the default (DEFAULT_BASE_DIR)
+        # is the process cwd, so reading tmp_path requires an explicit base.
+        result = LoadGslibFile(str(fpath), property_size=(2, 2, 1), basedir=str(tmp_path))
         assert "X" in result
         assert "Y" in result
         assert result["X"].size == 4

@@ -2,6 +2,7 @@
 #include "neighbourhood_param.h"
 #include "hpgl_exception.h"
 #include <limits>
+#include <sstream>
 
 namespace hpgl
 {
@@ -22,5 +23,22 @@ namespace hpgl
 		m_radiuses[0] = radius1;
 		m_radiuses[1] = radius2;
 		m_radiuses[2] = radius3;
+	}
+
+	void validate_kriging_radiuses_or_throw(
+			const sugarbox_search_ellipsoid_t & radiuses,
+			const char * context)
+	{
+		// A zero search radius yields an empty neighbourhood on kriging paths:
+		// every node reports KI_NO_NEIGHBOURS and kriging silently degrades to
+		// mean/noise fill (F-34). Simulation paths (SGS zero-radius CDF draw)
+		// are intentionally exempt — callers on those paths must not call this.
+		if (radiuses[0] <= 0 && radiuses[1] <= 0 && radiuses[2] <= 0)
+		{
+			std::ostringstream oss;
+			oss << "search radius must be positive (got "
+			    << radiuses[0] << ", " << radiuses[1] << ", " << radiuses[2] << ")";
+			throw hpgl_exception(context, oss.str());
+		}
 	}
 }

@@ -121,18 +121,22 @@ void test_1rhs_known_spd_integer_solution() {
 }
 
 /// Non-SPD matrix: dpotrf_ should fail, forcing fallback to gauss_solve.
-/// A = [[2, 4],     <- linearly dependent rows
-///      [1, 2]]
-/// B = [6, 3]
-/// Expected: X = [1, 1] via gauss_solve
+/// The matrix is stored row-major but read column-major by LAPACK
+/// (uplo='U'), so the effective symmetric matrix is built from the upper
+/// triangle read in column-major order: A[0]=(0,0), A[2]=(0,1), A[3]=(1,1).
+/// For the storage [1,2,2,4]: (0,0)=1, (0,1)=2, (1,1)=4 → [[1,2],[2,4]],
+/// det = 1*4 - 2*2 = 0 → singular → NOT SPD → dpotrf_ fails → gauss_solve
+/// also fails (linearly dependent rows). PR-04: the previous storage
+/// [2,4,1,2] read column-major as [[2,1],[1,2]] (det 3, SPD) so dpotrf_
+/// succeeded and the fallback was never exercised.
 void test_1rhs_non_spd_fallback() {
     TEST("lapack_spd_solve_1rhs 2x2 non-SPD (fallback to gauss_solve)");
     int size = 2;
     // This matrix is NOT positive-definite — rows are linearly dependent.
     // dpotrf_ will fail; gauss_solve must handle it.
     std::vector<double> A = {
-        2.0, 4.0,
-        1.0, 2.0
+        1.0, 2.0,
+        2.0, 4.0
     };
     std::vector<double> B = { 6.0, 3.0 };
     std::vector<double> X(size, 0.0);
@@ -148,25 +152,46 @@ void test_1rhs_non_spd_fallback() {
 
 /// Non-SPD that is actually solvable by gauss_solve (not singular,
 /// just not SPD). Use an asymmetric matrix.
+/// Storage [1,3,3,1] read column-major with uplo='U' gives the effective
+/// symmetric matrix [[1,3],[3,1]] (det = 1*1 - 3*3 = -8) → NOT SPD →
+/// dpotrf_ fails → gauss_solve must succeed on the row-major A_orig
+/// [[1,3],[3,1]]. B = A*[2,1]^T = [5,7] so X = [2,1] verifies the
+/// fallback solution. PR-04: the previous storage [1,5,0,2] read
+/// column-major as [[1,0],[0,2]] (SPD diagonal) so dpotrf_ succeeded.
 void test_1rhs_non_spd_solvable() {
     TEST("lapack_spd_solve_1rhs 2x2 non-SPD but non-singular (fallback)");
     int size = 2;
     // Asymmetric, non-SPD but non-singular: dpotrf_ will fail,
     // gauss_solve should succeed.
     std::vector<double> A = {
-        1.0, 5.0,
-        0.0, 2.0
+        1.0, 3.0,
+        3.0, 1.0
     };
-    std::vector<double> B = { 7.0, 2.0 };
-    // Solution: x1 * 1 + x2 * 5 = 7  => x1 = -3, x2 = 2
-    //           x1 * 0 + x2 * 2 = 2  => x2 = 1, x1 = 2
-    // Actually: 1*x1 + 5*x2 = 7, 0*x1 + 2*x2 = 2 => x2 = 1, x1 = 2
+    // B = A * [2, 1]^T = [1*2+3*1, 3*2+1*1] = [5, 7]
+    std::vector<double> B = { 5.0, 7.0 };
     std::vector<double> X(size, 0.0);
     std::vector<double> A_backup(A);
 
     bool ok = hpgl::detail::lapack_spd_solve_1rhs(
         A.data(), size, X.data(), B.data(),
         A_backup.data(), "test 1rhs non-SPD solvable");
+
+    // PR-04 regression assertion: the gauss fallback must actually trigger.
+    // dpotrf_ reads the upper triangle column-major: for storage [1,3,3,1]
+    // that is [[1,3],[3,1]] with det = -8 < 0, which is NOT positive
+    // definite — dpotrf_ MUST fail (info > 0). The matrix is symmetric, so
+    // a successful dpotrf_ would otherwise produce the same solution and
+    // mask a regression where the fallback never runs. Probing dpotrf_
+    // directly proves the Cholesky path is genuinely unavailable, so the
+    // ok==true result below can only come from gauss_solve.
+    {
+        char uplo = 'U';
+        integer n = size;
+        integer info = 0;
+        std::vector<double> probe(A);
+        dpotrf_(&uplo, &n, probe.data(), &n, &info);
+        CHECK(info > 0);   // genuinely non-SPD → fallback required
+    }
 
     CHECK(ok);
     CHECK_CLOSE(X[0], 2.0, 1e-12);
@@ -276,12 +301,17 @@ void test_2rhs_non_spd_fallback() {
 }
 
 /// Singular non-SPD: both dpotrf_ and gauss_solve should fail.
+/// Storage [1,2,2,4] read column-major with uplo='U' gives the effective
+/// symmetric matrix [[1,2],[2,4]] (det = 1*4 - 2*2 = 0) → singular → NOT
+/// SPD → dpotrf_ fails → gauss_solve also fails (linearly dependent rows).
+/// PR-04: the previous storage [2,4,1,2] read column-major as [[2,1],[1,2]]
+/// (det 3, SPD) so dpotrf_ succeeded and the assertion never held.
 void test_2rhs_singular_returns_false() {
     TEST("lapack_spd_solve_2rhs 2x2 singular (both fail)");
     int size = 2;
     std::vector<double> A = {
-        2.0, 4.0,
-        1.0, 2.0  // linearly dependent rows
+        1.0, 2.0,
+        2.0, 4.0  // linearly dependent rows
     };
     std::vector<double> B0 = { 6.0, 3.0 };
     std::vector<double> B1 = { 4.0, 2.0 };

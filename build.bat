@@ -170,6 +170,14 @@ if /i "%BUILD_CONFIG%"=="Debug" (
 )
 
 set "DLL_COPY_FAILED=0"
+REM Remove stale DLL variants that shadow the fresh build (F-03/I2-43):
+REM hpgl_wrap.py searches lib{name}.dll before {name}.dll, so a leftover
+REM libhpgl.dll / lib_cvariogram.dll silently wins at runtime over the
+REM freshly copied DLL. Delete all variants before copying the fresh build.
+if exist "%~dp0src\geo_bsd\libhpgl.dll" del /q "%~dp0src\geo_bsd\libhpgl.dll" >nul 2>&1
+if exist "%~dp0src\geo_bsd\libhpgl_d.dll" del /q "%~dp0src\geo_bsd\libhpgl_d.dll" >nul 2>&1
+if exist "%~dp0src\geo_bsd\lib_cvariogram.dll" del /q "%~dp0src\geo_bsd\lib_cvariogram.dll" >nul 2>&1
+if exist "%~dp0src\geo_bsd\lib_cvariogram_d.dll" del /q "%~dp0src\geo_bsd\lib_cvariogram_d.dll" >nul 2>&1
 if exist "%~dp0src\msvc\geo_bsd\hpgl%DLL_SUFFIX%.dll" (
 	copy /Y "%~dp0src\msvc\geo_bsd\hpgl%DLL_SUFFIX%.dll" "%~dp0src\geo_bsd\hpgl.dll" >nul 2>&1
 	if !ERRORLEVEL! EQU 0 (
@@ -215,7 +223,9 @@ echo.
 echo Build log: %LogFile%
 echo.
 echo Smoke test: verifying library load...
-uv run python -c "import sys; sys.path.insert(0, r'%~dp0src'); from geo_bsd import hpgl_wrap; print('  hpgl shared library loaded successfully')" >nul 2>&1
+REM Assert the FRESH library loads: _HAS_KRIGING_STATS is only True for builds
+REM exporting hpgl_get_kriging_stats (stale builds report False — I2-47).
+uv run python -c "import sys; sys.path.insert(0, r'%~dp0src'); from geo_bsd import hpgl_wrap; assert hpgl_wrap._HAS_KRIGING_STATS, 'stale library loaded (_HAS_KRIGING_STATS=False)'; print('  hpgl shared library loaded successfully')" >nul 2>&1
 if !ERRORLEVEL! EQU 0 (
     echo   Smoke test: PASSED
 ) else (

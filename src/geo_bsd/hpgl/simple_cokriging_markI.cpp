@@ -13,6 +13,9 @@
 #include "cov_model.h"
 #include "gauss_solver.h"
 #include "my_kriging_weights.h"
+#include "kriging_interpolation.h"
+#include "kriging_stats.h"
+#include "api.h"
 
 namespace hpgl
 {
@@ -24,6 +27,7 @@ bool build_system(
 	const primary_cov_model_t & primary_cov,
 	const cross_cov_model_t & cross_cov,
 	double secondary_variance,
+	bool secondary_present,
 	std::vector<double> & A,
 	std::vector<double> & b)
 {
@@ -35,7 +39,12 @@ bool build_system(
 	}
 
 	int neighbour_count = static_cast<int>(coords.size());
-	int matrix_size = neighbour_count + 1;
+	// F-22: when the secondary is missing/undefined at the target, drop the
+	// secondary equation from the system entirely (GSLIB convention) — the
+	// system becomes plain primary-only kriging with matrix_size ==
+	// neighbour_count. Substituting secondary_mean while keeping the
+	// full-variance secondary equation produces an estimate that is not BLUP.
+	int matrix_size = neighbour_count + (secondary_present ? 1 : 0);
 
 	size_t ms = static_cast<size_t>(matrix_size);
 	size_t matrix_elements = 0;
@@ -43,6 +52,21 @@ bool build_system(
 	{
 		HPGL_LOG_STRING("Security: Matrix size overflow in build_system.");
 		return false;
+	}
+	// I2-23: hard upper bound on the cokriging system size. The linear
+	// solver consumes O(size^3); sizes beyond this are pathological configs.
+	// PR-07: previously returned false → calc_value mapped it to
+	// KI_SINGULARITY → process_node_loop silently mean-filled. Now a clear
+	// error so the caller observes the failure instead of silent wrong output.
+	// The C-API bound (validate_max_neighbours_or_throw, api.cpp) is aligned
+	// at the same limit; this guard is defense in depth for direct C++ callers
+	// and the secondary-equation +1 edge (ms = neighbour_count + 1).
+	if (ms > 100000)
+	{
+		std::ostringstream oss;
+		oss << "cokriging system size " << ms
+		    << " exceeds upper bound (100000) in build_system";
+		throw hpgl_exception("simple_cokriging_markI", oss.str());
 	}
 	A.resize(matrix_elements);
 
@@ -52,21 +76,34 @@ bool build_system(
 	{
 		for (int j = i; j < neighbour_count; ++j)
 		{
-			A[i * matrix_size + j] = primary_cov(coords[i], coords[j]);
-			A[j * matrix_size + i] = A[i * matrix_size + j];
+			// I2-23: size_t indexing — i*matrix_size overflows signed int
+			// for >46340 neighbours (heap OOB write). Ported from
+			// my_kriging_weights.h's safe indexing pattern.
+			A[static_cast<size_t>(i) * ms + j] = primary_cov(coords[i], coords[j]);
+			A[static_cast<size_t>(j) * ms + i] = A[static_cast<size_t>(i) * ms + j];
 		}
 	}
 	
-	for (int i = 0; i < neighbour_count; ++i)
+	if (secondary_present)
 	{
-		A[neighbour_count * matrix_size + i] = cross_cov(center, coords[i]);
-		A[i * matrix_size + neighbour_count] = A[neighbour_count * matrix_size + i];
-		b[i] = primary_cov(coords[i], center);
+		for (int i = 0; i < neighbour_count; ++i)
+		{
+			A[static_cast<size_t>(neighbour_count) * ms + i] = cross_cov(center, coords[i]);
+			A[static_cast<size_t>(i) * ms + neighbour_count] = A[static_cast<size_t>(neighbour_count) * ms + i];
+			b[i] = primary_cov(coords[i], center);
+		}
+
+		b[neighbour_count] = cross_cov(coord_t(0,0,0), coord_t(0,0,0));
+
+		A[static_cast<size_t>(ms) * ms - 1] = secondary_variance;
 	}
-
-	b[neighbour_count] = cross_cov(coord_t(0,0,0), coord_t(0,0,0));
-
-	A[matrix_size * matrix_size - 1] = secondary_variance;	
+	else
+	{
+		for (int i = 0; i < neighbour_count; ++i)
+		{
+			b[i] = primary_cov(coords[i], center);
+		}
+	}
 
 	return true;
 }
@@ -107,6 +144,7 @@ bool calc_weights(
 		const primary_cov_model_t & primary_cov,
 		const cross_cov_model_t & cross_cov,
 		double secondary_variance,
+		bool secondary_present,
 		std::vector<kriging_weight_t> & weights
 		)
 {
@@ -114,7 +152,7 @@ bool calc_weights(
 	std::vector<double> b;
 	
 	// build system
-	if (!build_system(center, coords, primary_cov, cross_cov, secondary_variance, A, b))
+	if (!build_system(center, coords, primary_cov, cross_cov, secondary_variance, secondary_present, A, b))
 		return false;
 	// solve systemk
 	return solve_system(A, b, weights);
@@ -126,13 +164,19 @@ bool combine(
 		mean_t primary_mean,
 		cont_value_t secondary_value,
 		mean_t secondary_mean,
+		bool secondary_present,
 		cont_value_t & result
 	    )
 {
-	if (values.size() != weights.size() - 1)
+	// F-22: when the secondary equation was dropped (secondary missing at
+	// the target), weights.size() == values.size(); otherwise the secondary
+	// weight is the last element.
+	size_t expected_weights = values.size() + (secondary_present ? 1u : 0u);
+	if (weights.size() != expected_weights)
 	{
 		std::ostringstream oss;
-		oss << "values.size() = " << values.size() << ", weights.size() = " << weights.size() << ". weights.size() - values.size() != 1";
+		oss << "values.size() = " << values.size() << ", weights.size() = " << weights.size()
+		    << ". weights.size() != values.size()" << (secondary_present ? " + 1" : "");
 		throw hpgl_exception("combine", oss.str());
 	}
 
@@ -142,15 +186,17 @@ bool combine(
 	{
 		result += (values[i] - primary_mean) * weights[i];
 	}
-	result += weights[size] * (secondary_value - secondary_mean);
+	if (secondary_present)
+		result += weights[size] * (secondary_value - secondary_mean);
 	return true;
 }
 
 template<typename data_t, typename primary_cov_model_t, typename cross_cov_model_t, typename n_lookup_t>
-bool calc_value(
+ki_result_t calc_value(
 		node_index_t node,
 		const data_t & primary_data,
 		cont_value_t secondary_value,
+		bool secondary_present,
 		mean_t primary_mean,
 		mean_t secondary_mean,
 		double secondary_variance,
@@ -167,20 +213,20 @@ bool calc_value(
 	n_lookup.find(node, is_informed_predicate_t<data_t>(primary_data), center, indices, coords);
 
 	if (indices.size() <= 0)
-		return false;
+		return ki_result_t::KI_NO_NEIGHBOURS;
 
 	std::vector<kriging_weight_t> weights;
-	if (!calc_weights(center, coords, primary_cov, cross_cov, secondary_variance, weights))
-		return false;
+	if (!calc_weights(center, coords, primary_cov, cross_cov, secondary_variance, secondary_present, weights))
+		return ki_result_t::KI_SINGULARITY;
 
 	std::vector<cont_value_t> values;
 	select(primary_data, indices, values);
 	
-	if (!combine(values, weights, primary_mean, secondary_value, secondary_mean, result))
-		return false;
+	if (!combine(values, weights, primary_mean, secondary_value, secondary_mean, secondary_present, result))
+		return ki_result_t::KI_SINGULARITY;
 
 	
-	return true;
+	return ki_result_t::KI_SUCCESS;
 }
 
 template<typename cov_model_t>
@@ -268,9 +314,15 @@ static void process_node_loop(
 		const cross_cov_model_t & cross_cov,
 		const n_lookup_t & n_lookup,
 		data_t & output_prop,
-		progress_reporter_t & report)
+		progress_reporter_t & report,
+		kriging_stats_t & stats)
 {
 	int data_size = input_prop.size();
+	unsigned long points_calculated = 0;
+	unsigned long points_without_neighbours = 0;
+	unsigned long points_singularity = 0;
+	unsigned long points_processed = 0;
+	double sum = 0;
 	for (node_index_t i = 0; i < data_size; ++i)
 	{
 		cont_value_t result = -500;
@@ -280,17 +332,55 @@ static void process_node_loop(
 		}
 		else
 		{
-			cont_value_t secondary_value = secondary_data.is_informed(i)
+			// F-22: whether the secondary is actually defined at this node
+			// decides whether the secondary equation enters the system.
+			bool secondary_present = secondary_data.is_informed(i);
+			cont_value_t secondary_value = secondary_present
 				? secondary_data[i] : secondary_mean;
-			if (!calc_value(i, input_prop, secondary_value, primary_mean,
-					secondary_mean, secondary_variance, primary_cov,
-					cross_cov, n_lookup, result))
+			ki_result_t ki_result = calc_value(i, input_prop, secondary_value,
+				secondary_present, primary_mean, secondary_mean,
+				secondary_variance, primary_cov, cross_cov, n_lookup, result);
+			switch (ki_result)
 			{
+			case ki_result_t::KI_SUCCESS:
+				++points_calculated;
+				++points_processed;
+				sum += result;
+				break;
+			case ki_result_t::KI_NO_NEIGHBOURS:
+				++points_without_neighbours;
 				result = primary_mean + secondary_value - secondary_mean;
+				++points_processed;
+				sum += result;
+				break;
+			case ki_result_t::KI_SINGULARITY:
+				++points_singularity;
+				result = primary_mean + secondary_value - secondary_mean;
+				++points_processed;
+				sum += result;
+				break;
 			}
 		}
 		output_prop.set_at(i, result);
 		report.next_lap();
+	}
+	stats.m_points_calculated = points_calculated;
+	stats.m_points_without_neighbours = points_without_neighbours;
+	stats.m_points_singularity = points_singularity;
+	stats.m_mean = points_processed > 0 ? sum / points_processed : 0;
+	// m_speed_nps is set by the caller after report.stop() (the reporter
+	// needs m_end, which stop() records, to compute iterations_per_second).
+
+	// F-19: emit failure signals on all cokriging failure paths (mirrors
+	// cont_kriging.h:234-241). Previously every failure silently degraded
+	// to the trivial mean fallback with no observability.
+	if (stats.m_points_singularity > 0 || stats.m_points_without_neighbours > 0)
+	{
+		fprintf(stderr,
+			"HPGL: cokriging failures: %lu singularity, %lu no-neighbours (of %d total)\n",
+			stats.m_points_singularity,
+			stats.m_points_without_neighbours,
+			data_size);
 	}
 }
 
@@ -339,9 +429,14 @@ void simple_cokriging_markI(
 
 	report.start(data_size);
 
+	kriging_stats_t stats;
 	process_node_loop(input_prop, secondary_data, primary_mean,
 			secondary_mean, secondary_variance, cov, cross_cov,
-			n_lookup, output_prop, report);
+			n_lookup, output_prop, report, stats);
+
+	report.stop();
+	stats.m_speed_nps = report.iterations_per_second();
+	set_kriging_stats(stats);
 }
 
 void simple_cokriging_markII(
@@ -393,9 +488,14 @@ void simple_cokriging_markII(
 
 	report.start(data_size);
 
+	kriging_stats_t stats;
 	process_node_loop(input_prop, secondary_data, primary_mean,
 			secondary_mean, secondary_variance, primary_cov, cross_cov,
-			n_lookup, output_prop, report);
+			n_lookup, output_prop, report, stats);
+
+	report.stop();
+	stats.m_speed_nps = report.iterations_per_second();
+	set_kriging_stats(stats);
 }
 
 }

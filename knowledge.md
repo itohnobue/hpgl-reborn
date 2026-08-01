@@ -1,5 +1,6 @@
 # Knowledge Base
-Last updated: 2026-08-01T15:33:42.549396
+Last updated: 2026-08-02T01:58:25.846690
+
 ## [got-20260616055758-f1d951]
 Category: gotcha
 Tags: hpgl-reborn, cvariogram, error-handling
@@ -223,3 +224,158 @@ Tags: testing, ffi, python, hpgl-reborn
 Changed: 2026-07-24T23:10:56.575763
 
 FFI integration test structurally bypasses wrapper layer — tests must call the public Python API not the raw C binding: When a test verifies FFI integration by calling the raw C API binding directly (e.g., ctypes wrapped function) instead of the Python public API wrapper function, the test structurally bypasses the layer of code it claims to verify. The wrapper's integration code — populating module-level state variables, applying validation, transforming data structures — is never exercised. If the wrapper's state wiring line were deleted, the test would still pass, producing false confidence that the integration is verified. Fix: (a) tests for FFI wrapper integration MUST call the public Python API function (e.g., ordinary_kriging(), not hpgl_get_kriging_stats() directly), (b) assert on the wrapper-managed state variable (e.g., geo._last_kriging_stats["points_calculated"] > 0) to verify the wrapper's state management code actually ran, (c) structurally verify the test would FAIL if the wrapper's state wiring line were deleted — delete the line temporarily and run the test to confirm. Checklist: for every integration test near an FFI boundary, grep for the test's function call — if it calls a ctypes binding function directly instead of the public Python API, the test is structurally incomplete. In hpgl-reborn: test_kriging_stats_reported_after_ordinary_kriging at test_cpp_fixes.py:516-533 calls get_kriging_stats() from hpgl_wrap directly (C API binding), bypassing geo._last_kriging_stats — would pass even if geo.py:1152 stats wiring was deleted. PRIOR_FIX_ATTEMPT at e19aa84 created this test. CONFIRMED MEDIUM (UF-06).
+
+## [got-20260801220227-b91b90]
+Category: gotcha
+Tags: geo, security, f28
+Changed: 2026-08-01T22:02:27.333290
+
+geo.py F-28 basedir: DEFAULT_BASE_DIR=cwd at import; tmp_path callers MUST pass explicit basedir or CriticalValidationError fires
+
+## [got-20260801220227-3d10e9]
+Category: gotcha
+Tags: geo, kriging, f33
+Changed: 2026-08-01T22:02:27.403101
+
+F-33 SK/LVM: mean_on_failure fills finite means passing isfinite; points_singularity>0 is the genuine failure signal (RuntimeError); no-neighbour mean-fill is documented contract (pure-nugget covariance, sparse data) -> warning only. All-masked degenerate input must warn not raise
+
+## [got-20260801220227-ff0d76]
+Category: gotcha
+Tags: geo, f55, shape
+Changed: 2026-08-01T22:02:27.472001
+
+F-55 shape contract: load_cont_property/load_ind_property with 3-tuple size now return 3D Fortran on BOTH fast and fallback paths; read_inc_file_float/byte stay 1D (low-level contract). Downstream flat arithmetic must ravel.
+
+## [got-20260802015631-1bc183]
+Category: gotcha
+Tags: ffi, ctypes, numerical, python
+Changed: 2026-08-02T01:56:31.147576
+
+ctypes small-int scalar types do NOT range-check: assigning an out-of-range Python value to c_ubyte/c_uint8 silently wraps mod 256 (300->44) with no error, unlike numpy 2.x which raises OverflowError for Python ints. At FFI boundaries, ctypes casts must be preceded by explicit Python-side range validation, because the C layer cannot detect the corruption. In hpgl-reborn: F-44 (CONFIRMED MEDIUM, boundary-found) - indicator_values passed to _c_array(c_ubyte,...) on the GSLIB byte write path silently wrapped 300->44 (silent data corruption in written files) while the INC path raised a confusing numpy OverflowError; fractional floats silently truncated (1.5->1); duplicate indicator_values not rejected on write path. Fix: [0,255] validation on the Python write path before ctypes conversion. Checklist: (a) grep _c_array/c_ubyte/c_int at FFI boundaries, (b) validate every value in Python before ctypes conversion - the conversion itself provides zero protection, (c) behavior differs by path: numpy 2.x raises on ints, ctypes always wraps.
+
+## [got-20260802015636-a24aca]
+Category: gotcha
+Tags: ffi, build, macos, hpgl-reborn
+Changed: 2026-08-02T01:56:36.327255
+
+macOS dylib shadowing via lib{name} search-order preference: on macOS, ctypes/loader search order prefers lib{name}.dylib over {name}.dylib. A stale lib{name}.dylib left in the runtime directory silently shadows a freshly built {name}.dylib, so the test suite and production runs exercise a month-old binary. build.sh copies only hpgl.dylib and never removes the stale libhpgl.dylib; hash-guard verification with an empty expected-hash dict is a permanent no-op; smoke tests that only check 'library loaded' cannot catch API incompleteness. In hpgl-reborn: F-03 (CONFIRMED HIGH) - stale libhpgl.dylib (Jun 27, missing hpgl_get_kriging_stats) shadowed fresh hpgl.dylib (Jul 24), 4 test skips; same for lib_cvariogram.dylib (I2-43, I2-47); freshness checks passed silently because only 2 of the needed symbols were checked (PR-08). Fix: build.sh must delete stale lib{name}.dylib before copying; symbol-freshness check must assert the NEW API symbols exist (e.g. _EXPECTED_LIBRARY_SYMBOLS includes every new export); smoke test must assert API completeness, not just loadability. Checklist: (a) after any rebuild verify which file CDLL actually loads (lib._name), (b) grep the runtime dir for stale lib-prefixed dylibs and delete them, (c) extend symbol-freshness checks whenever a new C API function is added.
+
+## [got-20260802015641-a15dae]
+Category: gotcha
+Tags: numerical, python, numpy, hpgl-reborn
+Changed: 2026-08-02T01:56:41.416884
+
+numpy int/uint8 arrays are NOT boolean masks: numpy treats an int/uint8 array passed to indexing as an integer (fancy) index array, not a boolean mask. A uint8 mask with values 0/1 used where a bool mask was intended causes integer fancy indexing - selecting rows instead of masking, inflating counts (5x pair-count inflation: uint8 5x5x5 gave [625,1940,2223] vs bool [125,420,507]) or crashing with IndexError when the index exceeds the dimension. In hpgl-reborn: F-01 (CONFIRMED HIGH, both-found) - variogram.py CubeScan passed non-boolean (int/uint8) masks to numpy indexing; codebase standard mask dtype is uint8 so the docstring's bool-or-int promise was broken; empirically verified. Fix: convert masks explicitly: arr.astype(bool) or arr > 0 before using as a mask; validate mask dtype is bool at API boundaries. Checklist: (a) grep for indexing like data[mask] where mask may be int/uint8, (b) verify mask.astype(bool) or comparison-to-zero before fancy indexing, (c) test masks with dtype uint8, not only bool - the corruption is silent in count-based results.
+
+## [got-20260802015647-ee8c09]
+Category: gotcha
+Tags: numerical, cpp, python, ffi, hpgl-reborn
+Changed: 2026-08-02T01:56:47.423769
+
+float32 CDF last-value rounding to exactly 1.0f corrupts the max datum: when a CDF is stored in float32, the final plotting position can round UP to exactly 1.0f. If the inverse-CDF path treats p>=1.0 by returning the mean (or median), the MAXIMUM datum maps to normal score 0.0 (median) instead of the correct high tail score - the max datum silently collapses to the median on back-transform. GSLIB uses midpoint plotting positions to avoid this. In hpgl-reborn: F-04 (CONFIRMED HIGH, both-found) - gaussian_distribution.h:73-77 / non_parametric_cdf.h:245-259 / cdf.py:126-131 / sequential_gaussian_simulation.cpp:44 - last float32 CDF prob rounds to exactly 1.0f, inverse(p>=1.0) returns mean, max datum -> normal score 0.0, round-trip corrupts max datum to median; verified by exact float32 arithmetic; PFA b305411 introduced the guard (incomplete fix). I2-27 adds the low-side mirror: LVM means below data-min map to p=0.0 -> inverse(0.0) -> m_mean=0.0 -> local means collapse to median on back-transform. Fix: saturate tails (mirror non_parametric_cdf.h:271-291), not return mean for p>=1.0; handle both high-side p rounding to 1.0f and low-side p=0. Checklist: (a) for any float32 CDF, verify the max plotting position cannot round to exactly 1.0f, (b) test inverse(p=1.0f) explicitly with a float32-built CDF, (c) verify the extreme data values survive a round-trip through the transform.
+
+## [got-20260802015652-a891f8]
+Category: gotcha
+Tags: numerical, cpp, ffi, hpgl-reborn
+Changed: 2026-08-02T01:56:52.868521
+
+FP-to-int cast is UB on NaN/huge values in C++: converting a NaN, Inf, or out-of-range float/double to int is undefined behavior in C++ (on x86-64 typically produces INT_MIN/garbage), and numpy has similar silent-wrap traps in ctypes paths. A NaN thickness/value cast to int can become INT_MIN, then be clamped to 0, then write blank_value to an entire column or poison cumulative state - whole-column silent corruption. In hpgl-reborn: I2-25 (CONFIRMED MEDIUM, both-found) - stack_layers.h:43,52,66 casts NaN/huge thickness (reachable via F-32: Python writers write NaN verbatim) to int: INT_MIN -> clamped 0 -> negative path writes blank_value to entire column [0,nz), cumulative_k becomes NaN poisoning subsequent layers; no NaN/range validation before the cast. Fix: guard every FP->int cast with an explicit std::isfinite + range check before converting, or reject non-finite input at the API boundary. Checklist: (a) grep for C-style or static_cast<int> of float/double expressions in C++, (b) verify isfinite check precedes every such cast, (c) trace whether NaN can reach the cast from any writer/loader path (Python writers must validate isfinite before writing).
+
+## [got-20260802015657-f8eb69]
+Category: gotcha
+Tags: concurrency, cpp, build, hpgl-reborn
+Changed: 2026-08-02T01:56:57.884636
+
+OpenMP break inside worksharing loop is non-conforming: per OpenMP spec (2.11.2), break inside a worksharing loop (for/parallel for) has undefined behavior when OMP_CANCELLATION is not enabled (the default). The breaking thread's remaining iterations are dropped, leaving NaN cells and incomplete counters while other threads continue. Cancellation requires #pragma omp cancel for + OMP_CANCELLATION=true, or a flag-check restructure. In hpgl-reborn: F-23 (CONFIRMED MEDIUM, conditional on OpenMP builds) - cont_kriging.h:193-198 and median_ik.cpp:117-122 use #pragma omp cancel for + unconditional break; sibling indicator_kriging.h:216-228 is CORRECT (break inside #else non-OpenMP branch); shipped artifact had OpenMP disabled (build/CMakeCache NOTFOUND, 0 fopenmp flags) but OpenMP IS the documented default config - a legitimate production config where it fires. Fix: move break into the #else non-OpenMP branch, or use conforming cancellation flags. Checklist: (a) grep for 'break' inside omp for/parallel regions, (b) verify cancellation patterns conform to OpenMP spec, (c) test both OpenMP-enabled and serial builds - the bug only manifests with OpenMP on.
+
+## [got-20260802015702-0830cc]
+Category: gotcha
+Tags: build, packaging, python, hpgl-reborn
+Changed: 2026-08-02T01:57:02.885123
+
+scikit-build-core sdist: include wins over exclude - exclude patterns in [tool.scikit-build] sdist config do NOT reliably drop files that a broader include pattern pulls in. Stale compiled binaries (.so/.dylib) and __pycache__ left in the source tree get shipped in the sdist despite exclude patterns; consumers building from the sdist get stale platform binaries that shadow the fresh build. In hpgl-reborn: I2-44 (CONFIRMED MEDIUM) - pyproject.toml sdist exclude patterns present, yet sdist shipped 17 stale artifacts (6 binaries: hpgl.so/dylib, libhpgl.dylib, _cvariogram.so/dylib, lib_cvariogram.dylib; 11 .pyc), reproduced FRESH from the extracted sdist's own pyproject. Fix: verify the actual sdist contents after build (extract and list binaries), remove stale binaries from the source tree, and test that building from the sdist reproduces the same package as building from the repo. Checklist: (a) after any sdist build, extract and grep for binaries/.pyc, (b) do not trust exclude patterns - verify the shipped artifact, (c) clean stale build artifacts before packaging.
+
+## [got-20260802015708-3e64f9]
+Category: gotcha
+Tags: build, cmake, macos, hpgl-reborn
+Changed: 2026-08-02T01:57:08.244590
+
+find_package(OpenMP) does not search Homebrew prefix on macOS: CMake's FindOpenMP does not look in /opt/homebrew/opt/libomp (or /usr/local/opt/libomp) by default. When libomp is installed via Homebrew and OpenMP_ROOT is not set, find_package(OpenMP) silently returns NOTFOUND and HPGL-style builds compile WITHOUT OpenMP despite HPGL_USE_OPENMP=ON - the parallel algorithms are silently disabled and shipped artifacts contain zero fopenmp flags. In hpgl-reborn: confirmed (CONFIRMED, s3-adv-M2 evidence: build/CMakeCache OpenMP_CXX_FLAGS=NOTFOUND, 0 fopenmp in compile_commands; fixed in s7 by adding Homebrew libomp prefix detection setting OpenMP_ROOT=/opt/homebrew/opt/libomp before find_package(OpenMP)). Fix: detect Homebrew libomp prefix and set OpenMP_ROOT before find_package(OpenMP); consider failing loudly when OpenMP is requested but not found. Checklist: (a) on macOS with Homebrew, check whether OpenMP was silently NOT found (grep CMakeCache for NOTFOUND), (b) set OpenMP_ROOT to the libomp prefix, (c) verify compile_commands contains fopenmp when OpenMP is requested.
+
+## [pat-20260802015713-aaa15f]
+Category: pattern
+Tags: build, cmake, hpgl-reborn
+Changed: 2026-08-02T01:57:13.987588
+
+CMake PARENT_SCOPE is dynamic-scoping, NOT static: set(VAR ... PARENT_SCOPE) inside a function modifies the CALLER's variable at the time the call executes. Two consecutive PARENT_SCOPE sets in the same function from different collection calls ACCUMULATE into the parent (each reads the parent's then-current value), they do NOT replace. A discovery misreading this as 'the second call overwrites the first, so BLAS dir is dropped' is a FALSE POSITIVE - empirically, the variables union (BLAS;/LAPACK both present). In hpgl-reborn: F-60 (REJECTED by adversarial, empirical CMake reproduction of the exact function: PARENT_SCOPE accumulates - BLAS;/LAPACK union; discovery misread CMake dynamic scoping; macOS uses Accelerate.framework anyway). Lesson: before filing a CMake variable-scoping finding, reproduce the exact function in a minimal CMake script - PARENT_SCOPE semantics are dynamic and accumulation is the norm. Checklist: (a) when a finding claims a CMake variable is 'dropped' or 'overwritten' by a PARENT_SCOPE set, reproduce the function in isolation first, (b) remember PARENT_SCOPE reads the parent's value at call time and accumulates across calls, (c) check the final parent value empirically before concluding data loss.
+
+## [got-20260802015719-44782b]
+Category: gotcha
+Tags: numerical, cpp, geostatistics, hpgl-reborn
+Changed: 2026-08-02T01:57:19.252421
+
+box-limited covariance functor truncating data-to-data pairs to 0 while RHS exact creates an inconsistent kriging system: when the LHS (data-to-data) covariance functor truncates pairs farther than the search box to 0, but the RHS (data-to-unknown) uses the exact model, the kriging system becomes inconsistent - the covariance model says data-to-data covariance is non-zero at distances where the functor reports 0, silently biasing all production kriging paths (SK/OK/SGS/SIS/IK/LVM/median-IK) at ~0.3 sill error when range a > 2r. In hpgl-reborn: F-21 (CONFIRMED MEDIUM) - precalculated_covariances_t/covariance_field_t box-limited functor truncates out-of-box data-to-data pairs to 0 while RHS exact; F-21 sibling PR-06 persists on covariance_field_t::operator() (median_ik path, LHS spans 2xradius vs RHS in-box). Fix: data-to-data pairs beyond the box must use the exact covariance (or the truncation must apply symmetrically to LHS and RHS). Checklist: (a) for any box-limited covariance functor, verify LHS and RHS use the SAME truncation rule, (b) test kriging with range > box radius and compare against exact-model reference, (c) audit both precalculated_covariances_t and covariance_field_t paths.
+
+## [got-20260802015741-bf72dc]
+Category: gotcha
+Tags: ffi, memory, python, cpp, hpgl-reborn
+Changed: 2026-08-02T01:57:41.396416
+
+numpy sliced/non-contiguous arrays passed to C++ flat-indexed loops cause heap OOB writes: C++ code that indexes a result array flat (cube_index = ix + nx*(iy + ny*iz)) assumes the Python wrapper validated shape AND passed C-contiguous arrays. Sliced numpy views (legitimate numpy slicing) have non-contiguous strides; C++ flat indexing then writes past the buffer or misaddresses data. Result-array shape must be validated against the write pattern (x/y dims, not just nz) before the FFI call, and arrays should be made contiguous (np.ascontiguousarray) before passing. In hpgl-reborn: F-06 (CONFIRMED HIGH) - CStackLayers heap OOB WRITE: result x/y-shape not validated vs layer shape, layer (5,5,1)+result (4,4,10) -> cube_index 209>160, empirical SIGSEGV; F-08 (CONFIRMED HIGH) - non-contiguous sliced layers -> OOB WRITE into cumulative_k + wrong data mapping, no contiguity check anywhere. Fix: validate every shape dimension (not just volume product) and enforce contiguity (np.ascontiguousarray or flags check) before FFI. Checklist: (a) for every C++ flat-indexed result write, verify the Python wrapper validates x/y/z dims individually, (b) verify slices/views are made contiguous before passing to C, (c) test with sliced/transposed inputs, not just fresh arrays.
+
+## [got-20260802015746-f503a5]
+Category: gotcha
+Tags: numerical, cpp, memory, hpgl-reborn
+Changed: 2026-08-02T01:57:46.675575
+
+int overflow in matrix index arithmetic (i*matrix_size+j) causes heap OOB: computing A[i*matrix_size+j] in signed int overflows once matrix_size*matrix_size exceeds INT_MAX (~46340^2). Allocation may use a safe size_t path while indexing uses signed int - the mismatch (safe alloc + unsafe index) produces a heap OOB write for large neighbourhood counts. Same class: size*size pre-scan overflow lets NaN matrices reach the solver. In hpgl-reborn: I2-23 (CONFIRMED MEDIUM) - simple_cokriging_markI.cpp:55-69 A[i*matrix_size+j] computed in signed int -> heap OOB when neighbourhood count > 46340; solver NaN pre-scan size*size int overflow (solver_entry_point.h:111); Python validate_max_neighbors only warns >1000, C API has no upper bound. Fix: use size_t/checked arithmetic for index computation (port static_cast<size_t> from my_kriging_weights.h:167), pre-scan size*size in 64-bit before dispatch. Checklist: (a) grep for i*size+j index patterns computed in int, (b) verify allocation and indexing use the SAME integer width, (c) add an upper bound on matrix dimensions so overflow is unreachable.
+
+## [got-20260802015752-d96c7e]
+Category: gotcha
+Tags: ffi, cpp, error-handling, hpgl-reborn
+Changed: 2026-08-02T01:57:52.209522
+
+abort()/SIGABRT in a C++ library is uncatchable by Python/ctypes: when a C++ library call aborts the process (abort(), std::terminate, assert), the Python caller gets a process death, not a catchable exception - try/except RuntimeError cannot intercept SIGABRT. Libraries called via FFI must throw catchable exceptions (hpgl_exception) instead of aborting, and validate inputs so the abort path is unreachable. In hpgl-reborn: I2-24 (CONFIRMED MEDIUM) - precalculated_covariance.h:71-75 abort() for radius >= 645 in SK/LVM paths ((2r+1)^3 > INT_MAX); Python MAX_RADIUS=1e6 allows r >= 645; contrast: clusterizer.cpp:106-108 throws catchable hpgl_exception for the analogous case. Fix: replace abort() with throw hpgl_exception (catchable -> Python RuntimeError). Checklist: (a) grep C++ for abort()/exit()/terminate in library paths reachable via FFI, (b) verify every defensive guard throws, not aborts, (c) test the boundary condition directly from Python - a SIGABRT is a crash, not an error.
+
+## [got-20260802015758-6e1cf2]
+Category: gotcha
+Tags: concurrency, ffi, python, cpp, hpgl-reborn
+Changed: 2026-08-02T01:57:58.280795
+
+reentrant FFI handler deadlock: holding a non-recursive lock (threading.Lock / non-recursive std::mutex) across a C++ call that can invoke a Python callback which itself calls back into the library (set_output_handler / set_progress_handler / another kriging) causes self-deadlock on the same thread. The fix-stage regression in hpgl-reborn (PR-02 CONFIRMED MEDIUM, both-found+boundary) was adding _hpgl_call_lock wraps (8 new) around kriging FFI calls: a reentrant handler call from within a locked kriging call deadlocked (empirical 10s TIMEOUT-DEADLOCK, handler fired once). Fix: use threading.RLock (recursive) instead of Lock, or drop the lock before invoking callbacks; on the C++ side, do not hold the handler mutex while calling the handler (F-53). Checklist: (a) any lock acquired around an FFI call that can invoke a Python callback must be recursive (RLock), (b) if a C++ mutex guards handler invocation, check for reentrant callbacks back into the library, (c) after adding locking to FFI wrappers, test the reentrant path (handler that calls back).
+
+## [got-20260802015803-470e78]
+Category: gotcha
+Tags: io, security, ffi, hpgl-reborn
+Changed: 2026-08-02T01:58:03.494338
+
+temp-file writers must use O_NOFOLLOW/O_EXCL + unique names + cleanup on failure: a fixed-name temp file (<target>.tmp) shared by concurrent writers corrupts (last rename wins, interleaved writes) and leaks on every failure path (write_value throw, fflush/rename failure) with zero cleanup. Worse, opening <target>.tmp with plain fopen('w+') follows symlinks - an attacker with write access to the target directory can plant a symlink at target.tmp and redirect the C++ write through it (TOCTOU between Python validation and C++ fopen). Python's safe_open_write uses O_NOFOLLOW but C++ re-opens the path itself. In hpgl-reborn: F-52 (CONFIRMED MEDIUM) - property_writer.cpp .tmp never removed on write failure, concurrent writers share one .tmp path; I2-58 (CONFIRMED MEDIUM, boundary-found) - C++ writers bypass O_NOFOLLOW, symlink-follow TOCTOU on <filename>.tmp (STRIDE Tampering). Fix: open temp files with O_NOFOLLOW|O_EXCL, use per-writer unique temp names (pid/thread), and remove the temp file on every failure path. Checklist: (a) grep fopen of derived temp paths - add O_NOFOLLOW/O_EXCL, (b) verify cleanup on ALL failure paths (throw, fflush, rename), (c) verify concurrent writers do not share one temp path.
+
+## [got-20260802015809-929f31]
+Category: gotcha
+Tags: numerical, testing, ffi, hpgl-reborn
+Changed: 2026-08-02T01:58:09.474395
+
+LAPACK reads matrices COLUMN-major (Fortran order): test data written in row-major order and read by LAPACK with uplo='U' silently tests a DIFFERENT matrix than intended. A row-major matrix that should be non-SPD can appear SPD to dpotrf (info=0) because LAPACK reads the upper triangle of the transposed layout, and the fallback-path assertion then fails unexpectedly (or worse, passes on the wrong matrix). In hpgl-reborn: PR-04 (CONFIRMED MEDIUM, both-found) - test_solver_entry_point.cpp:146,172,299 defective test data: row-major matrices read by LAPACK column-major with uplo='U' -> dpotrf succeeded (SPD) on a different matrix -> fallback assertions permanently RED; fixed with genuinely non-SPD matrices [1,3,3,1]/[1,2,2,4] read column-major. Fix: when constructing LAPACK test matrices, either write them in column-major layout or verify the matrix is genuinely non-SPD under the storage order LAPACK will read. Checklist: (a) for any LAPACK test, compute the matrix LAPACK will actually see (column-major read), (b) verify non-SPD matrices are non-SPD in that layout (dpotrf info>0), (c) run the test and confirm the expected branch actually executes.
+
+## [got-20260802015814-729334]
+Category: gotcha
+Tags: build, packaging, python, hpgl-reborn
+Changed: 2026-08-02T01:58:14.559709
+
+wheel install list must include every module imported unconditionally at import time: scikit-build-core/CMake packages install Python files via an explicit install(FILES) list; a module added to the source tree but NOT added to the install list produces a wheel that fails import (ModuleNotFoundError) for users - even when the source tree works. The failure is only detectable by installing the built wheel and importing, not by running tests in-tree. In hpgl-reborn: F-10 (CONFIRMED HIGH, PFA 24d834f repeat regression) - wheel had no importable top-level package and CMake install list omitted config.py + ffi_adapter.py (both imported unconditionally by __init__.py/sgs.py/sis.py/gtsim.py) -> import hpgl fails; I2-07 (CONFIRMED MEDIUM) - wheel exposes 'hpgl' but docs/tests use 'geo_bsd' (import-name divergence), cibuildwheel test imports a nonexistent name. Fix: keep the install list in sync with every unconditionally-imported module and add a wheel-install-import smoke test. Checklist: (a) when adding a Python module, grep the CMake install(FILES) list and add it, (b) verify wheel package layout matches the documented import name, (c) test: pip install the built wheel in a clean venv and import.
+
+## [got-20260802015819-d37416]
+Category: gotcha
+Tags: io, security, ffi, hpgl-reborn
+Changed: 2026-08-02T01:58:19.532194
+
+self-referential basedir defeats path-containment validation: when a validator derives the 'base' directory from the filename's own directory (basedir = dirname(filename)), any file trivially passes relative_to containment - symlink containment is defeated because the base moves with the file. Symlink escapes (e.g. a symlinked temp dir pointing into another tree) become undetectable. In hpgl-reborn: F-28 (CONFIRMED MEDIUM, boundary-found) - self-referential basedir at ALL 10 production call sites (geo.py:446,510,672,714,819,846,877,952; routines.py:241,305,487) defeats PathValidator symlink containment; DEFAULT_BASE_DIR is dead code (0 uses); live symlink escape reproduced, control with a real base rejects. Fix: use a trusted independent base (DEFAULT_BASE_DIR or an explicitly passed root), never the file's own directory; canonicalize paths with realpath before containment checks. Checklist: (a) for any path-containment validator, verify basedir is NOT derived from the checked file's own directory, (b) verify realpath/canonicalization happens before relative_to checks (symlinks must be resolved first), (c) test with a symlinked directory to confirm rejection.
+
+## [got-20260802015825-2228af]
+Category: gotcha
+Tags: memory, validation, build, hpgl-reborn
+Changed: 2026-08-02T01:58:25.844107
+
+unbounded user-controlled sizes/counts cause memory exhaustion and infinite hangs: parameters that size allocations or drive loop counts (max_neighbours, grid volume, radius, lag counts, file sizes) need magnitude caps at BOTH the Python boundary AND the C++ side. Python-side caps that only warn (validate_max_neighbors warns >1000 but continues) or are absent entirely let C++ allocate 16-80GB or run 7.7e11 iterations. C++ internal limits must match API-boundary caps - a mismatch (API allows 1e7, internal limit 1e5) silently routes to fallback (mean-fill) instead of erroring. In hpgl-reborn: F-25 (no hard upper bound on max_neighbours -> ~32GB reserve), F-49 (1e9 volume threshold -> 40-80GB), F-38 (lag_sep=1e6 x num_lags=10000 -> 7.7e11 iterations, effectively infinite hang), I2-04 (mgrid no volume cap -> 1152 TB), I2-05 (per-token loop no size cap), PR-07 (1e7 API bound vs 1e5 internal limit -> silent mean-fill) - all CONFIRMED MEDIUM. Fix: enforce hard caps in Python validation, re-enforce in C++, and align boundary caps with internal algorithm limits. Checklist: (a) every size/count parameter has a hard cap, (b) Python warning is not a cap - C++ must reject, (c) API-boundary caps match internal limits, (d) exceeding a cap raises, not mean-fills silently.
+

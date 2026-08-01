@@ -230,6 +230,21 @@ _hpgl_so = None
 # a warning (not a hard error) to support development rebuilds.
 _EXPECTED_LIBRARY_HASHES: dict[str, str] = {}
 
+# Symbols that a FRESH library build must export. A loaded library missing
+# these is stale (predates the API) or the wrong binary — the freshness
+# check (F-03) warns so a stale-lib shadow cannot pass silently. This is the
+# meaningful replacement for the empty-dict hash guard (which was a permanent
+# no-op).
+_EXPECTED_LIBRARY_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "hpgl": ("hpgl_get_kriging_stats",),
+    "hpgl_d": ("hpgl_get_kriging_stats",),
+    "_cvariogram": (
+        "cvar_get_last_error",
+        "cvar_stack_layers",
+        "cvar_clear_last_error",
+    ),
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -260,7 +275,14 @@ def _safe_load_library(lib_name: str, ref_file: str):
     # The library should be in the same directory as the reference file
     lib_dir = ref_path.parent
 
-    # Try platform-specific library names
+    # Try platform-specific library names.
+    #
+    # F-03: prefer the build-output name ({name}) over the lib-prefixed
+    # name. build.sh copies the fresh binary as hpgl.dylib / _cvariogram.dylib,
+    # so a leftover libhpgl.dylib / lib_cvariogram.dylib (or a stale
+    # cross-platform .so) is an OLD build that must not shadow the fresh one.
+    # The lib-prefixed names remain as a fallback for environments where the
+    # build was installed under the conventional lib{name} name.
     lib_paths = []
 
     if sys.platform.startswith("win"):
@@ -278,17 +300,17 @@ def _safe_load_library(lib_name: str, ref_file: str):
         # macOS: .dylib or .so extensions
         lib_paths.extend(
             [
-                lib_dir / f"lib{lib_name}.dylib",
-                lib_dir / f"lib{lib_name}.so",
                 lib_dir / f"{lib_name}.dylib",
                 lib_dir / f"{lib_name}.so",
+                lib_dir / f"lib{lib_name}.dylib",
+                lib_dir / f"lib{lib_name}.so",
             ]
         )
     else:  # Linux and others
         lib_paths.extend(
             [
-                lib_dir / f"lib{lib_name}.so",
                 lib_dir / f"{lib_name}.so",
+                lib_dir / f"lib{lib_name}.so",
             ]
         )
 
@@ -303,6 +325,7 @@ def _safe_load_library(lib_name: str, ref_file: str):
                 resolved_lib.relative_to(lib_dir)
                 lib = _load_lib_func(str(resolved_lib))
                 _verify_library_hash(lib_name, resolved_lib)
+                _verify_library_freshness(lib_name, lib)
                 return lib
             except ValueError as err:
                 # Library path escapes allowed directory
@@ -332,6 +355,7 @@ def _safe_load_library(lib_name: str, ref_file: str):
                         f"Loaded library {resolved} is outside allowed directory {lib_dir}"
                     ) from err
         _verify_library_hash(lib_name, pathlib.Path(os.path.join(str(ref_path.parent), lib_name)))
+        _verify_library_freshness(lib_name, lib)
         return lib
     except OSError as e:
         # Library not found or cannot be loaded
@@ -378,6 +402,37 @@ def _verify_library_hash(lib_name: str, lib_path: pathlib.Path) -> None:
             lib_name,
             lib_path,
             file_hash,
+        )
+
+
+def _verify_library_freshness(lib_name: str, lib: C.CDLL) -> None:
+    """Warn when a loaded library lacks symbols a fresh build must export.
+
+    The old hash guard was a permanent no-op because
+    ``_EXPECTED_LIBRARY_HASHES`` is never populated. This symbol check is
+    the meaningful freshness gate (F-03): a stale binary (e.g. the Jun-27
+    ``libhpgl.dylib`` predating ``hpgl_get_kriging_stats``) is detected by
+    the missing symbol and reported loudly instead of silently shadowing
+    the fresh build.
+
+    Warns (does not raise) so development rebuilds keep working.
+
+    Args:
+        lib_name: Logical name of the library (e.g. 'hpgl', '_cvariogram').
+        lib: The loaded ctypes CDLL object.
+    """
+    expected = _EXPECTED_LIBRARY_SYMBOLS.get(lib_name)
+    if not expected:
+        return  # Unknown library name — nothing to check
+    missing = [sym for sym in expected if not hasattr(lib, sym)]
+    if missing:
+        logger.warning(
+            "_verify_library_freshness: %s (%s) does not export expected "
+            "symbols %s — the loaded binary is stale or the wrong library. "
+            "Rebuild the native library.",
+            lib_name,
+            getattr(lib, "_name", "<unknown>"),
+            missing,
         )
 
 

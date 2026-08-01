@@ -1368,7 +1368,9 @@ class TestCDFEdgeCases:
         assert cdf.values.size == 1
         assert cdf.probs.size == 1
         assert cdf.values[0] == 42.0
-        assert cdf.probs[0] == 1.0
+        # F-04: last CDF probability is clamped strictly below 1.0 so the
+        # max datum does not map to p=1.0 in the SGS back-transform.
+        assert cdf.probs[0] < 1.0
 
     def test_uniform_distribution_cdf(self):
         """Test CDF with uniformly distributed values"""
@@ -1401,7 +1403,8 @@ class TestCDFEdgeCases:
         # Degenerate distribution: HPGL returns size 1 for single unique value
         assert cdf.values.size == 1
         assert cdf.values[0] == 42.5
-        assert cdf.probs[0] == 1.0
+        # F-04: last CDF probability is clamped strictly below 1.0.
+        assert cdf.probs[0] < 1.0
 
     def test_cdf_with_two_unique_values(self):
         """Test CDF with exactly two unique values"""
@@ -1418,7 +1421,8 @@ class TestCDFEdgeCases:
         assert cdf.values[0] == 1.0
         assert cdf.values[1] == 2.0
         assert cdf.probs[0] == 0.5  # 50% of values at/below first value
-        assert cdf.probs[-1] == 1.0  # Final cumulative probability is 1.0
+        # F-04: final cumulative probability is clamped strictly below 1.0.
+        assert cdf.probs[-1] < 1.0
 
     def test_cdf_with_many_unique_values(self):
         """Test CDF with many unique values"""
@@ -1590,7 +1594,8 @@ class TestProductionFixes:
             tmpfile = f.name
         try:
             # Should not raise with indicator_values=None (default)
-            write_property(prop, tmpfile, "TEST", -99.0)
+            # F-28: pass an explicit trusted base (tempfile lives outside cwd).
+            write_property(prop, tmpfile, "TEST", -99.0, basedir=str(Path(tmpfile).parent))
         finally:
             if os.path.exists(tmpfile):
                 os.remove(tmpfile)
@@ -1609,7 +1614,8 @@ class TestProductionFixes:
         with tempfile.NamedTemporaryFile(suffix=".gslib", delete=False) as f:
             tmpfile = f.name
         try:
-            write_gslib_property(prop, tmpfile, "TEST", -99.0)
+            # F-28: pass an explicit trusted base.
+            write_gslib_property(prop, tmpfile, "TEST", -99.0, basedir=str(Path(tmpfile).parent))
         finally:
             if os.path.exists(tmpfile):
                 os.remove(tmpfile)
@@ -1628,7 +1634,8 @@ class TestProductionFixes:
             f.write(content)
             tmpfile = f.name
         try:
-            prop = _load_prop_cont_slow(tmpfile, -99.0)
+            # F-28: pass an explicit trusted base (tempfile lives outside cwd).
+            prop = _load_prop_cont_slow(tmpfile, -99.0, basedir=str(Path(tmpfile).parent))
             assert len(prop.data) == 4  # 1.0, 2.0, 3.0, 4.0 (BADTOKEN skipped)
             assert np.all(prop.mask == 1)
         finally:
@@ -1648,7 +1655,8 @@ class TestProductionFixes:
             f.write(content)
             tmpfile = f.name
         try:
-            prop = _load_prop_ind_slow(tmpfile, -99, [0, 1])
+            # F-28: pass an explicit trusted base (tempfile lives outside cwd).
+            prop = _load_prop_ind_slow(tmpfile, -99, [0, 1], basedir=str(Path(tmpfile).parent))
             assert len(prop.data) == 4  # 0, 1, 0, 1 (BADTOKEN skipped)
         finally:
             os.remove(tmpfile)

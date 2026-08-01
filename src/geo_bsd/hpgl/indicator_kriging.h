@@ -31,48 +31,64 @@ namespace hpgl
 		// Correct indicator kriging probabilities for order relations.
 		// Ensures: 1) Monotonicity P(k) <= P(k+1), 2) Bounds [0,1].
 		//
-		// Algorithm: Iterative pairwise averaging (Deutsch & Journel, 1992,
-		// 1st ed.). This is NOT the GSLIB 2nd ed. (1998) two-pass envelope
-		// (ORDREL.FOR), which does upward fill-forward + downward fill-backward
-		// + average. Both algorithms satisfy monotonicity and [0,1] bounds;
-		// they diverge on inputs with multiple cascading violations.
-		//
-		// Repeat until monotonic to handle cascading violations; 2N passes
-		// guarantees convergence even for alternating patterns.
+		// Algorithm: GSLIB 2nd ed. (1998) two-pass envelope (ORDREL.FOR):
+		// clip all CDF estimates to [0,1], upward fill-forward pass,
+		// downward fill-backward pass, then average the two corrected
+		// sequences. This replaces the earlier iterative pairwise averaging
+		// (Deutsch & Journel, 1992, 1st ed.), which diverges from GSLIB on
+		// inputs with multiple cascading violations.
 		inline void correct_order_relations(std::vector<indicator_probability_t> & probs)
 		{
 			if (probs.empty())
 				return;
 
-			// Step 1: Clamp probabilities to [0, 1]
-			for (size_t i = 0; i < probs.size(); ++i)
+			const size_t n = probs.size();
+			std::vector<indicator_probability_t> ccdf1(n);
+			std::vector<indicator_probability_t> ccdf2(n);
+
+			// Step 1: Clip probabilities to [0, 1] (both working copies).
+			for (size_t i = 0; i < n; ++i)
 			{
-				if (probs[i] < 0.0)
-					probs[i] = 0.0;
-				else if (probs[i] > 1.0)
-					probs[i] = 1.0;
+				indicator_probability_t v = probs[i];
+				if (v < 0.0)
+					v = 0.0;
+				else if (v > 1.0)
+					v = 1.0;
+				ccdf1[i] = v;
+				ccdf2[i] = v;
 			}
 
-			// Step 2: Iterative averaging until monotonic
-			// A single pass may not fix cascading violations, so repeat until
-			// no inversions remain. Using 2× probs.size() ensures convergence
-			// even for small category counts where cascading violations require
-			// multiple passes (worst case: alternating violations propagate
-			// one position per pass).
-			bool changed = true;
-			for (size_t iter = 0; iter < probs.size() * 2 && changed; ++iter)
+			// Step 2: Upward pass — fill-forward (GSLIB ordrel).
+			//   do i=2,ncut: if ccdf1(i)<ccdf1(i-1): ccdf1(i)=ccdf1(i-1)
+			for (size_t i = 1; i < n; ++i)
 			{
-				changed = false;
-				for (size_t i = 0; i + 1 < probs.size(); ++i)
-				{
-					if (probs[i] > probs[i + 1])
-					{
-						double avg = (probs[i] + probs[i + 1]) / 2.0;
-						probs[i] = avg;
-						probs[i + 1] = avg;
-						changed = true;
-					}
-				}
+				if (ccdf1[i] < ccdf1[i - 1])
+					ccdf1[i] = ccdf1[i - 1];
+			}
+
+			// Step 3: Downward pass — fill-backward (GSLIB ordrel).
+			//   do i=ncut-1,1,-1: if ccdf2(i)>ccdf2(i+1): ccdf2(i)=ccdf2(i+1)
+			for (size_t i = n - 1; i > 0; --i)
+			{
+				if (ccdf2[i - 1] > ccdf2[i])
+					ccdf2[i - 1] = ccdf2[i];
+			}
+
+			// Step 4: Average the two monotone corrections.
+			for (size_t i = 0; i < n; ++i)
+				probs[i] = static_cast<indicator_probability_t>(0.5 * (ccdf1[i] + ccdf2[i]));
+
+			// Step 5: Normalize the resulting CDF so it ends at 1.0.
+			// GSLIB's categorical branch normalizes the PDF to sum 1.0;
+			// expressed on the CDF this means the top value equals 1.0
+			// (the recovered PDF — backward differences — then sums to 1).
+			// Scale-invariant consumers (most_probable_category, sample)
+			// make this a value correction, not a crash guard.
+			if (probs.back() > 0.0)
+			{
+				indicator_probability_t scale = 1.0f / probs.back();
+				for (size_t i = 0; i < n; ++i)
+					probs[i] = static_cast<indicator_probability_t>(probs[i] * scale);
 			}
 		}
 
