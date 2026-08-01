@@ -83,7 +83,6 @@ tmp/
 # Agentic workflow (local tooling — not part of the repo)
 .opencode/
 AGENTS.md
-knowledge.md
 session.md
 opencode.json
 loop-tasks.txt
