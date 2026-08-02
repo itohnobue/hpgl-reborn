@@ -5,7 +5,10 @@
 #include "var_radix_utils.h"
 #include "cov_model.h"
 #include "sugarbox_grid.h"
+#include "hpgl_exception.h"
 #include <algorithm>
+#include <climits>
+#include <cstdint>
 #include <optional>
 
 namespace hpgl
@@ -67,11 +70,70 @@ namespace hpgl
 			});
 	}
 
+	// Shared radius-magnitude guard for the (2r+1)³ covariance box.
+	// calc_cov_field, covariance_field_t::init, and
+	// precalculated_covariances_t::init each build a box of
+	// (2rx+1)*(2ry+1)*(2rz+1) doubles.  Radii around 463 already exceed
+	// INT_MAX volume, and Python permits radii up to 1e6, so an unguarded
+	// box would silently allocate tens of GB or hang before kriging starts
+	// (F-M2/F-M3/F-N7).  Throws hpgl_exception (catchable by Python via
+	// error_guard) — never abort()/exit().
+	//
+	// Entry points that build the box indirectly (ordinary-kriging default,
+	// median_ik, cokriging markI/markII) call the ellipsoid overload before
+	// allocating.  The int-triple overload is the core; the ellipsoid
+	// overload truncates the double radii to int exactly like the box
+	// construction paths do, so the guard rejects the same inputs the
+	// builder would reject.
+	inline size_t validate_covariance_radiuses_or_throw(
+			int xradius, int yradius, int zradius, const char * context)
+	{
+		// Overflow-safe size_t arithmetic: no signed-int multiplication
+		// (rx*2+1) happens before the magnitude checks below, so a radius
+		// near INT_MAX cannot wrap UB-first.  Negative radii wrap to huge
+		// size_t values and are rejected by the overflow checks.
+		const size_t sx = static_cast<size_t>(xradius) * 2 + 1;
+		const size_t sy = static_cast<size_t>(yradius) * 2 + 1;
+		const size_t sz = static_cast<size_t>(zradius) * 2 + 1;
+		size_t volume = 0;
+		if (sx > 0 && sy > 0 && sz > 0)
+		{
+			if (sx > SIZE_MAX / sy)
+				throw hpgl_exception(context, "overflow in covariance box sx*sy");
+			const size_t tmp = sx * sy;
+			if (tmp > SIZE_MAX / sz)
+				throw hpgl_exception(context, "overflow in covariance box volume");
+			volume = tmp * sz;
+		}
+		// vr_to_dec returns int; the box index must fit in INT_MAX
+		// (same bound as precalculated_covariances_t::init, I2-24).
+		if (volume > static_cast<size_t>(INT_MAX))
+		{
+			throw hpgl_exception(context,
+				"covariance volume exceeds INT_MAX (search radii too large)");
+		}
+		return volume;
+	}
+
+	inline size_t validate_covariance_radiuses_or_throw(
+			const sugarbox_search_ellipsoid_t & radiuses, const char * context)
+	{
+		return validate_covariance_radiuses_or_throw(
+			static_cast<int>(radiuses[0]),
+			static_cast<int>(radiuses[1]),
+			static_cast<int>(radiuses[2]),
+			context);
+	}
+
 	// type covariance_model_t:
 	//     covariance_t operator(coord_t, coord_t)
 	template <typename covariance_model_t, typename coord_t>
 	void calc_cov_field(const search_area_t & area, const covariance_model_t & cov, std::vector<sugarbox_vector_t> & vectors)
 	{
+		// F-M2: radius-magnitude guard — the (2r+1)³ box is allocated
+		// below; reject radii whose box exceeds INT_MAX with a catchable
+		// hpgl_exception instead of exhausting memory.
+		validate_covariance_radiuses_or_throw(area, "calc_cov_field");
 		std::vector<covariance_t> data;	
 		int m_xradius = area[0];
 		int m_yradius = area[1];

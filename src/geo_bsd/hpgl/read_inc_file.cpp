@@ -8,9 +8,70 @@
 #include <cstring>
 #include <cctype>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace hpgl
 {
 	namespace {
+		#ifndef _WIN32
+		/// Open a file for reading without following a symlink at the final
+		/// path component (F-N15). The Python validation layer resolves and
+		/// validates the path, then the C++ layer re-opens it by path string —
+		/// a plain fopen would follow an attacker-swapped symlink, bypassing
+		/// the containment check. Matches the write side (property_writer.cpp)
+		/// and the slow parsers (validation.py safe_open_read). Throws
+		/// hpgl_exception with a basename-only message on failure.
+		FILE * fopen_read_nofollow(const char * file_name, const char * func_name)
+		{
+			int fd = ::open(file_name, O_RDONLY | O_NOFOLLOW);
+			if (fd < 0)
+			{
+				int open_errno = errno;
+				const char * basename = strrchr(file_name, '/');
+				if (basename == nullptr) basename = file_name;
+				else ++basename; // skip '/'
+				std::ostringstream oss;
+				oss << "Error opening file '" << basename << "': " << strerror(open_errno);
+				throw hpgl_exception(func_name, oss.str());
+			}
+			FILE * file = fdopen(fd, "r");
+			if (file == 0)
+			{
+				int fdopen_errno = errno;
+				close(fd);
+				errno = fdopen_errno;
+				const char * basename = strrchr(file_name, '/');
+				if (basename == nullptr) basename = file_name;
+				else ++basename; // skip '/'
+				std::ostringstream oss;
+				oss << "Error opening file '" << basename << "': " << strerror(fdopen_errno);
+				throw hpgl_exception(func_name, oss.str());
+			}
+			return file;
+		}
+		#else
+		// _WIN32: fopen() only — no O_NOFOLLOW available (F-N20 parity
+		// documented; junction following is a Windows limitation).
+		FILE * fopen_read_nofollow(const char * file_name, const char * func_name)
+		{
+			FILE * file = fopen(file_name, "r");
+			if (file == 0)
+			{
+				int open_errno = errno;
+				const char * basename = strrchr(file_name, '/');
+				if (basename == nullptr) basename = file_name;
+				else ++basename; // skip '/'
+				std::ostringstream oss;
+				oss << "Error opening file '" << basename << "': " << strerror(open_errno);
+				throw hpgl_exception(func_name, oss.str());
+			}
+			return file;
+		}
+		#endif
+
 		/// Line-aware token reader matching the Python slow parser semantics
 		/// (F-54): only a *line* starting with "/" is the end-of-data marker;
 		/// a mid-line "/" token is skipped like any unparseable token. Lines
@@ -215,19 +276,7 @@ namespace hpgl
 			unsigned char * mask_buffer)
 	{
 		blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
-		FILE * file = fopen(file_name, "r");
-		if (file == 0)
-		{
-			// Use basename to avoid leaking full filesystem path in error messages.
-			// Also capture the errno before any other call may modify it.
-			int open_errno = errno;
-			const char * basename = strrchr(file_name, '/');
-			if (basename == nullptr) basename = file_name;
-			else ++basename; // skip '/'
-			std::ostringstream oss;
-			oss << "Error opening file '" << basename << "': " << strerror(open_errno);
-			throw hpgl_exception("read_inc_file_float", oss.str());
-		}
+		FILE * file = fopen_read_nofollow(file_name, "read_inc_file_float");
 		try
 		{
 			std::string prop_name;
@@ -237,9 +286,21 @@ namespace hpgl
 
 			if (mask_buffer != 0)
 			{
+				// GSLIB missing-value convention (F-M18): values outside the
+				// ±1.0e21 window are treated as missing in addition to exact
+				// undefined_value matches. The Python slow parsers apply the
+				// same window (get_gslib_property / LoadGslibFile), so the fast
+				// reader must not load third-party sentinels as data. Strict
+				// inequality per the GSLIB convention ("less than -1.0e21 or
+				// greater than 1.0e21"); an exact ±1.0e21 value still relies on
+				// exact undefined_value equality (float32 round-trip of the
+				// HPGL writer's own sentinel is exact).
+				const float sentinel_min = -1.0e21f;
+				const float sentinel_max =  1.0e21f;
 				for (int i = 0; i < size; ++i)
 				{
-					mask_buffer[i] = data_buffer[i] == undefined_value ? 0 : 1;
+					const float v = data_buffer[i];
+					mask_buffer[i] = (v == undefined_value || v < sentinel_min || v > sentinel_max) ? 0 : 1;
 				}
 			}
 		}
@@ -271,17 +332,7 @@ namespace hpgl
 		}
 
 		blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
-		FILE * file = fopen(file_name, "r");
-		if (file == 0)
-		{
-			int open_errno = errno;
-			const char * basename = strrchr(file_name, '/');
-			if (basename == nullptr) basename = file_name;
-			else ++basename;
-			std::ostringstream oss;
-			oss << "Error opening file '" << basename << "': " << strerror(open_errno);
-			throw hpgl_exception("read_inc_file_byte", oss.str());
-		}
+		FILE * file = fopen_read_nofollow(file_name, "read_inc_file_byte");
 		try
 		{
 			std::string prop_name;

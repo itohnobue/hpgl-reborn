@@ -8,8 +8,70 @@
 #include "hpgl_exception.h"
 #include "locale_keeper.h"
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace hpgl
 {
+
+namespace {
+
+#ifndef _WIN32
+	/// Open a file for reading without following a symlink at the final
+	/// path component (F-N19 / F-N15 parity). This surface has no FFI
+	/// wrapper today, but hardening it matches the rest of the read paths
+	/// and the write side (property_writer.cpp) in case it is ever exposed.
+	FILE * fopen_read_nofollow(const char * file_name, const char * func_name)
+	{
+		int fd = ::open(file_name, O_RDONLY | O_NOFOLLOW);
+		if (fd < 0)
+		{
+			int open_errno = errno;
+			const char * basename = strrchr(file_name, '/');
+			if (basename == nullptr) basename = file_name;
+			else ++basename; // skip '/'
+			std::ostringstream oss;
+			oss << "Error opening file '" << basename << "': " << strerror(open_errno);
+			throw hpgl_exception(func_name, oss.str());
+		}
+		FILE * file = fdopen(fd, "r");
+		if (file == 0)
+		{
+			int fdopen_errno = errno;
+			close(fd);
+			errno = fdopen_errno;
+			const char * basename = strrchr(file_name, '/');
+			if (basename == nullptr) basename = file_name;
+			else ++basename; // skip '/'
+			std::ostringstream oss;
+			oss << "Error opening file '" << basename << "': " << strerror(fdopen_errno);
+			throw hpgl_exception(func_name, oss.str());
+		}
+		return file;
+	}
+#else
+	// _WIN32: fopen() only — no O_NOFOLLOW available (F-N20 parity
+	// documented; junction following is a Windows limitation).
+	FILE * fopen_read_nofollow(const char * file_name, const char * func_name)
+	{
+		FILE * file = fopen(file_name, "r");
+		if (file == 0)
+		{
+			int open_errno = errno;
+			const char * basename = strrchr(file_name, '/');
+			if (basename == nullptr) basename = file_name;
+			else ++basename; // skip '/'
+			std::ostringstream oss;
+			oss << "Error opening file '" << basename << "': " << strerror(open_errno);
+			throw hpgl_exception(func_name, oss.str());
+		}
+		return file;
+	}
+#endif
+
+} // anonymous namespace
 
 void read_prop_name(FILE * file, std::string & prop_name)
 {
@@ -138,19 +200,7 @@ void load_variable_mean_from_file(
 	const std::string & file_name)
 {
 	blue_sky::locale_keeper lkeeper ("C", LC_NUMERIC);
-	FILE * file = fopen(file_name.c_str(), "r");
-	if (file == 0)
-	{
-		// Use basename to avoid leaking full filesystem path in error messages.
-		// Also capture the errno before any other call may modify it.
-		int open_errno = errno;
-		const char * basename = strrchr(file_name.c_str(), '/');
-		if (basename == nullptr) basename = file_name.c_str();
-		else ++basename; // skip '/'
-		std::ostringstream oss;
-		oss << "Error opening file '" << basename << "': " << strerror(open_errno);
-		throw hpgl_exception("load_variable_mean_from_file", oss.str());
-	}
+	FILE * file = fopen_read_nofollow(file_name.c_str(), "load_variable_mean_from_file");
 	try
 	{
 		std::string prop_name;

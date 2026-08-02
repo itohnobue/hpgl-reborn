@@ -644,8 +644,15 @@ except AttributeError:
 def get_kriging_stats() -> dict[str, int | float]:
     """Return kriging statistics from the most recent kriging call as a dict.
 
-    Returns zero-initialized values if no kriging call has been made yet
-    on the current thread (matches C API contract — api.h:191).
+    The C++ engine zero-initializes the thread-local stats at the top of
+    every kriging/simulation entry point (F-N2: ``reset_kriging_stats`` in
+    api.cpp), and each entry point whose algorithm calls
+    ``set_kriging_stats`` (OK/SK/LVM/cokriging markI/II, median_ik, IK,
+    SGS, SIS) populates them. So after any kriging/simulation call this
+    returns THAT call's stats — never stale data from a prior, different
+    call (matches the api.h:188-193 promise). A call to an entry point
+    that does not populate (e.g. ``simple_kriging_weights``) leaves the
+    zero-initialized values.
 
     Returns:
         dict with keys: points_calculated, points_without_neighbours,

@@ -167,6 +167,57 @@ class TestCalcCdfEdgeCases:
         if cdf.probs.size > 1:
             assert np.all(np.diff(cdf.probs) >= 0)
 
+
+# =============================================================================
+# F-N13: multi-value CDF tail assertions (F-M11 verification)
+# =============================================================================
+
+
+@pytest.mark.hpgl
+class TestCalcCdfMultiValueTail:
+    def test_multi_value_float32_downcast_tail_below_one(self):
+        """F-N13a: the float32-downcast tail must be clamped below 1.0.
+
+        F-M11 facet (a): with 3 equal-count values the float64 cumulative sum
+        is 0.9999999999999999 (not >= 1.0), which previously bypassed the
+        `>= 1.0` clamp and rounded to exactly 1.0f in the float32 downcast —
+        re-introducing the F-04 max-datum→median collapse. The clamp must
+        fire AFTER the downcast so the stored tail is strictly below 1.0.
+        """
+        prop = _make_prop([1.0, 2.0, 3.0], grid_shape=(3, 1, 1))
+        cdf = calc_cdf(prop)
+        assert cdf.values.size == 3
+        assert cdf.probs[-1] < 1.0, "float32-downcast tail must be clamped below 1.0"
+        assert cdf.probs[-1] == np.nextafter(np.float32(1.0), np.float32(0.0))
+
+    def test_large_grid_monotonic_no_spurious_value_error(self):
+        """F-N13b: full_count >= 2^25 must not raise a spurious ValueError.
+
+        F-M11 facet (b): with 2^25 cells the last unique value's count is
+        smaller than one float32 ulp, so the second-to-last cumulative
+        probability rounds UP to exactly 1.0f; clamping probs[-1] to
+        0.99999994f then produced the non-monotonic tail [1.0f, 0.99999994f]
+        and a spurious monotonicity ValueError. The fixed clamp caps the
+        1.0f suffix so the float32 output stays monotonic and probs[-1] < 1.
+        calc_cdf supports flat (1D) property data — no grid needed, so the
+        2^25-cell property is not subject to the 1e7 per-axis grid cap.
+        """
+        n = 2**25
+        data = np.zeros(n, dtype="float32")
+        data[-1] = 1.0
+        prop = ContProperty(data, np.ones(n, dtype="uint8"))
+        cdf = calc_cdf(prop)
+        assert np.all(np.diff(cdf.probs) >= 0), "float32 CDF must stay monotonic"
+        assert cdf.probs[-1] < 1.0
+
+    def test_multi_value_earlier_probs_unchanged(self):
+        """F-M11 must not alter earlier (non-tail) probabilities."""
+        prop = _make_prop([1.0] * 4 + [2.0] * 4, grid_shape=(2, 2, 2))
+        cdf = calc_cdf(prop)
+        np.testing.assert_array_almost_equal(cdf.probs, [0.5, 1.0], decimal=5)
+        assert cdf.probs[0] == 0.5
+        assert cdf.probs[-1] < 1.0
+
     def test_large_value_range(self):
         prop = _make_prop([1e-10, 1e10], grid_shape=(2, 1, 1))
         cdf = calc_cdf(prop)

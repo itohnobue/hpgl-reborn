@@ -74,6 +74,7 @@ from .validation import (
     PathValidator,
     ValidationConstants,
     validate_kriging_params,
+    validate_property_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,14 +98,29 @@ _progress_handler_param = None
 # simple_kriging, lvm_kriging, median_ik, indicator_kriging,
 # simple_cokriging_markI/II, sgs_simulation, sis_simulation) resets this
 # to None BEFORE its FFI call, so stale stats from a prior call never
-# survive an exception raised by the C++ call. Wrappers whose C++ function
-# calls set_kriging_stats() (SK/LVM/OK) then populate it via
-# get_kriging_stats(); paths that do not (median_ik, indicator_kriging,
-# cokriging, SGS, SIS) leave it None — an honest "no stats available"
-# sentinel. Callers can inspect geo_bsd.geo._last_kriging_stats after a
-# kriging call to detect partial solver failure (e.g.
-# points_without_neighbours > 0). Set to None if the native library does
-# not export hpgl_get_kriging_stats.
+# survive an exception raised by the C++ call. On the C++ side every
+# kriging/simulation entry point except simple_kriging_weights (a
+# reset-only, stats-less path — api.cpp:746) calls set_kriging_stats() —
+# OK/SK/LVM, cokriging markI/II
+# (simple_cokriging_markI.cpp:439/:498), median_ik
+# (median_ik.cpp:201) and indicator_kriging (indicator_kriging.h:323)
+# since F-M5, and SGS/SIS since F-M6 — so the C++ thread-local stats are
+# always populated (matches the hpgl_wrap.py:649-651 producer list). The
+# Python sentinel is then populated via get_kriging_stats() only by
+# wrappers that call ``_finalize_kriging_stats`` (ordinary_kriging:1431,
+# simple_kriging:1536, lvm_kriging:1657, simple_cokriging_markI:1942,
+# simple_cokriging_markII:2045, sgs.py:255/268, sis.py:284/297). The
+# median_ik and indicator_kriging wrappers are deliberately RESET-ONLY by
+# design: they call ``_reset_kriging_stats()`` (geo.py:1755 / :1840) but
+# never ``_finalize_kriging_stats()``, so the Python sentinel stays None
+# even though the C++ side populated its own stats (retrievable via
+# hpgl_wrap.get_kriging_stats()) — an honest "no Python-level stats"
+# sentinel. Reset/populate run inside ``_hpgl_call_lock`` (atomic per-call
+# sentinel, F-M23/F-N12) via the ``_reset_kriging_stats`` /
+# ``_finalize_kriging_stats`` helpers. Callers can inspect
+# geo_bsd.geo._last_kriging_stats after a kriging call to detect partial
+# solver failure (e.g. points_without_neighbours > 0). Set to None if the
+# native library does not export hpgl_get_kriging_stats.
 _last_kriging_stats: dict | None = None
 # Deferred cache of old CFUNCTYPE handler+param references to prevent
 # use-after-free in concurrent kriging calls. Kriging/simulation FFI calls
@@ -730,6 +746,13 @@ def write_property(
         filename, basedir=basedir, must_exist=False
     )
 
+    # F-N16: validate prop_name BEFORE the FFI call. Names containing '\n'/
+    # control chars inject phantom header lines; a '--' prefix is a comment
+    # marker the readers skip and leading/trailing whitespace shifts the
+    # data off-by-one. Shared contract with the C++ writers
+    # (property_writer.cpp validate_property_name).
+    validate_property_name(prop_name, "write_property")
+
     if indicator_values is None:
         indicator_values = []
     ParameterValidator.validate_list_param(
@@ -786,6 +809,10 @@ def write_gslib_property(
     safe_path = PathValidator.validate_filepath_in_basedir(
         filename, basedir=basedir, must_exist=False
     )
+
+    # F-N16: validate prop_name BEFORE the FFI call (shared contract with
+    # the C++ writers; see write_property).
+    validate_property_name(prop_name, "write_gslib_property")
 
     if indicator_values is None:
         indicator_values = []
@@ -1234,6 +1261,42 @@ def calc_mean(prop):
 _validate_kriging_params = validate_kriging_params
 
 
+def _reset_kriging_stats() -> None:
+    """Reset the documented inspection sentinel BEFORE an FFI call (F-12/F-M23/F-N12).
+
+    MUST be called inside ``with _hpgl_call_lock:``. Guarantees the sentinel
+    stays None when the C++ call raises (stale stats never survive an exception).
+    """
+    global _last_kriging_stats
+    _last_kriging_stats = None
+
+
+def _finalize_kriging_stats(expected_calculated: int, func_name: str) -> None:
+    """Populate the sentinel from C++ and surface solver failure (F-33/F-M4/F-M21).
+
+    MUST be called inside ``with _hpgl_call_lock:`` immediately after the FFI
+    call. The C++ stats are thread_local (api.cpp:187) but the Python sentinel
+    is a shared module-global; doing reset+populate+check under the lock makes
+    each call's sentinel write atomic with respect to other kriging threads, so
+    the failure check always consumes THIS call's stats (F-M23/F-N12).
+
+    ``get_kriging_stats`` is referenced as a module-global (NOT captured in a
+    default argument) so the F-33 monkeypatch tests (test_s6_python_b_fixes.py:
+    138-227) can patch it.
+
+    ``expected_calculated`` = grid.x*grid.y*grid.z - informed_count (number of
+    uninformed cells the solver should have calculated).
+    """
+    global _last_kriging_stats
+    try:
+        _last_kriging_stats = get_kriging_stats()
+    except (NotImplementedError, AttributeError):
+        # Library build without hpgl_get_kriging_stats (hpgl_wrap.py:636-641);
+        # sentinel already None from the reset — honest "no stats available".
+        return
+    _check_kriging_failure_stats(_last_kriging_stats, expected_calculated, func_name)
+
+
 def _check_kriging_failure_stats(stats, expected_calculated, func_name):
     """Surface partial/total kriging solver failure from C++ stats (F-33).
 
@@ -1265,15 +1328,18 @@ def _check_kriging_failure_stats(stats, expected_calculated, func_name):
     if singular > 0:
         raise RuntimeError(
             f"{func_name}: kriging system was singular at {singular} point(s); "
-            f"those cells were mean-filled. A singular kriging system is a "
-            f"numerical solver failure — check the covariance model and "
+            f"those cells were left at the failure fallback (mean-filled for "
+            f"SK/LVM/cokriging; undefined for OK). A singular kriging system "
+            f"is a numerical solver failure — check the covariance model and "
             f"neighbourhood configuration. stats={stats}"
         )
     if expected_calculated > 0 and calculated < expected_calculated:
         missing = expected_calculated - calculated
         logger.warning(
             "%s: %d of %d cells could not be kriged (no neighbours in the "
-            "search radius) and were mean-filled; stats=%s",
+            "search radius) and were left at the failure fallback (mean-filled "
+            "for SK/LVM/cokriging; undefined for OK; marginal draw for SGS; "
+            "marginal-probability substitution for SIS); stats=%s",
             func_name, missing, expected_calculated, stats,
         )
 
@@ -1326,7 +1392,6 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     ``geo_bsd.geo._last_kriging_stats`` after the call, which is populated
     from C++ ``kriging_stats_t`` via ``get_kriging_stats()``.
     """
-    global _last_kriging_stats
     valid_radiuses = _validate_kriging_params(
         grid, radiuses, max_neighbours, cov_model,
         min_radius=ValidationConstants.MIN_KRIGING_RADIUS,
@@ -1361,14 +1426,11 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
 
     inp = _create_hpgl_cont_masked_array(prop, grid)
     outp = _create_hpgl_cont_masked_array(out_prop, grid)
-    _last_kriging_stats = None
+    expected = grid.x * grid.y * grid.z - int(numpy.sum(prop.mask > 0))
     with _hpgl_call_lock:
+        _reset_kriging_stats()
         call_ordinary_kriging(inp, okp, outp)
-
-    try:
-        _last_kriging_stats = get_kriging_stats()
-    except (NotImplementedError, AttributeError):
-        pass
+        _finalize_kriging_stats(expected, "ordinary_kriging")
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1427,7 +1489,6 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     weight-based API (:func:`simple_kriging_weights`) also detects
     failures explicitly.
     """
-    global _last_kriging_stats
     valid_radiuses = _validate_kriging_params(
         grid, radiuses, max_neighbours, cov_model,
         min_radius=ValidationConstants.MIN_KRIGING_RADIUS,
@@ -1468,28 +1529,13 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
 
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
-    _last_kriging_stats = None
+    expected = grid.x * grid.y * grid.z - int(numpy.sum(prop.mask > 0))
     with _hpgl_call_lock:
+        _reset_kriging_stats()
         call_simple_kriging(
             prop.data, prop.mask, sh, skp, out_prop[0], out_prop[1], sh
         )
-
-    try:
-        _last_kriging_stats = get_kriging_stats()
-    except (NotImplementedError, AttributeError):
-        pass
-
-    # F-33: surface partial/total solver failure. Simple Kriging mean-fills
-    # failed cells with finite means that pass the isfinite gate below, so
-    # without this check a call that failed everywhere is indistinguishable
-    # from success.
-    if _last_kriging_stats is not None:
-        _check_kriging_failure_stats(
-            _last_kriging_stats,
-            expected_calculated=grid.x * grid.y * grid.z
-            - int(numpy.sum(prop.mask > 0)),
-            func_name="simple_kriging",
-        )
+        _finalize_kriging_stats(expected, "simple_kriging")
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1549,7 +1595,6 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
     ``geo_bsd.geo._last_kriging_stats`` after the call, which is populated
     from C++ ``kriging_stats_t`` via ``get_kriging_stats()``.
     """
-    global _last_kriging_stats
     valid_radiuses = _validate_kriging_params(
         grid, radiuses, max_neighbours, cov_model,
         min_radius=ValidationConstants.MIN_KRIGING_RADIUS,
@@ -1597,8 +1642,9 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
 
     sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
 
-    _last_kriging_stats = None
+    expected = grid.x * grid.y * grid.z - int(numpy.sum(prop.mask > 0))
     with _hpgl_call_lock:
+        _reset_kriging_stats()
         call_lvm_kriging(
             prop.data,
             prop.mask,
@@ -1610,23 +1656,7 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
             out_prop.mask,
             sh,
         )
-
-    try:
-        _last_kriging_stats = get_kriging_stats()
-    except (NotImplementedError, AttributeError):
-        pass
-
-    # F-33: surface partial/total solver failure. LVM Kriging mean-fills
-    # failed cells with finite local means that pass the isfinite gate
-    # below, so without this check a call that failed everywhere is
-    # indistinguishable from success.
-    if _last_kriging_stats is not None:
-        _check_kriging_failure_stats(
-            _last_kriging_stats,
-            expected_calculated=grid.x * grid.y * grid.z
-            - int(numpy.sum(prop.mask > 0)),
-            func_name="lvm_kriging",
-        )
+        _finalize_kriging_stats(expected, "lvm_kriging")
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1723,9 +1753,8 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
 
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
-    global _last_kriging_stats
-    _last_kriging_stats = None
     with _hpgl_call_lock:
+        _reset_kriging_stats()
         call_median_ik(inp, miksp, outp)
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
@@ -1809,9 +1838,8 @@ def indicator_kriging(prop, grid, data, marginal_probs):
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
     params = __create_hpgl_ik_params(data, len(data), False, marginal_probs)
-    global _last_kriging_stats
-    _last_kriging_stats = None
     with _hpgl_call_lock:
+        _reset_kriging_stats()
         call_indicator_kriging(inp, outp, params, len(data))
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
@@ -1909,10 +1937,11 @@ def simple_cokriging_markI(
         secondary_variance=secondary_variance,
         correlation_coef=correlation_coef,
     )
-    global _last_kriging_stats
-    _last_kriging_stats = None
+    expected = grid.x * grid.y * grid.z - int(numpy.sum(prop.mask > 0))
     with _hpgl_call_lock:
+        _reset_kriging_stats()
         call_simple_cokriging_mark1(inp, sec, params, outp)
+        _finalize_kriging_stats(expected, "simple_cokriging_markI")
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -2009,10 +2038,13 @@ def simple_cokriging_markII(
         secondary_mean=secondary_data["mean"],
         correlation_coef=correlation_coef,
     )
-    global _last_kriging_stats
-    _last_kriging_stats = None
+    expected = grid.x * grid.y * grid.z - int(
+        numpy.sum(primary_data["data"].mask > 0)
+    )
     with _hpgl_call_lock:
+        _reset_kriging_stats()
         call_simple_cokriging_mark2(inp, sec, params, outp)
+        _finalize_kriging_stats(expected, "simple_cokriging_markII")
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -2075,6 +2107,7 @@ def simple_kriging_weights(
     weights = numpy.array([0] * len(n_x), dtype="float32")
 
     with _hpgl_call_lock:
+        _reset_kriging_stats()
         rc = call_simple_kriging_weights(
             _c_array(c_float, 3, center_point),
             numpy.array(n_x, dtype="float32"),
@@ -2123,13 +2156,16 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
     )
     prop = prop_dict[prop_name]
     informed_array = numpy.zeros(prop.shape, dtype=numpy.uint8)
-    # Use exact equality for undefined_value comparison to match
-    # the C++ fast reader and _load_prop_cont_slow parser behavior.
-    # NaN sentinels are handled separately since NaN != NaN.
+    # F-M18: GSLIB missing-value trimming — values outside the ±1.0e21
+    # window (strict inequality per the GSLIB convention "less than
+    # -1.0e21 or greater than 1.0e21") are missing sentinels in addition
+    # to exact undefined_value matches, matching the C++ fast reader
+    # (read_inc_file.cpp:287-305). NaN sentinels are handled separately
+    # since NaN != NaN.
     if numpy.isnan(undefined_value):
-        uninformed = numpy.isnan(prop)
+        uninformed = numpy.isnan(prop) | (prop < -1.0e21) | (prop > 1.0e21)
     else:
-        uninformed = prop == undefined_value
+        uninformed = (prop == undefined_value) | (prop < -1.0e21) | (prop > 1.0e21)
     informed_array = numpy.where(uninformed, 0, 1).astype(numpy.uint8)
     return (prop_dict[prop_name], informed_array)
 
@@ -2159,6 +2195,15 @@ def set_output_handler(handler, param):
     other HPGL calls, and keeps the old CFUNCTYPE object alive until the new
     handler has been installed to prevent use-after-free of the C function
     pointer.
+
+    Reentrancy (F-M22): handlers are invoked from the C++ engine while a
+    kriging/simulation FFI call holds ``_hpgl_call_lock``. The C++ engine
+    only invokes the handler on the OpenMP master thread (output.cpp F-M22),
+    so a handler that calls back into a kriging/simulation API on the same
+    thread re-enters the lock legally (RLock). Handlers MUST NOT, however,
+    spawn work on other threads that then call kriging/simulation APIs —
+    that would block on ``_hpgl_call_lock`` held by the calling thread while
+    the C++ engine waits for the handler, deadlocking the call.
     """
     global _h, _output_handler_param
     if handler is not None and not callable(handler):
@@ -2226,6 +2271,10 @@ def set_progress_handler(handler, param):
     other HPGL calls, and keeps the old CFUNCTYPE object alive until the new
     handler has been installed to prevent use-after-free of the C function
     pointer.
+
+    Reentrancy (F-M22): same contract as :func:`set_output_handler` — handlers
+    run on the OpenMP master thread during a lock-holding FFI call; same-thread
+    re-entry of kriging APIs is legal (RLock), cross-thread re-entry deadlocks.
     """
     global _progress_handler, _progress_handler_param
     if handler is not None and not callable(handler):

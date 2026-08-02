@@ -29,6 +29,23 @@ namespace {
     // window loop (lag_sep * num_lags * R2 * R3 product guard).
     constexpr double MAX_WINDOW_VOLUME = 100000000.0;
 
+    // F-H2: total-work cap for the point-set path
+    // (calc_variograms_from_point_set). The pair loop is O(size^2) and each
+    // in-tunnel pair bins into up to lag_count lags, so the worst-case work
+    // is size^2 * lag_count. MAX_POINT_SET_SIZE (1e6) combined with
+    // MAX_NUM_LAGS (1e4) would permit up to 1e16 pair-lag operations — an
+    // effectively-infinite loop. This cap rejects the product before the
+    // loop starts. Mirrored in cvariogram.py (CalcVariogramsFromPointSet).
+    constexpr double MAX_TOTAL_PAIR_LAG_WORK = 1e12;
+    // F-M12: total-work cap for the grid path (calc_variograms). The F-38
+    // MAX_WINDOW_VOLUME cap bounds only the number of window OFFSETS; the
+    // inner loop then iterates ALL grid cells for every in-tunnel offset, so
+    // the real work is window_volume * grid_volume. A maximal window (1e8)
+    // over a maximal grid (1e9 cells) would be 1e17 cell-offset iterations.
+    // This cap rejects the product before the loop starts. Mirrored in
+    // cvariogram.py (CalcVariograms).
+    constexpr double MAX_TOTAL_GRID_WORK = 1e12;
+
     /// Thread-safe error storage for the cvariogram module.
     std::string last_cvariogram_error;
     std::mutex last_cvariogram_error_mutex;
@@ -565,6 +582,26 @@ void calc_variograms(
 		return;
 	}
 
+	// F-M12: the F-38 cap above bounds only the number of window OFFSETS.
+	// For every in-tunnel offset the inner loop iterates ALL grid cells, so
+	// the effective total work is window_volume * grid_volume. A maximal
+	// window (1e8 offsets) over a maximal grid (1e9 cells) would run 1e17
+	// cell-offset iterations — an effectively-infinite loop even though each
+	// quantity is under its individual cap. Compute the grid volume in
+	// double (int dims can overflow: 1e7^3 = 1e21 > INT_MAX) and reject the
+	// product before the loop.
+	double grid_volume =
+		static_cast<double>(data->m_data_shape[0]) *
+		static_cast<double>(data->m_data_shape[1]) *
+		static_cast<double>(data->m_data_shape[2]);
+	if (window_volume * grid_volume > MAX_TOTAL_GRID_WORK)
+	{
+		cvar_set_last_error("calc_variograms: total work (window offsets x grid cells) exceeds maximum (1e12)");
+		free(lag_stats);
+		lag_stats = nullptr;
+		return;
+	}
+
 	for (int i2 = (int)floor(window.m_min_i); i2 <= (int)ceil(window.m_max_i); ++i2)
 		for (int j2 = (int)floor(window.m_min_j); j2 <= (int)ceil(window.m_max_j); ++j2)
 			for (int k2 = (int)floor(window.m_min_k); k2 <= (int)ceil(window.m_max_k); ++k2)
@@ -688,6 +725,27 @@ void calc_variograms_from_point_set(
 		? templ->m_num_lags
 		: result_length;
 
+	// F-H2: work-based cap on the O(size^2 * lag_count) pair loop below.
+	// The count cap above (MAX_POINT_SET_SIZE) bounds the input SIZE only;
+	// the loop cost is size^2 * num_lags, so a size of 1e6 with 1e4 lags
+	// would run 1e16 pair-lag operations — an effectively-infinite loop.
+	// Compute the work estimate in double (size^2 for 1e6 points is 1e12,
+	// safely inside double but the product with lag_count must not overflow
+	// int) and reject it before any allocation or loop work.
+	const double pair_lag_work =
+		static_cast<double>(point_set->size) *
+		static_cast<double>(point_set->size) *
+		static_cast<double>(lag_count);
+	if (pair_lag_work > MAX_TOTAL_PAIR_LAG_WORK)
+	{
+		fprintf(stderr,
+			"[HPGL ERROR] calc_variograms_from_point_set: estimated pair-lag work %.3g exceeds maximum %.3g\n",
+			pair_lag_work, MAX_TOTAL_PAIR_LAG_WORK);
+		fflush(stderr);
+		cvar_set_last_error("calc_variograms_from_point_set: point-set pair-lag work exceeds maximum (1e12)");
+		return;
+	}
+
 	lag_stats = (lag_statistics_t *) calloc(lag_count, sizeof(lag_statistics_t));
 	if (!lag_stats) {
 		fprintf(stderr, "[HPGL ERROR] calc_variograms_from_point_set: calloc(lag_stats) failed\n");
@@ -711,6 +769,23 @@ void calc_variograms_from_point_set(
 	}
 	init_lag_list(templ, lags, lag_count);
 
+	// F-M13-cpp: contiguity contract. The point-set arrays (xs/ys/zs/values)
+	// are read LINEARLY via pointer arithmetic (point_set->xs[idx1],
+	// point_set->values[idx2], ...) with no stride math, exactly like the
+	// grid path reads its contiguous flat buffer. This is safe ONLY when the
+	// caller passes C-contiguous 1-D float32 arrays of `size` elements.
+	//
+	// The Python wrapper (cvariogram.py CalcVariogramsFromPointSet) MUST
+	// enforce ndim == 1 and C-contiguity on the "X"/"Y"/"Z"/"Property"
+	// arrays before constructing cont_point_set_t (sibling precedent:
+	// CStackLayers validates layer contiguity at the Python boundary,
+	// cvariogram.py CStackLayers). A non-contiguous view (e.g. a strided
+	// slice of a 2-D array) would be read here as if it were contiguous,
+	// producing garbage coordinate/value pairs or OOB reads.
+	//
+	// C++ side is stride-agnostic-safe ONLY under that contract; the C++
+	// cont_point_set_t struct carries no shape/strides metadata to detect
+	// violations, so the validation must happen at the FFI boundary.
 	for (int idx1 = 0; idx1 < point_set->size; ++idx1)
 	{
 		for (int idx2 = 0; idx2 < point_set->size; ++idx2)

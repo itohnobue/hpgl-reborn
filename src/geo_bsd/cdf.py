@@ -33,8 +33,15 @@ class CdfData:
                     f"to float32 — potential precision loss.",
                     stacklevel=2,
                 )
-        self.values = numpy.require(values, "float32")
-        self.probs = numpy.require(probs, "float32")
+        # F-M25: force C-contiguity. numpy.require without requirements
+        # PRESERVES the input's memory layout (an F-ordered input stays
+        # F-contiguous), but create_nonparam_cdf passes these arrays to the
+        # C++ non-parametric CDF via raw ctypes pointers that read linearly —
+        # a non-C-contiguous layout would be misread. All 9 geo.py sites pass
+        # an explicit layout requirement; ours must be "C" (the values/probs
+        # are consumed linearly, not per-property-cell like the Fortran data).
+        self.values = numpy.require(values, "float32", requirements=["C"])
+        self.probs = numpy.require(probs, "float32", requirements=["C"])
 
         # Validate values and probs for NaN / Inf BEFORE range checks.
         # NaN falsifies all three range/diff comparisons below
@@ -135,6 +142,26 @@ def calc_cdf(prop):
     # 1.0 (nextafter), matching cpp-A's tail-saturation convention in
     # gaussian_distribution.h/non_parametric_cdf.h, so the max datum maps
     # to a large-but-finite normal score instead of the median.
+    #
+    # F-M11: apply the clamp AFTER the float32 downcast. The float64
+    # accumulation above can (a) leave the tail in [1-2^-25, 1.0) — below
+    # the old `>= 1.0` threshold, yet rounded to exactly 1.0f by the float32
+    # downcast (clamp bypassed → max datum maps to the median again); and
+    # (b) when full_count >= ~2^25, round EARLIER cumulative probabilities
+    # up to exactly 1.0f, producing a non-monotonic tail [.., 1.0f,
+    # 0.99999994f] and a spurious monotonicity ValueError. Downcasting first
+    # lets the clamp see the exact float32 values the CDF stores. Rounding
+    # a non-decreasing sequence is monotone, so after clamping probs[-1] the
+    # only possible violation is a suffix of exactly-1.0f entries above the
+    # clamped tail — cap that suffix down to keep the float32 output
+    # monotonically non-decreasing.
+    probs = numpy.require(probs, "float32")
     if size > 0 and probs[-1] >= 1.0:
-        probs[-1] = float(numpy.nextafter(numpy.float32(1.0), numpy.float32(0.0)))
+        clamped = numpy.nextafter(numpy.float32(1.0), numpy.float32(0.0))
+        probs[-1] = clamped
+        for i in range(size - 2, -1, -1):
+            if probs[i] > clamped:
+                probs[i] = clamped
+            else:
+                break
     return CdfData(values=values, probs=probs)

@@ -13,6 +13,7 @@ import logging
 import os
 import pathlib
 import warnings
+from contextlib import contextmanager
 from functools import wraps
 
 import numpy
@@ -39,9 +40,10 @@ class ValidationConstants:
     # footprint a single MAX_GRID_SIZE property already permits.
     MAX_GSLIB_VALUES = 1000000000
 
-    # Volume cap for the pure-Python ellipse-mask moving-average loop.
-    # The cubical-mask path is vectorized and unbounded; only the
-    # per-cell Python loop needs this DoS bound.
+    # Volume cap for the pure-Python moving-average path (F-M16). The
+    # cubical-mask path is vectorized, but its mean-mask allocation is
+    # radius-driven ((2r)^3 cells); both the vectorized and per-cell loop
+    # paths share this bound to prevent a hang/OOM from oversized grids.
     MAX_MOVING_AVERAGE_VOLUME = 1000000
 
     # Neighbor count limits
@@ -122,13 +124,29 @@ class ValidationWarning(ValidationError):
 # ============================================================================
 
 
-class PathValidator:
+class _PathValidatorMeta(type):
+    """Metaclass providing a lazy ``DEFAULT_BASE_DIR`` class property (F-N21).
+
+    The base directory is resolved from the current working directory at
+    ACCESS time instead of being captured at import time. The import-time
+    capture was stale after ``os.chdir()`` and, in service contexts, could
+    pin an attacker-influenced import-time cwd as the trusted base.
+    """
+
+    @property
+    def DEFAULT_BASE_DIR(cls) -> str:
+        return os.path.realpath(os.getcwd())
+
+
+class PathValidator(metaclass=_PathValidatorMeta):
     """Validates file paths to prevent directory traversal attacks"""
 
-    # Trusted base directory that callers SHOULD use instead of deriving
-    # basedir from the filename (self-referential basedir defeats symlink
-    # containment). Defaults to cwd realpath at import time.
-    DEFAULT_BASE_DIR: str = os.path.realpath(os.getcwd())
+    # ``DEFAULT_BASE_DIR`` is provided lazily by ``_PathValidatorMeta``:
+    # the trusted base directory is resolved at access time from the
+    # process cwd (F-N21), so ``os.chdir()`` after import is respected
+    # instead of pinning the import-time cwd. Callers SHOULD use it
+    # instead of deriving basedir from the filename (self-referential
+    # basedir defeats symlink containment).
 
     @staticmethod
     def validate_filepath(
@@ -294,6 +312,83 @@ class PathValidator:
         )
         fd = os.open(safe_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW)
         return os.fdopen(fd, "w", encoding=encoding)
+
+    @staticmethod
+    @contextmanager
+    def safe_atomic_open_write(
+        filename: str | pathlib.Path,
+        basedir: str | pathlib.Path,
+        encoding: str = "utf-8",
+    ):
+        """Validate path for writing and write atomically via temp + rename (F-N18).
+
+        Same path validation as ``safe_open_write`` (basedir containment +
+        O_NOFOLLOW), but content is first written to a uniquely-named temp
+        file in the same directory and then atomically ``os.replace``-ed onto
+        the target on clean exit. A crash or exception mid-write leaves the
+        previous target intact instead of a truncated file (the C++ writers
+        use the same temp+rename pattern, property_writer.cpp F-52/F-M19
+        lineage). The temp name embeds pid + a process-local counter and is
+        created with O_CREAT|O_EXCL|O_NOFOLLOW + mode 0644, defeating
+        hardlink pre-creation (F-M19/F-N23 parity).
+
+        Args:
+            filename: The file path to validate and write.
+            basedir: Base directory for containment check (required).
+            encoding: Text encoding for the opened temp file.
+
+        Yields:
+            A text-mode file object for the temp file. On clean exit the
+            content is atomically renamed over ``filename``; on exception
+            the temp file is removed.
+
+        Raises:
+            CriticalValidationError: If path is invalid or outside basedir.
+            OSError: If the file cannot be opened or renamed.
+        """
+        safe_path = PathValidator.validate_filepath_in_basedir(
+            filename, basedir=basedir, must_exist=False
+        )
+        tmp_dir = os.path.dirname(safe_path) or "."
+        tmp_base = os.path.basename(safe_path) + ".tmp"
+        pid = os.getpid()
+        counter = 0
+        max_attempts = 64
+        fd = -1
+        tmp_path = None
+        for _ in range(max_attempts):
+            candidate = os.path.join(tmp_dir, f"{tmp_base}.{pid}.{counter}")
+            counter += 1
+            try:
+                fd = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o644,
+                )
+                tmp_path = candidate
+                break
+            except FileExistsError:
+                continue  # stale temp from a crashed run — try next name
+        if tmp_path is None:
+            raise OSError(
+                f"Could not create a unique temporary file for {safe_path}"
+            )
+        f = os.fdopen(fd, "w", encoding=encoding)
+        try:
+            yield f
+            f.flush()
+            f.close()
+            os.replace(tmp_path, safe_path)
+        except BaseException:
+            try:
+                f.close()
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     @staticmethod
     def safe_open_read(
@@ -1044,6 +1139,58 @@ def validate_file_params(*args, **kwargs):
         PathValidator.validate_filepath(filename, must_exist=must_exist)
 
 
+def validate_property_name(name: str, func_name: str = "validate_property_name") -> str:
+    """Validate a property name for INC/GSLIB header writes (F-N16/F-N17).
+
+    Shared contract with the C++ writers (property_writer.cpp
+    ``validate_property_name``, property_writer.cpp:34-52). A name is
+    VALID iff:
+      - non-empty;
+      - contains no control characters (bytes 0x00-0x1F or 0x7F) — in
+        particular no ``\\n``/``\\r`` (would inject phantom header lines),
+        no ``\\t``;
+      - no leading or trailing whitespace (readers skip whitespace-leading
+        lines, silently shifting the data off-by-one);
+      - does not start with ``"--"`` (comment marker skipped by readers) or
+        ``"/"`` (INC end-of-data marker).
+    Internal spaces and non-ASCII UTF-8 are allowed.
+
+    Args:
+        name: Property name to validate.
+        func_name: Caller name for the error message prefix.
+
+    Returns:
+        The validated ``name`` (unchanged).
+
+    Raises:
+        ValueError: If ``name`` violates the contract.
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"{func_name}: property name must be a non-empty string")
+
+    if name.startswith("--"):
+        raise ValueError(
+            f"{func_name}: property name {name!r} must not start with \"--\""
+        )
+    if name[0] == "/":
+        raise ValueError(
+            f"{func_name}: property name {name!r} must not start with '/'"
+        )
+    if name[0].isspace() or name[-1].isspace():
+        raise ValueError(
+            f"{func_name}: property name {name!r} must not have leading or "
+            f"trailing whitespace"
+        )
+    for ch in name:
+        code = ord(ch)
+        if code < 0x20 or code == 0x7F:
+            raise ValueError(
+                f"{func_name}: property name {name!r} must not contain control "
+                f"characters"
+            )
+    return name
+
+
 # ============================================================================
 # Validation Context Manager
 # ============================================================================
@@ -1112,5 +1259,6 @@ __all__ = [
     "validate_kriging_params",
     "validate_simulation_params",
     "validate_file_params",
+    "validate_property_name",
     "ValidationContext",
 ]

@@ -192,6 +192,15 @@ namespace hpgl {
 	{
 		g_last_kriging_stats = stats;
 	}
+
+	void reset_kriging_stats()
+	{
+		g_last_kriging_stats.m_points_calculated = 0;
+		g_last_kriging_stats.m_points_without_neighbours = 0;
+		g_last_kriging_stats.m_points_singularity = 0;
+		g_last_kriging_stats.m_mean = 0;
+		g_last_kriging_stats.m_speed_nps = 0;
+	}
 }
 
 extern "C" {
@@ -590,6 +599,9 @@ HPGL_API void hpgl_ordinary_kriging(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call so a validation
+	// failure or stats-less path cannot leave stale stats observable.
+	reset_kriging_stats();
 	validate_pointer_or_throw(input_data, "input_data (ordinary_kriging)");
 	validate_pointer_or_throw(params, "params (ordinary_kriging)");
 	validate_pointer_or_throw(output_data, "output_data (ordinary_kriging)");
@@ -668,6 +680,8 @@ HPGL_API void hpgl_simple_kriging(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	reset_kriging_stats();
 	validate_pointer_or_throw(input_data, "input_data (simple_kriging)");
 	validate_pointer_or_throw(output_data, "output_data (simple_kriging)");
 	validate_pointer_or_throw(input_data_shape, "input_data_shape (simple_kriging)");
@@ -727,6 +741,9 @@ hpgl_simple_kriging_weights(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	// simple_kriging_weights is a stats-less path; leave honest zeros.
+	reset_kriging_stats();
 	real_location_t center(center_coords[0], center_coords[1], center_coords[2]);
 
 	std::vector<real_location_t> neighbour_coords(neighbours_count);
@@ -773,6 +790,8 @@ HPGL_API void hpgl_lvm_kriging(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	reset_kriging_stats();
 	validate_pointer_or_throw(input_data, "input_data (lvm_kriging)");
 	validate_pointer_or_throw(mean_data, "mean_data (lvm_kriging)");
 	validate_pointer_or_throw(output_data, "output_data (lvm_kriging)");
@@ -837,6 +856,8 @@ hpgl_indicator_kriging(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	reset_kriging_stats();
 	validate_pointer_or_throw(in_data, "in_data (indicator_kriging)");
 	validate_pointer_or_throw(out_data, "out_data (indicator_kriging)");
 	validate_pointer_or_throw(params, "params (indicator_kriging)");
@@ -893,6 +914,17 @@ hpgl_indicator_kriging(
 		validate_kriging_radiuses_or_throw(radiuses, "hpgl_indicator_kriging");
 	}
 
+	// PR-07 (F-H1): enforce the max-neighbours cap on the ONLY kriging entry
+	// point that lacked it. hpgl_indicator_kriging was the sole sibling with
+	// no validate_max_neighbours_or_throw call — an unbounded value (e.g.
+	// 2e9, which passes init_sis_params' `< 0` check) flows into the
+	// neighbour lookup's per-node reserve() (sugarbox_neighbour_lookup.h:40-42)
+	// → ~32GB/thread heap reserve inside the OpenMP region → uncatchable
+	// std::terminate. All 10 other entry points (api.cpp:631,650,821,940,994,
+	// 1070,1158,1233,1341,1451) enforce the same bound.
+	for (int i = 0; i < indicator_count; ++i)
+		validate_max_neighbours_or_throw(params[i].m_max_neighbours, "hpgl_indicator_kriging");
+
 	indicator_property_array_t in_prop(in_data->m_data, in_data->m_mask, size, in_data->m_indicator_count);
 	indicator_property_array_t out_prop(out_data->m_data, out_data->m_mask, size2, out_data->m_indicator_count);
 
@@ -918,6 +950,8 @@ hpgl_sgs_simulation(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	reset_kriging_stats();
 	validate_pointer_or_throw(data, "data (sgs_simulation)");
 	validate_pointer_or_throw(params, "params (sgs_simulation)");
 
@@ -970,6 +1004,8 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	reset_kriging_stats();
 	validate_pointer_or_throw(data, "data (sgs_lvm_simulation)");
 	validate_pointer_or_throw(params, "params (sgs_lvm_simulation)");
 	validate_pointer_or_throw(means, "means (sgs_lvm_simulation)");
@@ -1038,6 +1074,8 @@ HPGL_API void hpgl_median_ik(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	reset_kriging_stats();
 	validate_pointer_or_throw(in_data, "in_data (median_ik)");
 	validate_pointer_or_throw(params, "params (median_ik)");
 	validate_pointer_or_throw(out_data, "out_data (median_ik)");
@@ -1119,6 +1157,8 @@ hpgl_sis_simulation(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	reset_kriging_stats();
 	validate_pointer_or_throw(data, "data (sis_simulation)");
 	validate_pointer_or_throw(params, "params (sis_simulation)");
 
@@ -1191,6 +1231,8 @@ hpgl_sis_simulation_lvm(
 	try
 	{
 	using namespace hpgl;
+	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	reset_kriging_stats();
 	validate_pointer_or_throw(data, "data (sis_simulation_lvm)");
 	validate_pointer_or_throw(params, "params (sis_simulation_lvm)");
 	validate_pointer_or_throw(mean_data, "mean_data (sis_simulation_lvm)");
@@ -1290,6 +1332,8 @@ hpgl_simple_cokriging_mark1(
 	try
 	{
 		using namespace hpgl;
+		// F-N2: zero thread-local stats before the call (stale-stat promise).
+		reset_kriging_stats();
 		validate_pointer_or_throw(input_data, "input_data (cokriging_m1)");
 		validate_pointer_or_throw(secondary_data, "secondary_data (cokriging_m1)");
 		validate_pointer_or_throw(params, "params (cokriging_m1)");
@@ -1392,6 +1436,8 @@ hpgl_simple_cokriging_mark2(
 	try
 	{
 		using namespace hpgl;
+		// F-N2: zero thread-local stats before the call (stale-stat promise).
+		reset_kriging_stats();
 		validate_pointer_or_throw(primary_data, "primary_data (cokriging_m2)");
 		validate_pointer_or_throw(secondary_data, "secondary_data (cokriging_m2)");
 		validate_pointer_or_throw(params, "params (cokriging_m2)");

@@ -12,6 +12,7 @@ from geo_bsd.variogram import (
     MAX_POINT_SET_SIZE,
     CalcCovarianceFunction,
     CalcIndCorrelationFunction,
+    CalcVariogramFunction,
     CubeScan,
     PointSetScanContStyle,
     PointSetScanGridStyle,
@@ -378,3 +379,188 @@ class TestCalcLagsAreasWindowCap:
         )
         result = _CalcLagsAreas(templ)
         assert len(result) == 5
+
+
+# =============================================================================
+# F-M14: CalcVariogramFunction must receive the F-02 tuple-path fix the
+# covariance/correlation siblings already have (ravel_multi_index + numpy.take)
+# =============================================================================
+
+
+class TestCalcVariogramTuplePath:
+    def test_3d_values_3tuple_identical_pairs(self):
+        """F-M14: 3D values + (I, J, K) 3-tuple (natural CubeScan path)."""
+        values = [np.arange(24, dtype="float32").reshape(4, 3, 2)]
+        params = {"HardData": values}
+
+        result = CalcVariogramFunction(None, None, None, params)
+        idx_i = np.array([0, 1], dtype="int64")
+        idx_j = np.array([0, 0], dtype="int64")
+        idx_k = np.array([0, 0], dtype="int64")
+        result2 = CalcVariogramFunction((idx_i, idx_j, idx_k), (idx_i, idx_j, idx_k), result, params)
+
+        # Identical point pairs -> zero-variance pairs -> variogram 0.
+        assert np.allclose(result2[: len(values)], 0.0, atol=1e-6)
+        assert result2[len(values) + len(values)] == 2  # two pairs accumulated
+
+    def test_scalar_indices_with_3d_values(self):
+        """F-M14: scalar index path + 3D values (PointSetScanGridStyle
+        convention). Pre-fix: broadcast ValueError — Values[i][array([0])] on
+        a 3D array returned a block, not a row."""
+        values = [np.arange(8, dtype="float32").reshape(2, 2, 2)]
+        params = {"HardData": values}
+
+        result = CalcVariogramFunction(None, None, None, params)
+        # Pair (flat 0, flat 1): values 0 and 1 -> var 1, count 1.
+        result2 = CalcVariogramFunction(np.array([0]), np.array([1]), result, params)
+        assert np.all(np.isfinite(result2))
+        assert result2[len(values) + len(values)] == 1  # one pair accumulated
+        # variogram[0] = sum/count/2 = (1-0)^2/1/2 = 0.5
+        assert np.allclose(result2[0], 0.5)
+
+    def test_1d_values_3tuple_matches_sibling_contract(self):
+        """F-M14: 1D flat values + 3-component tuple must raise the same
+        ValueError as the covariance/correlation siblings (ravel_multi_index
+        requires len(multi_index) == len(shape)) — NOT the pre-fix
+        IndexError."""
+        values = [np.arange(125, dtype="float32")]
+        params = {"HardData": values}
+        result = CalcVariogramFunction(None, None, None, params)
+        idx_i = np.array([0, 1], dtype="int64")
+        idx_j = np.array([0, 0], dtype="int64")
+        idx_k = np.array([0, 0], dtype="int64")
+        with pytest.raises(ValueError, match="sequence of length"):
+            CalcVariogramFunction((idx_i, idx_j, idx_k), (idx_i, idx_j, idx_k), result, params)
+
+
+# =============================================================================
+# F-N14: CubeScan must reject a search template whose extent exceeds the grid
+# size (C++ is_inside equivalent) instead of crashing with a broadcast error
+# =============================================================================
+
+
+class TestCubeScanTemplateExtentGuard:
+    def _template(self, r, lag_width, lag_sep, num_lags):
+        ell = TVEllipsoid(R1=r, R2=r, R3=r)
+        return TVVariogramSearchTemplate(
+            LagWidth=lag_width,
+            LagSeparation=lag_sep,
+            TolDistance=1.0,
+            NumLags=num_lags,
+            Ellipsoid=ell,
+        )
+
+    def test_grid_smaller_than_template_extent_raises(self):
+        """F-N14: 4x4x4 grid with a template whose lag offsets reach 5 in one
+        axis previously crashed with a broadcast ValueError (Mask1 empty vs
+        Mask2[0:-1]). The guard raises a clear ValueError instead."""
+        templ = self._template(r=100, lag_width=3.0, lag_sep=2.0, num_lags=3)
+        mask = np.ones((4, 4, 4), dtype="uint8")
+        values = [np.arange(64, dtype="float32").reshape(4, 4, 4)]
+        with pytest.raises(ValueError, match="exceeds grid size"):
+            CubeScan(templ, mask, _pair_counter, {"HardData": values})
+
+    def test_smaller_grid_than_template_extent_raises(self):
+        """F-N14: 3x3x3 grid with the same template also raises."""
+        templ = self._template(r=100, lag_width=3.0, lag_sep=2.0, num_lags=3)
+        mask = np.ones((3, 3, 3), dtype="uint8")
+        values = [np.arange(27, dtype="float32").reshape(3, 3, 3)]
+        with pytest.raises(ValueError, match="exceeds grid size"):
+            CubeScan(templ, mask, _pair_counter, {"HardData": values})
+
+    def test_template_fitting_grid_still_works(self):
+        """F-N14: a template within grid bounds must still compute."""
+        templ = self._template(r=100, lag_width=1.0, lag_sep=1.0, num_lags=2)
+        mask = np.ones((4, 4, 4), dtype="uint8")
+        values = [np.arange(64, dtype="float32").reshape(4, 4, 4)]
+        result, _ = CubeScan(templ, mask, _pair_counter, {"HardData": values})
+        assert np.all(np.isfinite(result))
+
+    def test_exact_extent_still_works(self):
+        """F-N14: a template whose offset magnitude exactly equals the grid
+        dimension produces empty-empty slices (no crash, C++-equivalent skip)
+        — the guard must not reject it (boundary DI == NI)."""
+        templ = self._template(r=100, lag_width=1.0, lag_sep=1.0, num_lags=3)
+        mask = np.ones((3, 3, 3), dtype="uint8")
+        values = [np.arange(27, dtype="float32").reshape(3, 3, 3)]
+        result, _ = CubeScan(templ, mask, _pair_counter, {"HardData": values})
+        assert np.all(np.isfinite(result))
+
+
+# =============================================================================
+# F-M24: PointSetScanContStyle must skip self-pairs (i == j) like the C++
+# point-set scan (variograms.cpp:793) — equivalence test Python vs C++
+# =============================================================================
+
+
+class TestPointSetScanSelfPairSkip:
+    def _make_templates(self):
+        """Identical search geometry for the Python and C++ paths.
+
+        1D points along X with LagWidth=2.0 put distance-1 pairs AND the
+        self-pairs (distance 0) in the same lag band, exposing the self-pair
+        counting difference: pre-fix Python lag1 = 22.22 vs C++ = 50.0.
+        """
+        p_ell = TVEllipsoid(R1=100, R2=100, R3=100)
+        p_templ = TVVariogramSearchTemplate(
+            LagWidth=2.0, LagSeparation=1.0, TolDistance=1.0, NumLags=3,
+            Ellipsoid=p_ell, FirstLagDistance=0,
+        )
+        return p_templ
+
+    def test_python_point_set_matches_cpp(self):
+        """F-M24: Python PointSetScanContStyle (self-pairs skipped) matches
+        the C++ calc_variograms_from_point_set output."""
+        pytest.importorskip("geo_bsd.cvariogram")
+        from geo_bsd.cvariogram import (
+            CalcVariogramsFromPointSet,
+            Ellipsoid,
+            VariogramSearchTemplate,
+        )
+
+        xs = np.array([0, 1, 2, 3, 4], dtype="float32")
+        ys = np.zeros(5, dtype="float32")
+        zs = np.zeros(5, dtype="float32")
+        vals = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype="float32")
+
+        # C++ reference (skips idx1 == idx2 at variograms.cpp:793).
+        c_ell = Ellipsoid(R1=100, R2=100, R3=100, azimuth=0, dip=0, rotation=0)
+        c_templ = VariogramSearchTemplate(
+            lag_width=2.0, lag_separation=1.0, tol_distance=1.0,
+            num_lags=3, first_lag_distance=0.0, ellipsoid=c_ell,
+        )
+        c_var = np.zeros(3, dtype="float32")
+        _, cpp_result = CalcVariogramsFromPointSet(
+            c_templ, {"X": xs, "Y": ys, "Z": zs, "Property": vals}, c_var
+        )
+
+        # Python (self-pairs skipped by the F-M24 fix).
+        p_templ = self._make_templates()
+        py_result, _ = PointSetScanContStyle(
+            p_templ, {"X": xs, "Y": ys, "Z": zs}, CalcVariogramFunction,
+            {"HardData": [vals]},
+        )
+
+        np.testing.assert_allclose(py_result[:, 0], cpp_result, atol=1e-4)
+        # Sanity pin: lag 1 must be 50.0, NOT the pre-fix 22.22 dilution.
+        assert abs(py_result[1, 0] - 50.0) < 1e-4
+
+    def test_self_pair_not_counted_in_lag_zero(self):
+        """F-M24: without any real pairs at distance 0, the self-pairs must
+        not inflate the lag-0 pair count (pre-fix: 5 self-pairs counted)."""
+        from geo_bsd.variogram import CalcVariogramFunction, PointSetScanContStyle
+
+        xs = np.array([0, 1, 2, 3, 4], dtype="float32")
+        ys = np.zeros(5, dtype="float32")
+        zs = np.zeros(5, dtype="float32")
+        vals = np.array([10.0, 20.0, 30.0, 40.0, 50.0], dtype="float32")
+        p_templ = self._make_templates()
+
+        py_result, _ = PointSetScanContStyle(
+            p_templ, {"X": xs, "Y": ys, "Z": zs}, CalcVariogramFunction,
+            {"HardData": [vals]},
+        )
+        # Result layout: [variogram..., sums..., count] — count slot is index
+        # 2*NumValues. NumValues = 1, so count is index 2.
+        assert py_result[0, 2] == 0, "lag 0 must not count self-pairs"
+        assert py_result[1, 2] == 4, "lag 1 counts the 4 real distance-1 pairs only"

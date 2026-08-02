@@ -55,15 +55,15 @@ try:
     from importlib.metadata import PackageNotFoundError  # noqa: E402
     from importlib.metadata import version as _get_version
 except ImportError:
-    __version__ = "2.0.0"
+        __version__ = "2.0.1"
 else:
     try:
         __version__ = _get_version("hpgl")
     except PackageNotFoundError:
         logging.warning(
-            "hpgl package not found via importlib.metadata; falling back to default version 2.0.0"
+            "hpgl package not found via importlib.metadata; falling back to default version 2.0.1"
         )
-        __version__ = "2.0.0"
+    __version__ = "2.0.1"
 
 __all__ = [
     # Kriging algorithms

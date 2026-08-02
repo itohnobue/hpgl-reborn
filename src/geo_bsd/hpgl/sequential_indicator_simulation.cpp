@@ -15,6 +15,8 @@
 #include "cov_model.h"
 #include "hpgl_exception.h"
 #include "indicator_kriging.h"
+#include "kriging_stats.h"
+#include "api.h"
 
 namespace hpgl
 {
@@ -71,6 +73,11 @@ void do_sis(
 	// failures are widespread.
 	unsigned long kriging_failures = 0;
 	unsigned long kriging_skipped = 0;
+	unsigned long points_calculated = 0;
+	unsigned long points_without_neighbours = 0;
+	unsigned long points_singularity = 0;
+	unsigned long nodes_processed = 0;
+	double sum_categories = 0;
 
 	if(params.m_category_count == 2)
 	{
@@ -112,32 +119,38 @@ void do_sis(
 
 		probs.clear();
 
-		// median SIS
-			if(params.m_category_count == 2)
-		{
-				int idx = 0;
+			// median SIS
+				if(params.m_category_count == 2)
+			{
+					int idx = 0;
 
-				double prob;
-				
-				ki_result_t ki_result = kriging_interpolation_ws(
-					ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(property), 
-					node, covariances[idx], marginal_probs[idx], nblookups[idx], weight_calculator_sis, prob, ws);
+					double prob;
+					
+					ki_result_t ki_result = kriging_interpolation_ws(
+						ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(property), 
+						node, covariances[idx], marginal_probs[idx], nblookups[idx], weight_calculator_sis, prob, ws);
 
-				if (ki_result != ki_result_t::KI_SUCCESS)
-				{
-					prob = marginal_probs[idx][node];
-					++kriging_failures;
-				}
+					if (ki_result != ki_result_t::KI_SUCCESS)
+					{
+						prob = marginal_probs[idx][node];
+						++kriging_failures;
+					}
+					switch (ki_result)
+					{
+					case ki_result_t::KI_SUCCESS: ++points_calculated; break;
+					case ki_result_t::KI_NO_NEIGHBOURS: ++points_without_neighbours; break;
+					case ki_result_t::KI_SINGULARITY: ++points_singularity; break;
+					}
 
-				// Clamp kriged probability to [0,1] before computing the
-				// complement so both probabilities are well-formed.
-				// SK weights are unconstrained — poorly conditioned matrices,
-				// sparse neighbours, or extreme anisotropy can push the
-				// combine() result outside [0,1].
-				if (prob < 0.0) prob = 0.0;
-				else if (prob > 1.0) prob = 1.0;
-				probs.push_back(prob);
-				probs.push_back(1.0 - prob);
+					// Clamp kriged probability to [0,1] before computing the
+					// complement so both probabilities are well-formed.
+					// SK weights are unconstrained — poorly conditioned matrices,
+					// sparse neighbours, or extreme anisotropy can push the
+					// combine() result outside [0,1].
+					if (prob < 0.0) prob = 0.0;
+					else if (prob > 1.0) prob = 1.0;
+					probs.push_back(prob);
+					probs.push_back(1.0 - prob);
 
 		}
 		else
@@ -154,6 +167,12 @@ void do_sis(
 				{
 					prob = marginal_probs[idx][node];
 					++kriging_failures;
+				}
+				switch (ki_result)
+				{
+				case ki_result_t::KI_SUCCESS: ++points_calculated; break;
+				case ki_result_t::KI_NO_NEIGHBOURS: ++points_without_neighbours; break;
+				case ki_result_t::KI_SINGULARITY: ++points_singularity; break;
 				}
 				probs.push_back(prob);
 			}
@@ -179,10 +198,26 @@ void do_sis(
 			for (size_t i = probs.size() - 1; i > 0; --i)
 				probs[i] -= probs[i - 1];
 		}
-		property.set_at(node, sample(gen, probs));
+		indicator_value_t sampled = sample(gen, probs);
+		property.set_at(node, sampled);
+		sum_categories += static_cast<double>(sampled);
+		++nodes_processed;
 	}
 
 	reporter.stop();
+	// F-M6: surface SIS kriging failures via stats (previously the counter
+	// below was stderr-only; the Python wrapper could not observe SIS
+	// solver failures and geo._last_kriging_stats stayed None). Counters
+	// are per-category kriging evaluations; mean is the average category.
+	{
+		kriging_stats_t stats;
+		stats.m_points_calculated = points_calculated;
+		stats.m_points_without_neighbours = points_without_neighbours;
+		stats.m_points_singularity = points_singularity;
+		stats.m_mean = nodes_processed > 0 ? sum_categories / static_cast<double>(nodes_processed) : 0;
+		stats.m_speed_nps = reporter.iterations_per_second();
+		set_kriging_stats(stats);
+	}
 	if (kriging_failures > 0)
 	{
 		fprintf(stderr,

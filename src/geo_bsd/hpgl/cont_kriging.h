@@ -6,6 +6,7 @@
 #include "progress_reporter.h"
 #include "kriging_stats.h"
 #include "output.h"
+#include <exception>
 #include <limits>
 #include <sstream>
 #ifdef _OPENMP
@@ -108,28 +109,38 @@ namespace hpgl
 		// BLAS thread control: prevent oversubscription when BLAS internal
 		// threading combines with OpenMP parallel region threads.
 		// Reference-counted: concurrent kriging calls safely share the
-		// process-wide BLAS thread count.
+		// process-wide BLAS thread count. RAII guard (F-M8): the process-wide
+		// BLAS thread count is restored even when an exception unwinds
+		// through the parallel region (previously a plain acquire/restore
+		// pair left BLAS pinned to 1 thread if bad_alloc escaped).
 #if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)
 		extern "C" void mkl_set_num_threads(int);
 		extern "C" int mkl_get_max_threads(void);
-		detail::blas_thread_acquire(mkl_get_max_threads, mkl_set_num_threads);
+		detail::blas_thread_guard_t blas_guard(mkl_get_max_threads, mkl_set_num_threads);
 #elif defined(__linux__)
 		// OpenBLAS: limit internal threads to 1 so they don't multiply
 		// with OpenMP threads. Declared extern to avoid header dependency.
 		extern "C" void openblas_set_num_threads(int);
 		extern "C" int openblas_get_num_threads(void);
-		detail::blas_thread_acquire(openblas_get_num_threads, openblas_set_num_threads);
+		detail::blas_thread_guard_t blas_guard(openblas_get_num_threads, openblas_set_num_threads);
 #elif defined(HPGL_USE_OPENBLAS)
 		// macOS OpenBLAS: limit internal threads to 1.  Declarations are
 		// at file scope (above) because Apple Clang rejects extern "C"
 		// inside function bodies.  Define HPGL_USE_OPENBLAS via CMake
 		// when building with -DBLA_VENDOR=OpenBLAS on macOS.
-		detail::blas_thread_acquire(openblas_get_num_threads, openblas_set_num_threads);
+		detail::blas_thread_guard_t blas_guard(openblas_get_num_threads, openblas_set_num_threads);
 #else
 		// macOS Accelerate / other BLAS: no thread-count API available.
 		// Accelerate manages its own thread pool via GCD and does not
 		// oversubscribe with OpenMP in the same way.
 #endif
+		// F-M9: an allocation failure (e.g. ws.A.resize at
+		// my_kriging_weights.h:256 with a huge coord_size) inside the OpenMP
+		// worksharing loop must not escape the region (that is UB → the C ABI
+		// catch never sees it; the process aborts). Catch inside the region,
+		// record the exception, cancel the loop, and rethrow after the region
+		// so the C API converts it to a clean hpgl_exception error.
+		std::exception_ptr parallel_error;
 #pragma omp parallel
 {
 		// Per-thread workspace: pre-allocates vectors once, reused across
@@ -138,7 +149,9 @@ namespace hpgl
 		int local_lap_count = 0;
 		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_singularity) reduction(+: points_processed) reduction(+: sum) 
 		for(node_index_t idx = 0; idx < idx_end; ++idx)	
-		{	
+		{
+			try
+			{
 			if (!input_property.is_informed(idx))
 			{				
 				cont_value_t value;
@@ -200,6 +213,26 @@ namespace hpgl
 #endif
 				}
 			}
+			} // try
+			catch (const std::exception &)
+			{
+				// F-M9: allocation failure inside the region. Record the
+				// exception and cancel the worksharing loop; rethrow after
+				// the region so the C API catch converts it to a clean
+				// error. Without this the exception escapes the region
+				// (UB per OpenMP §2.13.6) and the process aborts before
+				// the C ABI catch can run.
+				#pragma omp critical
+				{
+					if (!parallel_error)
+						parallel_error = std::current_exception();
+				}
+#ifdef _OPENMP
+				#pragma omp cancel for
+#else
+				break;
+#endif
+			}
 		}
 		// Flush remaining laps for this thread
 		if (local_lap_count > 0)
@@ -213,34 +246,29 @@ namespace hpgl
 		// construct has already ended, and OMP §2.17.1 requires the cancel
 		// directive to appear within the worksharing construct it targets.
 		// Cancellation is handled inside the loop body at lines 176-182.
-}	
+}
 
-		// Restore BLAS thread count after parallel region completes
-#if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)
-		detail::blas_thread_restore(mkl_set_num_threads);
-#elif defined(__linux__)
-		detail::blas_thread_restore(openblas_set_num_threads);
-#elif defined(HPGL_USE_OPENBLAS)
-		detail::blas_thread_restore(openblas_set_num_threads);
-#endif
+		// F-M9: rethrow the recorded allocation failure on the calling
+		// thread (outside the parallel region). The RAII blas_guard above is
+		// destroyed during unwind, restoring the BLAS thread count.
+		if (parallel_error)
+			std::rethrow_exception(parallel_error);
 
 		report.stop();
-		// points_calculated semantics depend on the failure-handling mode:
-		//  - mean_on_failure (SK/LVM): counts only KI_SUCCESS cells, so the
-		//    Python F-33 warning contract fires ("calculated < expected"
-		//    detects no-neighbour mean-fill) — reviewers verified this is the
-		//    intended mean_on_failure semantics.
-		//  - undefined_on_failure (OK): counts every uninformed cell the
-		//    kriging loop processed (successes + no-neighbour + singular), so
-		//    a fully-masked property reports points_calculated == grid size
-		//    and callers can distinguish "kriging ran but everything failed"
-		//    from "kriging never ran" via points_without_neighbours /
-		//    points_singularity (F-33 contract:
-		//    test_kriging_stats_detects_no_neighbours_on_sparse_data).
-		if (fh == kriging_failure_handling::mean_on_failure)
-			stats.m_points_calculated = points_calculated;
-		else
-			stats.m_points_calculated = points_calculated + points_without_neighbours + points_singularity;
+		// points_calculated semantics (F-N6): count ONLY successfully kriged
+		// cells in BOTH failure-handling modes.
+		//  - mean_on_failure (SK/LVM): KI_SUCCESS cells only — the Python
+		//    F-33 warning contract ("calculated < expected" detects
+		//    no-neighbour mean-fill) fires when failures occur.
+		//  - undefined_on_failure (OK): previously counted every uninformed
+		//    cell the loop processed (successes + no-neighbour + singular),
+		//    which made m_points_calculated == expected always and the
+		//    _check_kriging_failure_stats warning branch (geo.py:1272) a
+		//    no-op for OK. Counting successes only lets that branch fire.
+		//    The "ran but everything failed" vs "never ran" distinction is
+		//    preserved via points_without_neighbours / points_singularity,
+		//    which remain nonzero when cells were left undefined.
+		stats.m_points_calculated = points_calculated;
 		stats.m_points_without_neighbours = points_without_neighbours;
 		stats.m_points_singularity = points_singularity;
 		stats.m_mean = points_processed > 0 ? sum / points_processed : 0;

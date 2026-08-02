@@ -247,6 +247,34 @@ class TestGtsim2Ind:
         result = gtsim_2ind(grid, prop, sk_params, do_sk=False, pk_prop=pk_prop, seed=42)
         assert isinstance(result, ContProperty)
 
+    def test_gtsim_2ind_clamps_overshoot_pk_prop_without_mutating_caller(self):
+        """F-M15 regression: out-of-[0,1] pk probabilities are clamped (not
+        rejected) and the caller's pk_prop.data array is never mutated.
+
+        The 3ad77ee production-check commit changed the hard ValueError reject
+        into a clamp but added no regression test (its commit message claims
+        "gtsim out-of-[0,1] rejection" — no such test exists). The clamp was
+        also applied through a ravel view (`np.clip(..., out=pk_flat)`), which
+        permanently altered the caller's array in place (1D arrays are both
+        C- and F-contiguous, so ContProperty's require("F") returns the same
+        object). F-M15 clamps a copy: the caller's original array must keep
+        its overshoot values.
+        """
+        grid, prop = self._make_grid_prop()
+        sk_params = self._make_sk_params()
+
+        pk_data = np.full(prop.data.size, 0.5, dtype="float32")
+        pk_data[0] = -0.05
+        pk_data[1] = 1.05
+        orig = pk_data.copy()
+        pk_prop = ContProperty(pk_data, np.ones(prop.data.size, dtype="uint8"))
+
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=False, pk_prop=pk_prop, seed=42)
+        assert isinstance(result, ContProperty)
+        assert np.all(np.isfinite(result.data))
+        # The caller's original array must not have been written in place.
+        np.testing.assert_array_equal(pk_data, orig)
+
     def test_gtsim_2ind_with_custom_tk_params(self):
         """gtsim_2ind accepts custom tk_mean and tk_std_dev."""
         grid, prop = self._make_grid_prop()

@@ -14,6 +14,8 @@
 #include "neighbourhood_lookup.h"
 #include "is_informed_predicate.h"
 #include "cov_model.h"
+#include "kriging_stats.h"
+#include "api.h"
 #include <sstream>
 
 namespace hpgl
@@ -66,6 +68,10 @@ namespace hpgl
 		unsigned long kriging_failures = 0;
 		unsigned long kriging_skipped = 0;
 		unsigned long kriging_ndmin_skipped = 0;
+		unsigned long points_calculated = 0;
+		unsigned long points_without_neighbours = 0;
+		unsigned long points_singularity = 0;
+		double sum_simulated = 0;
 		for (node_index_t counter = 0, counter_end = property.size(); counter < counter_end; ++counter, report.next_lap())		
 		{
 			node = path_gen.next();
@@ -110,14 +116,35 @@ namespace hpgl
 			if (ki_result != ki_result_t::KI_SUCCESS)
 				++kriging_failures;
 
+			switch (ki_result)
+			{
+			case ki_result_t::KI_SUCCESS: ++points_calculated; break;
+			case ki_result_t::KI_NO_NEIGHBOURS: ++points_without_neighbours; break;
+			case ki_result_t::KI_SINGULARITY: ++points_singularity; break;
+			}
+
 			double value = ki_result == ki_result_t::KI_SUCCESS
 				? sample(gen, gaussian_cdf_t(mean, variance))
 				: sample(gen, gaussian_cdf_t(mp[node], 1.0));		
 			
 			property.set_at(node, value);
+			sum_simulated += value;
 			//neighbour_lookup.add_node(node);
 		}
 		report.stop();
+		// F-M6: surface kriging failures via stats (previously the counters
+		// below were stderr-only; the Python wrapper could not observe SGS
+		// solver failures and geo._last_kriging_stats stayed None). The
+		// points_calculated semantics mirror cont_kriging: KI_SUCCESS cells.
+		{
+			kriging_stats_t stats;
+			stats.m_points_calculated = points_calculated;
+			stats.m_points_without_neighbours = points_without_neighbours;
+			stats.m_points_singularity = points_singularity;
+			stats.m_mean = points_calculated > 0 ? sum_simulated / static_cast<double>(points_calculated) : 0;
+			stats.m_speed_nps = report.iterations_per_second();
+			set_kriging_stats(stats);
+		}
 		if (kriging_failures > 0)
 		{
 			fprintf(stderr,

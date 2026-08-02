@@ -82,6 +82,18 @@ namespace hpgl
 		{
 			if (m_clusterizer->limit_exceeded(node))
 			{
+				// F-M26 (documented divergence): this fallback is the plain
+				// neighbour_lookup_t::find — covariance-ranked selection up
+				// to m_max_neighbours, NO octant-diversity enforcement (the
+				// fast path below applies octant diversity).  The fallback
+				// triggers when the node's 3×3×3 cluster box contains an
+				// over-limit cluster (dense data regions), so a single run
+				// mixes semantics by local density: sparse areas get octant
+				// diversity, dense areas get pure covariance ranking.
+				// Deliberate: aligning them would change neighbour selection
+				// (and kriging results) in dense regions and requires
+				// rewriting the shared neighbour_lookup_t::find used by
+				// cokriging too — out of scope for F-M26.
 				m_nlookup.find(node, defineds, node_coord, indices, coords);				
 			}
 			else
@@ -171,6 +183,9 @@ namespace hpgl
 				// spatial octant (8 octants in 3D) before filling remaining slots.
 				// This prevents all neighbours from concentrating in one direction
 				// when data is clustered on one side of the estimation point.
+				// F-M26: FAST-PATH-ONLY — the fallback branch above
+				// (m_nlookup.find, taken when a cluster overflows its limit)
+				// does NOT enforce octant diversity.  See the fallback comment.
 				indices.clear();
 				coords.clear();
 				const size_t max_nb = m_max_neighbours;

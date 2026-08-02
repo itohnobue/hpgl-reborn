@@ -12,6 +12,9 @@
 #include "neighbourhood_lookup.h"
 #include "is_informed_predicate.h"
 #include "cov_model.h"
+#include "kriging_stats.h"
+#include "api.h"
+#include <exception>
 
 namespace hpgl
 {
@@ -165,22 +168,33 @@ namespace hpgl
 		// BLAS thread control: prevent oversubscription when BLAS internal
 		// threading combines with OpenMP parallel region threads.
 		// Reference-counted: concurrent kriging calls safely share the
-		// process-wide BLAS thread count.
+		// process-wide BLAS thread count. RAII guard (F-M8): restored even
+		// when an exception unwinds through the parallel region.
 #if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)
 		extern "C" void mkl_set_num_threads(int);
 		extern "C" int mkl_get_max_threads(void);
-		detail::blas_thread_acquire(mkl_get_max_threads, mkl_set_num_threads);
+		detail::blas_thread_guard_t blas_guard(mkl_get_max_threads, mkl_set_num_threads);
 #elif defined(__linux__)
 		// OpenBLAS: limit internal threads to 1 so they don't multiply
 		// with OpenMP threads. Declared extern to avoid header dependency.
 		extern "C" void openblas_set_num_threads(int);
 		extern "C" int openblas_get_num_threads(void);
-		detail::blas_thread_acquire(openblas_get_num_threads, openblas_set_num_threads);
+		detail::blas_thread_guard_t blas_guard(openblas_get_num_threads, openblas_set_num_threads);
 #else
 		// macOS Accelerate / other BLAS: no thread-count API available.
 		// Accelerate manages its own thread pool via GCD and does not
 		// oversubscribe with OpenMP in the same way.
 #endif
+		// F-M9: catch allocation failures (correct_order_relations ccdf1/ccdf2,
+		// ws.A.resize) inside the region and rethrow after it, so the C ABI
+		// catch converts them to a clean error instead of std::terminate.
+		// F-M5: track per-category kriging outcomes for stats population.
+		unsigned long points_calculated = 0;
+		unsigned long points_without_neighbours = 0;
+		unsigned long points_singularity = 0;
+		unsigned long nodes_processed = 0;
+		double sum_categories = 0;
+		std::exception_ptr parallel_error;
 		#pragma omp parallel
 		{
 			int local_lap_count = 0;
@@ -189,9 +203,11 @@ namespace hpgl
 			// (node × indicator) pair. Vectors are re-filled on each
 			// kriging_interpolation_ws call — same memory, zero heap churn.
 			kriging_ws_t<indicator_value_t, coord_t> ws;
-			#pragma omp for schedule(dynamic)
+			#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_singularity) reduction(+: nodes_processed) reduction(+: sum_categories)
 			for (size_t node_idx = 0; node_idx < size; ++node_idx)
 			{
+				try
+				{
 				probs.clear();
 				for (size_t idx = 0; idx < params.m_category_count; ++idx)
 				{
@@ -202,6 +218,12 @@ namespace hpgl
 					if (ki_result != ki_result_t::KI_SUCCESS)
 					{
 						prob = mps[idx][node_idx];
+					}
+					switch (ki_result)
+					{
+					case ki_result_t::KI_SUCCESS: ++points_calculated; break;
+					case ki_result_t::KI_NO_NEIGHBOURS: ++points_without_neighbours; break;
+					case ki_result_t::KI_SINGULARITY: ++points_singularity; break;
 					}
 					probs.push_back(prob);
 				}
@@ -216,7 +238,10 @@ namespace hpgl
 				// Apply order relations correction to ensure monotonicity and [0,1] bounds
 				correct_order_relations(probs);
 
-				output_property.set_at(node_idx, most_probable_category(probs));			
+				indicator_value_t category = most_probable_category(probs);
+				output_property.set_at(node_idx, category);
+				sum_categories += static_cast<double>(category);
+				++nodes_processed;
 
 				// Batch progress updates to reduce critical section contention.
 				// Each thread accumulates laps locally and flushes in batches,
@@ -243,6 +268,24 @@ namespace hpgl
 #endif
 				}
 			}
+				} // try
+				catch (const std::exception &)
+				{
+					// F-M9: allocation failure (correct_order_relations
+					// ccdf1/ccdf2, ws.A.resize) inside the region. Record and
+					// cancel; rethrow after the region so the C ABI catch
+					// converts it to a clean error instead of std::terminate.
+					#pragma omp critical
+					{
+						if (!parallel_error)
+							parallel_error = std::current_exception();
+					}
+#ifdef _OPENMP
+					#pragma omp cancel for
+#else
+					break;
+#endif
+				}
 		}
 		// Flush remaining laps for this thread
 		if (local_lap_count > 0)
@@ -258,14 +301,27 @@ namespace hpgl
 		// Cancellation is handled inside the loop body at lines 216-222.
 	}
 
-		// Restore BLAS thread count after parallel region completes
-#if defined(HPGL_USE_MKL) || defined(USE_INTEL_MKL)
-		detail::blas_thread_restore(mkl_set_num_threads);
-#elif defined(__linux__)
-		detail::blas_thread_restore(openblas_set_num_threads);
-#endif
+		// F-M9: rethrow the recorded allocation failure on the calling
+		// thread (outside the parallel region). The RAII blas_guard above is
+		// destroyed during unwind, restoring the BLAS thread count.
+		if (parallel_error)
+			std::rethrow_exception(parallel_error);
 
 		report.stop();
+		// F-M5: populate kriging stats (previously indicator kriging never
+		// called set_kriging_stats, leaving stale stats from a prior
+		// kriging observable via hpgl_get_kriging_stats — api.h:188-193
+		// zero-init promise violated). Points are per-category kriging
+		// evaluations; mean is the average output category.
+		{
+			kriging_stats_t stats;
+			stats.m_points_calculated = points_calculated;
+			stats.m_points_without_neighbours = points_without_neighbours;
+			stats.m_points_singularity = points_singularity;
+			stats.m_mean = nodes_processed > 0 ? sum_categories / static_cast<double>(nodes_processed) : 0;
+			stats.m_speed_nps = report.iterations_per_second();
+			set_kriging_stats(stats);
+		}
 		{
 			std::ostringstream oss;
 			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";

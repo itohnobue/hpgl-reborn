@@ -555,15 +555,13 @@ class TestKrigingFailureTracking:
     def test_kriging_stats_after_sgs_simulation(
         self, small_cont_prop, small_grid, sample_cov_model
     ):
-        """After SGS simulation, kriging stats are not populated.
+        """After SGS simulation, kriging stats ARE populated (F-M6/F-N4).
 
-        Deterministic by construction: SGS does not call set_kriging_stats()
-        in the current C++ build, so the C++ stats must be UNCHANGED by the
-        call. Snapshotting before/after removes the test-order dependency
-        (a prior kriging test may have left points_calculated > 0, which is
-        stale data SGS must not touch). When the C++ SGS path is updated to
-        call set_kriging_stats(), this assertion will fail and the contract
-        can be re-assessed.
+        F-M6 wiring: the C++ SGS path now calls set_kriging_stats with the
+        simulation's kriging-outcome counters, so the C-level stats must be
+        CHANGED by the call (previously SGS left them untouched and the
+        Python sentinel stayed None). Snapshotting before/after removes the
+        test-order dependency.
         """
         from geo_bsd.hpgl_wrap import _HAS_KRIGING_STATS, get_kriging_stats
         from geo_bsd.sgs import sgs_simulation
@@ -585,8 +583,11 @@ class TestKrigingFailureTracking:
         )
 
         stats_after = dict(get_kriging_stats())
-        assert stats_after == stats_before, (
-            f"SGS must not modify kriging stats; got {stats_before} -> {stats_after}"
+        assert stats_after != stats_before, (
+            f"SGS must populate kriging stats (F-M6); got {stats_before} -> {stats_after}"
+        )
+        assert stats_after["points_calculated"] > 0, (
+            f"Expected positive points_calculated after SGS, got {stats_after}"
         )
 
     def test_kriging_stats_detects_no_neighbours_on_sparse_data(
@@ -615,9 +616,12 @@ class TestKrigingFailureTracking:
         )
 
         stats = get_kriging_stats()
-        # When ALL cells have no neighbours, all points should fail
-        # points_calculated tracks total cells, points_without_neighbours tracks failures
-        assert stats["points_calculated"] > 0, f"Stats: {stats}"
+        # F-N6: points_calculated counts ONLY successfully kriged cells
+        # (cont_kriging.h counts KI_SUCCESS cells in both failure modes).
+        # With ALL cells uninformed there are no successes, so
+        # points_calculated == 0 — the _check_kriging_failure_stats warning
+        # branch (calculated < expected) is what now surfaces this case.
+        assert stats["points_calculated"] == 0, f"Stats: {stats}"
         # All cells lack neighbours on fully masked input
         assert stats["points_without_neighbours"] > 0, (
             f"Expected failure stats on sparse data, got {stats}"

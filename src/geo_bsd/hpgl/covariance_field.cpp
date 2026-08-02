@@ -57,6 +57,14 @@ void covariance_field_t::init(
 		int zradius,
 		const cov_model_t & cov)	
 {
+	// F-M3: same overflow/INT_MAX guard its sibling
+	// precalculated_covariances_t::init has (I2-24).  The diameter
+	// arithmetic below (xradius*2+1) and the m_data box allocation would
+	// otherwise overflow/hang for legal-but-extreme radii.  Throws
+	// hpgl_exception (catchable by Python) — never abort().
+	validate_covariance_radiuses_or_throw(xradius, yradius, zradius,
+		"covariance_field_t::init");
+
 	m_xradius = (xradius);
 	m_yradius = (yradius);
 	m_zradius = (zradius);

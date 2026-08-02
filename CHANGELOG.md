@@ -2,6 +2,20 @@
 
 All notable changes to HPGL Reborn.
 
+## [2.0.1] — 2026-08
+
+### Fixed
+- **Resource-exhaustion hardening** — `max_neighbours` hard cap added to `hpgl_indicator_kriging` (the only kriging entry point still missing it); radius magnitude guards on covariance-field construction across all kriging paths; work-based caps on point-set and grid variogram computation; tightened clusterizer allocation bound
+- **Kriging failure observability** — cokriging, ordinary kriging, median IK, indicator kriging, SGS, and SIS now populate kriging stats that reach the Python layer (no silent mean-fill); `_last_kriging_stats` updates serialized under the FFI lock; stale-stat exposure removed from the public `get_kriging_stats()`
+- **CDF numerical robustness** — float32 tail clamp applied after downcast (no spurious monotonicity error on large grids); `CdfData` enforces contiguity before FFI
+- **Variogram correctness** — Python point-set scan now skips self-pairs to match the C++ kernel; `CubeScan` guards template-extent-vs-grid; `CalcVariogramFunction` tuple-path indexing fixed; `CalcVariogramsFromPointSet` enforces `ndim==1` + contiguity
+- **GTSIM** — out-of-[0,1] clamping no longer mutates the caller's array; documented and regression-tested
+- **File I/O security** — `O_EXCL` + unique temp names on C++ and Python writers, `O_NOFOLLOW` on C++ fast reads, property-name validation on all write paths (C++ and Python), GSLIB ±1.0e21 missing-value trimming on all read paths
+- **OpenMP robustness** — BLAS thread-count guard is now RAII/exception-safe; exceptions no longer escape parallel regions (catchable errors instead of `std::terminate`); progress-callback re-entry from worker threads prevented
+
+### Added
+- Regression tests for the fixed issues: 2-category SIS no-spurious-warning, SGS `ndmin`, GTSIM clamp, CDF multi-value tail + monotonicity, variogram tuple-path + self-pair equivalence, `CubeScan` guard, property-name injection, GSLIB trimming round-trips
+
 ## [2.0.0] — 2026-07
 
 ### Added

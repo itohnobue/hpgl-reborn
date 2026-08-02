@@ -344,9 +344,18 @@ hpgl_simple_cokriging_mark2(
 /// C++ helper: stores kriging statistics in thread-local storage.
 /// Called by ordinary_kriging, simple_kriging, and lvm_kriging
 /// after cont_kriging completes. Retrieve via hpgl_get_kriging_stats().
+/// Also called by median IK, indicator kriging, SGS, and SIS so the
+/// api.h:188-191 zero-init promise holds after ANY kriging/simulation run
+/// (F-M5/F-M6).
 namespace hpgl {
 	struct kriging_stats_t;
 	void set_kriging_stats(const kriging_stats_t & stats);
+	/// Zeroes the thread-local kriging statistics. Every kriging/simulation
+	/// C API entry point calls this before running so a stats-less or
+	/// failed call never leaves stale stats from a prior call observable via
+	/// hpgl_get_kriging_stats() (F-N2: api.h:188-191 "zero-initialized stats
+	/// if no kriging call has been made").
+	void reset_kriging_stats();
 }
 #endif
 

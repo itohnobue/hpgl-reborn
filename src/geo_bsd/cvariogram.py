@@ -553,6 +553,23 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
                 f"CalcVariogramsFromPointSet: point_set['{key}'] must be a float32 ndarray, "
                 f"got {type(arr).__name__}"
             )
+    # F-M13-py: the C++ point-set scan reads xs/ys/zs/values LINEARLY via
+    # pointer arithmetic with no shape/strides metadata (variograms.cpp
+    # F-M13-cpp contract), so a non-1D array or a non-contiguous view would
+    # be misread as a contiguous flat buffer (garbage values or OOB reads).
+    # Enforce ndim == 1 and copy non-contiguous views to contiguous buffers,
+    # mirroring the CStackLayers sibling precedent (cvariogram.py:627-632,
+    # 659-661). numpy.ascontiguousarray returns the same array when already
+    # C-contiguous (no copy); the cont_point_set_t keeps a reference to the
+    # NEW arrays via _refs below.
+    for key in ("X", "Y", "Z", "Property"):
+        arr = point_set[key]
+        if arr.ndim != 1:
+            raise ValueError(
+                f"CalcVariogramsFromPointSet: point_set['{key}'] must be "
+                f"1-dimensional, got {arr.ndim}d"
+            )
+    point_set = {key: numpy.ascontiguousarray(arr) for key, arr in point_set.items()}
     if variogram is None:
         variogram = numpy.array([0] * templ.num_lags, dtype="float32")
 

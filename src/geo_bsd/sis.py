@@ -36,17 +36,11 @@ from .validation import (
     ValidationConstants,
 )
 
-# Simulation-specific failure statistics are NOT available in the current
-# C++ build: the SIS path tracks kriging_failures locally in
-# sequential_indicator_simulation.cpp but does NOT call set_kriging_stats().
-# Calling get_kriging_stats() here would return stale data from the last
-# continuous kriging call (SK/LVM/OK) — a different algorithm. We explicitly
-# set geo._last_kriging_stats (the documented inspection point in geo.py)
-# to None BEFORE the FFI call as an honest sentinel: "no simulation stats
-# available." Resetting before the call is exception-safe — stale stats
-# from a prior kriging call never survive an error raised by C++.
-# Forward-compatible: when C++ is updated to call set_kriging_stats() in
-# the SIS path, the wiring can be re-enabled here.
+# Simulation failure statistics ARE now populated by the C++ SIS path
+# (F-M6: sequential_indicator_simulation.cpp calls set_kriging_stats with
+# the kriging outcome counters). The Python wrapper consumes them via
+# geo._finalize_kriging_stats (populate + raise on failure counters)
+# under _hpgl_call_lock, mirroring the continuous-kriging wrappers.
 
 
 def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
@@ -126,11 +120,10 @@ def sis_simulation(
         If marginal probabilities do not sum to 1.0 (non-LVM mode).
     RuntimeError
         If the underlying C++ simulation fails."""
-    # Reset the documented kriging-stats inspection point BEFORE the FFI
-    # call (exception-safe): SIS does not populate stats, so a successful
-    # call leaves it None; a C++ error leaves it None instead of a stale
-    # dict from a prior kriging call (see module comment).
-    _geo_module._last_kriging_stats = None
+    # Reset the documented kriging-stats inspection point and populate from
+    # the C++ SIS stats under _hpgl_call_lock (F-M6/F-N12) — see the module
+    # comment. The reset must run INSIDE the lock so each call's sentinel
+    # write is atomic with respect to other kriging/simulation threads.
 
     # Raise on unexpected keyword arguments to catch parameter name typos
     if params:
@@ -262,8 +255,25 @@ def sis_simulation(
                 )
             means.append(_create_hpgl_float_array(marginal_probs[i], grid))
 
+    # Expected number of kriging evaluations the simulation should perform.
+    # The C++ SIS counting differs by branch (sequential_indicator_simulation.cpp):
+    # the 2-category median-SIS branch does ONE kriging evaluation per node
+    # (:122-155), while the 3+-category branch does one evaluation per
+    # indicator category (:156-179), so points_calculated is incremented
+    # once per category per node there. The expected count must mirror that
+    # per-branch counting: (uninformed, unmasked cells) × evaluations_per_node,
+    # where evaluations_per_node is 1 for 2 categories and len(data) otherwise.
+    # Computed before the lock (cheap numpy sum) — keeps the lock hold minimal;
+    # the C++ SIS counters decide whether the failure warning fires.
+    uninformed = grid.x * grid.y * grid.z - int(numpy.sum(out_prop.mask > 0))
+    if mask is not None:
+        uninformed = int(numpy.sum((out_prop.mask.ravel() == 0) & (mask.ravel() != 0)))
+    evaluations_per_node = 1 if len(data) == 2 else len(data)
+    expected = uninformed * evaluations_per_node
+
     if not is_lvm:
         with _hpgl_call_lock:
+            _geo_module._reset_kriging_stats()
             call_sis_simulation(
                 prop_2,
                 ikps,
@@ -271,8 +281,10 @@ def sis_simulation(
                 seed,
                 _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
             )
+            _geo_module._finalize_kriging_stats(expected, "sis_simulation")
     else:
         with _hpgl_call_lock:
+            _geo_module._reset_kriging_stats()
             call_sis_simulation_lvm(
                 prop_2,
                 ikps,
@@ -282,10 +294,11 @@ def sis_simulation(
                 _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
                 use_correlogram,
             )
+            _geo_module._finalize_kriging_stats(expected, "sis_simulation")
 
-    # geo._last_kriging_stats was reset to None before the FFI call above
-    # (see module comment) — SIS does not populate stats in the current
-    # C++ build, so it remains None as an honest sentinel.
+    # geo._last_kriging_stats was populated from the C++ SIS stats inside
+    # the lock above (see module comment) — the sentinel now carries the
+    # simulation's failure counters.
 
     # Validate output data for NaN/Inf after C++ computation.
     # C++ simulation can return NaN/Inf from degenerate matrices,

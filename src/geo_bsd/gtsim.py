@@ -145,7 +145,10 @@ def gtsim_2ind(
         unless pk_prop is provided. Kept for backward compatibility.
         (default: True)
     pk_prop : ContProperty, optional
-        Pre-computed probability property (if None, will compute via SK)
+        Pre-computed probability property (if None, will compute via SK).
+        Values slightly outside [0, 1] (kriging overshoots) are clamped to
+        [0, 1] on an internal copy — the caller's pk_prop.data array is
+        never mutated (F-M15).
     sgs_params : dict, optional
         Sequential Gaussian Simulation parameters (if None, uses sk_params)
     tk_mean : float, optional
@@ -219,8 +222,19 @@ def gtsim_2ind(
     # before the inverse-CDF threshold calculation. Clamp rather than
     # reject so partially-informed data works (a hard reject previously
     # made gtsim_2ind unusable with realistic partially-informed props).
+    #
+    # F-M15: the clamp is applied to a NEW array, never the caller's
+    # pk_prop.data. ravel(order="K") returns a VIEW of pk_prop.data (1D
+    # arrays are both C- and F-contiguous, so ContProperty's require("F")
+    # returns the same object), and np.clip(..., out=view) would write the
+    # clamped values back into the caller's array in place — permanently
+    # altering a user-supplied pk_prop whose overshoots were legitimate.
+    # Replacing the reference (np.clip without out=) leaves the caller's
+    # original array object untouched; every downstream step (tk_calculation,
+    # the restore below, pseudo_gaussian_transform) then sees the clamped
+    # copy, matching the GSLIB clamp semantics.
     if np.any((pk_flat < 0.0) | (pk_flat > 1.0)):
-        np.clip(pk_flat, 0.0, 1.0, out=pk_flat)
+        pk_prop.data = np.clip(pk_prop.data, 0.0, 1.0)
 
     # 2. calculate tk_prop
     # t0_prop = 0

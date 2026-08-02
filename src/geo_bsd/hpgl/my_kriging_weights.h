@@ -70,6 +70,32 @@ namespace hpgl
 				setter(blas_saved_threads());
 			}
 		}
+
+		/// RAII wrapper around blas_thread_acquire/blas_thread_restore (F-M8).
+		/// Acquires the guard on construction and restores on destruction,
+		/// so the process-wide BLAS thread count is restored even when an
+		/// exception (e.g. bad_alloc from ws.A.resize inside the OpenMP
+		/// worksharing loop) unwinds through the kriging parallel region.
+		/// Previously the acquire/restore calls were plain functions paired
+		/// manually: an exception between them left BLAS pinned to 1 thread
+		/// for the process lifetime, and an exception escaping the region was
+		/// UB (OpenMP requires exceptions be caught within the region).
+		class blas_thread_guard_t {
+		public:
+			blas_thread_guard_t(int (*getter)(), void (*setter)(int))
+				: m_setter(setter)
+			{
+				blas_thread_acquire(getter, setter);
+			}
+			~blas_thread_guard_t()
+			{
+				blas_thread_restore(m_setter);
+			}
+			blas_thread_guard_t(const blas_thread_guard_t &) = delete;
+			blas_thread_guard_t & operator=(const blas_thread_guard_t &) = delete;
+		private:
+			void (*m_setter)(int);
+		};
 	}
 
 	// SECURITY FIX: Safe allocation helper to prevent integer overflow

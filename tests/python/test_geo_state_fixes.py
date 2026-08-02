@@ -103,8 +103,13 @@ def _sis_data(count):
 class TestSimulationStatsSentinel:
     """F-11: sgs/sis write the documented geo._last_kriging_stats, not a dead local."""
 
-    def test_sgs_simulation_resets_geo_last_kriging_stats(self):
-        """sgs_simulation clears stale geo._last_kriging_stats (F-11)."""
+    def test_sgs_simulation_populates_geo_last_kriging_stats(self):
+        """sgs_simulation populates geo._last_kriging_stats (F-11 + F-M6/F-N4).
+
+        F-M6 wiring: the C++ SGS path now calls set_kriging_stats, so a
+        successful simulation leaves the documented inspection point
+        populated with the simulation's failure counters (previously None).
+        """
         from geo_bsd import geo
         from geo_bsd.sgs import sgs_simulation
 
@@ -116,10 +121,15 @@ class TestSimulationStatsSentinel:
             radiuses=(3, 3, 2), max_neighbours=8,
             cov_model=_cov_model(), seed=42, kriging_type="sk",
         )
-        assert geo._last_kriging_stats is None
+        assert geo._last_kriging_stats is not None, (
+            "geo._last_kriging_stats should be populated after sgs_simulation"
+        )
+        assert geo._last_kriging_stats["points_calculated"] > 0, (
+            f"Expected positive points_calculated after SGS, got {geo._last_kriging_stats}"
+        )
 
-    def test_sis_simulation_resets_geo_last_kriging_stats(self):
-        """sis_simulation clears stale geo._last_kriging_stats (F-11)."""
+    def test_sis_simulation_populates_geo_last_kriging_stats(self):
+        """sis_simulation populates geo._last_kriging_stats (F-11 + F-M6/F-N4)."""
         from geo_bsd import geo
         from geo_bsd.sis import sis_simulation
 
@@ -130,7 +140,12 @@ class TestSimulationStatsSentinel:
             prop=prop, grid=grid, data=_sis_data(3),
             seed=42, marginal_probs=[0.33, 0.33, 0.34],
         )
-        assert geo._last_kriging_stats is None
+        assert geo._last_kriging_stats is not None, (
+            "geo._last_kriging_stats should be populated after sis_simulation"
+        )
+        assert geo._last_kriging_stats["points_calculated"] > 0, (
+            f"Expected positive points_calculated after SIS, got {geo._last_kriging_stats}"
+        )
 
     def test_dead_module_local_shadows_removed(self):
         """The dead sgs._/sis._last_kriging_stats shadow globals are gone (F-11)."""

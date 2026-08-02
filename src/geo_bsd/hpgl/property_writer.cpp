@@ -1,9 +1,11 @@
 #include "stdafx.h"
 
+#include <atomic>
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cctype>
 
 #include "property_array.h"
 #include "property_writer.h"
@@ -17,10 +19,48 @@
 
 namespace hpgl
 {
+	namespace {
+
+		/// Shared property-name validation contract (F-N16). Names written into
+		/// INC/GSLIB headers must round-trip through every reader:
+		///   - non-empty;
+		///   - no control characters (C0 0x00-0x1F or DEL 0x7F) — in particular
+		///     no '\n'/'\r', which would inject phantom header lines;
+		///   - no leading or trailing whitespace — readers skip
+		///     whitespace-leading lines, silently shifting the data off-by-one;
+		///   - must not start with "--" (comment marker skipped by readers) or
+		///     "/" (end-of-data marker in the INC fast reader).
+		/// The Python layer applies the same rule at its call sites.
+		void validate_property_name(const std::string & name)
+		{
+			if (name.empty())
+				throw hpgl_exception("validate_property_name", "Property name must not be empty.");
+			const char first = name[0];
+			if (name.size() >= 2 && first == '-' && name[1] == '-')
+				throw hpgl_exception("validate_property_name", "Property name must not start with \"--\".");
+			if (first == '/')
+				throw hpgl_exception("validate_property_name", "Property name must not start with '/'.");
+			if (isspace(static_cast<unsigned char>(first)) ||
+			    isspace(static_cast<unsigned char>(name[name.size() - 1])))
+				throw hpgl_exception("validate_property_name", "Property name must not have leading or trailing whitespace.");
+			for (size_t i = 0; i < name.size(); ++i)
+			{
+				const unsigned char c = static_cast<unsigned char>(name[i]);
+				if (c < 0x20 || c == 0x7f)
+					throw hpgl_exception("validate_property_name", "Property name must not contain control characters.");
+			}
+		}
+
+	} // anonymous namespace
+
 	void property_writer_t :: init(
 		const std::string & filename,
 		const std::string& property_name)
 	{
+		// F-N16: reject names that cannot round-trip through every reader
+		// (see validate_property_name). Throws hpgl_exception, surfaced as a
+		// clean FFI error by the api.cpp callers.
+		validate_property_name(property_name);
 		m_file_name = filename;
 		m_property_name = property_name;
 	}
@@ -48,42 +88,88 @@ namespace hpgl
 	namespace {
 
 		typedef std::shared_ptr<FILE> file_t;
-		file_t open_file_checked(const char * filename, const char * mode)
+
+		[[noreturn]] void throw_open_error(const char * filename)
 		{
-			auto throw_open_error = [filename]() {
-				int open_errno = errno;
-				// Use basename to avoid leaking full filesystem path in error messages.
-				const char * bn = strrchr(filename, '/');
-				if (bn == nullptr) bn = filename;
-				else ++bn; // skip '/'
-				std::ostringstream oss;
-				oss << "Can't open file '" << bn << "': " << strerror(open_errno) << ".";
-				throw hpgl_exception("open_file_checked", oss.str());
-			};
-#ifdef _WIN32
-			FILE * f = fopen(filename, mode);
-			if (f == 0)
-				throw_open_error();
-#else
-			// Open the temp path without following symlinks (I2-58). Plain
-			// fopen("w+") follows an attacker-placed symlink at <target>.tmp
-			// and writes through it, defeating the Python layer's O_NOFOLLOW
-			// path validation. Mirrors validation.py safe_open_write
-			// (O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW). Callers always pass "w+",
-			// which requires a read-write fd for fdopen compatibility.
-			int flags = O_RDWR | O_CREAT | O_TRUNC | O_NOFOLLOW;
-			int fd = open(filename, flags, 0666);
-			if (fd < 0)
-				throw_open_error();
-			FILE * f = fdopen(fd, mode);
-			if (f == 0)
+			int open_errno = errno;
+			// Use basename to avoid leaking full filesystem path in error messages.
+			const char * bn = strrchr(filename, '/');
+			if (bn == nullptr) bn = filename;
+			else ++bn; // skip '/'
+			std::ostringstream oss;
+			oss << "Can't open file '" << bn << "': " << strerror(open_errno) << ".";
+			throw hpgl_exception("open_tmp_file_checked", oss.str());
+		}
+
+#ifndef _WIN32
+		/// Open a uniquely-named temporary file next to `filename` for the
+		/// atomic-rename write pattern (F-M19). The name embeds the pid and a
+		/// process-local counter, so it cannot be predicted or pre-created by
+		/// an attacker with directory write access: the previous deterministic
+		/// `<target>.tmp` path allowed a hardlink pre-creation that O_TRUNC
+		/// would follow, truncating the linked victim (O_NOFOLLOW blocks
+		/// symlinks only), and concurrent writers collided on the fixed name.
+		/// O_CREAT|O_EXCL makes the create atomic — a symlink or hardlink
+		/// placed at the path is never followed, and a stale temp from a
+		/// crashed run (pid reuse) is skipped by retrying the next counter
+		/// value. On success `out_path` receives the created path for the RAII
+		/// guard and the final rename(). Created with mode 0644 (F-N23: the
+		/// previous 0666 & umask left outputs world-readable on permissive
+		/// umasks). Callers pass "w+", which requires a read-write fd for
+		/// fdopen compatibility.
+		file_t open_tmp_file_checked(
+				const std::string & filename,
+				const std::string & mode,
+				std::string & out_path)
+		{
+			static std::atomic<unsigned long> counter{0};
+			const long pid = static_cast<long>(getpid());
+			const int max_attempts = 64;
+			for (int attempt = 0; attempt < max_attempts; ++attempt)
 			{
-				int fdopen_errno = errno;
-				close(fd);
-				errno = fdopen_errno;
-				throw_open_error();
+				std::ostringstream oss;
+				oss << filename << ".tmp." << pid << "." << counter.fetch_add(1);
+				std::string candidate = oss.str();
+				int fd = ::open(candidate.c_str(), O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW, 0644);
+				if (fd < 0)
+				{
+					if (errno == EEXIST)
+						continue; // stale temp from a crashed run — try next name
+					throw_open_error(candidate.c_str());
+				}
+				FILE * f = fdopen(fd, mode.c_str());
+				if (f == 0)
+				{
+					int fdopen_errno = errno;
+					close(fd);
+					std::remove(candidate.c_str()); // don't orphan the temp file
+					errno = fdopen_errno;
+					throw_open_error(candidate.c_str());
+				}
+				out_path = candidate;
+				return file_t(f, [](FILE* fp) {
+					if (fflush(fp) != 0)
+						fprintf(stderr, "HPGL: fflush failed — buffered data may be lost\n");
+					if (fclose(fp) != 0)
+						fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");
+				});
 			}
-#endif
+			throw hpgl_exception("open_tmp_file_checked",
+				"Could not create a unique temporary file.");
+		}
+#else
+		// _WIN32: fopen() has no O_NOFOLLOW/O_EXCL equivalent (F-N20 — Windows
+		// junction following and the deterministic temp name are documented
+		// limitations on this platform; behavior is unchanged).
+		file_t open_tmp_file_checked(
+				const std::string & filename,
+				const std::string & mode,
+				std::string & out_path)
+		{
+			FILE * f = fopen(filename.c_str(), mode.c_str());
+			if (f == 0)
+				throw_open_error(filename.c_str());
+			out_path = filename;
 			return file_t(f, [](FILE* fp) {
 				if (fflush(fp) != 0)
 					fprintf(stderr, "HPGL: fflush failed — buffered data may be lost\n");
@@ -91,6 +177,7 @@ namespace hpgl
 					fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");
 			});
 		}
+#endif
 
 		/// RAII guard that removes the temp file unless the atomic rename
 		/// succeeded. Any throw path (write_value failure, fflush failure,
@@ -123,10 +210,10 @@ namespace hpgl
 			// This prevents data loss if the process crashes mid-write:
 			// fopen("w+") would have truncated the original before any
 			// data was written, leaving a partial or empty file.
-			std::string tmp_filename = std::string(filename) + ".tmp";
+			std::string tmp_filename;
+			file_t f = open_tmp_file_checked(filename, "w+", tmp_filename);
 			tmp_file_guard_t tmp_guard(tmp_filename);
 			{
-				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
 				if (fprintf(f.get(), "%s\n", property_name) < 0)
 					throw hpgl_exception("write_property_cont", "Error writing property name.");
 
@@ -176,10 +263,10 @@ namespace hpgl
 
 			// Write to a temporary file first, then atomically rename
 			// (same atomic-write pattern as write_property_cont).
-			std::string tmp_filename = std::string(filename) + ".tmp";
+			std::string tmp_filename;
+			file_t f = open_tmp_file_checked(filename, "w+", tmp_filename);
 			tmp_file_guard_t tmp_guard(tmp_filename);
 			{
-				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
 				if (fprintf(f.get(), "%s\n", property_name) < 0)
 					throw hpgl_exception("write_property_ind", "Error writing property name.");
 
@@ -240,11 +327,10 @@ namespace hpgl
 
 			// Write to a temporary file first, then atomically rename
 			// (same atomic-write pattern as write_property_cont).
-			std::string tmp_filename = std::string(filename) + ".tmp";
+			std::string tmp_filename;
+			file_t f = open_tmp_file_checked(filename, "w+", tmp_filename);
 			tmp_file_guard_t tmp_guard(tmp_filename);
 			{
-				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
-
 				int var_num = 1;
 				write_header(f.get(), var_num, property_name);
 
@@ -286,11 +372,10 @@ namespace hpgl
 
 			// Write to a temporary file first, then atomically rename
 			// (same atomic-write pattern as write_property_cont).
-			std::string tmp_filename = std::string(filename) + ".tmp";
+			std::string tmp_filename;
+			file_t f = open_tmp_file_checked(filename, "w+", tmp_filename);
 			tmp_file_guard_t tmp_guard(tmp_filename);
 			{
-				file_t f = open_file_checked(tmp_filename.c_str(), "w+");
-
 				int var_num = 1;
 				write_header(f.get(), var_num, property_name);
 

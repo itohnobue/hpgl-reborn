@@ -480,6 +480,20 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         FIndex = FIndex[Filter]
         FDistance2 = FDistance2[Filter]
 
+        # F-M24: skip the self-pair (j == i) to match the C++ point-set scan
+        # (variograms.cpp:793 `if (idx1 == idx2) continue;`). With
+        # FirstLagDistance=0 the first lag band starts at distance 0, so each
+        # point's self-pair passes the distance filter and lands in lag 0,
+        # adding a zero-variance pair and +1 count that dilutes the lag-0
+        # variogram the C++ never counts. Unconditional is exact: when
+        # FirstLagDistance > 0 the self-pair is already excluded by the
+        # MinDistance2 distance filter (distance 0 < MinDistance2), so this
+        # filter is a no-op there.
+        SelfPairFilter = FIndex != i
+        FDX, FDY, FDZ = FDX[SelfPairFilter], FDY[SelfPairFilter], FDZ[SelfPairFilter]
+        FIndex = FIndex[SelfPairFilter]
+        FDistance2 = FDistance2[SelfPairFilter]
+
         Filter = _IsInTunnel(VariogramSearchTemplate, column_stack((FDX, FDY, FDZ)))
 
         FDX, FDY, FDZ = FDX[Filter], FDY[Filter], FDZ[Filter]
@@ -636,6 +650,29 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
             "(NumLags, LagSeparation, LagWidth, Ellipsoid ranges)."
         )
 
+    # F-N14: guard the search-template extent against the grid size before
+    # slicing. The C++ grid path bounds-checks every candidate pair with
+    # is_inside (variograms.cpp:603) and silently skips out-of-bound pairs;
+    # the Python slice approach below cannot skip a single offset, and an
+    # offset with magnitude > the grid dimension produces an empty Mask1
+    # slice and a truncated Mask2 slice (e.g. min(NI - DI, NI) == -1 for
+    # DI > NI → Mask2[0:-1]) → broadcast ValueError. Reject the degenerate
+    # template up front. (Offsets of magnitude exactly equal to the grid
+    # dimension produce empty-on-both-sides slices — no crash, and the
+    # zero-pair outcome matches the C++ skip.)
+    if (
+        max(abs(LI)) > NI
+        or max(abs(LJ)) > NJ
+        or max(abs(LK)) > NK
+    ):
+        raise ValueError(
+            "CubeScan: search-template lag offset exceeds grid size "
+            f"(grid {NI}x{NJ}x{NK}, max offset |i|={max(abs(LI))}, "
+            f"|j|={max(abs(LJ))}, |k|={max(abs(LK))}). Reduce Ellipsoid "
+            "ranges, NumLags, or LagSeparation so the search extent fits "
+            "within the grid."
+        )
+
     if Function is not None:
         Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
@@ -731,21 +768,37 @@ def CalcVariogramFunction(Point1, Point2, Result, Params):
     else:
         # Normalize Point1/Point2 to handle both scalar (PointSetScanGridStyle),
         # list (PointSetScanContStyle), and tuple-of-arrays (CubeScan) inputs.
+        # F-M14: propagate the F-02 fix (ravel_multi_index + numpy.take) from
+        # the covariance/correlation siblings. The raw multi-axis indexing
+        # `Values[i][Point1[:]]` only worked when the tuple length matched a
+        # 3D value array (IndexError for 1D flat values) and a scalar index on
+        # 3D values raised a broadcast ValueError; numpy.take on the flat
+        # indices handles every combination the siblings handle.
+        P1: numpy.ndarray
+        P2: numpy.ndarray
+        NumPoints: int
         if isinstance(Point1, tuple):
-            # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays
+            # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays.
+            # ravel_multi_index flattens the multi-index components to flat
+            # indices matching the C-order ravel of the value arrays (F-02).
+            # The tuple must have one component per value-array dimension
+            # (3 components for 3D grid values, 1 for flat 1D values) —
+            # ravel_multi_index requires len(multi_index) == len(shape).
             NumPoints = len(Point1[0])
+            P1 = ravel_multi_index(Point1, Values[0].shape)  # type: ignore[assignment]
+            P2 = ravel_multi_index(Point2, Values[0].shape)  # type: ignore[assignment]
         else:
             P1 = numpy.atleast_1d(numpy.asarray(Point1)).ravel()
             P2 = numpy.atleast_1d(numpy.asarray(Point2)).ravel()
             NumPoints = len(P1)
-            Point1 = P1
-            Point2 = P2
 
+        # numpy.take with axis=None (default) indexes the raveled array, so
+        # flat indices resolve correctly regardless of Values[i].ndim.
         Values1 = zeros((NumValues, NumPoints))
         Values2 = zeros((NumValues, NumPoints))
         for i in range(NumValues):
-            Values1[i] = Values[i][Point1[:]]
-            Values2[i] = Values[i][Point2[:]]
+            Values1[i] = numpy.take(Values[i], P1)
+            Values2[i] = numpy.take(Values[i], P2)
         Variances = float32(Values1 - Values2) ** 2
         Result[NumValues + 0 : NumValues + NumValues] = Result[
             NumValues + 0 : NumValues + NumValues
@@ -788,10 +841,13 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
         NumPoints: int
         if isinstance(Point1, tuple):
             # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays.
-            # Flatten the multi-dimensional indices to flat indices that match
-            # the C-order ravel of the value arrays (F-02). numpy.take with a
-            # flat index array indexes the raveled array regardless of whether
-            # Values[i] is 1D or 3D.
+            # ravel_multi_index flattens the multi-index components to flat
+            # indices matching the C-order ravel of the value arrays (F-02).
+            # The tuple must have one component per value-array dimension
+            # (3 components for 3D grid values, 1 for flat 1D values) —
+            # ravel_multi_index requires len(multi_index) == len(shape);
+            # numpy.take with axis=None (default) then indexes the raveled
+            # array regardless of Values[i].ndim.
             NumPoints = len(Point1[0])
             P1 = ravel_multi_index(Point1, Values[0].shape)  # type: ignore[assignment]
             P2 = ravel_multi_index(Point2, Values[0].shape)  # type: ignore[assignment]
@@ -853,10 +909,13 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
         NumPoints: int
         if isinstance(Point1, tuple):
             # CubeScan path: Point1 is (I, J, K) tuple of 1D index arrays.
-            # Flatten the multi-dimensional indices to flat indices that match
-            # the C-order ravel of the value arrays (F-02). numpy.take with a
-            # flat index array indexes the raveled array regardless of whether
-            # Values[i] is 1D or 3D.
+            # ravel_multi_index flattens the multi-index components to flat
+            # indices matching the C-order ravel of the value arrays (F-02).
+            # The tuple must have one component per value-array dimension
+            # (3 components for 3D grid values, 1 for flat 1D values) —
+            # ravel_multi_index requires len(multi_index) == len(shape);
+            # numpy.take with axis=None (default) then indexes the raveled
+            # array regardless of Values[i].ndim.
             NumPoints = len(Point1[0])
             P1 = ravel_multi_index(Point1, Values[0].shape)  # type: ignore[assignment]
             P2 = ravel_multi_index(Point2, Values[0].shape)  # type: ignore[assignment]

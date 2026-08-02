@@ -56,7 +56,10 @@ namespace hpgl
 	struct clusterizer_t::state
 	{
 		//typedef std::vector<node_index_t> cluster_t;
-		std::vector<std::shared_ptr<cluster_t> > m_clusters;
+		// F-N11: clusters are created lazily on first add_node — the vector
+		// holds null pointers for empty cells, so heap objects scale with
+		// actual cluster occupancy instead of the cluster-grid volume.
+		std::vector<std::unique_ptr<cluster_t> > m_clusters;
 		rect_3d_t<int> m_cluster_box;
 		int m_x;
 		int m_y;
@@ -99,18 +102,21 @@ namespace hpgl
 		size_t total_volume = static_cast<size_t>(m_state->m_x)
 		                    * static_cast<size_t>(m_state->m_y)
 		                    * static_cast<size_t>(m_state->m_z);
-		// Sanity check: a cluster grid larger than 1 billion cells is
-		// almost certainly a configuration error (grid_extent / radius
-		// would be unreasonably large) and would exhaust memory.
-		// Typical grids are 50-500 cells per dimension (~125K–125M).
-		if (total_volume > 1'000'000'000)
+		// F-N11: the previous cap (1e9, e791f6b) still admitted a legal
+		// 998³ grid + radius 1, which allocated ~1e9 cluster_t heap
+		// objects (each with its own reserve()'d vector) and hung before
+		// kriging started.  Two prior attempts (b017bd9 size_t cast,
+		// e791f6b 1e9 cap) only tweaked the arithmetic/cap.  Two-part fix:
+		//   (1) Lazy cluster creation (add_node allocates on first touch)
+		//       removes the per-cell heap-allocation amplifier entirely.
+		//   (2) The cap bounds the up-front pointer vector: 8 bytes per
+		//       slot, so 1e8 slots = ~800MB worst case.  A ~464³ cluster
+		//       grid (grid up to ~464³ at radius 1, far beyond typical
+		//       use — the largest test grid is 50³) still passes.
+		if (total_volume > 100'000'000)
 			throw hpgl_exception("clusterizer_t::clusterizer_t",
-				"Cluster grid volume exceeds 1 billion cells — check grid dimensions and search radii.");
+				"Cluster grid volume exceeds 100 million cells — check grid dimensions and search radii.");
 		m_state->m_clusters.resize(total_volume);
-		for (size_t i = 0; i < total_volume; ++i)
-		{
-			m_state->m_clusters[i].reset(new cluster_t(m_state->m_limit));
-		}
 	}
 
 	clusterizer_t::~clusterizer_t()
@@ -131,7 +137,14 @@ namespace hpgl
 		
 		int cluster_idx = get_index_from_grid_point(loc);
 		if (cluster_idx >= 0)
+		{
+			// F-N11: lazy cluster creation — allocate the cluster_t only
+			// when a node actually lands in this cell.  Heap objects now
+			// scale with occupancy, not with the cluster-grid volume.
+			if (!m_state->m_clusters[cluster_idx])
+				m_state->m_clusters[cluster_idx] = std::make_unique<cluster_t>(m_state->m_limit);
 			m_state->m_clusters[cluster_idx]->add_node(idx);
+		}
 	}
 	
 	int clusterizer_t::get_nearby_harddata_count(node_index_t idx)const
@@ -150,6 +163,10 @@ namespace hpgl
 					int cluster_idx = get_index(i, j, k);
 					if (cluster_idx >= 0)
 					{
+						// F-N11: lazily-created clusters may be null — skip
+						// cells that never received a node.
+						if (!m_state->m_clusters[cluster_idx])
+							continue;
 						if (m_state->m_clusters[cluster_idx]->limit_exceeded())
 							{ fprintf(stderr, "HPGL FATAL: clusterizer_t: cluster limit exceeded\n"); abort(); }
 			   			size_t cluster_size = m_state->m_clusters[cluster_idx]->count();
@@ -178,6 +195,10 @@ namespace hpgl
 				int cluster_idx = get_index(i, j, k);
 				if (cluster_idx >= 0)
 				{
+					// F-N11: lazily-created clusters may be null — skip
+					// cells that never received a node.
+					if (!m_state->m_clusters[cluster_idx])
+						continue;
 					if (m_state->m_clusters[cluster_idx]->limit_exceeded())
 						{ fprintf(stderr, "HPGL FATAL: clusterizer_t: cluster limit exceeded\n"); abort(); }
 					const std::vector<node_index_t> & nodes = m_state->m_clusters[cluster_idx]->nodes();
@@ -201,6 +222,10 @@ namespace hpgl
 					int cluster_idx = get_index(i, j, k);
 					if (cluster_idx >= 0)
 					{
+						// F-N11: lazily-created clusters may be null — skip
+						// cells that never received a node.
+						if (!m_state->m_clusters[cluster_idx])
+							continue;
 						if (m_state->m_clusters[cluster_idx]->limit_exceeded())
 							return true;			   		
 					}

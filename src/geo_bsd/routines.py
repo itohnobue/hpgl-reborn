@@ -22,7 +22,13 @@ from numpy import (
     zeros,
 )
 
-from .validation import GridValidator, PathValidator, ValidationConstants
+from .validation import (
+    GridValidator,
+    ParameterValidator,
+    PathValidator,
+    ValidationConstants,
+    validate_property_name,
+)
 
 
 def CalcMean(Cube, Mask):
@@ -260,13 +266,27 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption, basedir=None):
                 f"(NaN or Inf). GSLIB format does not support non-finite values."
             )
 
-    # Security: safe_open_write validates the path and opens atomically
+    # F-N17: validate the Caption and every property name against the shared
+    # property-name contract (validate_property_name, shared with the C++
+    # writers). A name/caption containing '\n' or other control characters
+    # would inject phantom header lines that LoadGslibFile (or C++ readers)
+    # mis-parses; a '--' prefix is a comment marker that readers skip, and
+    # leading/trailing whitespace shifts the data off-by-one. Reject before
+    # any file is created.
+    validate_property_name(Caption, "SaveGSLIBPointSet")
+    for Key in PointSet.keys():
+        validate_property_name(Key, "SaveGSLIBPointSet")
+
+    # Security: safe_atomic_open_write validates the path and opens atomically
     # with O_NOFOLLOW to prevent TOCTOU symlink attacks. The basedir is
     # the trusted base (DEFAULT_BASE_DIR unless overridden) — NOT derived
     # from the filename's own directory, which would defeat containment.
+    # Content is written to a uniquely-named temp file and atomically renamed
+    # into place on clean exit, so a crash mid-write never truncates the
+    # target (F-N18, matching the C++ writers' temp+rename pattern).
     if basedir is None:
         basedir = PathValidator.DEFAULT_BASE_DIR
-    with PathValidator.safe_open_write(FileName, basedir=basedir) as f:
+    with PathValidator.safe_atomic_open_write(FileName, basedir=basedir) as f:
         # 1. Caption
         f.write(Caption + "\n")
 
@@ -342,13 +362,27 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g", basedir=None
                 f"(NaN or Inf). GSLIB format does not support non-finite values."
             )
 
-    # Security: safe_open_write validates the path and opens atomically
+    # F-N17: validate the Caption and every property name against the shared
+    # property-name contract (validate_property_name, shared with the C++
+    # writers). A name/caption containing '\n' or other control characters
+    # would inject phantom header lines that LoadGslibFile (or C++ readers)
+    # mis-parses; a '--' prefix is a comment marker that readers skip, and
+    # leading/trailing whitespace shifts the data off-by-one. Reject before
+    # any file is created.
+    validate_property_name(Caption, "SaveGSLIBCubes")
+    for Key in CubesDictionary.keys():
+        validate_property_name(Key, "SaveGSLIBCubes")
+
+    # Security: safe_atomic_open_write validates the path and opens atomically
     # with O_NOFOLLOW to prevent TOCTOU symlink attacks. The basedir is
     # the trusted base (DEFAULT_BASE_DIR unless overridden) — NOT derived
     # from the filename's own directory, which would defeat containment.
+    # Content is written to a uniquely-named temp file and atomically renamed
+    # into place on clean exit, so a crash mid-write never truncates the
+    # target (F-N18, matching the C++ writers' temp+rename pattern).
     if basedir is None:
         basedir = PathValidator.DEFAULT_BASE_DIR
-    with PathValidator.safe_open_write(FileName, basedir=basedir) as f:
+    with PathValidator.safe_atomic_open_write(FileName, basedir=basedir) as f:
         # 1. Caption
         f.write(Caption + "\n")
 
@@ -366,7 +400,13 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g", basedir=None
 
 
 def GetCubicalMask(Radiuses):
-    MeanMask = ones((Radiuses[0] * 2, Radiuses[1] * 2, Radiuses[2] * 2), dtype=uint8)
+    rx, ry, rz = Radiuses
+    if rx <= 0 or ry <= 0 or rz <= 0:
+        raise ValueError(
+            f"GetCubicalMask: radius components must be positive, "
+            f"got ({rx}, {ry}, {rz})"
+        )
+    MeanMask = ones((rx * 2, ry * 2, rz * 2), dtype=uint8)
     MeanMask = require(MeanMask, requirements="F")
     return MeanMask
 
@@ -458,6 +498,42 @@ def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):
 def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
     Cube, Mask = cube_mask
     MACube = copy(Cube)
+
+    # F-M16: validate radiuses BEFORE any allocation. GetCubicalMask had no
+    # validation at all (0/negative radiuses produced empty-dim masks or raw
+    # numpy errors), and an unbounded radius (r=1e6 is within MAX_RADIUS)
+    # previously attempted a (2e6)^3 = 8e18-byte mask allocation before the
+    # volume cap could fire. The mask is (2rx·2ry·2rz) cells, so a radius
+    # larger than the grid in any axis would only allocate unused memory —
+    # reject it here with a clear error.
+    Radiuses = ParameterValidator.validate_radius(Radiuses, "Radiuses")
+    rx, ry, rz = Radiuses
+    if rx <= 0 or ry <= 0 or rz <= 0:
+        raise ValueError(
+            f"MovingAverage3D: radius components must be positive, "
+            f"got ({rx}, {ry}, {rz})"
+        )
+    nx, ny, nz = Cube.shape
+    if rx > nx or ry > ny or rz > nz:
+        raise ValueError(
+            f"MovingAverage3D: radius ({rx}, {ry}, {rz}) exceeds the grid "
+            f"({nx}, {ny}, {nz}) in at least one axis. The mean-mask window "
+            f"is clamped to the grid, so a larger radius is never used."
+        )
+
+    # F-M16: grid-volume cap BEFORE the mask allocation. The cubical
+    # (vectorized) path was previously unbounded because it returned before
+    # this check; the mask allocation itself is radius-driven, so both paths
+    # now share the bound and an over-cap grid is rejected before the mask
+    # (and the cubical integral images) are ever allocated.
+    volume = int(nx) * int(ny) * int(nz)
+    if volume > ValidationConstants.MAX_MOVING_AVERAGE_VOLUME:
+        raise ValueError(
+            f"MovingAverage3D: grid volume {volume} exceeds the maximum "
+            f"{ValidationConstants.MAX_MOVING_AVERAGE_VOLUME} supported by "
+            f"the pure-Python moving-average path. Reduce the grid size."
+        )
+
     MeanMask = MaskCalcFunction(Radiuses)
 
     # I2-06: the cubical-mask path is vectorized with 3D cumulative sums.
@@ -470,18 +546,9 @@ def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
     if bool(numpy.all(MeanMask == 1)):
         return _moving_average_cubical(Cube, Mask, Radiuses, undefined_value)
 
-    volume = int(Cube.shape[0]) * int(Cube.shape[1]) * int(Cube.shape[2])
-    if volume > ValidationConstants.MAX_MOVING_AVERAGE_VOLUME:
-        raise ValueError(
-            f"MovingAverage3D: grid volume {volume} exceeds the maximum "
-            f"{ValidationConstants.MAX_MOVING_AVERAGE_VOLUME} supported by "
-            f"the non-cubical (ellipse-mask) pure-Python path. Use a cubical "
-            f"mask or reduce the grid size."
-        )
-
-    for i in range(Cube.shape[0]):
-        for j in range(Cube.shape[1]):
-            for k in range(Cube.shape[2]):
+    for i in range(nx):
+        for j in range(ny):
+            for k in range(nz):
                 MACube[i, j, k] = MeanCalc(
                     Cube, Mask, Radiuses, MeanMask, (i, j, k), undefined_value
                 )
@@ -676,14 +743,29 @@ def LoadGslibFile(filename, property_size, basedir=None):
             )
 
         data = numpy.array(rows, dtype=float64)  # shape (grid_size, num_p)
+
+        # Reject genuine non-finite source values (NaN or Inf) BEFORE the
+        # F-M18 sentinel trim — GSLIB cannot represent them and HPGL-written
+        # files never contain them (the writer rejects non-finite at write
+        # time). The trim below converts only FINITE out-of-window values.
+        for j, key in enumerate(list_prop):
+            if not numpy.all(numpy.isfinite(data[:, j])):
+                raise ValueError(
+                    f"LoadGslibFile: property '{key}' contains non-finite "
+                    f"values (NaN or Inf). GSLIB format does not support non-finite values."
+                )
+
+        # F-M18: GSLIB missing-value trimming — finite values outside the
+        # ±1.0e21 window (strict inequality per the GSLIB convention "less
+        # than -1.0e21 or greater than 1.0e21") are missing sentinels, not
+        # real data. Convert them to NaN (the numpy missing marker) so
+        # downstream mean/variogram/kriging do not silently compute with
+        # third-party sentinel magnitudes. Matches the C++ fast reader
+        # (read_inc_file.cpp:287-305) and get_gslib_property.
+        out_of_window = numpy.abs(data) > 1.0e21
+        data[out_of_window] = numpy.nan
+
         for j, key in enumerate(list_prop):
             result[key] = data[:, j].reshape(property_size, order="F")
-
-    for dkey in result.keys():
-        if not numpy.all(numpy.isfinite(result[dkey])):
-            raise ValueError(
-                f"LoadGslibFile: property '{dkey}' contains non-finite "
-                f"values (NaN or Inf). GSLIB format does not support non-finite values."
-            )
 
     return result
