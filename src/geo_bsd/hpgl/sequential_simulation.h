@@ -29,12 +29,20 @@ namespace hpgl
 		}
 	};
 
-	template <typename grid_t, typename mean_provider_t, typename weight_calculator_t, typename mask_t>
+	template <typename grid_t, typename mean_provider_t, typename fallback_mean_provider_t, typename weight_calculator_t, typename mask_t>
 	void do_sequential_gausian_simulation(
 		cont_property_array_t & property,
 		const grid_t & grid,
 		const sgs_params_t & params,
-		const mean_provider_t & mp,		
+		const mean_provider_t & mp,
+		// R-5: separate fallback mean provider. The kriging estimate and the
+		// failure fallback draw can need DIFFERENT means: the SGS-OK path
+		// passes no_mean_t() as mp (GSLIB zero-mean normal-score semantics —
+		// no (1−Σλᵢ)·mean term on the n<4 SK-downgraded estimate) while the
+		// fallback must still draw N(gmean, 1.0) per GSLIB
+		// (sgsim.for: `cmean = gmean; cstdev = 1.0`; M-29). KRIG_SIMPLE and
+		// LVM pass the same provider for both.
+		const fallback_mean_provider_t & fallback_mp,
 		const weight_calculator_t & weight_calculator_sgs,
 		const mask_t & mask)
 	{
@@ -63,6 +71,24 @@ namespace hpgl
 		
 		progress_reporter_t report(property.size());	
 		report.start();
+
+		// M-11 (GSLIB ndmin semantics): the ndmin gate must count ORIGINAL
+		// conditioning data only (sgsim.for: "If there are fewer than ndmin
+		// data points the node is not simulated" — ndmin counts original
+		// data, never previously simulated nodes). The plain neighbour
+		// lookup applies the live informed-mask predicate at call time, and
+		// set_at marks each simulated node informed, so previously simulated
+		// nodes re-enter conditioning and would inflate ws.indices.size().
+		// Snapshot which cells were originally informed so the gate can
+		// exclude simulated nodes from the count. This is a deliberate
+		// GSLIB-compliance change: it changes covariance reproduction between
+		// simulated cells only through the ndmin skip threshold — the
+		// conditioning set itself still includes simulated nodes per HPGL's
+		// established (non-GSLIB) design.
+		std::vector<unsigned char> originally_informed(property.size(), 0);
+		for (node_index_t i = 0; i < property.size(); ++i)
+			originally_informed[i] = property.is_informed(i) ? 1 : 0;
+
 		node_index_t node;
 		kriging_ws_t<cont_value_t, sugarbox_location_t> ws;
 		unsigned long kriging_failures = 0;
@@ -71,6 +97,13 @@ namespace hpgl
 		unsigned long points_calculated = 0;
 		unsigned long points_without_neighbours = 0;
 		unsigned long points_singularity = 0;
+		// 2-M-33: count every node that received a simulated value (success
+		// OR failure fallback) so m_mean uses a numerator==denominator pair
+		// like the four sibling consumers (cont_kriging, indicator_kriging,
+		// cokriging, SIS). Previously the denominator was points_calculated
+		// (KI_SUCCESS only) while sum_simulated accumulated over ALL
+		// simulated nodes — a biased mean on partial failure.
+		unsigned long nodes_simulated = 0;
 		double sum_simulated = 0;
 		for (node_index_t counter = 0, counter_end = property.size(); counter < counter_end; ++counter, report.next_lap())		
 		{
@@ -101,16 +134,37 @@ namespace hpgl
 			ki_result_t ki_result = kriging_interpolation_ws(property, is_informed_predicate_t<cont_property_array_t>(property), node, pcov, mp, 
 				neighbour_lookup, weight_calculator_sgs, mean, variance, ws);			
 
-			// GSLIB ndmin semantics (F-14): when fewer than
-			// m_min_neighbours conditioning data are available, leave the
-			// node unsimulated instead of simulating from the marginal
-			// distribution. Previously m_min_neighbours was stored/printed
-			// but never wired into the simulation logic.
-			if (params.m_min_neighbours > 0
-				&& ws.indices.size() < static_cast<size_t>(params.m_min_neighbours))
+			// GSLIB ndmin semantics (F-14 + M-11): when fewer than
+			// m_min_neighbours ORIGINAL conditioning data are available, leave
+			// the node unsimulated instead of simulating from the marginal
+			// distribution. GSLIB sgsim.for counts original data only
+			// (`if(nclose.lt.ndmin) go to 5` — nclose comes from srchsupr, the
+			// input-data search; previously simulated nodes are searched
+			// separately by srchnd and do NOT count toward ndmin). The plain
+			// lookup applies the live informed-mask predicate at call time, so
+			// previously simulated nodes re-enter conditioning and inflate
+			// ws.indices.size(). The gate therefore counts ORIGINAL data only:
+			// when m_min_neighbours > 0, skip iff the number of originally
+			// informed conditioning cells is < m_min_neighbours — with NO outer
+			// total-precondition. A node with fewer than ndmin original data is
+			// skipped even when previously simulated neighbours push the total
+			// count above the threshold. R-3: the round-1 fix nested this check
+			// inside `ws.indices.size() < min`, where original_count <= size
+			// always holds — making the gate byte-identical to the pre-fix total
+			// gate. The outer precondition is removed here.
+			if (params.m_min_neighbours > 0)
 			{
-				++kriging_ndmin_skipped;
-				continue;
+				size_t original_data_count = 0;
+				for (size_t k = 0; k < ws.indices.size(); ++k)
+				{
+					if (originally_informed[ws.indices[k]])
+						++original_data_count;
+				}
+				if (original_data_count < static_cast<size_t>(params.m_min_neighbours))
+				{
+					++kriging_ndmin_skipped;
+					continue;
+				}
 			}
 
 			if (ki_result != ki_result_t::KI_SUCCESS)
@@ -125,10 +179,11 @@ namespace hpgl
 
 			double value = ki_result == ki_result_t::KI_SUCCESS
 				? sample(gen, gaussian_cdf_t(mean, variance))
-				: sample(gen, gaussian_cdf_t(mp[node], 1.0));		
+				: sample(gen, gaussian_cdf_t(fallback_mp[node], 1.0));
 			
 			property.set_at(node, value);
 			sum_simulated += value;
+			++nodes_simulated;
 			//neighbour_lookup.add_node(node);
 		}
 		report.stop();
@@ -141,7 +196,10 @@ namespace hpgl
 			stats.m_points_calculated = points_calculated;
 			stats.m_points_without_neighbours = points_without_neighbours;
 			stats.m_points_singularity = points_singularity;
-			stats.m_mean = points_calculated > 0 ? sum_simulated / static_cast<double>(points_calculated) : 0;
+			// 2-M-33: divide by ALL simulated nodes (nodes_simulated), not
+			// the success-only points_calculated — sum_simulated includes
+			// failure-fallback draws.
+			stats.m_mean = nodes_simulated > 0 ? sum_simulated / static_cast<double>(nodes_simulated) : 0;
 			stats.m_speed_nps = report.iterations_per_second();
 			set_kriging_stats(stats);
 		}

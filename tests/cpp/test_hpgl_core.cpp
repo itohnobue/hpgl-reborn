@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <future>
 #include <limits>
 #include <thread>
@@ -42,6 +43,7 @@
 #include "src/geo_bsd/hpgl/sgs_params.h"
 #include "src/geo_bsd/hpgl/sequential_simulation.h"
 #include "src/geo_bsd/hpgl/mean_provider.h"
+#include "src/geo_bsd/hpgl/my_kriging_weights.h"
 #include "src/geo_bsd/hpgl/api.h"
 #include "src/geo_bsd/hpgl/api.h"
 #include "src/geo_bsd/hpgl/output.h"
@@ -979,6 +981,898 @@ void test_cokriging_rejects_huge_max_neighbours() {
     CHECK(msg != nullptr && strstr(msg, "hpgl_simple_cokriging_mark1") != nullptr);
 }
 
+// ---- FIX-stage regression tests (s6-fix-cpp-engines) ----
+
+// M-3: GSLIB sgsim downgrades OK→SK when fewer than 4 conditioning data are
+// available (`if(ktype.eq.1.and.(nclose+ncnode).lt.4)lktype=0`). The OK solve's
+// Lagrange-multiplier variance correction inflates variance for tiny
+// neighbourhoods (a nugget-only model gives 2×sill for n=1); the fix delegates
+// R-5 / R-4 (M-3 reconciliation): the GSLIB sgsim OK→SK <4-data downgrade is
+// SGS-ONLY. The shared ok_kriging_weights_3(_ws) calculators keep the public
+// hpgl_ordinary_kriging (the kt3d analog) OK contract for n<4 — weights sum
+// to 1 — while ok_sgs_weight_calculator_t delegates to the SK solve below 4
+// data (GSLIB: `if(ktype.eq.1.and.(nclose+ncnode).lt.4)lktype=0`) so the
+// SGS-OK variance is not inflated by the Lagrange multiplier.
+void test_ok_sgs_only_downgrades_under_4_neighbours() {
+    TEST("R-5/M-3: OK→SK downgrade is SGS-only — public OK sums to 1, sgs calculator downgrades");
+    double ranges[3] = {10.0, 10.0, 10.0};
+    double angles[3] = {0.0, 0.0, 0.0};
+    hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_EXPONENTIAL,
+                          ranges, angles, 1.0, 0.0);
+
+    // n=2: public OK weights must sum to 1 (contract preserved).
+    {
+        std::vector<hpgl::sugarbox_location_t> coords(2, hpgl::sugarbox_location_t(0, 0, 0));
+        coords[0] = hpgl::sugarbox_location_t(1, 0, 0);
+        coords[1] = hpgl::sugarbox_location_t(2, 0, 0);
+        std::vector<hpgl::kriging_weight_t> ok_weights;
+        double ok_var = 0.0;
+        bool ok = hpgl::ok_kriging_weights_3<hpgl::cov_model_t, true, hpgl::sugarbox_location_t>(
+            hpgl::sugarbox_location_t(0, 0, 0), coords, cov, ok_weights, ok_var);
+        CHECK(ok);
+        double sum = 0.0;
+        for (size_t i = 0; i < ok_weights.size(); ++i) sum += ok_weights[i];
+        CHECK_CLOSE(sum, 1.0, 1e-9);
+    }
+    // Workspace public OK variant: same sum-to-1 contract.
+    {
+        std::vector<hpgl::sugarbox_location_t> coords(2, hpgl::sugarbox_location_t(0, 0, 0));
+        coords[0] = hpgl::sugarbox_location_t(1, 0, 0);
+        coords[1] = hpgl::sugarbox_location_t(2, 0, 0);
+        hpgl::weight_calc_workspace_t ws;
+        std::vector<hpgl::kriging_weight_t> ok_weights;
+        double ok_var = 0.0;
+        bool ok = hpgl::ok_kriging_weights_3_ws<hpgl::cov_model_t, true, hpgl::sugarbox_location_t>(
+            hpgl::sugarbox_location_t(0, 0, 0), coords, cov, ok_weights, ok_var, ws);
+        CHECK(ok);
+        double sum = 0.0;
+        for (size_t i = 0; i < ok_weights.size(); ++i) sum += ok_weights[i];
+        CHECK_CLOSE(sum, 1.0, 1e-9);
+    }
+    // n=2: the SGS-OK calculator delegates to SK — weights and variance must
+    // match sk_kriging_weights_3 exactly (and need not sum to 1).
+    {
+        std::vector<hpgl::sugarbox_location_t> coords(2, hpgl::sugarbox_location_t(0, 0, 0));
+        coords[0] = hpgl::sugarbox_location_t(1, 0, 0);
+        coords[1] = hpgl::sugarbox_location_t(2, 0, 0);
+        std::vector<hpgl::kriging_weight_t> sk_weights;
+        double sk_var = 0.0;
+        bool sk_ok = hpgl::sk_kriging_weights_3<hpgl::cov_model_t, true, hpgl::sugarbox_location_t>(
+            hpgl::sugarbox_location_t(0, 0, 0), coords, cov, sk_weights, sk_var);
+        CHECK(sk_ok);
+        hpgl::ok_sgs_weight_calculator_t sgs_wc;
+        std::vector<hpgl::kriging_weight_t> sgs_weights;
+        double sgs_var = 0.0;
+        bool sgs_ok = sgs_wc(hpgl::sugarbox_location_t(0, 0, 0),
+            coords, cov, sgs_weights, sgs_var);
+        CHECK(sgs_ok);
+        CHECK(sgs_weights.size() == sk_weights.size());
+        for (size_t i = 0; i < sgs_weights.size(); ++i)
+            CHECK_CLOSE(sgs_weights[i], sk_weights[i], 1e-9);
+        CHECK_CLOSE(sgs_var, sk_var, 1e-9);
+    }
+    // n=4: the SGS-OK calculator applies full OK — weights sum to 1.
+    {
+        std::vector<hpgl::sugarbox_location_t> coords(4, hpgl::sugarbox_location_t(0, 0, 0));
+        for (int i = 0; i < 4; ++i)
+            coords[i] = hpgl::sugarbox_location_t(i + 1, 0, 0);
+        hpgl::ok_sgs_weight_calculator_t sgs_wc;
+        std::vector<hpgl::kriging_weight_t> sgs_weights;
+        double sgs_var = 0.0;
+        bool sgs_ok = sgs_wc(hpgl::sugarbox_location_t(0, 0, 0),
+            coords, cov, sgs_weights, sgs_var);
+        CHECK(sgs_ok);
+        double sum = 0.0;
+        for (size_t i = 0; i < sgs_weights.size(); ++i) sum += sgs_weights[i];
+        CHECK_CLOSE(sum, 1.0, 1e-9);
+    }
+    // Pure-nugget n=1: public OK keeps the (kt3d) inflated variance 2×sill;
+    // the SGS-OK calculator downgrades to SK → variance == sill (not 2×sill).
+    {
+        hpgl::cov_model_t nug_cov(hpgl::covariance_type_t::COV_SPHERICAL,
+                                  ranges, angles, 1.0, 1.0);  // nugget == sill
+        std::vector<hpgl::sugarbox_location_t> coords(1, hpgl::sugarbox_location_t(1, 0, 0));
+        std::vector<hpgl::kriging_weight_t> ok_weights;
+        double ok_var = 0.0;
+        bool ok = hpgl::ok_kriging_weights_3<hpgl::cov_model_t, true, hpgl::sugarbox_location_t>(
+            hpgl::sugarbox_location_t(0, 0, 0), coords, nug_cov, ok_weights, ok_var);
+        CHECK(ok);
+        CHECK_CLOSE(ok_var, 2.0, 1e-9);   // public OK: inflated (kt3d semantics)
+        hpgl::ok_sgs_weight_calculator_t sgs_wc;
+        std::vector<hpgl::kriging_weight_t> sgs_weights;
+        double sgs_var = 0.0;
+        bool sgs_ok = sgs_wc(hpgl::sugarbox_location_t(0, 0, 0),
+            coords, nug_cov, sgs_weights, sgs_var);
+        CHECK(sgs_ok);
+        CHECK_CLOSE(sgs_var, 1.0, 1e-9);  // SGS downgrade: SK variance == sill
+    }
+}
+
+// M-5: `#pragma omp cancel for` is a silent no-op in default builds (cancel-var
+// ICV false), so user cancellation never stopped the kriging loop. The fix uses
+// a shared atomic loop-stop flag checked per iteration. A progress handler that
+// returns non-zero cancels; after cancellation the loop must stop early —
+// leaving many output cells uninformed — instead of processing every cell.
+static int cancel_progress_handler(char *, int, void *) { return 1; }  // cancel
+
+void test_user_cancellation_stops_kriging_loop() {
+    TEST("M-5: user cancellation stops the kriging loop in a default build");
+    // Grid sized so the first per-thread batch flush (LP_BATCH_SIZE=1000 laps)
+    // is guaranteed to happen before the whole grid is processed even on very
+    // high-core machines: the first flush fires at the earliest thread reaching
+    // 1000 laps, when at most num_threads×1000 cells have been touched.
+    // num_threads is bounded by OMP max (~512) → 600000 > 512×1000.
+    const int nx = 100, ny = 100, nz = 60;
+    const int nodes = nx * ny * nz;
+    std::vector<float> in_data(nodes);
+    std::vector<unsigned char> in_mask(nodes, 0);
+    // 70% informed — leaves ~180000 uninformed cells that kriging would fill.
+    for (int i = 0; i < nodes; ++i) {
+        if (i % 10 < 7) { in_data[i] = 1.0f; in_mask[i] = 1; }
+    }
+    std::vector<float> out_data(nodes, 0.0f);
+    std::vector<unsigned char> out_mask(nodes, 0);
+    hpgl_cont_masked_array_t in, out;
+    in.m_data = in_data.data(); in.m_mask = in_mask.data();
+    init_shape(in.m_shape, nx, ny, nz);
+    out.m_data = out_data.data(); out.m_mask = out_mask.data();
+    init_shape(out.m_shape, nx, ny, nz);
+
+    hpgl_ok_params_t params;
+    params.m_covariance_type = 0;  // COV_SPHERICAL
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 8;
+
+    hpgl_set_progress_handler(cancel_progress_handler, nullptr);
+    hpgl_ordinary_kriging(&in, &params, &out);
+    hpgl_set_progress_handler(nullptr, nullptr);  // reset BEFORE any CHECK
+
+    int informed = 0;
+    for (int i = 0; i < nodes; ++i)
+        if (out_mask[i]) ++informed;
+    // Pre-fix: omp cancel is a no-op → all 15000 uninformed cells get kriged
+    // (mask=1) → informed == nodes. Post-fix: the loop stops shortly after the
+    // first batch flush observes the cancel → many cells remain uninformed.
+    CHECK(informed < nodes);
+}
+
+#ifndef _WIN32
+// Runs fn() with stderr redirected to a temp file and returns what was written.
+static std::string capture_stderr_around(const std::function<void()> & fn)
+{
+    fflush(stderr);
+    std::string path = make_temp_dir() + "/hpgl_stderr_capture.txt";
+    int saved = dup(fileno(stderr));
+    FILE * cap = fopen(path.c_str(), "w");
+    if (cap != nullptr)
+    {
+        dup2(fileno(cap), fileno(stderr));
+        fclose(cap);
+    }
+    fn();
+    fflush(stderr);
+    dup2(saved, fileno(stderr));
+    close(saved);
+    std::string result;
+    FILE * r = fopen(path.c_str(), "r");
+    if (r != nullptr)
+    {
+        char buf[1024];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), r)) > 0)
+            result.append(buf, n);
+        fclose(r);
+    }
+    std::remove(path.c_str());
+    return result;
+}
+#endif
+
+// M-6: median IK previously emitted NO stderr failure signal when kriging
+// systems failed (siblings cont_kriging/cokriging/SIS do). With sparse data,
+// most nodes report KI_NO_NEIGHBOURS → the added signal must appear on stderr.
+void test_median_ik_emits_stderr_failure_signal() {
+    TEST("M-6: median IK emits stderr failure signal");
+    const int cells = 16;            // 4x4x1
+    const int cats = 2;
+    std::vector<unsigned char> in_data(cells * cats, 0);
+    std::vector<unsigned char> in_mask(cells * cats, 0);
+    std::vector<unsigned char> out_data(cells * cats, 0);
+    std::vector<unsigned char> out_mask(cells * cats, 0);
+    in_mask[0] = 1;                  // corner datum (0,0)
+    in_mask[15] = 1;                 // opposite corner (3,3)
+    in_data[0] = 1;                  // category 0 indicator
+    in_data[16 + 15] = 1;            // cell 15, indicator byte 1 → category 1
+
+    hpgl_ind_masked_array_t in, out;
+    in.m_data = in_data.data(); in.m_mask = in_mask.data();
+    init_shape(in.m_shape, 4, 4, 1);
+    in.m_indicator_count = cats;
+    out.m_data = out_data.data(); out.m_mask = out_mask.data();
+    init_shape(out.m_shape, 4, 4, 1);
+    out.m_indicator_count = cats;
+
+    hpgl_median_ik_params_t params;
+    params.m_covariance_type = 0;  // COV_SPHERICAL
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 8;
+    params.m_marginal_probs[0] = 0.5;
+    params.m_marginal_probs[1] = 0.5;
+
+#ifndef _WIN32
+    std::string err = capture_stderr_around([&] {
+        hpgl_median_ik(&in, &params, &out);
+    });
+    // With only 2 corner data and radius 1, the 12 middle cells have no
+    // neighbour → the M-6 stderr failure signal must fire.
+    CHECK(err.find("kriging failures") != std::string::npos);
+#else
+    hpgl_median_ik(&in, &params, &out);
+    hpgl_kriging_stats_t stats = hpgl_get_kriging_stats();
+    CHECK(stats.m_points_without_neighbours > 0);
+#endif
+}
+
+// R-3 / M-11: the ndmin gate must count ORIGINAL conditioning data only
+// (GSLIB sgsim semantics), not previously simulated nodes, and must fire even
+// when previously simulated neighbours INFLATE the total count above ndmin.
+// The round-1 regression test (single original datum) was VACUOUS — with one
+// datum no node is ever simulated, so the inflation path was never exercised
+// and the round-1 fix (which nested the original-count check inside the total
+// gate, where original_count <= size always holds) was byte-identical to
+// pre-fix. This test uses a 1×4 line with originals at 0 and 1 (min=2):
+// node 2 has 2 original neighbours → simulated by both gates; node 3 has 1
+// original neighbour (index 1) and — when node 2 was simulated earlier in the
+// random path — a simulated neighbour too, so its TOTAL reaches 2 while its
+// ORIGINAL count is 1. The fixed gate must SKIP node 3 (original < ndmin);
+// the pre-fix/round-1 total gate simulated it whenever total >= 2.
+void test_sgs_ndmin_skips_nodes_with_few_originals_despite_inflated_total() {
+    TEST("R-3/M-11: SGS ndmin skips nodes with <ndmin ORIGINAL data even when simulated neighbours inflate the total");
+    const int nx = 4, ny = 1, nz = 1;
+    const int nodes = nx * ny * nz;
+    // Non-vacuity guard: the divergence only manifests when node 2 (the node
+    // that becomes a simulated neighbour) is processed BEFORE node 3. Use the
+    // same seeded path generator the SGS kernel uses to select exactly the
+    // seeds with that ordering, and assert at least one such seed exists —
+    // otherwise the fixture is vacuous (the round-1 test's failure mode).
+    bool saw_inflation_order = false;
+    for (int64_t seed = 1; seed <= 40; ++seed)
+    {
+        hpgl::path_random_generator_t path(nodes, seed);
+        int pos2 = -1, pos3 = -1;
+        for (int i = 0; i < nodes; ++i)
+        {
+            int idx = path.next();
+            if (idx == 2) pos2 = i;
+            if (idx == 3) pos3 = i;
+        }
+        if (!(pos2 >= 0 && pos3 >= 0 && pos2 < pos3))
+            continue;  // not an inflation-order seed — both gates behave identically
+        saw_inflation_order = true;
+
+        std::vector<float> data(nodes, 0.0f);
+        std::vector<unsigned char> mask(nodes, 0);
+        data[0] = 1.0f;  mask[0] = 1;
+        data[1] = 2.0f;  mask[1] = 1;
+        hpgl_cont_masked_array_t in;
+        in.m_data = data.data();
+        in.m_mask = mask.data();
+        init_shape(in.m_shape, nx, ny, nz);
+
+        hpgl_sgs_params_t params;
+        params.m_covariance_type = 0;  // COV_SPHERICAL
+        params.m_ranges[0] = 3; params.m_ranges[1] = 3; params.m_ranges[2] = 3;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 2; params.m_radiuses[1] = 0; params.m_radiuses[2] = 0;
+        params.m_max_neighbours = 8;
+        params.m_kriging_kind = 1;  // KRIG_SIMPLE
+        params.m_seed = seed;
+        params.m_min_neighbours = 2;
+
+        double mean = 0.0;
+        hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
+
+        // Originals preserved.
+        CHECK(mask[0] == 1);
+        CHECK(mask[1] == 1);
+        // Node 2 has 2 ORIGINAL neighbours (indices 0,1) → simulated.
+        CHECK(mask[2] == 1);
+        // Node 3 has 1 ORIGINAL neighbour (index 1) < ndmin → must stay
+        // unsimulated even though its TOTAL (index 1 + simulated node 2)
+        // reached 2. The pre-fix/round-1 TOTAL gate simulated node 3 here —
+        // the R-3 divergence the fix removes.
+        CHECK(mask[3] == 0);
+    }
+    CHECK(saw_inflation_order);
+}
+
+// R-5: the SGS-OK <4-data downgraded estimate must have NO mean term (GSLIB
+// sgsim lktype=0 zero-mean normal-score semantics). With a user mean of 100
+// vs 0 and identical seeds on a config where every node kriges with <4 data
+// (no failure fallback), the outputs must be IDENTICAL — the pre-fix code
+// (single_mean_t(mean) + M-3 SK-downgraded weights) shifted every estimate by
+// (1−Σλᵢ)·mean, making the n=4 mean-pull discontinuity user-visible.
+void test_sgs_ok_downgraded_estimate_has_no_mean_term() {
+    TEST("R-5: SGS-OK <4-data estimate has no (1-SumLambda)*mean term");
+    const int nx = 5, ny = 1, nz = 1;  // 1×5 line
+    const int nodes = nx * ny * nz;
+    const int64_t seed = 42;
+
+    auto run = [&](double user_mean, std::vector<float> & out_data,
+                   std::vector<unsigned char> & out_mask) {
+        std::vector<float> data(nodes, 0.0f);
+        std::vector<unsigned char> mask(nodes, 0);
+        data[0] = 1.0f;  mask[0] = 1;
+        data[4] = 3.0f;  mask[4] = 1;
+        hpgl_cont_masked_array_t in;
+        in.m_data = data.data();
+        in.m_mask = mask.data();
+        init_shape(in.m_shape, nx, ny, nz);
+
+        hpgl_sgs_params_t params;
+        params.m_covariance_type = 0;  // COV_SPHERICAL
+        params.m_ranges[0] = 3; params.m_ranges[1] = 3; params.m_ranges[2] = 3;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 2; params.m_radiuses[1] = 0; params.m_radiuses[2] = 0;
+        params.m_max_neighbours = 8;
+        params.m_kriging_kind = 0;    // KRIG_ORDINARY — SGS-OK path
+        params.m_seed = seed;
+        params.m_min_neighbours = 0;
+
+        double mean = user_mean;
+        hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
+        out_data = data;
+        out_mask = mask;
+    };
+
+    std::vector<float> d100, d0;
+    std::vector<unsigned char> m100, m0;
+    run(100.0, d100, m100);
+    run(0.0, d0, m0);
+
+    // Every uninformed node has 1-2 ORIGINAL neighbours within radius 2 →
+    // kriges on the <4-data SK-downgraded path (no failure fallback, so the
+    // fallback mean — the only mean that legitimately differs — is never
+    // used). With the R-5 fix the kriged mean is Σλᵢzᵢ regardless of the
+    // user mean → identical outputs.
+    for (int i = 0; i < nodes; ++i)
+        CHECK(std::abs(d100[i] - d0[i]) < 1e-6);
+}
+
+// R-6: the plain-lookup pure-nugget fallback (2-M-32) must be BOUNDED. The
+// covariance-threshold offset list for a pure-nugget model is empty, so the
+// fallback fires per find(); pre-fix it iterated the FULL (2r+1)³ box per
+// node — an effectively-infinite loop for large radii on sparse grids (the
+// round-1 fix comment conflated the construction-time calc_cov_field scan
+// with this find-time scan). The fix caps the per-direction window at 8
+// cells: neighbours beyond the window are NOT admitted (bounded work),
+// neighbours inside it still are (the 2-M-32 kriging behavior is preserved
+// for realistic radii).
+void test_plain_lookup_fallback_window_bounded() {
+    TEST("R-6: plain-lookup pure-nugget fallback is bounded to a small window");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(21, 21, 1);   // indices 0..440
+    double ranges[3] = {3.0, 3.0, 3.0};
+    double angles[3] = {0.0, 0.0, 0.0};
+    hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_SPHERICAL,
+                          ranges, angles, 1.0, 1.0);  // pure nugget
+
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(50, 50, 0);   // large legal radius
+    nb.m_max_neighbours = 8;
+
+    hpgl::neighbour_lookup_t<hpgl::sugarbox_grid_t, hpgl::cov_model_t> nl(&grid, &cov, nb);
+
+    struct mask_pred {
+        const unsigned char * m;
+        bool operator()(hpgl::node_index_t i) const { return m[i] == 1; }
+    };
+
+    // Target (10,10). The out-of-window datum (1,1) is at offset (−9,−9).
+    const int target = 10 * 21 + 10;
+    std::vector<unsigned char> mask(441, 0);
+
+    // 1) Out-of-window datum → NOT admitted (bounded). The pre-fix full-box
+    // scan would have admitted it (radius 50 covers the whole 21×21 grid).
+    {
+        mask[1 * 21 + 1] = 1;
+        std::vector<hpgl::node_index_t> indices;
+        std::vector<hpgl::sugarbox_location_t> coords;
+        hpgl::sugarbox_location_t node_coord;
+        nl.find(target, mask_pred{&mask[0]}, node_coord, indices, coords);
+        CHECK(indices.empty());
+        mask[1 * 21 + 1] = 0;
+    }
+    // 2) In-window datum (offset (0,3)) → still admitted (fallback works).
+    {
+        mask[13 * 21 + 10] = 1;   // (10,13)
+        std::vector<hpgl::node_index_t> indices;
+        std::vector<hpgl::sugarbox_location_t> coords;
+        hpgl::sugarbox_location_t node_coord;
+        nl.find(target, mask_pred{&mask[0]}, node_coord, indices, coords);
+        CHECK(indices.size() == 1);
+        CHECK(indices[0] == 13 * 21 + 10);
+    }
+}
+
+// R-11 / 2-M-35: hpgl_median_ik must validate marginal_probs. Pre-fix the
+// pair was copied raw — a value outside [0,1] (e.g. marginal_probs[1]=5.0)
+// silently produced all-1 output for direct-C callers (prob=5.0 →
+// choose_indicator always returns 1). The fix mirrors the Python wrapper
+// (geo.py:1879-1884 → validation.py:834-881): each value in [0,1] and the
+// pair sums to ~1 (tolerance 0.01).
+void test_median_ik_rejects_invalid_marginal_probs() {
+    TEST("R-11/2-M-35: median_ik rejects marginal_probs outside [0,1] or not summing to 1");
+    const int cells = 4;  // 2×2×1
+    const int cats = 2;
+    std::vector<unsigned char> in_data(cells * cats, 0);
+    std::vector<unsigned char> in_mask(cells * cats, 0);
+    std::vector<unsigned char> out_data(cells * cats, 0);
+    std::vector<unsigned char> out_mask(cells * cats, 0);
+
+    hpgl_ind_masked_array_t in, out;
+    in.m_data = in_data.data(); in.m_mask = in_mask.data();
+    init_shape(in.m_shape, 2, 2, 1);
+    in.m_indicator_count = cats;
+    out.m_data = out_data.data(); out.m_mask = out_mask.data();
+    init_shape(out.m_shape, 2, 2, 1);
+    out.m_indicator_count = cats;
+
+    // 1) Value outside [0,1] → clear error (pre-fix: silent all-1 output).
+    {
+        hpgl_median_ik_params_t params;
+        params.m_covariance_type = 0;
+        params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_marginal_probs[0] = 0.5;
+        params.m_marginal_probs[1] = 5.0;  // pre-fix: silent all-1 output
+        hpgl_median_ik(&in, &params, &out);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "marginal_probs") != nullptr);
+    }
+    // 2) Pair not summing to ~1 → clear error.
+    {
+        hpgl_median_ik_params_t params;
+        params.m_covariance_type = 0;
+        params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_marginal_probs[0] = 0.2;
+        params.m_marginal_probs[1] = 0.5;  // sum 0.7 ≠ 1
+        hpgl_median_ik(&in, &params, &out);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "sum") != nullptr);
+    }
+    // 3) Valid pair still works (all-uninformed → all fallback to 0.5 →
+    // category 0 → every output cell is written).
+    {
+        hpgl_median_ik_params_t params;
+        params.m_covariance_type = 0;
+        params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_marginal_probs[0] = 0.5;
+        params.m_marginal_probs[1] = 0.5;
+        hpgl_median_ik(&in, &params, &out);
+        int informed = 0;
+        for (int i = 0; i < cells; ++i)
+            informed += (out_mask[i] ? 1 : 0);
+        CHECK(informed == cells);  // no exception; every node processed
+    }
+}
+
+// M-28: m_min_neighbours must be validated at the C API boundary. Pre-fix,
+// min>max ⇒ every node skipped → fully-unsimulated SGS output with no error.
+// The fix rejects min<0 and min>max with a clear error message.
+void test_sgs_rejects_invalid_min_neighbours() {
+    TEST("M-28: SGS rejects min_neighbours > max_neighbours");
+    float data[4] = {1.0f, 0, 0, 0};
+    unsigned char mask[4] = {1, 0, 0, 0};
+    hpgl_cont_masked_array_t in;
+    in.m_data = data;
+    in.m_mask = mask;
+    init_shape(in.m_shape, 2, 2, 1);
+
+    hpgl_sgs_params_t params;
+    params.m_covariance_type = 0;
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 3;
+    params.m_kriging_kind = 1;
+    params.m_seed = 42;
+    params.m_min_neighbours = 5;  // > max
+
+    double mean = 0.0;
+    hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "m_min_neighbours") != nullptr);
+}
+
+void test_sgs_rejects_negative_min_neighbours() {
+    TEST("M-28: SGS rejects negative min_neighbours");
+    float data[4] = {1.0f, 0, 0, 0};
+    unsigned char mask[4] = {1, 0, 0, 0};
+    hpgl_cont_masked_array_t in;
+    in.m_data = data;
+    in.m_mask = mask;
+    init_shape(in.m_shape, 2, 2, 1);
+
+    hpgl_sgs_params_t params;
+    params.m_covariance_type = 0;
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 8;
+    params.m_kriging_kind = 1;
+    params.m_seed = 42;
+    params.m_min_neighbours = -1;
+
+    double mean = 0.0;
+    hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "m_min_neighbours") != nullptr);
+}
+
+// M-29 + 2-M-33: with max_neighbours=0 (unconditional simulation) every node
+// takes the failure fallback. GSLIB draws N(gmean, 1.0) on the OK fallback
+// (M-29: previously N(0,1) — the supplied mean was ignored), and the reported
+// stats mean must divide by ALL simulated nodes (2-M-33: previously the
+// success-only denominator forced m_mean=0 when every node fell back).
+void test_sgs_ok_fallback_uses_gmean_and_stats_denominator() {
+    TEST("M-29+2-M-33: OK-mode SGS fallback draws N(gmean,1) and stats mean uses all nodes");
+    const int nx = 20, ny = 20, nz = 1;
+    const int nodes = nx * ny * nz;
+    std::vector<float> data(nodes, 0.0f);
+    std::vector<unsigned char> mask(nodes, 0);
+    mask[0] = 1;  // keep SGS running; radiuses 0 → no neighbours anywhere
+    data[0] = 0.0f;
+    hpgl_cont_masked_array_t in;
+    in.m_data = data.data();
+    in.m_mask = mask.data();
+    init_shape(in.m_shape, nx, ny, nz);
+
+    hpgl_sgs_params_t params;
+    params.m_covariance_type = 0;
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 0; params.m_radiuses[1] = 0; params.m_radiuses[2] = 0;
+    params.m_max_neighbours = 0;  // unconditional simulation — legal for SGS
+    params.m_kriging_kind = 0;    // KRIG_ORDINARY — fallback path
+    params.m_seed = 7;
+    params.m_min_neighbours = 0;
+
+    double mean = 5.0;  // user-supplied mean (gmean)
+    hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
+
+    hpgl_kriging_stats_t stats = hpgl_get_kriging_stats();
+    // All nodes fell back → m_points_calculated == 0; m_mean must still
+    // approximate gmean=5.0 (M-29 fallback + 2-M-33 all-node denominator).
+    // 400 samples of N(5,1): |mean − 5| < 0.15 with overwhelming probability.
+    CHECK(stats.m_points_calculated == 0);
+    CHECK(stats.m_mean > 4.0 && stats.m_mean < 6.0);
+}
+
+// M-31: kriging requires at least one neighbour — max_neighbours=0 (legal for
+// SGS/SIS unconditional simulation) must be REJECTED on kriging entry points
+// with a clear error instead of silently mean-filling / all-undefined output.
+void test_kriging_rejects_zero_max_neighbours() {
+    TEST("M-31: kriging rejects max_neighbours=0");
+    float in_data[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    unsigned char in_mask[4] = {1, 1, 1, 1};
+    float out_data[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    unsigned char out_mask[4] = {0, 0, 0, 0};
+    hpgl_cont_masked_array_t in, out;
+    in.m_data = in_data; in.m_mask = in_mask; init_shape(in.m_shape, 2, 2, 1);
+    out.m_data = out_data; out.m_mask = out_mask; init_shape(out.m_shape, 2, 2, 1);
+
+    hpgl_ok_params_t params;
+    params.m_covariance_type = 0;
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 0;  // pre-fix: accepted → empty neighbourhood
+
+    hpgl_ordinary_kriging(&in, &params, &out);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "at least 1") != nullptr);
+}
+
+// 2-M-4: m_kriging_kind must be validated at the SGS C API boundary. Pre-fix
+// every value ≠ KRIG_SIMPLE silently ran ordinary kriging. Values outside
+// {KRIG_ORDINARY=0, KRIG_SIMPLE=1} must be rejected with a clear error.
+void test_sgs_rejects_invalid_kriging_kind() {
+    TEST("2-M-4: SGS rejects invalid kriging_kind");
+    float data[4] = {1.0f, 0, 0, 0};
+    unsigned char mask[4] = {1, 0, 0, 0};
+    hpgl_cont_masked_array_t in;
+    in.m_data = data;
+    in.m_mask = mask;
+    init_shape(in.m_shape, 2, 2, 1);
+
+    hpgl_sgs_params_t params;
+    params.m_covariance_type = 0;
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 8;
+    params.m_kriging_kind = 99;  // invalid — pre-fix silently ran OK
+    params.m_seed = 42;
+    params.m_min_neighbours = 0;
+
+    double mean = 0.0;
+    hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "kriging_kind") != nullptr);
+}
+
+// 2-M-32: cokriging uses the PLAIN neighbour lookup whose calc_cov_field offset
+// list is covariance-threshold filtered — a pure-nugget model (nugget==sill,
+// every h>0 covariance is 0) produced an EMPTY neighbourhood → every node
+// mean-filled (26/26 KI_NO_NEIGHBOURS in the finding's repro). The plain
+// lookup now mirrors the indexed lookup's radius-bounded pure-nugget fallback,
+// so the same params produce kriged (KI_SUCCESS) values.
+void test_cokriging_pure_nugget_not_mean_filled() {
+    TEST("2-M-32: cokriging pure-nugget model kriges (not mean-fills)");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(4, 4, 1);
+    const int n = 16;
+    std::vector<float> primary_data(n, 0.0f);
+    std::vector<unsigned char> primary_mask(n, 0);
+    primary_data[0] = 1.0f;  primary_mask[0] = 1;
+    primary_data[1] = 3.0f;  primary_mask[1] = 1;
+    primary_data[4] = 2.0f;  primary_mask[4] = 1;
+    primary_data[15] = 4.0f; primary_mask[15] = 1;  // cover the far corner
+    std::vector<float> secondary_data(n, 0.0f);
+    std::vector<unsigned char> secondary_mask(n, 0);
+    secondary_data[0] = 1.0f; secondary_mask[0] = 1;
+    secondary_data[4] = 2.0f; secondary_mask[4] = 1;
+    std::vector<float> output_data(n, 0.0f);
+    std::vector<unsigned char> output_mask(n, 0);
+
+    hpgl::cont_property_array_t primary(primary_data.data(), primary_mask.data(), n);
+    hpgl::cont_property_array_t secondary(secondary_data.data(), secondary_mask.data(), n);
+    hpgl::cont_property_array_t output(output_data.data(), output_mask.data(), n);
+
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(2, 2, 0);
+    nb.m_max_neighbours = 8;
+
+    hpgl::covariance_param_t cp;
+    cp.m_covariance_type = hpgl::covariance_type_t::COV_SPHERICAL;
+    cp.set_ranges(3.0, 3.0, 3.0);
+    cp.set_angles(0.0, 0.0, 0.0);
+    cp.set_sill(1.0);
+    cp.set_nugget(1.0);  // pure nugget: C(h>0) == 0
+
+    hpgl::simple_cokriging_markI(grid, primary, secondary,
+        0.0f, 0.0f, 1.0, 0.5, nb, cp, output);
+
+    hpgl_kriging_stats_t stats = hpgl_get_kriging_stats();
+    // Pre-fix: plain lookup threshold-filtered to nothing → 12/12 uninformed
+    // nodes mean-filled (KI_NO_NEIGHBOURS, points_calculated == 0). Post-fix:
+    // radius-bounded neighbours found → all uninformed nodes kriged.
+    CHECK(stats.m_points_calculated > 0);
+    CHECK(stats.m_points_without_neighbours == 0);
+}
+
+// 2-M-33 (median_ik): kriging_stats_t.m_mean must divide by all processed
+// nodes, not success-only points_calculated. With every node falling back to
+// the marginal (no neighbours), marginal_probs[1]=0.9 → every node outputs
+// category 1 → m_mean must be 1.0, not 0.0 (pre-fix: points_calculated==0 →
+// the ternary returned 0).
+void test_median_ik_stats_mean_uses_all_processed() {
+    TEST("2-M-33: median IK stats mean uses all-processed denominator");
+    const int cells = 16;            // 4x4x1, all uninformed
+    const int cats = 2;
+    std::vector<unsigned char> in_data(cells * cats, 0);
+    std::vector<unsigned char> in_mask(cells * cats, 0);
+    std::vector<unsigned char> out_data(cells * cats, 0);
+    std::vector<unsigned char> out_mask(cells * cats, 0);
+
+    hpgl_ind_masked_array_t in, out;
+    in.m_data = in_data.data(); in.m_mask = in_mask.data();
+    init_shape(in.m_shape, 4, 4, 1);
+    in.m_indicator_count = cats;
+    out.m_data = out_data.data(); out.m_mask = out_mask.data();
+    init_shape(out.m_shape, 4, 4, 1);
+    out.m_indicator_count = cats;
+
+    hpgl_median_ik_params_t params;
+    params.m_covariance_type = 0;
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 8;
+    params.m_marginal_probs[0] = 0.1;
+    params.m_marginal_probs[1] = 0.9;
+
+    hpgl_median_ik(&in, &params, &out);
+    hpgl_kriging_stats_t stats = hpgl_get_kriging_stats();
+    // No informed cells → every node falls back to marginal 0.9 → category 1.
+    // Post-fix mean == 1.0 (16/16); pre-fix mean == 0.0 (points_calculated 0).
+    CHECK(stats.m_points_calculated == 0);
+    CHECK(stats.m_mean > 0.99);
+}
+
+// 2-M-2: hpgl_simple_kriging_weights was the ONLY kriging entry point
+// without the MAX_NEIGHBOURS_UPPER_BOUND gate. Pre-fix a pathological
+// neighbours_count (a) dereferenced the neighbour arrays up to count — a
+// heap OOB read when count exceeds the arrays' actual length — and
+// (b) allocated A = count² (100k pts → 160 GB) + O(count³) solve → OOM/DoS.
+// The gate must reject count > 100000 with a clear error BEFORE any
+// dereference, while a valid small count still works.
+void test_simple_kriging_weights_rejects_huge_count() {
+    TEST("2-M-2: simple_kriging_weights rejects neighbours_count > 100000");
+    float center[3] = {0.0f, 0.0f, 0.0f};
+    float nx[2] = {1.0f, 2.0f};
+    float ny[2] = {0.0f, 0.0f};
+    float nz[2] = {0.0f, 0.0f};
+    float weights[2] = {0.0f, 0.0f};
+
+    hpgl_cov_params_t params;
+    params.m_covariance_type = 0;   // COV_SPHERICAL
+    params.m_ranges[0] = 10; params.m_ranges[1] = 10; params.m_ranges[2] = 10;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+
+    // Pathological count: the arrays have only 2 elements. Pre-fix this read
+    // neighbours_x[i] for i < 100001 (heap OOB read) and allocated a 100001²
+    // covariance matrix (~80 GB) before the solve.
+    int rc = hpgl_simple_kriging_weights(center, nx, ny, nz, 100001, &params, weights);
+    CHECK(rc == -1);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "100000") != nullptr);
+
+    // A valid small count still produces weights.
+    rc = hpgl_simple_kriging_weights(center, nx, ny, nz, 2, &params, weights);
+    CHECK(rc == 0);
+    CHECK(std::isfinite(weights[0]) && std::isfinite(weights[1]));
+}
+
+// 2-M-9: cokriging Mark I/II gained per-node workspace reuse (the previous
+// ~7 heap allocations per node — coords/indices/weights/values/A/b/A_backup —
+// are now reused from a cokriging_ws_t). This test asserts correctness is
+// unchanged: with an informed secondary, uninformed nodes are kriged
+// (KI_SUCCESS), no singularity fallback, and all outputs are finite.
+void test_cokriging_workspace_preserves_correctness() {
+    TEST("2-M-9: cokriging Mark I workspace reuse preserves correctness");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(4, 4, 1);
+    const int n = 16;
+    std::vector<float> primary_data(n, 0.0f);
+    std::vector<unsigned char> primary_mask(n, 0);
+    primary_data[0] = 1.0f;  primary_mask[0] = 1;
+    primary_data[1] = 3.0f;  primary_mask[1] = 1;
+    primary_data[4] = 2.0f;  primary_mask[4] = 1;
+    std::vector<float> secondary_data(n, 0.0f);
+    std::vector<unsigned char> secondary_mask(n, 0);
+    secondary_data[0] = 1.0f; secondary_mask[0] = 1;
+    secondary_data[4] = 2.0f; secondary_mask[4] = 1;
+    std::vector<float> output_data(n, 0.0f);
+    std::vector<unsigned char> output_mask(n, 0);
+
+    hpgl::cont_property_array_t primary(primary_data.data(), primary_mask.data(), n);
+    hpgl::cont_property_array_t secondary(secondary_data.data(), secondary_mask.data(), n);
+    hpgl::cont_property_array_t output(output_data.data(), output_mask.data(), n);
+
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(2, 2, 0);
+    nb.m_max_neighbours = 8;
+
+    hpgl::covariance_param_t cp;
+    cp.m_covariance_type = hpgl::covariance_type_t::COV_EXPONENTIAL;
+    cp.set_ranges(3.0, 3.0, 3.0);
+    cp.set_angles(0.0, 0.0, 0.0);
+    cp.set_sill(1.0);
+    cp.set_nugget(0.0);
+
+    hpgl::simple_cokriging_markI(grid, primary, secondary,
+        0.0f, 0.0f, 1.0, 0.5, nb, cp, output);
+
+    hpgl_kriging_stats_t stats = hpgl_get_kriging_stats();
+    // Pre/post-fix identical: the workspace refactor is allocation-only.
+    CHECK(stats.m_points_calculated > 0);
+    CHECK(stats.m_points_singularity == 0);
+    bool any_output = false;
+    for (int i = 0; i < n; ++i) {
+        if (output_mask[i]) {
+            CHECK(std::isfinite(output_data[i]));
+            any_output = true;
+        }
+    }
+    CHECK(any_output);
+}
+
+// 2-M-15: the C++ property_array mask buffer is a separate allocation whose
+// length may be smaller than the data size (a mismatched Python mask). The
+// mask_size constructor arg bounds set_at/is_informed/delete_value_at so a
+// smaller mask cannot cause a heap OOB write (0x01) or OOB read.
+void test_property_array_mask_size_bounds() {
+    TEST("2-M-15: property_array mask_size bounds mask access");
+    float data[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    unsigned char mask[2] = {1, 0};   // mask smaller than data (4 cells)
+
+    hpgl::cont_property_array_t prop(data, mask, 4, 2);  // mask_size = 2
+
+    // Reads beyond the mask length must be treated as not-informed — pre-fix
+    // is_informed(2)/is_informed(3) read mask[2]/mask[3] out of bounds.
+    CHECK(prop.is_informed(0) == true);
+    CHECK(prop.is_informed(1) == false);
+    CHECK(prop.is_informed(2) == false);
+    CHECK(prop.is_informed(3) == false);
+
+    // Writes within the mask length still work.
+    prop.set_at(1, 5.0f);
+    CHECK(data[1] == 5.0f);
+    CHECK(mask[1] == 1);
+
+    // Legacy default (mask_size=0) keeps the pre-existing behavior.
+    float data2[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    unsigned char mask2[4] = {0, 0, 0, 0};
+    hpgl::cont_property_array_t prop2(data2, mask2, 4);
+    prop2.set_at(3, 7.0f);
+    CHECK(data2[3] == 7.0f);
+    CHECK(mask2[3] == 1);
+}
+
+// M-12: the clusterizer admission cap must bound the EFFECTIVE memory
+// (pointer vector + worst-case fully-dense cluster_t objects), not just the
+// pointer count. A 300³ grid at radius 1 has a cluster grid of 302³ ≈ 27.5M
+// cells — legal under the old 100M pointer-vector cap but ~1.7 GB of lazy
+// cluster_t heap objects when fully dense. It must be rejected with a clear
+// memory-safe error instead of OOM.
+void test_clusterizer_rejects_memory_unsafe_volume() {
+    TEST("M-12: clusterizer rejects memory-unsafe cluster-grid volume");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(300, 300, 300);
+    hpgl::sugarbox_search_ellipsoid_t ell(1, 1, 1);
+
+    bool threw = false;
+    try {
+        hpgl::clusterizer_t c(&grid, ell, 1);
+    } catch (const hpgl::hpgl_exception & ex) {
+        threw = true;
+        CHECK(strstr(ex.what(), "memory-safe") != nullptr);
+    }
+    CHECK(threw);
+}
+
 // ---- Main ----
 
 int main() {
@@ -1017,6 +1911,29 @@ int main() {
     test_indicator_kriging_rejects_zero_radius();
     test_covariance_field_exact_beyond_box();
     test_cokriging_rejects_huge_max_neighbours();
+
+    // s6-fix-cpp-engines regression tests (M-3, M-5, M-6, M-11, M-28, M-29,
+    // M-31, 2-M-4, 2-M-32, 2-M-33) + s9 round-2 re-fixes (R-3, R-5, R-6, R-11).
+    test_ok_sgs_only_downgrades_under_4_neighbours();
+    test_user_cancellation_stops_kriging_loop();
+    test_median_ik_emits_stderr_failure_signal();
+    test_sgs_ndmin_skips_nodes_with_few_originals_despite_inflated_total();
+    test_sgs_rejects_invalid_min_neighbours();
+    test_sgs_rejects_negative_min_neighbours();
+    test_sgs_ok_fallback_uses_gmean_and_stats_denominator();
+    test_kriging_rejects_zero_max_neighbours();
+    test_sgs_rejects_invalid_kriging_kind();
+    test_cokriging_pure_nugget_not_mean_filled();
+    test_median_ik_stats_mean_uses_all_processed();
+    test_sgs_ok_downgraded_estimate_has_no_mean_term();
+    test_plain_lookup_fallback_window_bounded();
+    test_median_ik_rejects_invalid_marginal_probs();
+
+    // s6-fix-cpp-hardening regression tests (M-12, 2-M-2, 2-M-9, 2-M-15).
+    test_simple_kriging_weights_rejects_huge_count();
+    test_cokriging_workspace_preserves_correctness();
+    test_property_array_mask_size_bounds();
+    test_clusterizer_rejects_memory_unsafe_volume();
 
     std::printf("C++ unit tests: %d run, %d failed\n", g_tests_run, g_tests_failed);
     return g_tests_failed > 0 ? 1 : 0;

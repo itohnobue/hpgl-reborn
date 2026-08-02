@@ -314,8 +314,8 @@ class TestGtsim2Ind:
 
         # Leave ~30% of cells uninformed in both props so SGS actually
         # simulates them (seed-dependent). Identical masks for a fair
-        # seed comparison. Note: gtsim_2ind mutates prop.data in place,
-        # so two fresh props are required.
+        # seed comparison. (2-M-12: gtsim_2ind no longer mutates the
+        # caller's prop, but fresh props keep the comparison clean.)
         rng = np.random.RandomState(123)
         partial_mask = (rng.rand(prop1.mask.size) < 0.7).astype("uint8")
         prop1.mask[:] = partial_mask

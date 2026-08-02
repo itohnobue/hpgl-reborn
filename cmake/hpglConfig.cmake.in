@@ -8,17 +8,35 @@
 
 @PACKAGE_INIT@
 
+# find_dependency() is defined by this macro module — it is NOT part of the
+# PACKAGE_INIT expansion. Without it, every find_dependency() call below
+# (MKL/OpenMP in the original; BLAS/LAPACK added in 2-M-23) failed consumers
+# with "Unknown CMake command find_dependency".
+include(CMakeFindDependencyMacro)
+
 include("${CMAKE_CURRENT_LIST_DIR}/hpglTargets.cmake")
 
-# BLAS/LAPACK are PRIVATE link dependencies for non-MKL builds,
-# but consumers that compile with HPGL_USE_MKL may need the MKL target.
-# For non-MKL builds, BLAS/LAPACK are already embedded in the shared library.
+# BLAS/LAPACK: for non-MKL builds these are DYNAMIC PRIVATE link dependencies
+# of libhpgl — they are NOT embedded in the shared library (the old "already
+# embedded" comment was false for dynamic BLAS, 2-M-23). find_dependency
+# declares the transitive requirement so a consumer without BLAS/LAPACK fails
+# at configure time with a clear message instead of at dlopen time on the
+# consumer's machine.
 if(@HPGL_USE_MKL@)
     find_dependency(MKL CONFIG QUIET)
+else()
+    find_dependency(BLAS)
+    find_dependency(LAPACK)
 endif()
 
-# OpenMP is a PUBLIC dependency — consumers need OpenMP flags.
-if(@HPGL_USE_OPENMP@ AND @HPGL_OPENMP_BOOL@)
+# OpenMP is a PUBLIC dependency — consumers need OpenMP flags. Exception
+# (R-21): when OpenMP is STATICALLY embedded in the shipped dylibs (macOS
+# wheel built with libomp.a, HPGL_OPENMP_STATIC=TRUE), the consumer needs no
+# OpenMP at configure time or runtime. Requiring find_dependency(OpenMP)
+# unconditionally made find_package(hpgl) fail on machines without Homebrew
+# libomp ("Could NOT find OpenMP_CXX") even though the wheel is
+# self-contained. Gate the dependency on the dynamic-link case only.
+if(@HPGL_USE_OPENMP@ AND @HPGL_OPENMP_BOOL@ AND NOT @HPGL_OPENMP_STATIC_BOOL@)
     find_dependency(OpenMP)
 endif()
 

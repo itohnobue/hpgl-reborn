@@ -142,6 +142,12 @@ def sis_simulation(
         use_harddata = config.use_harddata
         if config.marginal_probs is not None:
             marginal_probs = list(config.marginal_probs)
+        # M-25: never mutate the caller's data dicts. The injection below
+        # adds radiuses/max_neighbours entries the caller did not provide;
+        # writing them into the caller-owned dicts silently leaves stale
+        # config values behind for dict reuse. Inject into shallow copies
+        # (cov_model references are shared read-only).
+        data = [dict(ikd) for ikd in data]
         # Apply config radiuses / max_neighbours to each indicator's data dict
         # only if the dict doesn't already specify its own value
         for ikd in data:

@@ -27,6 +27,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# macOS deployment target: pin at the CMake level so EVERY build path (local
+# builds, wheel builds) targets macOS 11.0 instead of the host-macOS version.
+# Without this, a wheel built on macOS 15 tags macosx_15_0 and pip rejects it
+# on macOS 11-14 (H-3). Overridable via -DCMAKE_OSX_DEPLOYMENT_TARGET=...
+# (covers both undefined AND stale-empty cache entries).
+if(APPLE AND (NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL ""))
+    set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0 CACHE STRING "Minimum macOS deployment target" FORCE)
+endif()
+
 # Link-Time Optimization (LTO/IPO) for Release builds.
 # Equivalent to vcxproj Release configs that enable LTO via /GL and /LTCG.
 include(CheckIPOSupported)
@@ -64,6 +73,30 @@ option(HPGL_BUILD_TESTS "Build tests" OFF)
 option(HPGL_USE_OPENMP "Enable OpenMP parallelization" ON)
 option(HPGL_USE_MKL "Use Intel MKL instead of OpenBLAS" OFF)
 
+# macOS: statically link libomp so the produced dylibs carry NO absolute
+# Homebrew libomp runtime dependency — the wheel is then relocatable without
+# delocate repair (H-3). Default ON on Apple, OFF elsewhere (other platforms
+# link the system OpenMP runtime dynamically, which is the local convention).
+if(APPLE)
+    set(_hpgl_static_libomp_default ON)
+else()
+    set(_hpgl_static_libomp_default OFF)
+endif()
+option(HPGL_STATIC_LIBOMP "Statically link libomp on macOS for relocatable artifacts" ${_hpgl_static_libomp_default})
+
+# R-26/R-31: stale-cache detection. The option() call above does NOT override a
+# cached value, so a build directory configured before HPGL_STATIC_LIBOMP
+# defaulted to ON silently keeps producing non-relocatable dylibs (absolute
+# Homebrew libomp runtime dependency — the H-3 defect class) with no error.
+# Warn loudly when macOS is configured with the option OFF so the stale-cache
+# mechanism cannot silently disable the H-3 protection.
+if(APPLE AND NOT HPGL_STATIC_LIBOMP)
+    message(WARNING "HPGL_STATIC_LIBOMP is OFF on macOS: the produced dylibs will carry an absolute "
+                    "Homebrew libomp runtime dependency and are NOT relocatable. This is usually a stale "
+                    "CMake cache from before the option defaulted to ON — reconfigure with "
+                    "-DHPGL_STATIC_LIBOMP=ON (or delete the cache dir) for self-contained artifacts.")
+endif()
+
 # BLAS vendor selection (only used when HPGL_USE_MKL=OFF).
 # Set to pin a specific vendor: OpenBLAS, Intel10_64lp, Apple, etc.
 # Leave empty to let CMake auto-detect.
@@ -83,8 +116,28 @@ if(HPGL_USE_OPENMP)
     # serial build on Apple Silicon/Intel even though libomp is installed
     # (production-check gap: wheels built on macOS shipped without OpenMP).
     # Point OpenMP_ROOT at the Homebrew libomp installation when present.
+    # The probe is skipped for universal (multi-arch) builds: Homebrew
+    # prefixes are single-arch, so an auto-picked libomp would force one
+    # arch and break the other (F-2) — universal builds must set
+    # OpenMP_ROOT explicitly per-arch in the packaging environment.
     if(APPLE AND NOT DEFINED OpenMP_ROOT)
-        foreach(_brew_prefix "/opt/homebrew/opt/libomp" "/usr/local/opt/libomp")
+        set(_hpgl_osx_archs "${CMAKE_OSX_ARCHITECTURES}")
+        set(_hpgl_probe_prefixes "")
+        if(NOT _hpgl_osx_archs)
+            if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+                set(_hpgl_probe_prefixes "/opt/homebrew/opt/libomp" "/usr/local/opt/libomp")
+            else()
+                set(_hpgl_probe_prefixes "/usr/local/opt/libomp" "/opt/homebrew/opt/libomp")
+            endif()
+        elseif(NOT _hpgl_osx_archs MATCHES ";")
+            # Single explicitly-listed arch: probe both prefixes, host-arch first.
+            if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+                set(_hpgl_probe_prefixes "/opt/homebrew/opt/libomp" "/usr/local/opt/libomp")
+            else()
+                set(_hpgl_probe_prefixes "/usr/local/opt/libomp" "/opt/homebrew/opt/libomp")
+            endif()
+        endif()
+        foreach(_brew_prefix IN LISTS _hpgl_probe_prefixes)
             if(EXISTS "${_brew_prefix}/include/omp.h")
                 set(OpenMP_ROOT "${_brew_prefix}" CACHE PATH "Homebrew libomp prefix" FORCE)
                 message(STATUS "OpenMP: using Homebrew libomp at ${_brew_prefix}")
@@ -92,11 +145,74 @@ if(HPGL_USE_OPENMP)
             endif()
         endforeach()
     endif()
-    find_package(OpenMP)
-    if(OpenMP_FOUND)
-        message(STATUS "OpenMP found - version ${OpenMP_CXX_VERSION}")
-    else()
-        message(WARNING "OpenMP not found - parallel algorithms will be disabled")
+    # HPGL_USE_OPENMP=ON is a HARD requirement: silently degrading to a serial
+    # build produced numerically-divergent artifacts from the same commit on
+    # different machines (2-M-21). Fail loudly at configure instead of
+    # shipping a serial "high performance" library.
+    find_package(OpenMP REQUIRED)
+    message(STATUS "OpenMP found - version ${OpenMP_CXX_VERSION}")
+
+    # macOS: prefer statically linking libomp.a so the built dylibs carry no
+    # absolute /opt/homebrew/opt/libomp/lib/libomp.dylib load command (H-3).
+    # Falls back to OpenMP::OpenMP_CXX (dynamic) when the archive is absent.
+    set(_hpgl_omp_link OpenMP::OpenMP_CXX)
+    set(_hpgl_omp_flags "")
+    set(_hpgl_omp_include "")
+    # R-21: records whether OpenMP is STATICALLY embedded in the built dylibs
+    # (macOS wheel with libomp.a). The exported package config uses this to
+    # skip find_dependency(OpenMP) — a static-libomp consumer needs no OpenMP
+    # at configure time or runtime. Always set (FALSE default) so the config
+    # template substitution is never empty.
+    set(HPGL_OPENMP_STATIC FALSE)
+    if(HPGL_STATIC_LIBOMP AND APPLE AND OpenMP_ROOT AND EXISTS "${OpenMP_ROOT}/lib/libomp.a")
+        set(_hpgl_omp_flags ${OpenMP_CXX_FLAGS})
+        # OpenMP_CXX_FLAGS is ONE string ("-Xclang -fopenmp"); splitting it is
+        # required — passing it raw makes the compiler see a single quoted
+        # argument "-Xclang -fopenmp", which clang++ rejects as "unknown
+        # argument" (the exact failure the original OpenMP::OpenMP_CXX comment
+        # documents). The include dir must be propagated manually too — the
+        # OpenMP::OpenMP_CXX interface normally provides omp.h (source files
+        # do #include <omp.h>).
+        separate_arguments(_hpgl_omp_flags UNIX_COMMAND "${_hpgl_omp_flags}")
+        set(_hpgl_omp_include "${OpenMP_ROOT}/include")
+        set(_hpgl_omp_link "${OpenMP_ROOT}/lib/libomp.a")
+        set(HPGL_OPENMP_STATIC TRUE)
+        message(STATUS "OpenMP: statically linking libomp.a (relocatable artifacts)")
+
+        # R-23: deployment-target guarantee. The static libomp.a objects carry
+        # their own LC_BUILD_VERSION min-OS; if the archive was built for a
+        # newer macOS than CMAKE_OSX_DEPLOYMENT_TARGET, the wheel's
+        # macosx_11_0 tag is structurally unsound (embedded objects claim a
+        # newer min-OS than the dylib). Warn at configure time (the escalation
+        # probe found NO macOS 15+ API usage in Homebrew's libomp — 0
+        # weak_import — so the wheel still runs on macOS 11+, but the
+        # guarantee is fragile). The wheel verification gate additionally
+        # asserts LC_BUILD_VERSION on the shipped dylibs (build.sh).
+        execute_process(
+            COMMAND otool -l "${OpenMP_ROOT}/lib/libomp.a"
+            OUTPUT_VARIABLE _hpgl_libomp_otool
+            ERROR_QUIET
+        )
+        string(REPLACE "\n" ";" _hpgl_libomp_otool_lines "${_hpgl_libomp_otool}")
+        set(_hpgl_libomp_max "")
+        foreach(_line IN LISTS _hpgl_libomp_otool_lines)
+            string(STRIP "${_line}" _line_stripped)
+            if(_line_stripped MATCHES "^minos[ \t]+([0-9]+\\.[0-9]+)")
+                if(NOT _hpgl_libomp_max OR CMAKE_MATCH_1 VERSION_GREATER "${_hpgl_libomp_max}")
+                    set(_hpgl_libomp_max "${CMAKE_MATCH_1}")
+                endif()
+            endif()
+        endforeach()
+        if(_hpgl_libomp_max AND CMAKE_OSX_DEPLOYMENT_TARGET
+           AND _hpgl_libomp_max VERSION_GREATER CMAKE_OSX_DEPLOYMENT_TARGET)
+            message(WARNING "Static libomp at ${OpenMP_ROOT}/lib/libomp.a was built for macOS ${_hpgl_libomp_max} "
+                            "which is newer than the deployment target ${CMAKE_OSX_DEPLOYMENT_TARGET}. The produced "
+                            "artifact embeds objects claiming min-OS ${_hpgl_libomp_max} inside a "
+                            "macosx_${CMAKE_OSX_DEPLOYMENT_TARGET} wheel. Escalation probe found no macOS 15+ API "
+                            "usage (0 weak_import), so the artifact still runs on the deployment target — but this "
+                            "is fragile. Rebuild libomp with -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET} "
+                            "for a structurally sound guarantee.")
+        endif()
     endif()
 endif()
 
@@ -110,6 +226,8 @@ if(HPGL_USE_MKL)
         message(STATUS "Intel MKL found")
         set(BLAS_LIBRARIES MKL::MKL)
         set(LAPACK_LIBRARIES MKL::MKL)
+        # R-10: MKL is not OpenBLAS — the HPGL_USE_OPENBLAS define stays off.
+        set(_hpgl_blas_is_openblas FALSE)
     else()
         message(FATAL_ERROR "HPGL_USE_MKL is ON but Intel MKL not found")
     endif()
@@ -152,6 +270,18 @@ else()
                             "Mixed-vendor BLAS/LAPACK can cause ABI mismatches. "
                             "Set -DBLA_VENDOR=<vendor> to pin a specific provider.")
         endif()
+        # R-10: HPGL_USE_OPENBLAS gates the OpenBLAS thread-control fast path
+        # in indicator_kriging.h / cont_kriging.h / median_ik.cpp (M-32). It
+        # must be defined ONLY when the build actually links OpenBLAS — the
+        # openblas_* symbols it references are absent from other vendors, and
+        # an unconditional define caused an undefined-symbol dlopen failure
+        # with netlib/BLIS/FlexiBLAS/ATLAS. Detect via the library-name
+        # vendor extraction above OR the explicit BLA_VENDOR cache var.
+        if(_blas_vendor MATCHES "openblas" OR BLA_VENDOR MATCHES "OpenBLAS")
+            set(_hpgl_blas_is_openblas TRUE)
+        else()
+            set(_hpgl_blas_is_openblas FALSE)
+        endif()
     else()
         message(FATAL_ERROR "BLAS/LAPACK not found - one of these libraries is required. "
                             "Install BLAS/LAPACK packages for your platform or set HPGL_USE_MKL=ON.")
@@ -191,9 +321,19 @@ add_library(hpgl::core ALIAS hpgl_core)
 # Ensure consistent output name across platforms (Python bindings expect "hpgl")
 set_target_properties(hpgl_core PROPERTIES
     OUTPUT_NAME "hpgl"
-    VERSION "${PROJECT_VERSION}"
-    SOVERSION "${PROJECT_VERSION_MAJOR}"
 )
+# Version the shared library for standalone installs (C++ consumers get the
+# SOVERSION symlink chain). Wheel builds (SKBUILD) skip VERSION/SOVERSION so
+# the install emits a single plain libhpgl.dylib — the wheel assembler
+# dereferences the versioned symlink chain into duplicate physical copies
+# (H-3d / 2-M-25), and setting the properties to "" would emit the malformed
+# name "libhpgl..dylib".
+if(NOT SKBUILD)
+    set_target_properties(hpgl_core PROPERTIES
+        VERSION "${PROJECT_VERSION}"
+        SOVERSION "${PROJECT_VERSION_MAJOR}"
+    )
+endif()
 
 # Compiler warning flags applied at target scope
 target_compile_options(hpgl_core PRIVATE ${HPGL_COMPILE_WARNINGS})
@@ -224,10 +364,27 @@ if(HPGL_USE_MKL AND MKL_FOUND)
     target_compile_definitions(hpgl_core PRIVATE HPGL_USE_MKL USE_INTEL_MKL)
 endif()
 
+# R-10: OpenBLAS thread-control fast path (M-32) — PRIVATE, because the define
+# gates code compiled INTO hpgl_core (indicator_kriging.h / cont_kriging.h /
+# median_ik.cpp); consumers compile the generic path through the same headers.
+# Defined ONLY when the detected vendor is OpenBLAS (see the BLAS section).
+if(_hpgl_blas_is_openblas)
+    target_compile_definitions(hpgl_core PRIVATE HPGL_USE_OPENBLAS)
+endif()
+
 # RPATH configuration: embed BLAS/LAPACK library paths so that the built
 # hpgl shared library can locate them at runtime without LD_LIBRARY_PATH.
 # Only extracts directory paths from concrete library file names (skips
 # -l flags and CMake interface targets).
+#
+# Framework bundles and system/SDK directories are EXCLUDED:
+#  - macOS BLAS resolves to Accelerate.framework, which is referenced by its
+#    absolute framework install name — no RPATH is needed. Baking the build
+#    machine's Xcode SDK frameworks dir into LC_RPATH leaked a machine-specific
+#    path into shipped artifacts (N4 fold-in into H-3).
+#  - System search dirs (/usr/lib, /usr/local/lib, /System, /Library) are
+#    already resolved by the OS default search paths; baking them into
+#    INSTALL_RPATH made standalone installs non-relocatable (2-M-23).
 set(_hpgl_rpath_dirs "")
 function(_hpgl_collect_rpath_dirs lib_list)
     foreach(_lib ${lib_list})
@@ -236,6 +393,9 @@ function(_hpgl_collect_rpath_dirs lib_list)
         endif()
         get_filename_component(_lib_dir "${_lib}" DIRECTORY)
         if(_lib_dir AND NOT _lib_dir STREQUAL "")
+            if(_lib_dir MATCHES "\\.framework$" OR _lib_dir MATCHES "(/SDKs/|MacOSX\\.sdk|^/System/|^/Library/|^/usr/lib|^/usr/local/lib|/Applications/Xcode)")
+                continue()
+            endif()
             list(APPEND _hpgl_rpath_dirs "${_lib_dir}")
         endif()
     endforeach()
@@ -295,12 +455,28 @@ endif()
 
 # OpenMP support
 if(HPGL_USE_OPENMP AND OpenMP_FOUND)
-    # OpenMP::OpenMP_CXX propagates the compiler flags (e.g. -Xclang -fopenmp
-    # on AppleClang) via its interface; adding ${OpenMP_CXX_FLAGS} manually
-    # passed the flag string as ONE quoted argument ("-Xclang -fopenmp"),
-    # which clang++ rejects as "unknown argument". The imported target is
-    # sufficient and correct.
-    target_link_libraries(hpgl_core PUBLIC OpenMP::OpenMP_CXX)
+    if(_hpgl_omp_flags)
+        # Static libomp (macOS, H-3): propagate the -fopenmp compile flags
+        # (e.g. "-Xclang -fopenmp" on AppleClang) and the omp.h include dir,
+        # and link the archive directly so no libomp.dylib runtime dependency
+        # is recorded — the wheel is relocatable without bundling or
+        # install_name_tool repair.
+        target_compile_options(hpgl_core PUBLIC ${_hpgl_omp_flags})
+        # R-22: wrap the Homebrew omp.h include dir in $<BUILD_INTERFACE:...>
+        # ONLY — at install/export time it contributes nothing, so the
+        # absolute build-machine path (/opt/homebrew/opt/libomp/include) no
+        # longer leaks into the shipped hpglTargets.cmake. The existing
+        # $<INSTALL_INTERFACE:include> (above) covers the packaged headers.
+        target_include_directories(hpgl_core PUBLIC $<BUILD_INTERFACE:${_hpgl_omp_include}>)
+        target_link_libraries(hpgl_core PRIVATE ${_hpgl_omp_link})
+    else()
+        # OpenMP::OpenMP_CXX propagates the compiler flags (e.g. -Xclang -fopenmp
+        # on AppleClang) via its interface; adding ${OpenMP_CXX_FLAGS} manually
+        # passed the flag string as ONE quoted argument ("-Xclang -fopenmp"),
+        # which clang++ rejects as "unknown argument". The imported target is
+        # sufficient and correct.
+        target_link_libraries(hpgl_core PUBLIC OpenMP::OpenMP_CXX)
+    endif()
 endif()
 
 # ============================================================================
@@ -363,8 +539,25 @@ if(HPGL_BUILD_VARIOGRAM)
     # calc_variograms_from_point_set that benefits from parallelization.
     # OpenMP::OpenMP_CXX propagates the compile flags; see hpgl_core block.
     if(HPGL_USE_OPENMP AND OpenMP_FOUND)
-        target_link_libraries(hpgl_variogram PUBLIC OpenMP::OpenMP_CXX)
+        if(_hpgl_omp_flags)
+            target_compile_options(hpgl_variogram PUBLIC ${_hpgl_omp_flags})
+            # R-22: same BUILD_INTERFACE-only wrap as hpgl_core — keeps the
+            # Homebrew include dir out of any exported target (hpgl_variogram
+            # is not exported today, but the defect class is the same).
+            target_include_directories(hpgl_variogram PUBLIC $<BUILD_INTERFACE:${_hpgl_omp_include}>)
+            target_link_libraries(hpgl_variogram PRIVATE ${_hpgl_omp_link})
+        else()
+            target_link_libraries(hpgl_variogram PUBLIC OpenMP::OpenMP_CXX)
+        endif()
     endif()
+
+    # Windows symbol export (M-17): cvar_clear_last_error is defined as plain
+    # extern "C" without the CVAR_API macro in variograms.cpp, so on MSVC it
+    # is not dllexport'ed by default and Python's hasattr() check silently
+    # disables stale-error clearing. WINDOWS_EXPORT_ALL_SYMBOLS generates a
+    # module-definition file at link time covering it (and the other cvar_*
+    # exports) on fresh MSVC builds. Ignored on non-Windows platforms.
+    set_target_properties(hpgl_variogram PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 # ============================================================================
@@ -381,7 +574,21 @@ include(GNUInstallDirs)
 # layout. Native libraries MUST be co-located with the wrapper scripts so
 # that _safe_load_library() (which searches ref_path.parent) can find them.
 if(SKBUILD)
-    set(HPGL_PYTHON_DEST ${SKBUILD_PLATLIB_DIR}/geo_bsd)
+    # Wheel builds: scikit-build-core maps a plain RELATIVE destination to the
+    # platlib tree (CMAKE_INSTALL_PREFIX == SKBUILD_PLATLIB_DIR), so the
+    # installed location is identical to the old absolute
+    # ${SKBUILD_PLATLIB_DIR}/geo_bsd — but install(EXPORT) then records
+    # ${_IMPORT_PREFIX}/geo_bsd/... instead of the staging temp dir. The
+    # shipped wheel's hpglTargets-release.cmake referenced a deleted
+    # build-machine temp dir, making find_package(hpgl) against the installed
+    # wheel a guaranteed FATAL_ERROR and leaking the build-machine path
+    # (2-M-18). A relative destination fixes both.
+    set(HPGL_PYTHON_DEST "geo_bsd")
+    # Wheel builds additionally skip VERSION/SOVERSION (set conditionally at
+    # target creation above) so the wheel ships a single plain libhpgl.dylib
+    # — the wheel assembler dereferences the versioned symlink chain into
+    # duplicate physical copies, breaking the "exactly one dylib per library"
+    # verification gate (H-3d / 2-M-25).
 else()
     set(HPGL_PYTHON_DEST ${CMAKE_INSTALL_LIBDIR}/hpgl)
 endif()
@@ -455,6 +662,17 @@ else()
     set(HPGL_OPENMP_BOOL FALSE)
 endif()
 
+# R-21: same normalization for the static-embed flag (set in the OpenMP
+# section). TRUE when OpenMP is statically embedded (macOS libomp.a wheel) —
+# the package config then skips find_dependency(OpenMP). Always defined
+# (FALSE when HPGL_USE_OPENMP=OFF or dynamic OpenMP is linked), so the
+# template substitution is never empty.
+if(HPGL_OPENMP_STATIC)
+    set(HPGL_OPENMP_STATIC_BOOL TRUE)
+else()
+    set(HPGL_OPENMP_STATIC_BOOL FALSE)
+endif()
+
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hpglConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/hpglConfig.cmake"
@@ -476,8 +694,17 @@ install(FILES
 # ============================================================================
 
 if(HPGL_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
+    # Guard against sdists built without the test suite (2-M-17): every
+    # preset and build.sh sets HPGL_BUILD_TESTS=ON, so an unconditional
+    # add_subdirectory(tests) hard-failed configure for sdist consumers whose
+    # tarball omitted tests/. Skipping with a status message keeps preset
+    # configures working even if tests/ is absent.
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
+        enable_testing()
+        add_subdirectory(tests)
+    else()
+        message(STATUS "HPGL_BUILD_TESTS is ON but tests/ is absent (e.g. sdist built without the test suite) — skipping the tests subdirectory")
+    endif()
 endif()
 
 # ============================================================================

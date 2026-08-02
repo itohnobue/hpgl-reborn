@@ -2,6 +2,21 @@
 
 All notable changes to HPGL Reborn.
 
+## [2.0.2] — 2026-08
+
+### Fixed
+- **Kriging engine** — GSLIB-compliant SGS `ndmin` (original-data-only count); SGS-only OK→SK downgrade for <4 conditioning data (GSLIB sgsim); SGS failure fallback now draws N(mean, 1.0); OK-mode SGS honors the user mean; `kriging_type` validated at the C API; stats mean denominator consistent across all consumers
+- **Cancellation / OpenMP** — user cancellation effective in default builds (cooperative stop flag, no `OMP_CANCELLATION` dependency); cokriging/plain-lookup pure-nugget fallback bounded (no per-node full-box scan)
+- **Validation / API hardening** — `max_neighbours=0` rejected on kriging entry points; `min_neighbours` validated at the C API (`min > max` rejected); `simple_kriging_weights` count gate + post-FFI isfinite validation; median IK marginal-probability validation; property data/mask shape invariant enforced in setters and C++ bounds; `lvm_kriging` mean_data shape validation
+- **Variogram** — pure-Python point-set scans now have a total-pair-lag work cap; Python lag-binning aligned to the C++ projection metric; `GridStyle` self-pair skip (both point-set scans agree)
+- **File I/O** — slow-parser fallback applies the ±1.0e21 sentinel window; streaming parser bounded memory (no full-file list materialization, truncation fails fast); slow-parser tokenizer bounded against crafted oversized lines
+- **Config / validation** — `SGSConfig`/`SISConfig` type gates accept numpy scalars + reject bool; `max_neighbours` Python cap aligned with C++ (hard reject above 100000); `validate_seed` raises `CriticalValidationError`
+- **Simulation wrappers** — `gtsim_2ind` never mutates caller arrays (`pk_prop` and `prop`); `sis_simulation` config path no longer mutates caller dicts
+- **Version / packaging** — `__version__` now reports the installed metadata version (regression-fixed); deterministic seeded variogram sampling (`calc_variograms_seeded`); Windows export of `cvar_clear_last_error`; wheel relocatable (static libomp, no absolute build-machine paths, `macosx_11_0` tag, verification gate); wheel ships the license file; sdist includes `tests/` and `CHANGELOG.md`; relocatable CMake export package; OpenMP hard-required (no silent serial degradation)
+
+### Added
+- 100+ regression tests for the above (new test files `test_production_fixes_geo.py`, `test_production_fixes_rest.py`, expanded `tests/cpp/test_hpgl_core.cpp`)
+
 ## [2.0.1] — 2026-08
 
 ### Fixed

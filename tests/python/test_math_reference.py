@@ -201,6 +201,15 @@ class TestOrdinaryKrigingConstraints:
 
         Uses a 3×3×1 grid with two informed cells at opposite corners
         and tests the estimate at the grid centre.
+
+        R-4 (M-3 reconciliation): the round-1 M-3 GSLIB OK→SK downgrade for
+        n<4 was initially applied at the SHARED OK calculator, which silently
+        changed the public hpgl_ordinary_kriging contract (weights no longer
+        summed to 1; this test failed with 70.7329 vs 75.0). The round-2
+        C++ re-scope restricted the downgrade to the SGS path only
+        (ok_sgs_weight_calculator_t in kriging_interpolation.h) — the public
+        hpgl_ordinary_kriging keeps its OK contract here, so this test pins
+        75.0 again.
         """
         grid = SugarboxGrid(x=3, y=3, z=1)
         n_total = grid.x * grid.y * grid.z

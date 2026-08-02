@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdint.h>
 #include <limits>
 #include <mutex>
 #include <random>
@@ -87,7 +88,10 @@ void cvar_set_last_error(const char * message)
 /// failures were both suppressed after the first raise. Python calls this
 /// after a successful computation so the snapshot is empty on the next call
 /// and consecutive identical failures are no longer suppressed (F-37).
-extern "C" void cvar_clear_last_error(void)
+/// M-17: declared in api.h with CVAR_API so it is dllexport'ed on Windows
+/// (previously defined extern "C" without the macro and not declared — the
+/// Python hasattr() check silently disabled stale-error clearing).
+CVAR_API void cvar_clear_last_error(void)
 {
     std::lock_guard<std::mutex> lock(last_cvariogram_error_mutex);
     last_cvariogram_error.clear();
@@ -202,15 +206,6 @@ bool validate_template(variogram_search_template_t * templ)
     }
 
     return true;
-}
-
-/// Backward-compatible entry point — kept so existing callers in
-/// calc_variograms compile unchanged.  The actual RNG is fully
-/// thread-safe via thread_local, so the body is a no-op.
-void seed_rand_once()
-{
-    static std::once_flag init_flag;
-    std::call_once(init_flag, []() {});
 }
 
 /// Validates a non-null pointer. Sets error and returns false on null.
@@ -523,7 +518,9 @@ update_lags(
 	}
 }
 
-void calc_variograms(
+/// Internal kernel shared by the exported calc_variograms (time-seeded
+/// default) and calc_variograms_seeded (caller-provided seed, 2-M-3).
+static void calc_variograms_impl(
 		variogram_search_template_t * templ,
 		hard_data_t * data,
 		float * result_covariations,
@@ -541,8 +538,6 @@ void calc_variograms(
 	// search loop so we fail loudly instead of looping ~1e11 times or
 	// silently returning an all-zero variogram.
 	if (!validate_template(templ)) return;
-
-	seed_rand_once();
 
 	int lag_count = templ->m_num_lags <= result_length 
 		? templ->m_num_lags
@@ -679,6 +674,38 @@ void calc_variograms(
         free(lag_stats);
         cvar_set_last_error(ex.what());
     }
+}
+
+/// Exported: grid-path variogram with the legacy time-seeded RNG behavior.
+/// Declared in api.h with CVAR_API (C linkage / Windows export).
+void calc_variograms(
+		variogram_search_template_t * templ,
+		hard_data_t * data,
+		float * result_covariations,
+		int result_length,
+		int percentToUse)
+{
+    calc_variograms_impl(templ, data, result_covariations, result_length, percentToUse);
+}
+
+/// Exported: grid-path variogram with a caller-provided RNG seed (2-M-3).
+/// Re-seeds the per-thread mt19937 so identical inputs + identical seed
+/// produce an identical variogram (reproducible published experiments).
+/// The seed is honored literally — 0 is a valid seed.  Declared in api.h
+/// with CVAR_API (C linkage / Windows export).
+void calc_variograms_seeded(
+		variogram_search_template_t * templ,
+		hard_data_t * data,
+		float * result_covariations,
+		int result_length,
+		int percentToUse,
+		uint64_t seed)
+{
+    // 2-M-3: deterministic re-seed of the thread_local engine on the calling
+    // thread. The unseeded entry point leaves the engine at its
+    // random_device^time default (legacy non-deterministic behavior).
+    g_tls_rng.seed(static_cast<std::mt19937::result_type>(seed));
+    calc_variograms_impl(templ, data, result_covariations, result_length, percentToUse);
 }
 
 void calc_variograms_from_point_set(

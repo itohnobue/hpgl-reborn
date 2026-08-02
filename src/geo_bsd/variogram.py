@@ -33,6 +33,22 @@ from .validation import GridValidator
 MAX_NUM_LAGS = 10000
 MAX_POINT_SET_SIZE = 1_000_000
 MAX_WINDOW_VOLUME = 100_000_000
+# H-1/R-1: total-work cap for the pure-Python point-set scans. The pair loop
+# is O(n^2) and each in-tunnel pair bins into up to NumLags lags, so the
+# worst-case work is n^2 * NumLags. MAX_POINT_SET_SIZE (1e6) combined with
+# MAX_NUM_LAGS (1e4) would permit up to 1e16 pair-lag operations — an
+# effectively-infinite loop in pure Python. This cap rejects the product
+# before the loop starts.
+#
+# DELIBERATE Python/C++ DIVERGENCE: the C++ kernel keeps
+# MAX_TOTAL_PAIR_LAG_WORK = 1e12 (variograms.cpp:40 — ~17 min worst case at
+# compiled speed, acceptable for the compiled batch kernel). Pure Python runs
+# ~4e7 pair-lag ops/s, so the same 1e12 constant would allow ~6 h to 108 days
+# of wall-clock work. The Python cap is therefore 1e8 (~2.5 s worst case at
+# measured throughput). Parity of the constant was the original rationale;
+# parity of the GUARANTEE (no effectively-infinite pure-Python run) is the
+# corrected rationale.
+MAX_TOTAL_PAIR_LAG_WORK = 1e8
 
 
 class TVEllipsoid:
@@ -324,7 +340,16 @@ def _CalcLagsAreas(VariogramSearchTemplate):
     GJ = GJ[ActivePoints]
     GK = GK[ActivePoints]
 
-    Dist = power(power(GI, 2) + power(GJ, 2) + power(GK, 2), 0.5)
+    # 2-M-13: lag binning uses the DIRECTIONAL PROJECTION of the offset onto
+    # the principal anisotropy axis (|dot(offset, direction1)|), matching the
+    # C++ kernels (variograms.cpp:647 grid path, :805 point-set path). The
+    # previous raw Euclidean distance produced different lag assignments than
+    # the C++ engine for any pair whose offset is not parallel to the
+    # principal axis — the same template + data yielded different variogram
+    # curves between the Python and C++ paths. Projection is the
+    # GSLIB-conventional metric.
+    D1 = VariogramSearchTemplate.Ellipsoid.Direction1
+    Dist = numpy.abs(GI * D1[0] + GJ * D1[1] + GK * D1[2])
 
     # Accumulate per-lag results in Python lists to avoid O(L²) vstack copies
     idx_i_parts = []
@@ -444,11 +469,33 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
             f"MAX_POINT_SET_SIZE ({MAX_POINT_SET_SIZE})"
         )
 
+    # H-1/R-1: total-work cap (Python-specific 1e8 — see module constant;
+    # deliberately lower than the C++ kernel's 1e12 for pure-Python
+    # throughput). The scan is O(n^2) — every point pairs
+    # with every other point — and each in-tunnel pair bins into up to
+    # NumLags lags, so the worst-case work is n^2 * NumLags. The size cap
+    # above bounds the input SIZE only; a legal 1e6-point set with a large
+    # search window would run up to 1e16 pair-lag Python iterations — an
+    # effectively-infinite loop. Reject the product before the loop starts.
+    pair_lag_work = len(PX) * len(PX) * VariogramSearchTemplate.NumLags
+    if pair_lag_work > MAX_TOTAL_PAIR_LAG_WORK:
+        raise ValueError(
+            f"PointSetScanContStyle: estimated pair-lag work {pair_lag_work} "
+            f"exceeds maximum {MAX_TOTAL_PAIR_LAG_WORK}. Reduce the point set "
+            f"size or NumLags."
+        )
+
     MinX, MinY, MinZ, MaxX, MaxY, MaxZ = _CalcSearchTemplateWindow(VariogramSearchTemplate)
 
     LagIndex, LagDistance, LagStart, LagEnd = _CalcLagDistances(VariogramSearchTemplate)
-    MinDistance2 = max(0, LagStart.min()) ** 2
-    MaxDistance2 = LagEnd.max() ** 2
+    # 2-M-13: the lag-binning metric is the directional projection onto the
+    # principal anisotropy axis (matching variograms.cpp:647, 805), so the
+    # pre-pruning band must use the same projection — not the raw Euclidean
+    # distance, which can exceed the projection and would wrongly discard
+    # pairs that belong to a lag band under the projection metric.
+    D1 = VariogramSearchTemplate.Ellipsoid.Direction1
+    MinDistance = max(0, LagStart.min())
+    MaxDistance = LagEnd.max()
 
     if Function is not None:
         Result = Function(0, 0, None, Params)
@@ -472,13 +519,17 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         FDX, FDY, FDZ = DX[Filter], DY[Filter], DZ[Filter]
         FIndex = Index[Filter]
 
-        FDistance2 = FDX**2 + FDY**2 + FDZ**2
-        Filter = MinDistance2 <= FDistance2
-        Filter = bitwise_and(Filter, FDistance2 <= MaxDistance2)
+        # 2-M-13: directional projection onto the principal anisotropy axis
+        # for lag binning (|dot(offset, direction1)|) — matches the C++
+        # point-set kernel (variograms.cpp:805). Computed BEFORE the band
+        # filter so the pruning and the binning use the same metric.
+        FDistance = numpy.abs(FDX * D1[0] + FDY * D1[1] + FDZ * D1[2])
+        Filter = MinDistance <= FDistance
+        Filter = bitwise_and(Filter, FDistance <= MaxDistance)
 
         FDX, FDY, FDZ = FDX[Filter], FDY[Filter], FDZ[Filter]
         FIndex = FIndex[Filter]
-        FDistance2 = FDistance2[Filter]
+        FDistance = FDistance[Filter]
 
         # F-M24: skip the self-pair (j == i) to match the C++ point-set scan
         # (variograms.cpp:793 `if (idx1 == idx2) continue;`). With
@@ -487,20 +538,18 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         # adding a zero-variance pair and +1 count that dilutes the lag-0
         # variogram the C++ never counts. Unconditional is exact: when
         # FirstLagDistance > 0 the self-pair is already excluded by the
-        # MinDistance2 distance filter (distance 0 < MinDistance2), so this
+        # MinDistance distance filter (distance 0 < MinDistance), so this
         # filter is a no-op there.
         SelfPairFilter = FIndex != i
         FDX, FDY, FDZ = FDX[SelfPairFilter], FDY[SelfPairFilter], FDZ[SelfPairFilter]
         FIndex = FIndex[SelfPairFilter]
-        FDistance2 = FDistance2[SelfPairFilter]
+        FDistance = FDistance[SelfPairFilter]
 
         Filter = _IsInTunnel(VariogramSearchTemplate, column_stack((FDX, FDY, FDZ)))
 
         FDX, FDY, FDZ = FDX[Filter], FDY[Filter], FDZ[Filter]
         FIndex = FIndex[Filter]
-        FDistance2 = FDistance2[Filter]
-
-        FDistance = FDistance2**0.5
+        FDistance = FDistance[Filter]
 
         for Lag in LagIndex:
             Filter = bitwise_and(LagStart[Lag] <= FDistance, FDistance < LagEnd[Lag])
@@ -569,6 +618,19 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
             f"MAX_POINT_SET_SIZE ({MAX_POINT_SET_SIZE})"
         )
 
+    # H-1/R-1: total-work cap (Python-specific 1e8 — see module constant;
+    # deliberately lower than the C++ kernel's 1e12 for pure-Python
+    # throughput) shared with PointSetScanContStyle above. The scan
+    # is O(n^2) and each candidate pair bins into up to NumLags lags, so the
+    # worst-case work is n^2 * NumLags. Reject the product before the loop.
+    pair_lag_work = len(PI) * len(PI) * VariogramSearchTemplate.NumLags
+    if pair_lag_work > MAX_TOTAL_PAIR_LAG_WORK:
+        raise ValueError(
+            f"PointSetScanGridStyle: estimated pair-lag work {pair_lag_work} "
+            f"exceeds maximum {MAX_TOTAL_PAIR_LAG_WORK}. Reduce the point set "
+            f"size or NumLags."
+        )
+
     if Function is not None:
         Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
@@ -593,6 +655,15 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
         FIndex = Index[Filter]
 
         for j in range(len(FDI)):
+            # M-21: skip the self-pair (j == i), mirroring the C++ point-set
+            # kernel (variograms.cpp:793) and PointSetScanContStyle's F-M24
+            # skip. Without it, GridStyle counts each point's self-pair
+            # (offset (0,0,0)) in lag 0, diluting the lag-0 variogram exactly
+            # as the pre-F-M24 ContStyle did — reproducing the dilution the
+            # ContStyle fix removed. With FirstLagDistance > 0 the self-pair
+            # offset lands in no lag band, so the skip is a no-op there.
+            if FIndex[j] == i:
+                continue
             LFilter = FDI[j] == LI
             LFilter = bitwise_and(LFilter, FDJ[j] == LJ)
             LFilter = bitwise_and(LFilter, FDK[j] == LK)

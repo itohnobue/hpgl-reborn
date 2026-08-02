@@ -22,9 +22,18 @@ namespace hpgl
 		float * m_data;
 		unsigned char * m_mask;
 		int m_size;
+		// 2-M-15: length of the mask buffer when the caller knows it
+		// (mask_size constructor arg). 0 means "mask has m_size elements"
+		// (legacy contract — the C API structs carry no mask length, so all
+		// existing call sites use the default). When a caller constructs with
+		// an explicit smaller mask_size, set_at/is_informed bound the mask
+		// access to it so a mismatched (smaller) mask cannot cause a heap
+		// OOB write/read.
+		int m_mask_size;
 	public:
-		cont_property_array_t(float * data, unsigned char * mask, int size)
-			: m_data(data), m_mask(mask), m_size(size)
+		cont_property_array_t(float * data, unsigned char * mask, int size, int mask_size = 0)
+			: m_data(data), m_mask(mask), m_size(size),
+			  m_mask_size(mask_size > 0 ? mask_size : size)
 		{}
 
 		typedef float value_type;
@@ -51,7 +60,13 @@ namespace hpgl
 			HPGL_CHECK(index >= 0 && index < m_size, "cont_property_array_t::set_at: index out of bounds");
 			m_data[index] = value;
 			if (m_mask != nullptr)
+			{
+				// 2-M-15: guard the mask write with its own length — a
+				// mask buffer smaller than m_size must not be written past.
+				HPGL_CHECK(index >= 0 && index < m_mask_size,
+					"cont_property_array_t::set_at: mask index out of bounds (mask smaller than data?)");
 				m_mask[index] = 1;
+			}
 		}
 
 		bool is_informed(size_type index)const
@@ -59,7 +74,10 @@ namespace hpgl
 			// Null mask = all cells are informed (per API contract at api.h:228-231)
 			if (m_mask == nullptr)
 				return true;
-			return (index<0)||(index>=m_size) ? false : m_mask[index]!=0;
+			// 2-M-15: bound the mask read by its own length too — an index
+			// beyond the (possibly smaller) mask buffer is treated as not
+			// informed instead of reading out of bounds.
+			return (index<0)||(index>=m_size)||(index>=m_mask_size) ? false : m_mask[index]!=0;
 		}
 	};
 
@@ -68,10 +86,15 @@ namespace hpgl
 		unsigned char  * m_data;
 		unsigned char * m_mask;
 		int m_size;
+		// 2-M-15: length of the mask buffer when known (see the cont_property
+		// array comment above). 0 = mask has m_size elements (legacy default).
+		int m_mask_size;
 	public:
 		int m_indicator_count;
-		indicator_property_array_t(unsigned char  * data, unsigned char * mask, int size, int indicator_count)
-			: m_data(data), m_mask(mask), m_size(size), m_indicator_count(indicator_count)
+		indicator_property_array_t(unsigned char  * data, unsigned char * mask, int size, int indicator_count, int mask_size = 0)
+			: m_data(data), m_mask(mask), m_size(size),
+			  m_mask_size(mask_size > 0 ? mask_size : size),
+			  m_indicator_count(indicator_count)
 		{}
 
 
@@ -101,7 +124,13 @@ namespace hpgl
 			m_data[index] = value;
 			// Null mask = all cells are informed (consistent with is_informed)
 			if (m_mask != nullptr)
+			{
+				// 2-M-15: guard the mask write with its own length — a mask
+				// buffer smaller than m_size must not be written past.
+				HPGL_CHECK(index >= 0 && index < m_mask_size,
+					"indicator_property_array_t::set_at: mask index out of bounds (mask smaller than data?)");
 				m_mask[index] = 1;
+			}
 		}
 
 		bool is_informed(size_type index)const
@@ -109,7 +138,8 @@ namespace hpgl
 			// Null mask = all cells are informed (per API contract at api.h:228-231)
 			if (m_mask == nullptr)
 				return true;
-			if ((index < 0) || (index >= m_size))
+			// 2-M-15: bound the mask read by its own length too.
+			if ((index < 0) || (index >= m_size) || (index >= m_mask_size))
 				return false;
 			else
 				return m_mask[index] != 0;
@@ -120,7 +150,12 @@ namespace hpgl
 			HPGL_CHECK(node >= 0 && node < m_size, "indicator_property_array_t::delete_value_at: index out of bounds");
 			// Null mask = nothing to delete (consistent with is_informed)
 			if (m_mask != nullptr)
+			{
+				// 2-M-15: guard the mask write with its own length.
+				HPGL_CHECK(node >= 0 && node < m_mask_size,
+					"indicator_property_array_t::delete_value_at: mask index out of bounds (mask smaller than data?)");
 				m_mask[node] = 0;
+			}
 		}
 	};
 

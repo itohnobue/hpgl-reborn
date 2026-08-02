@@ -114,12 +114,29 @@ def sgs_simulation(
     seed : int
         Seed for the random number generator.
     kriging_type : str, optional
-        Kriging method: ``"sk"`` for Simple Kriging or ``"ok"`` for Ordinary Kriging.
-        Default: ``"sk"``.
+        Kriging method: ``"sk"`` for Simple Kriging or ``"ok"`` for Ordinary
+        Kriging.  Default: ``"sk"``.  Only these two values are accepted; any
+        other value raises ``ValueError``.
     mean : None, float, or numpy.ndarray, optional
         Stationary mean value. If ``None``, the mean is calculated automatically
         from source data. If a non-scalar ndarray, it is used as a locally
         varying mean (LVM). Default: ``None``.
+
+        .. note::
+            The ``mean`` argument is honored for both ``kriging_type``
+            values.  With ``kriging_type="sk"`` (simple kriging) the
+            user-supplied mean is used as the stationary mean in the
+            kriging estimate.  With ``kriging_type="ok"`` (ordinary
+            kriging) the kriged estimate is computed from the
+            conditioning data without an explicit mean term (the OK
+            weight calculator solves for the local mean implicitly), but
+            the user-supplied mean IS applied on the failure fallback:
+            nodes that cannot be kriged (no neighbours in the search
+            radius, or a singular kriging system) draw from
+            N(mean, 1.0) rather than N(0, 1) (GSLIB sgsim semantics:
+            ``cmean = gmean; cstdev = 1.0``).  A non-scalar (LVM) mean
+            array is always used as the local varying mean, and the LVM
+            kernel performs simple kriging against it.
     use_harddata : bool, optional
         If ``True``, use source data values for simulation. If ``False``,
         ignore source data values. Default: ``True``.

@@ -225,12 +225,35 @@ echo.
 echo Smoke test: verifying library load...
 REM Assert the FRESH library loads: _HAS_KRIGING_STATS is only True for builds
 REM exporting hpgl_get_kriging_stats (stale builds report False — I2-47).
-uv run python -c "import sys; sys.path.insert(0, r'%~dp0src'); from geo_bsd import hpgl_wrap; assert hpgl_wrap._HAS_KRIGING_STATS, 'stale library loaded (_HAS_KRIGING_STATS=False)'; print('  hpgl shared library loaded successfully')" >nul 2>&1
+REM The _cvariogram module is loaded and its error-clear symbol checked too
+REM (2-M-22: the old gate never loaded _cvariogram, so a broken variogram
+REM module passed). A failed smoke test FAILS the build (exit /b 1).
+REM Python resolution (2-M-22): prefer uv (project standard), then the repo
+REM venv, then PATH python — previously the gate was uv-only and silently
+REM no-oped on machines without uv.
+set "PYTHON_CMD="
+where uv >nul 2>&1 && set "PYTHON_CMD=uv run python"
+if not defined PYTHON_CMD (
+    if exist "%~dp0.venv\Scripts\python.exe" set "PYTHON_CMD=%~dp0.venv\Scripts\python.exe"
+)
+if not defined PYTHON_CMD (
+    where python >nul 2>&1 && set "PYTHON_CMD=python"
+)
+if not defined PYTHON_CMD (
+    echo ERROR: Python not found -- cannot run smoke test.
+    if not defined CI pause
+    endlocal
+    exit /b 1
+)
+%PYTHON_CMD% -c "import sys; sys.path.insert(0, r'%~dp0src'); from geo_bsd import hpgl_wrap; assert hpgl_wrap._HAS_KRIGING_STATS, 'stale library loaded (_HAS_KRIGING_STATS=False)'; print('  hpgl shared library loaded successfully'); from geo_bsd import cvariogram; assert hasattr(cvariogram.cvar, 'cvar_clear_last_error'), '_cvariogram missing cvar_clear_last_error (stale build)'; print('  _cvariogram shared library loaded successfully')" >nul 2>&1
 if !ERRORLEVEL! EQU 0 (
     echo   Smoke test: PASSED
 ) else (
-    echo   WARNING: Smoke test failed -- library may not load at runtime.
+    echo   ERROR: Smoke test failed -- library may not load at runtime.
     echo   Check that Python dependencies are installed and MKL DLLs are in PATH.
+    if not defined CI pause
+    endlocal
+    exit /b 1
 )
 endlocal
 exit /b 0

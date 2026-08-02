@@ -7,7 +7,6 @@ namespace hpgl
 		: m_kriging_kind(kriging_kind_t::KRIG_SIMPLE)
 		, m_seed(0)
 		, m_mean_kind(mean_kind_t::e_mean_stationary_auto)
-		, m_lvm(nullptr)
 		, m_min_neighbours(0)
 	{
 	}

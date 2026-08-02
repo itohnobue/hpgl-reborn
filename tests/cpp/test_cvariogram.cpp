@@ -353,6 +353,60 @@ void test_search_template_window_includes_half_lag_width()
     CHECK_CLOSE(window.m_min_i, 0.0, 1e-9);
 }
 
+// 2-M-3: grid-path percent sampling must be reproducible when a seed is
+// supplied. Pre-fix the thread_local mt19937 was seeded from
+// random_device^time and seed_rand_once() was a documented no-op — identical
+// inputs produced different variograms. calc_variograms_seeded re-seeds the
+// engine: same inputs + same seed → bit-identical output.
+void test_calc_variograms_seeded_reproducible()
+{
+    TEST("2-M-3: seeded grid-path variogram is reproducible");
+    cvar_clear_last_error();
+    variogram_search_template_t templ = {};
+    templ.m_lag_width = 1.0;
+    templ.m_lag_separation = 1.0;
+    templ.m_tol_distance = 1.0;
+    templ.m_num_lags = 4;
+    templ.m_first_lag_distance = 0.0;
+    templ.m_ellipsoid.m_R1 = 10.0;
+    templ.m_ellipsoid.m_R2 = 5.0;
+    templ.m_ellipsoid.m_R3 = 3.0;
+    templ.m_ellipsoid.m_direction1.m_data[0] = 1.0;
+    templ.m_ellipsoid.m_direction2.m_data[1] = 1.0;
+    templ.m_ellipsoid.m_direction3.m_data[2] = 1.0;
+
+    const int nx = 5, ny = 5, nz = 1;
+    const size_t n = static_cast<size_t>(nx) * ny * nz;
+    std::vector<float> data_vals(n);
+    std::vector<unsigned char> mask_vals(n, 1);
+    for (size_t i = 0; i < n; ++i)
+        data_vals[i] = static_cast<float>(i + 1);
+
+    hard_data_t data = {};
+    data.m_data = data_vals.data();
+    data.m_mask = mask_vals.data();
+    data.m_data_shape[0] = nx; data.m_data_shape[1] = ny; data.m_data_shape[2] = nz;
+    data.m_mask_shape[0] = nx; data.m_mask_shape[1] = ny; data.m_mask_shape[2] = nz;
+    data.m_data_strides[0] = ny * nz; data.m_data_strides[1] = nz; data.m_data_strides[2] = 1;
+    data.m_mask_strides[0] = ny * nz; data.m_mask_strides[1] = nz; data.m_mask_strides[2] = 1;
+
+    const int percent = 50;   // exercises the RNG percent-sampling path
+    float out1[4] = {0, 0, 0, 0};
+    float out2[4] = {0, 0, 0, 0};
+    float out3[4] = {0, 0, 0, 0};
+
+    calc_variograms_seeded(&templ, &data, out1, 4, percent, 12345);
+    calc_variograms_seeded(&templ, &data, out2, 4, percent, 12345);
+    calc_variograms_seeded(&templ, &data, out3, 4, percent, 54321);
+
+    CHECK(std::strlen(cvar_get_last_error()) == 0);
+    // Same seed → bit-identical output (the reproducibility contract).
+    CHECK(memcmp(out1, out2, sizeof(out1)) == 0);
+    // Different seed → different sampled subset → (with overwhelming
+    // probability) a different variogram.
+    CHECK(memcmp(out1, out3, sizeof(out1)) != 0);
+}
+
 // ---- Main ----
 
 int main() {
@@ -367,6 +421,7 @@ int main() {
     test_calc_variograms_rejects_zero_range();
     test_is_in_tunnel_zero_range_sets_error();
     test_search_template_window_includes_half_lag_width();
+    test_calc_variograms_seeded_reproducible();
 
     std::printf("C++ cvariogram tests: %d run, %d failed\n", g_tests_run, g_tests_failed);
     return g_tests_failed > 0 ? 1 : 0;

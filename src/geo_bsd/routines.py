@@ -712,10 +712,47 @@ def LoadGslibFile(filename, property_size, basedir=None):
                 f"File may be corrupted or malicious."
             )
 
-        # I2-05: collect validated rows, then vectorize the string->float64
-        # conversion with a single numpy call instead of a per-token Python
-        # loop (the previous implementation ran one float64() per token).
-        rows: list[list[str]] = []
+        # I2-05/2-M-10: parse the data lines INCREMENTALLY into a preallocated
+        # float64 array instead of collecting the whole file into a list of
+        # lists of Python strings first. The old implementation materialized
+        # every token as a CPython str (~50-65 B each) plus per-row list
+        # overhead before a single numpy conversion — roughly 10-20x the
+        # memory of the final array, so a legal large file (e.g. 1e8 values)
+        # OOM'd. Row-by-row assignment keeps intermediate Python-object
+        # memory bounded to a single line while numpy still performs the
+        # string->float64 conversion.
+        #
+        # R-12: count the data rows BEFORE allocating the output array. The
+        # pre-fix streaming fix allocated numpy.empty((grid_size, num_p))
+        # up front, so a TRUNCATED file with a large declared grid allocated
+        # the full array (1.6-8 GB for a 1e8-cell grid) and only then raised
+        # the row-count error below. Count non-blank data lines first and
+        # raise the same row-count errors the parse loop raises, but before
+        # the allocation — the truncation error path then fails cleanly at
+        # KBs of memory. The success path is unchanged (the count pass is a
+        # cheap line scan; the parse then streams into the preallocated
+        # array exactly as before).
+        data_start = f.tell()
+        row_count = 0
+        for line in f:
+            if line.strip():
+                row_count += 1
+        if row_count > grid_size:
+            raise RuntimeError(
+                f"LoadGslibFile: too many values for property '{list_prop[0]}'. "
+                f"Expected {grid_size} elements "
+                f"(grid {property_size}), got more."
+            )
+        if row_count != grid_size:
+            raise RuntimeError(
+                f"LoadGslibFile: property '{list_prop[0]}' has {row_count} values, "
+                f"expected {grid_size} (grid {property_size}). "
+                f"File may be truncated or corrupted."
+            )
+        f.seek(data_start)
+
+        data = numpy.empty((grid_size, num_p), dtype=float64)
+        row_idx = 0
         for line in f:
             # Skip blank lines (whitespace-only)
             if not line.strip():
@@ -727,22 +764,14 @@ def LoadGslibFile(filename, property_size, basedir=None):
                     f"LoadGslibFile: expected {num_p} values per data line, "
                     f"got {len(points)} tokens in line: {line.strip()!r}"
                 )
-            if len(rows) >= grid_size:
+            if row_idx >= grid_size:
                 raise RuntimeError(
                     f"LoadGslibFile: too many values for property '{list_prop[0]}'. "
                     f"Expected {grid_size} elements "
                     f"(grid {property_size}), got more."
                 )
-            rows.append(points)
-
-        if len(rows) != grid_size:
-            raise RuntimeError(
-                f"LoadGslibFile: property '{list_prop[0]}' has {len(rows)} values, "
-                f"expected {grid_size} (grid {property_size}). "
-                f"File may be truncated or corrupted."
-            )
-
-        data = numpy.array(rows, dtype=float64)  # shape (grid_size, num_p)
+            data[row_idx] = points
+            row_idx += 1
 
         # Reject genuine non-finite source values (NaN or Inf) BEFORE the
         # F-M18 sentinel trim — GSLIB cannot represent them and HPGL-written

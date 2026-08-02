@@ -57,6 +57,17 @@ class TestCubeScanIntegerMask:
         Pre-fix: uint8 Mask1 & Mask2 stays uint8 and is used as an integer
         fancy index -> 5x pair-count inflation [625,1940,2223] vs bool
         [125,420,507] on a 5x5x5 all-ones mask.
+
+        Note (2-M-13): the bool-mask counts were re-pinned from
+        [125,420,507] to [125,420,687] when the Python lag-binning was
+        aligned to the C++ projection metric (variograms.cpp:647, 805).
+        Lag 2 under the old raw-Euclidean metric contained only offsets with
+        Euclidean distance in [1.5,2.5); under the projection metric it
+        additionally contains the dx=±2 offsets with dy/dz up to ±2 (e.g.
+        (2,1,1)), whose Euclidean distance 2.45 still falls inside the same
+        band but whose PROJECTION |dx|=2 the Euclidean metric had dropped.
+        The new value is cross-checked against the C++ grid kernel
+        (CalcVariograms) in TestVariogramProjectionMetric.
         """
         templ = _make_template(r1=5, r2=5, r3=5, lag_width=1.0, lag_sep=1.0, num_lags=3)
         mask_u8 = np.ones((5, 5, 5), dtype="uint8")
@@ -67,7 +78,7 @@ class TestCubeScanIntegerMask:
 
         np.testing.assert_array_equal(res_u8, res_bool)
         # Correct (bool) pair counts for this template — not the inflated 5x.
-        np.testing.assert_array_equal(res_bool[:, 2], np.array([125, 420, 507]))
+        np.testing.assert_array_equal(res_bool[:, 2], np.array([125, 420, 687]))
 
     def test_non_binary_integer_mask_does_not_index_error(self):
         """F-01: masks with values >= 2 must not IndexError / inflate counts.

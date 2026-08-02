@@ -216,25 +216,28 @@ def gtsim_2ind(
     pk_flat = pk_prop.data.ravel(order="K")
     if np.any(~np.isfinite(pk_flat)):
         raise ValueError("gtsim_2ind: pk_prop.data contains NaN or Inf values")
+
+    # M-24 / F-M15 / 2-M-12: never mutate the caller's pk_prop object or its
+    # data buffer. All downstream in-place transforms (the overshoot clamp,
+    # tk_calculation, the pseudo-Gaussian transform) run on an INTERNAL
+    # working copy, never on pk_prop.data. Pre-fix, the no-overshoot path
+    # called tk_calculation directly on the caller's array, writing the
+    # inverse-CDF thresholds into it in place through the ravel('K') view;
+    # the later attribute restore hid the damage from pk_prop itself, but any
+    # external buffer aliasing pk_prop.data was permanently corrupted (M-24).
     # Kriging with negative weights can produce probabilities slightly
     # outside [0, 1] (e.g. -0.04 or 1.02). These are legitimate kriging
     # overshoots, not invalid inputs: GSLIB's gtsim clamps probabilities
     # before the inverse-CDF threshold calculation. Clamp rather than
     # reject so partially-informed data works (a hard reject previously
     # made gtsim_2ind unusable with realistic partially-informed props).
-    #
-    # F-M15: the clamp is applied to a NEW array, never the caller's
-    # pk_prop.data. ravel(order="K") returns a VIEW of pk_prop.data (1D
-    # arrays are both C- and F-contiguous, so ContProperty's require("F")
-    # returns the same object), and np.clip(..., out=view) would write the
-    # clamped values back into the caller's array in place — permanently
-    # altering a user-supplied pk_prop whose overshoots were legitimate.
-    # Replacing the reference (np.clip without out=) leaves the caller's
-    # original array object untouched; every downstream step (tk_calculation,
-    # the restore below, pseudo_gaussian_transform) then sees the clamped
-    # copy, matching the GSLIB clamp semantics.
+    # The clamp is applied to the working copy's data, matching GSLIB's
+    # clamp semantics without touching the caller's array.
     if np.any((pk_flat < 0.0) | (pk_flat > 1.0)):
-        pk_prop.data = np.clip(pk_prop.data, 0.0, 1.0)
+        pk_work_data = np.clip(pk_prop.data, 0.0, 1.0)
+    else:
+        pk_work_data = pk_prop.data.copy(order="F")
+    pk_work = ContProperty(pk_work_data, pk_prop.mask.copy(order="F"))
 
     # 2. calculate tk_prop
     # t0_prop = 0
@@ -242,15 +245,16 @@ def gtsim_2ind(
     # (for 2 indicators)
 
     logger.info("Calculate tk_prop...")
-    # Save original probability data (tk_calculation overwrites pk_prop.data in-place)
+    # Save original probability data (tk_calculation overwrites pk_work.data
+    # in-place — on the internal copy, never the caller's buffer).
     # Use copy(order="F") to preserve Fortran (column-major) order expected by
     # the C++ backend. Default C-order copy would corrupt 3D array layout.
-    original_pk_data = pk_prop.data.copy(order="F")
-    tk_prop = tk_calculation(pk_prop, mean=tk_mean, std_dev=tk_std_dev)
+    original_pk_data = pk_work.data.copy(order="F")
+    tk_prop = tk_calculation(pk_work, mean=tk_mean, std_dev=tk_std_dev)
     # Extract threshold data for truncation (tk_prop.data contains inverse CDF thresholds)
     threshold_data = tk_prop.data.copy(order="F")
     # Restore original probabilities for pseudo_gaussian_transform
-    pk_prop.data = original_pk_data
+    pk_work.data = original_pk_data
     logger.info("Done.")
 
     # 3. pseudo gaussian transform of initial property (prop) with pk_prop
@@ -258,13 +262,17 @@ def gtsim_2ind(
 
     logger.info("Pseudo gaussian transforming...")
     rng = np.random.RandomState(seed)
-    # Copy prop data to avoid mutating caller's data (I2F-11)
-    prop.data = prop.data.copy()
-    prop = pseudo_gaussian_transform(prop, pk_prop, rng)
-    del pk_prop
+    # 2-M-12: transform an INTERNAL working copy of prop, never the caller's
+    # prop object. Pre-fix, `prop.data = prop.data.copy()` REBOUND the
+    # caller's attribute (mutating the caller's object) and the comment
+    # claiming "avoid mutating caller's data (I2F-11)" was false —
+    # pseudo_gaussian_transform then transformed the rebound array in place.
+    prop_work = ContProperty(prop.data.copy(order="F"), prop.mask.copy(order="F"))
+    prop_work = pseudo_gaussian_transform(prop_work, pk_work, rng)
+    del pk_work
     logger.info("Done.")
 
-    # 4. SGS on prop (after transfrom in 3)
+    # 4. SGS on prop_work (after transform in 3)
     # if sgs_params defined - use it
     # if not, use sk_params
     # sill of covariance must be 1
@@ -272,10 +280,10 @@ def gtsim_2ind(
     if sgs_params is None:
         sgs_params = sk_params
     logger.info("Computing CDF...")
-    cdf_data = calc_cdf(prop)
+    cdf_data = calc_cdf(prop_work)
     logger.info("Done.")
     logger.info("Testing SGS...")
-    prop1 = sgs_simulation(prop, grid, cdf_data, seed=seed, **sgs_params)
+    prop1 = sgs_simulation(prop_work, grid, cdf_data, seed=seed, **sgs_params)
     logger.info("Done.")
 
     # 5. Truncation

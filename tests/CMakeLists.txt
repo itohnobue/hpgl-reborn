@@ -46,6 +46,12 @@ target_include_directories(hpgl_core_tests SYSTEM PRIVATE
 )
 
 target_link_libraries(hpgl_core_tests PRIVATE hpgl_core)
+# s6-fix-cpp-engines: test_hpgl_core.cpp now instantiates the header-only
+# weight-calculator templates (ok_kriging_weights_3 / sk_kriging_weights_3),
+# which call dpotrf_/dpotrs_ directly (solver_entry_point.h). The binary must
+# link BLAS/LAPACK itself for the same reason hpgl_solver_tests does (F-59),
+# since hpgl_core links them PRIVATE.
+target_link_libraries(hpgl_core_tests PRIVATE ${BLAS_LIBRARIES} ${LAPACK_LIBRARIES})
 
 target_compile_features(hpgl_core_tests PRIVATE cxx_std_17)
 

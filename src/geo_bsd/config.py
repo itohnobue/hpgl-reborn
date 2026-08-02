@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 import numpy
 
+from .validation import ValidationConstants
+
 # ============================================================================
 # SGS Configuration
 # ============================================================================
@@ -101,6 +103,15 @@ class SGSConfig:
                 f"SGSConfig: max_neighbours must be positive, "
                 f"got {self.max_neighbours}"
             )
+        # M-20: hard-reject above the C++ engine's upper bound (api.cpp
+        # MAX_NEIGHBOURS_UPPER_BOUND = 100000) so construction fails fast
+        # instead of deferring to a late C++ RuntimeError.
+        if self.max_neighbours > ValidationConstants.MAX_NEIGHBORS_HARD_LIMIT:
+            raise ValueError(
+                f"SGSConfig: max_neighbours {self.max_neighbours} exceeds the "
+                f"maximum allowed {ValidationConstants.MAX_NEIGHBORS_HARD_LIMIT} "
+                f"(aligned with the C++ engine limit)."
+            )
 
         # -- radiuses --
         if not isinstance(self.radiuses, tuple):
@@ -116,7 +127,7 @@ class SGSConfig:
         import math
 
         for i, r in enumerate(self.radiuses):
-            if not isinstance(r, (int, float)):
+            if not isinstance(r, (int, float, numpy.integer, numpy.floating)) or isinstance(r, bool):
                 raise TypeError(
                     f"SGSConfig: radiuses[{i}] must be a number, "
                     f"got {type(r).__name__}"
@@ -208,6 +219,15 @@ class SISConfig:
                 f"SISConfig: max_neighbours must be positive, "
                 f"got {self.max_neighbours}"
             )
+        # M-20: hard-reject above the C++ engine's upper bound (api.cpp
+        # MAX_NEIGHBOURS_UPPER_BOUND = 100000) so construction fails fast
+        # instead of deferring to a late C++ RuntimeError.
+        if self.max_neighbours > ValidationConstants.MAX_NEIGHBORS_HARD_LIMIT:
+            raise ValueError(
+                f"SISConfig: max_neighbours {self.max_neighbours} exceeds the "
+                f"maximum allowed {ValidationConstants.MAX_NEIGHBORS_HARD_LIMIT} "
+                f"(aligned with the C++ engine limit)."
+            )
 
         # -- radiuses --
         if not isinstance(self.radiuses, tuple):
@@ -223,7 +243,7 @@ class SISConfig:
         import math
 
         for i, r in enumerate(self.radiuses):
-            if not isinstance(r, (int, float)):
+            if not isinstance(r, (int, float, numpy.integer, numpy.floating)) or isinstance(r, bool):
                 raise TypeError(
                     f"SISConfig: radiuses[{i}] must be a number, "
                     f"got {type(r).__name__}"
@@ -298,7 +318,7 @@ class GTSIMConfig:
     def __post_init__(self) -> None:
         """Validate all fields after dataclass construction."""
         # -- tk_mean --
-        if not isinstance(self.tk_mean, (int, float)):
+        if not isinstance(self.tk_mean, (int, float, numpy.integer, numpy.floating)) or isinstance(self.tk_mean, bool):
             raise TypeError(
                 f"GTSIMConfig: tk_mean must be a number, "
                 f"got {type(self.tk_mean).__name__}"
@@ -311,7 +331,7 @@ class GTSIMConfig:
             )
 
         # -- tk_std_dev --
-        if not isinstance(self.tk_std_dev, (int, float)):
+        if not isinstance(self.tk_std_dev, (int, float, numpy.integer, numpy.floating)) or isinstance(self.tk_std_dev, bool):
             raise TypeError(
                 f"GTSIMConfig: tk_std_dev must be a number, "
                 f"got {type(self.tk_std_dev).__name__}"

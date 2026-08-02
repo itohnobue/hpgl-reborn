@@ -22,9 +22,11 @@
 
 // OpenBLAS thread-control API — file-scope declarations for macOS builds
 // where extern "C" is not permitted inside function bodies (Apple Clang).
-// Define HPGL_USE_OPENBLAS via CMake when building with -DBLA_VENDOR=OpenBLAS
-// on macOS.  Linux builds use the __linux__ code-path inside the function
-// (GCC accepts extern "C" at block scope as an extension).
+// HPGL_USE_OPENBLAS is defined by CMake ONLY when the build actually links
+// OpenBLAS (BLA_VENDOR=OpenBLAS or BLAS library-name detection), so the
+// openblas_* symbols are never referenced on Linux builds that link a
+// different BLAS vendor (M-32: undefined-symbol dlopen failure with
+// netlib/BLIS/FlexiBLAS/ATLAS).
 #ifdef HPGL_USE_OPENBLAS
 extern "C" {
 	void openblas_set_num_threads(int);
@@ -117,22 +119,20 @@ namespace hpgl
 		extern "C" void mkl_set_num_threads(int);
 		extern "C" int mkl_get_max_threads(void);
 		detail::blas_thread_guard_t blas_guard(mkl_get_max_threads, mkl_set_num_threads);
-#elif defined(__linux__)
-		// OpenBLAS: limit internal threads to 1 so they don't multiply
-		// with OpenMP threads. Declared extern to avoid header dependency.
-		extern "C" void openblas_set_num_threads(int);
-		extern "C" int openblas_get_num_threads(void);
-		detail::blas_thread_guard_t blas_guard(openblas_get_num_threads, openblas_set_num_threads);
 #elif defined(HPGL_USE_OPENBLAS)
-		// macOS OpenBLAS: limit internal threads to 1.  Declarations are
-		// at file scope (above) because Apple Clang rejects extern "C"
-		// inside function bodies.  Define HPGL_USE_OPENBLAS via CMake
-		// when building with -DBLA_VENDOR=OpenBLAS on macOS.
+		// OpenBLAS (any platform): limit internal threads to 1 so they don't
+		// multiply with OpenMP threads.  HPGL_USE_OPENBLAS is defined by
+		// CMake ONLY when the build actually links OpenBLAS (BLA_VENDOR=OpenBLAS
+		// or BLAS library-name detection).  On Linux with netlib/BLIS/
+		// FlexiBLAS/ATLAS the macro is undefined, so the openblas_* symbols
+		// are never referenced — no undefined-symbol dlopen failure of
+		// libhpgl.so (M-32).  Declarations are at file scope (above) because
+		// Apple Clang rejects extern "C" inside function bodies.
 		detail::blas_thread_guard_t blas_guard(openblas_get_num_threads, openblas_set_num_threads);
 #else
-		// macOS Accelerate / other BLAS: no thread-count API available.
-		// Accelerate manages its own thread pool via GCD and does not
-		// oversubscribe with OpenMP in the same way.
+		// Other BLAS (Linux netlib/BLIS/FlexiBLAS/ATLAS, macOS Accelerate, …):
+		// no thread-count API available.  Accelerate manages its own thread
+		// pool via GCD and does not oversubscribe with OpenMP in the same way.
 #endif
 		// F-M9: an allocation failure (e.g. ws.A.resize at
 		// my_kriging_weights.h:256 with a huge coord_size) inside the OpenMP
@@ -141,6 +141,14 @@ namespace hpgl
 		// record the exception, cancel the loop, and rethrow after the region
 		// so the C API converts it to a clean hpgl_exception error.
 		std::exception_ptr parallel_error;
+		// M-5: cooperative cancellation flag shared by all threads.
+		// #pragma omp cancel for is a silent no-op in every default build
+		// (the cancel-var ICV is false; OMP_CANCELLATION is never set), so the
+		// documented user-cancel feature was never effective on the parallel
+		// path. Instead, each thread checks this atomic flag at the top of
+		// every iteration and skips the expensive kriging body once set. In
+		// non-OpenMP builds a plain break is legal (the loop is serial).
+		std::atomic<bool> loop_stop{false};
 #pragma omp parallel
 {
 		// Per-thread workspace: pre-allocates vectors once, reused across
@@ -150,6 +158,14 @@ namespace hpgl
 		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_singularity) reduction(+: points_processed) reduction(+: sum) 
 		for(node_index_t idx = 0; idx < idx_end; ++idx)	
 		{
+			// M-5: cooperative cancellation — see loop_stop above.
+			if (loop_stop.load(std::memory_order_relaxed)) {
+#ifndef _OPENMP
+				break;
+#else
+				continue;
+#endif
+			}
 			try
 			{
 			if (!input_property.is_informed(idx))
@@ -200,17 +216,11 @@ namespace hpgl
 				}
 				local_lap_count = 0;
 				if (report.cancelled()) {
-#ifdef _OPENMP
-					// OpenMP §2.11.2: break is forbidden inside a
-					// worksharing-loop construct. Use cancel-for to
-					// prevent new iterations; the current iteration
-					// finishes naturally (no more real work after
-					// this check). In single-threaded builds (no
-					// OpenMP), the plain 'break' is standard-conformant.
-					#pragma omp cancel for
-#else
-					break;
-#endif
+					// M-5: set the cooperative stop flag instead of
+					// `#pragma omp cancel for` (a silent no-op in default
+					// builds). Other threads observe the flag at their next
+					// iteration and skip the kriging body.
+					loop_stop.store(true, std::memory_order_relaxed);
 				}
 			}
 			} // try
@@ -227,11 +237,9 @@ namespace hpgl
 					if (!parallel_error)
 						parallel_error = std::current_exception();
 				}
-#ifdef _OPENMP
-				#pragma omp cancel for
-#else
-				break;
-#endif
+				// M-5: cooperative stop — sets the shared flag so all
+				// threads skip remaining work (see loop_stop above).
+				loop_stop.store(true, std::memory_order_relaxed);
 			}
 		}
 		// Flush remaining laps for this thread

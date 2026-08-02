@@ -147,6 +147,31 @@ static void validate_max_neighbours_or_throw(int max_neighbours, const char * co
 	}
 }
 
+/// Validates m_max_neighbours on KRIGING entry points (M-31).
+/// Kriging requires at least one conditioning neighbour — a zero
+/// max_neighbours produces an empty neighbourhood → SK all-mean-fill /
+/// OK all-undefined for direct C callers, with no error. The < 0 and
+/// upper-bound checks mirror validate_max_neighbours_or_throw. Simulation
+/// entry points (SGS/SIS, where max_neighbours=0 means unconditional
+/// simulation) must keep using validate_max_neighbours_or_throw.
+static void validate_kriging_max_neighbours_or_throw(int max_neighbours, const char * context)
+{
+	if (max_neighbours < 1)
+	{
+		std::ostringstream oss;
+		oss << context << ": m_max_neighbours must be at least 1 for kriging (got "
+		    << max_neighbours << ")";
+		throw hpgl::hpgl_exception("C API", oss.str());
+	}
+	if (max_neighbours > MAX_NEIGHBOURS_UPPER_BOUND)
+	{
+		std::ostringstream oss;
+		oss << context << ": m_max_neighbours " << max_neighbours
+		    << " exceeds maximum allowed (" << MAX_NEIGHBOURS_UPPER_BOUND << ")";
+		throw hpgl::hpgl_exception("C API", oss.str());
+	}
+}
+
 // Defined in neighbourhood_param.cpp — rejects a zero-radius search
 // neighbourhood on kriging paths (F-34). Simulation paths (SGS zero-radius
 // CDF draw) are intentionally exempt.
@@ -640,7 +665,8 @@ HPGL_API void hpgl_ordinary_kriging(
 			params->m_radiuses[2]);
 	validate_kriging_radiuses_or_throw(ok_p.m_radiuses, "hpgl_ordinary_kriging");
 
-	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_ordinary_kriging");
+	// M-31: kriging requires >= 1 neighbour — reject max_neighbours=0.
+	validate_kriging_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_ordinary_kriging");
 	ok_p.m_max_neighbours = params->m_max_neighbours;
 
 	hpgl::ordinary_kriging(in_prop, grid, ok_p, out_prop, true);
@@ -659,7 +685,8 @@ static void init_sk_params(hpgl_sk_params_t * params, hpgl::sk_params_t & sk_p)
 			params->m_radiuses[2]);
 	validate_kriging_radiuses_or_throw(sk_p.m_radiuses, "init_sk_params");
 
-	validate_max_neighbours_or_throw(params->m_max_neighbours, "init_sk_params");
+	// M-31: kriging requires >= 1 neighbour — reject max_neighbours=0.
+	validate_kriging_max_neighbours_or_throw(params->m_max_neighbours, "init_sk_params");
 	sk_p.m_max_neighbours = params->m_max_neighbours;
 
 	if (!params->m_automatic_mean)
@@ -736,6 +763,22 @@ hpgl_simple_kriging_weights(
 	if (neighbours_count < 0)
 	{
 		hpgl::set_last_exception_message("simple_kriging_weights: negative neighbours_count");
+		return -1;
+	}
+	// 2-M-2: this was the ONLY kriging entry point without the
+	// MAX_NEIGHBOURS_UPPER_BOUND gate (11 siblings enforce it via
+	// validate_max_neighbours_or_throw / validate_kriging_max_neighbours_or_throw).
+	// An unbounded neighbours_count (a) dereferences the neighbour arrays up to
+	// count — a heap OOB read when count exceeds the arrays' actual length — and
+	// (b) allocates A = count² (100k pts → 160 GB) + O(count³) solve → OOM/DoS.
+	// The raw C pointers carry no length metadata, so this gate bounds the
+	// dereference loop and the system size; the Python wrapper additionally
+	// validates count against the actual ndarray lengths (geo.py shape check).
+	if (neighbours_count > MAX_NEIGHBOURS_UPPER_BOUND)
+	{
+		hpgl::set_last_exception_message(
+			("simple_kriging_weights: neighbours_count " + std::to_string(neighbours_count)
+			 + " exceeds maximum allowed (" + std::to_string(MAX_NEIGHBOURS_UPPER_BOUND) + ")").c_str());
 		return -1;
 	}
 	try
@@ -837,7 +880,8 @@ HPGL_API void hpgl_lvm_kriging(
 			params->m_radiuses[2]);
 	validate_kriging_radiuses_or_throw(ok_p.m_radiuses, "hpgl_lvm_kriging");
 
-	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_lvm_kriging");
+	// M-31: kriging requires >= 1 neighbour — reject max_neighbours=0.
+	validate_kriging_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_lvm_kriging");
 	ok_p.m_max_neighbours = params->m_max_neighbours;
 
 	cont_property_array_t out_prop(output_data, output_mask, out_size);
@@ -922,8 +966,9 @@ hpgl_indicator_kriging(
 	// → ~32GB/thread heap reserve inside the OpenMP region → uncatchable
 	// std::terminate. All 10 other entry points (api.cpp:631,650,821,940,994,
 	// 1070,1158,1233,1341,1451) enforce the same bound.
+	// M-31: kriging requires >= 1 neighbour — reject max_neighbours=0.
 	for (int i = 0; i < indicator_count; ++i)
-		validate_max_neighbours_or_throw(params[i].m_max_neighbours, "hpgl_indicator_kriging");
+		validate_kriging_max_neighbours_or_throw(params[i].m_max_neighbours, "hpgl_indicator_kriging");
 
 	indicator_property_array_t in_prop(in_data->m_data, in_data->m_mask, size, in_data->m_indicator_count);
 	indicator_property_array_t out_prop(out_data->m_data, out_data->m_mask, size2, out_data->m_indicator_count);
@@ -976,7 +1021,8 @@ hpgl_sgs_simulation(
 
 	if (mean != 0)
 		sgs_p.set_mean(*mean);
-	sgs_p.m_lvm = 0;
+	// 2-M-1(c): m_mean_kind is consumed by sequential_gaussian_simulation
+	// (auto vs user stationary mean); e_mean_varying is set on the LVM path.
 	sgs_p.m_mean_kind = mean != 0 ? mean_kind_t::e_mean_stationary : mean_kind_t::e_mean_stationary_auto;
 
 	// Validate simulation mask shape matches grid shape to prevent
@@ -1048,7 +1094,9 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 		throw hpgl_exception("hpgl_sgs_lvm_simulation", oss.str());
 	}
 
-	sgs_p.m_lvm = means->m_data;
+	// 2-M-1(c): m_mean_kind is consumed by sequential_gaussian_simulation
+	// (the LVM entry point routes the varying mean via the mean_data
+	// parameter; e_mean_varying records the mode for print/contract parity).
 	sgs_p.m_mean_kind = mean_kind_t::e_mean_varying;
 
 	// Validate simulation mask shape matches grid shape to prevent
@@ -1105,8 +1153,28 @@ HPGL_API void hpgl_median_ik(
 			params->m_radiuses[2]);
 	validate_kriging_radiuses_or_throw(mik_p.m_radiuses, "hpgl_median_ik");
 
-	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_median_ik");
+	// M-31: kriging requires >= 1 neighbour — reject max_neighbours=0.
+	validate_kriging_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_median_ik");
 	mik_p.m_max_neighbours = params->m_max_neighbours;
+	// 2-M-35 (R-11): marginal_probs are consumed directly as the SK mean and
+	// the failure-fallback probability (median_ik.cpp:146,151) — a value
+	// outside [0,1] silently produces all-1/all-0 output for direct-C callers
+	// (e.g. marginal_probs[1]=5.0 → choose_indicator always returns 1) or a
+	// mean-leaked estimate. Mirror the Python wrapper's validation
+	// (geo.py:1879-1884 → validate_probability [0,1] + validate_probability_sum
+	// with 0.01 tolerance at validation.py:834-881). NaN fails the range
+	// checks too (NaN comparisons are false).
+	{
+		const double p0 = params->m_marginal_probs[0];
+		const double p1 = params->m_marginal_probs[1];
+		if (!(p0 >= 0.0 && p0 <= 1.0) || !(p1 >= 0.0 && p1 <= 1.0))
+			throw hpgl_exception("hpgl_median_ik",
+				"marginal_probs must be in [0, 1]");
+		const double prob_sum = p0 + p1;
+		if (prob_sum < 0.99 || prob_sum > 1.01)
+			throw hpgl_exception("hpgl_median_ik",
+				"marginal_probs must sum to 1.0 (within 0.01)");
+	}
 	mik_p.m_marginal_probs[0] = params->m_marginal_probs[0];
 	mik_p.m_marginal_probs[1] = params->m_marginal_probs[1];
 
@@ -1382,7 +1450,8 @@ hpgl_simple_cokriging_mark1(
 				output_data->m_data, output_data->m_mask, size3);
 
 		neighbourhood_param_t np;
-		validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_simple_cokriging_mark1");
+		// M-31: kriging requires >= 1 neighbour — reject max_neighbours=0.
+		validate_kriging_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_simple_cokriging_mark1");
 		np.m_max_neighbours = params->m_max_neighbours;
 
 		covariance_param_t cp;
@@ -1494,7 +1563,8 @@ hpgl_simple_cokriging_mark2(
 		init_cov_params_base(secondary_cp, &params->m_secondary_cov_params);
 
 		neighbourhood_param_t np;
-		validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_simple_cokriging_mark2");
+		// M-31: kriging requires >= 1 neighbour — reject max_neighbours=0.
+		validate_kriging_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_simple_cokriging_mark2");
 		np.m_max_neighbours = params->m_max_neighbours;
 		np.set_radiuses(
 			params->m_radiuses[0],

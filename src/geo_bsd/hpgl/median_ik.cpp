@@ -13,6 +13,20 @@
 #include "api.h"
 #include <exception>
 
+// OpenBLAS thread-control API — file-scope declarations so the in-function
+// branch compiles on Apple Clang too (extern "C" inside function bodies is
+// rejected there).  HPGL_USE_OPENBLAS is defined by CMake ONLY when the
+// build actually links OpenBLAS (BLA_VENDOR=OpenBLAS or BLAS library-name
+// detection), so the openblas_* symbols are never referenced on Linux
+// builds that link a different BLAS vendor (M-32: undefined-symbol dlopen
+// failure with netlib/BLIS/FlexiBLAS/ATLAS).
+#ifdef HPGL_USE_OPENBLAS
+extern "C" {
+	void openblas_set_num_threads(int);
+	int openblas_get_num_threads(void);
+}
+#endif
+
 namespace hpgl
 {
 	inline indicator_index_t choose_indicator(indicator_probability_t prob)
@@ -71,16 +85,17 @@ void median_ik_for_two_indicators(
 	extern "C" void mkl_set_num_threads(int);
 	extern "C" int mkl_get_max_threads(void);
 	detail::blas_thread_guard_t blas_guard(mkl_get_max_threads, mkl_set_num_threads);
-#elif defined(__linux__)
-	// OpenBLAS: limit internal threads to 1 so they don't multiply
-	// with OpenMP threads. Declared extern to avoid header dependency.
-	extern "C" void openblas_set_num_threads(int);
-	extern "C" int openblas_get_num_threads(void);
+#elif defined(HPGL_USE_OPENBLAS)
+	// OpenBLAS (any platform): limit internal threads to 1 so they don't
+	// multiply with OpenMP threads.  HPGL_USE_OPENBLAS is defined by CMake
+	// ONLY when the build actually links OpenBLAS — on Linux with
+	// netlib/BLIS/FlexiBLAS/ATLAS the macro is undefined, so the openblas_*
+	// symbols are never referenced (M-32).  Declarations at file scope above.
 	detail::blas_thread_guard_t blas_guard(openblas_get_num_threads, openblas_set_num_threads);
 #else
-	// macOS Accelerate / other BLAS: no thread-count API available.
-	// Accelerate manages its own thread pool via GCD and does not
-	// oversubscribe with OpenMP in the same way.
+	// Other BLAS (Linux netlib/BLIS/FlexiBLAS/ATLAS, macOS Accelerate, …):
+	// no thread-count API available.  Accelerate manages its own thread
+	// pool via GCD and does not oversubscribe with OpenMP in the same way.
 #endif
 	// F-M9: catch allocation failures inside the region and rethrow after
 	// it so the C ABI catch converts them to a clean error instead of
@@ -88,14 +103,36 @@ void median_ik_for_two_indicators(
 	unsigned long points_calculated = 0;
 	unsigned long points_without_neighbours = 0;
 	unsigned long points_singularity = 0;
+	// 2-M-33: count every node that received an output category (including
+	// failure fallbacks) so m_mean uses a numerator==denominator pair like
+	// the four sibling consumers (cont_kriging, indicator_kriging, cokriging,
+	// SIS). Previously the denominator was points_calculated (KI_SUCCESS only)
+	// while sum_categories accumulated over ALL nodes — a biased mean on
+	// partial failure.
+	unsigned long nodes_processed = 0;
 	double sum_categories = 0;
 	std::exception_ptr parallel_error;
+	// M-5: cooperative cancellation flag shared by all threads.
+	// #pragma omp cancel for is a silent no-op in every default build
+	// (the cancel-var ICV is false; OMP_CANCELLATION is never set), so
+	// the documented user-cancel feature was never effective. Each thread
+	// checks this atomic flag at the top of every iteration and skips the
+	// expensive kriging body once set.
+	std::atomic<bool> loop_stop{false};
 	#pragma omp parallel
 	{
 		int local_lap_count = 0;
-		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_singularity) reduction(+: sum_categories)
+		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_singularity) reduction(+: nodes_processed) reduction(+: sum_categories)
 		for (size_t idx = 0; idx < prop_size; ++idx)
 		{
+			// M-5: cooperative cancellation — see loop_stop above.
+			if (loop_stop.load(std::memory_order_relaxed)) {
+#ifndef _OPENMP
+				break;
+#else
+				continue;
+#endif
+			}
 			try
 			{
 			double prob;
@@ -123,6 +160,7 @@ void median_ik_for_two_indicators(
 			ind_index = choose_indicator(prob);
 			output_property.set_at(idx, ind_index);
 			sum_categories += static_cast<double>(ind_index);
+			++nodes_processed;
 			
 			// Batch progress updates to reduce critical section contention.
 			// Each thread accumulates laps locally and flushes in batches,
@@ -136,17 +174,10 @@ void median_ik_for_two_indicators(
 				}
 				local_lap_count = 0;
 				if (report.cancelled()) {
-#ifdef _OPENMP
-					// OpenMP §2.11.2: break is forbidden inside a
-					// worksharing-loop construct. Use cancel-for to
-					// prevent new iterations; the current iteration
-					// finishes naturally (no more real work after
-					// this check). In single-threaded builds (no
-					// OpenMP), the plain 'break' is standard-conformant.
-					#pragma omp cancel for
-#else
-					break;
-#endif
+					// M-5: set the cooperative stop flag instead of
+					// `#pragma omp cancel for` (a silent no-op in default
+					// builds).
+					loop_stop.store(true, std::memory_order_relaxed);
 				}
 			}
 			} // try
@@ -160,11 +191,9 @@ void median_ik_for_two_indicators(
 					if (!parallel_error)
 						parallel_error = std::current_exception();
 				}
-#ifdef _OPENMP
-				#pragma omp cancel for
-#else
-				break;
-#endif
+				// M-5: cooperative stop — sets the shared flag so all
+				// threads skip remaining work (see loop_stop above).
+				loop_stop.store(true, std::memory_order_relaxed);
 			}
 		}
 		// Flush remaining laps for this thread
@@ -191,14 +220,30 @@ void median_ik_for_two_indicators(
 	// F-M5: populate kriging stats (previously median IK never called
 	// set_kriging_stats, leaving stale stats observable — api.h:188-193
 	// zero-init promise violated). Mean is the average output category.
+	// 2-M-33: denominator is nodes_processed (all nodes that received an
+	// output category), not points_calculated (KI_SUCCESS only) — the sum
+	// includes failure-fallback categories.
 	{
 		kriging_stats_t stats;
 		stats.m_points_calculated = points_calculated;
 		stats.m_points_without_neighbours = points_without_neighbours;
 		stats.m_points_singularity = points_singularity;
-		stats.m_mean = points_calculated > 0 ? sum_categories / static_cast<double>(points_calculated) : 0;
+		stats.m_mean = nodes_processed > 0 ? sum_categories / static_cast<double>(nodes_processed) : 0;
 		stats.m_speed_nps = report.iterations_per_second();
 		set_kriging_stats(stats);
+
+		// M-6: emit the stderr failure signal on the median-IK failure paths
+		// (mirrors cont_kriging.h, simple_cokriging_markI.cpp, indicator_kriging.h,
+		// and SIS). Previously singular/no-neighbour systems silently
+		// substituted the marginal probability with no observability.
+		if (stats.m_points_singularity > 0 || stats.m_points_without_neighbours > 0)
+		{
+			fprintf(stderr,
+				"HPGL: kriging failures: %lu singularity, %lu no-neighbours (of %lu total)\n",
+				stats.m_points_singularity,
+				stats.m_points_without_neighbours,
+				static_cast<unsigned long>(prop_size));
+		}
 	}
 	std::ostringstream oss;
 	oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";

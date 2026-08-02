@@ -16,6 +16,20 @@
 #include "api.h"
 #include <exception>
 
+// OpenBLAS thread-control API — file-scope declarations so the in-function
+// branch compiles on Apple Clang too (extern "C" inside function bodies is
+// rejected there).  HPGL_USE_OPENBLAS is defined by CMake ONLY when the
+// build actually links OpenBLAS (BLA_VENDOR=OpenBLAS or BLAS library-name
+// detection), so the openblas_* symbols are never referenced on Linux
+// builds that link a different BLAS vendor (M-32: undefined-symbol dlopen
+// failure with netlib/BLIS/FlexiBLAS/ATLAS).
+#ifdef HPGL_USE_OPENBLAS
+extern "C" {
+	void openblas_set_num_threads(int);
+	int openblas_get_num_threads(void);
+}
+#endif
+
 namespace hpgl
 {
 	
@@ -174,16 +188,17 @@ namespace hpgl
 		extern "C" void mkl_set_num_threads(int);
 		extern "C" int mkl_get_max_threads(void);
 		detail::blas_thread_guard_t blas_guard(mkl_get_max_threads, mkl_set_num_threads);
-#elif defined(__linux__)
-		// OpenBLAS: limit internal threads to 1 so they don't multiply
-		// with OpenMP threads. Declared extern to avoid header dependency.
-		extern "C" void openblas_set_num_threads(int);
-		extern "C" int openblas_get_num_threads(void);
+#elif defined(HPGL_USE_OPENBLAS)
+		// OpenBLAS (any platform): limit internal threads to 1 so they don't
+		// multiply with OpenMP threads.  HPGL_USE_OPENBLAS is defined by CMake
+		// ONLY when the build actually links OpenBLAS — on Linux with
+		// netlib/BLIS/FlexiBLAS/ATLAS the macro is undefined, so the openblas_*
+		// symbols are never referenced (M-32).  Declarations at file scope above.
 		detail::blas_thread_guard_t blas_guard(openblas_get_num_threads, openblas_set_num_threads);
 #else
-		// macOS Accelerate / other BLAS: no thread-count API available.
-		// Accelerate manages its own thread pool via GCD and does not
-		// oversubscribe with OpenMP in the same way.
+		// Other BLAS (Linux netlib/BLIS/FlexiBLAS/ATLAS, macOS Accelerate, …):
+		// no thread-count API available.  Accelerate manages its own thread
+		// pool via GCD and does not oversubscribe with OpenMP in the same way.
 #endif
 		// F-M9: catch allocation failures (correct_order_relations ccdf1/ccdf2,
 		// ws.A.resize) inside the region and rethrow after it, so the C ABI
@@ -195,6 +210,13 @@ namespace hpgl
 		unsigned long nodes_processed = 0;
 		double sum_categories = 0;
 		std::exception_ptr parallel_error;
+		// M-5: cooperative cancellation flag shared by all threads.
+		// #pragma omp cancel for is a silent no-op in every default build
+		// (the cancel-var ICV is false; OMP_CANCELLATION is never set), so
+		// the documented user-cancel feature was never effective. Each
+		// thread checks this atomic flag at the top of every iteration and
+		// skips the expensive kriging body once set.
+		std::atomic<bool> loop_stop{false};
 		#pragma omp parallel
 		{
 			int local_lap_count = 0;
@@ -206,6 +228,14 @@ namespace hpgl
 			#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_singularity) reduction(+: nodes_processed) reduction(+: sum_categories)
 			for (size_t node_idx = 0; node_idx < size; ++node_idx)
 			{
+				// M-5: cooperative cancellation — see loop_stop above.
+				if (loop_stop.load(std::memory_order_relaxed)) {
+#ifndef _OPENMP
+					break;
+#else
+					continue;
+#endif
+				}
 				try
 				{
 				probs.clear();
@@ -255,17 +285,10 @@ namespace hpgl
 				}
 				local_lap_count = 0;
 				if (report.cancelled()) {
-#ifdef _OPENMP
-					// OpenMP §2.11.2: break is forbidden inside a
-					// worksharing-loop construct. Use cancel-for to
-					// prevent new iterations; the current iteration
-					// finishes naturally (no more real work after
-					// this check). In single-threaded builds (no
-					// OpenMP), the plain 'break' is standard-conformant.
-					#pragma omp cancel for
-#else
-					break;
-#endif
+					// M-5: set the cooperative stop flag instead of
+					// `#pragma omp cancel for` (a silent no-op in default
+					// builds).
+					loop_stop.store(true, std::memory_order_relaxed);
 				}
 			}
 				} // try
@@ -280,11 +303,9 @@ namespace hpgl
 						if (!parallel_error)
 							parallel_error = std::current_exception();
 					}
-#ifdef _OPENMP
-					#pragma omp cancel for
-#else
-					break;
-#endif
+					// M-5: cooperative stop — sets the shared flag so all
+					// threads skip remaining work (see loop_stop above).
+					loop_stop.store(true, std::memory_order_relaxed);
 				}
 		}
 		// Flush remaining laps for this thread
@@ -321,6 +342,19 @@ namespace hpgl
 			stats.m_mean = nodes_processed > 0 ? sum_categories / static_cast<double>(nodes_processed) : 0;
 			stats.m_speed_nps = report.iterations_per_second();
 			set_kriging_stats(stats);
+
+			// M-6: emit the stderr failure signal on the indicator-kriging
+			// failure paths (mirrors cont_kriging.h, simple_cokriging_markI.cpp,
+			// and SIS). Previously singular/no-neighbour systems silently
+			// substituted the marginal probability with no observability.
+			if (stats.m_points_singularity > 0 || stats.m_points_without_neighbours > 0)
+			{
+				fprintf(stderr,
+					"HPGL: kriging failures: %lu singularity, %lu no-neighbours (of %lu total)\n",
+					stats.m_points_singularity,
+					stats.m_points_without_neighbours,
+					static_cast<unsigned long>(size));
+			}
 		}
 		{
 			std::ostringstream oss;

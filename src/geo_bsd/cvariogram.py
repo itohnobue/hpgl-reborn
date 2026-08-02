@@ -457,11 +457,31 @@ def _validate_template_not_degenerate(templ, context):
             )
 
 
-def CalcVariograms(templ, hard_data, percent=100):
+def CalcVariograms(templ, hard_data, percent=100, seed=None):
     if templ.num_lags <= 0:
         raise ValueError("CalcVariograms: num_lags must be positive")
     if percent < 1 or percent > 100:
         raise ValueError(f"CalcVariograms: percent must be in [1, 100], got {percent}")
+    # 2-M-3: optional RNG seed for the grid-path percent sampling. When
+    # provided, the C++ kernel's thread_local mt19937 is re-seeded with the
+    # given value so identical inputs produce identical variograms
+    # (reproducible published experiments). None keeps the current
+    # non-deterministic behavior.
+    if seed is not None:
+        if not isinstance(seed, (int, numpy.integer)) or isinstance(seed, bool):
+            raise TypeError(
+                f"CalcVariograms: seed must be an int, got {type(seed).__name__}"
+            )
+        if seed < 0:
+            raise ValueError(
+                f"CalcVariograms: seed must be non-negative, got {seed}"
+            )
+        if not hasattr(cvar, "calc_variograms_seeded"):
+            raise RuntimeError(
+                "CalcVariograms: seed= requires a _cvariogram library that "
+                "exports calc_variograms_seeded (C++ kernel seeded-RNG "
+                "support). The installed library predates the seeded API."
+            )
     _validate_template_not_degenerate(templ.templ, "CalcVariograms")
     if not isinstance(hard_data[0], numpy.ndarray) or hard_data[0].dtype != numpy.float32:
         raise TypeError(
@@ -502,7 +522,32 @@ def CalcVariograms(templ, hard_data, percent=100):
     )
 
     with _cvar_error_guard("CalcVariograms"):
-        cvar.calc_variograms(C.byref(templ.templ), C.byref(hd), variogram, variogram.size, percent)
+        if seed is not None:
+            # 2-M-3: seeded entry point. Declared lazily so a stale library
+            # that predates calc_variograms_seeded still imports (the
+            # hasattr guard above rejects the call before we get here).
+            _seeded = cvar.calc_variograms_seeded
+            _seeded.restype = None
+            _seeded.argtypes = [
+                C.POINTER(variogram_search_template_t),
+                C.POINTER(hard_data_t),
+                NC.ndpointer(dtype=numpy.float32),
+                C.c_int,
+                C.c_int,
+                C.c_uint64,
+            ]
+            _seeded(
+                C.byref(templ.templ),
+                C.byref(hd),
+                variogram,
+                variogram.size,
+                percent,
+                int(seed),
+            )
+        else:
+            cvar.calc_variograms(
+                C.byref(templ.templ), C.byref(hd), variogram, variogram.size, percent
+            )
 
     # Post-call validation: check for NaN/Inf in output
     if numpy.any(numpy.isnan(variogram)) or numpy.any(numpy.isinf(variogram)):

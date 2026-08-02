@@ -48,7 +48,15 @@ namespace hpgl
 		if (params.m_kriging_kind == KRIG_SIMPLE)
 		{
 			double mean;
-			if (params.m_calculate_mean)
+			// 2-M-1(c): consult m_mean_kind (the descriptive mean-mode field
+			// set by the C API) rather than the redundant m_calculate_mean
+			// flag — previously m_mean_kind was set, printed, but never read
+			// by any algorithm. e_mean_stationary_auto → calculate from the
+			// transformed data; e_mean_stationary → use the user-supplied
+			// stationary mean (params.set_mean). The two fields were always
+			// set consistently by api.cpp; this wiring makes the documented
+			// contract (sgs.py docstring) match the actual behavior.
+			if (params.m_mean_kind == mean_kind_t::e_mean_stationary_auto)
 			{
 			bool valid_mean;
 			mean = calc_mean(output, &valid_mean);
@@ -65,6 +73,7 @@ namespace hpgl
 			{
 				do_sequential_gausian_simulation(output, grid, params,
 					single_mean_t(mean),
+					single_mean_t(mean),
 					sk_weight_calculator_t(),
 					mask);
 			}
@@ -72,23 +81,55 @@ namespace hpgl
 			{
 				do_sequential_gausian_simulation(output, grid, params,
 					single_mean_t(mean),
+					single_mean_t(mean),
 					sk_weight_calculator_t(),
 					no_mask_t());
 
 			}
 		}
 		else {
+			// M-29 + R-5: GSLIB's OK-mode failure fallback draws N(gmean, 1.0)
+			// (sgsim.for: `cmean = gmean; cstdev = 1.0`), NOT N(0,1). The
+			// mean is computed the same way as the KRIG_SIMPLE path above
+			// (user-supplied mean, or calculated from data). R-5: the OK
+			// kriging path uses no_mean_t() (zero means) so the kriged
+			// estimate is Σλᵢzᵢ with NO mean term on either branch — the
+			// n≥4 OK estimate (Σλ=1 ⇒ Σλᵢzᵢ + (1−Σλᵢ)·gmean = Σλᵢzᵢ anyway)
+			// and the n<4 SK-downgraded estimate (M-3, ok_sgs_weight_
+			// calculator_t) — matching GSLIB's zero-mean normal-score
+			// semantics and removing the n=4 mean-pull discontinuity. The
+			// user/computed mean is passed SEPARATELY as the fallback mean
+			// provider so the failure fallback still draws N(gmean, 1.0).
+			double mean;
+			// 2-M-1(c): same m_mean_kind wiring as the KRIG_SIMPLE branch —
+			// the descriptive field selects auto-calculated vs user-supplied
+			// stationary mean (2-M-1(a): the OK branch honors the user mean).
+			if (params.m_mean_kind == mean_kind_t::e_mean_stationary_auto)
+			{
+				bool valid_mean;
+				mean = calc_mean(output, &valid_mean);
+				if (!valid_mean)
+				{
+					LOGWARNING("No data to calculate mean. Defaulting to 0.\n");
+					mean = 0.0;
+				}
+			}
+			else
+				mean = params.mean();
+
 			if (mask != nullptr)
 			{
 				do_sequential_gausian_simulation(output, grid, params,
 					no_mean_t(),
-					ok_weight_calculator_t(),
+					single_mean_t(mean),
+					ok_sgs_weight_calculator_t(),
 					mask);
 			}
 			else {
 				do_sequential_gausian_simulation(output, grid, params,
 					no_mean_t(),
-					ok_weight_calculator_t(),
+					single_mean_t(mean),
+					ok_sgs_weight_calculator_t(),
 					no_mask_t());
 			}
 		}
@@ -149,9 +190,17 @@ namespace hpgl
 			}
 		}
 
+		// 2-M-1(b): the LVM path intentionally uses the simple-kriging weight
+		// calculator against the local varying mean (GSLIB sgsim ktype=3 LVM
+		// semantics — "LVM kernel performs simple kriging against it", sgs.py
+		// docstring). m_kriging_kind is deliberately NOT consulted here: LVM
+		// is a separate C API entry point (hpgl_sgs_lvm_simulation), not a
+		// kriging_kind value — the enum admits only KRIG_ORDINARY(0) and
+		// KRIG_SIMPLE(1), both of which use the varying mean on this path.
 		if (mask != nullptr)
 		{
 			do_sequential_gausian_simulation( output, grid, params,
+						mean_data_vec,
 						mean_data_vec,
 						sk_weight_calculator_t(),
 						mask);
@@ -159,6 +208,7 @@ namespace hpgl
 		else
 		{
 			do_sequential_gausian_simulation( output, grid, params,
+						mean_data_vec,
 						mean_data_vec,
 						sk_weight_calculator_t(),
 						no_mask_t());

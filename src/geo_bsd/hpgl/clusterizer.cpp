@@ -109,13 +109,30 @@ namespace hpgl
 		// e791f6b 1e9 cap) only tweaked the arithmetic/cap.  Two-part fix:
 		//   (1) Lazy cluster creation (add_node allocates on first touch)
 		//       removes the per-cell heap-allocation amplifier entirely.
-		//   (2) The cap bounds the up-front pointer vector: 8 bytes per
-		//       slot, so 1e8 slots = ~800MB worst case.  A ~464³ cluster
-		//       grid (grid up to ~464³ at radius 1, far beyond typical
-		//       use — the largest test grid is 50³) still passes.
-		if (total_volume > 100'000'000)
+		//   (2) The cap bounds the up-front pointer vector.
+		// M-12: the cap must bound the EFFECTIVE memory, not just the
+		// pointer-vector count. The old 1e8 cap admitted fully-dense grids
+		// (~464³) that lazily allocate ~1e8 cluster_t heap objects (~24-32 B
+		// each plus a nested vector) → 2.4-3.2 GB — the previous "800MB
+		// worst case" comment counted only the 8 B/slot pointer vector.
+		// Per-cell worst case at fully-dense occupancy:
+		//   8  B pointer slot          (std::unique_ptr in m_clusters)
+		//  24  B cluster_t object      (unique_ptr + limit + flag + padding)
+		//  24  B nested std::vector    (heap object created by the ctor)
+		//   >=8 B reserve()'d buffer   (limit * sizeof(node_index_t), min 8)
+		// Cap the product at 1 GiB so a fully-dense admitted grid stays
+		// memory-safe (radius-1 dense grids up to ~1.7e7 cells ≈ 256³, far
+		// beyond typical use — the largest test grid is 50³; larger grids
+		// are served by increasing the search radius, which shrinks the
+		// cluster grid quadratically).
+		size_t reserve_bytes = m_state->m_limit * sizeof(node_index_t);
+		size_t per_cell_cost = 8 + 24 + 24 + (reserve_bytes < 8 ? 8 : reserve_bytes);
+		const size_t max_cells = (1024ULL * 1024 * 1024) / per_cell_cost;
+		if (total_volume > max_cells)
 			throw hpgl_exception("clusterizer_t::clusterizer_t",
-				"Cluster grid volume exceeds 100 million cells — check grid dimensions and search radii.");
+				"Cluster grid volume exceeds the memory-safe limit of "
+				+ std::to_string(max_cells)
+				+ " cells — check grid dimensions and search radii.");
 		m_state->m_clusters.resize(total_volume);
 	}
 
@@ -185,8 +202,19 @@ namespace hpgl
 
 		// Pre-compute total capacity to avoid chain reallocations.
 		// At most 27 clusters (3×3×3 neighbour box), each capped at m_limit.
+		// M-13: cap the reserve. 27*m_limit scales with the search-box volume
+		// (m_limit = offsets/250; a legal radius-644 workflow reaches
+		// ~8.57M → ~925 MB/thread reserve inside the OpenMP kriging loop),
+		// and the caller only ever consumes up to its configured
+		// max_neighbours (bounded by MAX_NEIGHBOURS_UPPER_BOUND = 100000).
+		// std::vector grows on demand past the reserve, so capping only
+		// sacrifices a reallocation in pathological cases — never
+		// correctness.
+		const size_t MAX_NEIGHBOUR_RESERVE = 100000;
+		size_t reserve_cap = m_state->m_limit > MAX_NEIGHBOUR_RESERVE / 27
+			? MAX_NEIGHBOUR_RESERVE : 27 * m_state->m_limit;
 		neighbours.clear();
-		neighbours.reserve(27 * m_state->m_limit);
+		neighbours.reserve(reserve_cap);
 
 		for (int k = cz - 1; k <= cz + 1; ++k)
 			for (int j = cy - 1; j	<= cy + 1; ++j)

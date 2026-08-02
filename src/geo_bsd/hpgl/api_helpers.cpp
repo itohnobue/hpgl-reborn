@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include <stdexcept>
 #include <climits>
+#include <sstream>
 #include "api.h"
 #include "hpgl_exception.h"
 #include "covariance_type.h"
@@ -79,8 +80,35 @@ void init_sgs_params(hpgl_sgs_params_t * params, hpgl::sgs_params_t * params2)
 	if (params->m_max_neighbours < 0)
 		throw hpgl_exception("init_sgs_params", "m_max_neighbours cannot be negative");
 	sgs_p.m_max_neighbours = params->m_max_neighbours;
+	// 2-M-4: validate the kriging_kind enum at the C API boundary. The
+	// documented values are KRIG_ORDINARY(0) and KRIG_SIMPLE(1); every other
+	// value previously fell through the `== KRIG_SIMPLE` check in
+	// sequential_gaussian_simulation.cpp and silently ran ordinary kriging.
+	if (params->m_kriging_kind != static_cast<int>(kriging_kind_t::KRIG_ORDINARY)
+		&& params->m_kriging_kind != static_cast<int>(kriging_kind_t::KRIG_SIMPLE))
+	{
+		std::ostringstream oss;
+		oss << "m_kriging_kind " << params->m_kriging_kind
+		    << " is not a valid kriging kind (KRIG_ORDINARY=0, KRIG_SIMPLE=1)";
+		throw hpgl_exception("init_sgs_params", oss.str());
+	}
 	sgs_p.m_kriging_kind = (kriging_kind_t) params->m_kriging_kind;
 	sgs_p.m_seed = params->m_seed;
+	// M-28: validate m_min_neighbours at the C API boundary (mirrors
+	// Python's ParameterValidator.validate_min_neighbors — rejects negative
+	// and min>max). Without this gate, min>max ⇒ every node fails the ndmin
+	// check and SGS produces fully-unsimulated output with no error.
+	// m_max_neighbours has already been validated non-negative and bounded
+	// by the caller before init_sgs_params runs.
+	if (params->m_min_neighbours < 0)
+		throw hpgl_exception("init_sgs_params", "m_min_neighbours cannot be negative");
+	if (params->m_min_neighbours > params->m_max_neighbours)
+	{
+		std::ostringstream oss;
+		oss << "m_min_neighbours " << params->m_min_neighbours
+		    << " exceeds m_max_neighbours " << params->m_max_neighbours;
+		throw hpgl_exception("init_sgs_params", oss.str());
+	}
 	sgs_p.m_min_neighbours = params->m_min_neighbours;
 
 	sgs_p.validate();

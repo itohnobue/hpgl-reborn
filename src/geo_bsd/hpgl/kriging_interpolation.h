@@ -176,6 +176,107 @@ namespace hpgl
 		}
 	};
 
+	// M-3 (GSLIB sgsim OK→SK downgrade) — SGS-ONLY weight calculator (R-4/R-5).
+	// GSLIB sgsim switches from OK to SK when fewer than 4 conditioning data
+	// are available (`if(ktype.eq.1.and.(nclose+ncnode).lt.4)lktype=0`) to
+	// avoid the "artificially inflated" OK kriging variance the Lagrange
+	// multiplier introduces for very sparse neighbourhoods (a nugget-only
+	// model gives 2×sill for n=1). The downgrade is implemented ONLY here —
+	// the shared ok_kriging_weights_3(_ws) calculators keep the public
+	// hpgl_ordinary_kriging (the kt3d analog) OK contract for n<4 (weights
+	// sum to 1). R-5: the SGS-OK path combines this calculator with
+	// no_mean_t() (sequential_gaussian_simulation.cpp), so the downgraded SK
+	// estimate Σλᵢzᵢ has no (1−Σλᵢ)·mean term — matching GSLIB's zero-mean
+	// normal-score semantics — and the n≥4 OK estimate Σλᵢzᵢ (Σλ=1) is
+	// identical. This removes the n=4 discontinuity where the mean-pull
+	// abruptly turned off as local data density crossed 4.
+	class ok_sgs_weight_calculator_t
+	{
+	public:
+		template<typename covariances_t, typename coord_t>
+		bool operator()(
+			const coord_t & center,
+			const std::vector<coord_t> & coords,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights)const
+		{
+			double variance;
+			return (*this)(center, coords, covariances, weights, variance);
+		}
+
+		template<typename covariances_t, typename means_t, typename coord_t>
+		bool operator()(
+			const coord_t & center,
+			mean_t /*center_mean*/,
+			const std::vector<coord_t> & coords,
+			const means_t &,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights)const
+		{
+			double variance;
+			return (*this)(center, coords, covariances, weights, variance);
+		}
+
+		template<typename covariances_t, typename coord_t>
+		bool operator()(const coord_t & center,
+			const std::vector<coord_t> & coords,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights, double & variance)const
+		{
+			if (coords.size() < 4)
+			{
+				return sk_kriging_weights_3<covariances_t, true, coord_t>(center, coords, covariances, weights, variance);
+			}
+			return ok_kriging_weights_3<covariances_t, true, coord_t>(center, coords, covariances, weights, variance);
+		}
+
+		template<typename covariances_t, typename means_t, typename coord_t>
+		bool operator()(const coord_t & center,
+			mean_t /*center_mean*/,
+			const std::vector<coord_t> & coords,
+			const means_t &,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights, double & variance)const
+		{
+			if (coords.size() < 4)
+			{
+				return sk_kriging_weights_3<covariances_t, true, coord_t>(center, coords, covariances, weights, variance);
+			}
+			return ok_kriging_weights_3<covariances_t, true, coord_t>(center, coords, covariances, weights, variance);
+		}
+
+		// Workspace-aware overloads — used by the SGS-OK path
+		// (sequential_simulation.h kriging_interpolation_ws).
+		template<typename covariances_t, typename means_t, typename coord_t>
+		bool operator()(const coord_t & center,
+			mean_t /*center_mean*/,
+			const std::vector<coord_t> & coords,
+			const means_t &,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights,
+			weight_calc_workspace_t & ws)const
+		{
+			double variance;
+			return (*this)(center, coords, covariances, weights, variance, ws);
+		}
+
+		template<typename covariances_t, typename means_t, typename coord_t>
+		bool operator()(const coord_t & center,
+			mean_t /*center_mean*/,
+			const std::vector<coord_t> & coords,
+			const means_t &,
+			const covariances_t & covariances,
+			std::vector<kriging_weight_t> & weights, double & variance,
+			weight_calc_workspace_t & ws)const
+		{
+			if (coords.size() < 4)
+			{
+				return sk_kriging_weights_3_ws<covariances_t, true, coord_t>(center, coords, covariances, weights, variance, ws);
+			}
+			return ok_kriging_weights_3_ws<covariances_t, true, coord_t>(center, coords, covariances, weights, variance, ws);
+		}
+	};
+
 
 
 	

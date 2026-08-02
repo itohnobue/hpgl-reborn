@@ -1,6 +1,8 @@
 #ifndef _API_H_ASDJASLJDWQJLK1289379812hfdsaksdjKNKZBCXJHSADbhj7834kjsdkf78s234
 #define _API_H_ASDJASLJDWQJLK1289379812hfdsaksdjKNKZBCXJHSADbhj7834kjsdkf78s234
 
+#include <stdint.h>
+
 #ifdef _MSC_VER
 #ifdef CVAR_DLL
 #ifdef CVAR_EXPORTS
@@ -120,6 +122,20 @@ calc_variograms(
 		int result_length,
 		int percentToUse);
 
+/// Seeded variant of calc_variograms (2-M-3).  Re-seeds the per-thread RNG
+/// with `seed` before the percent sampling, so identical inputs + identical
+/// seed produce identical variograms (reproducible published experiments).
+/// `seed` is honored literally (0 is a valid seed).  The unseeded
+/// calc_variograms keeps the legacy time-seeded behavior.
+CVAR_API void 
+calc_variograms_seeded(
+		variogram_search_template_t * templ,
+		hard_data_t * data,
+		float * result_covariations,
+		int result_length,
+		int percentToUse,
+		uint64_t seed);
+
 CVAR_API void 
 calc_variograms_from_point_set(
 		variogram_search_template_t * templ,
@@ -141,6 +157,13 @@ cvar_stack_layers(
 /// Call after any CVAR_API function returns an error sentinel (nullptr, -1, etc.)
 /// to retrieve a human-readable description of the last error.
 CVAR_API const char * cvar_get_last_error(void);
+
+/// Clears the last error (thread-safe, C ABI).  Exported like every other
+/// cvar_* entry point (M-17: was previously defined extern "C" without the
+/// CVAR_API macro and undeclared in this header, so it was not
+/// dllexport'ed on Windows and Python's hasattr() check silently disabled
+/// stale-error clearing).
+CVAR_API void cvar_clear_last_error(void);
 
 /// Internal: stores an error message (thread-safe).
 /// Not CVAR_API — for internal use within the cvariogram module only.

@@ -17,8 +17,14 @@ namespace hpgl
 		sgs_params_t();
 		kriging_kind_t m_kriging_kind;
 		int64_t m_seed;
+		// 2-M-1(c): m_mean_kind is the descriptive mean-mode field. It is
+		// set by the C API and READ by sequential_gaussian_simulation (the
+		// auto/user stationary-mean branch selection); the LVM mode
+		// (e_mean_varying) is selected by the separate LVM entry point. The
+		// former m_lvm member was removed — it duplicated the mean_data
+		// parameter passed to sequential_gaussian_simulation_lvm and was
+		// read by no algorithm.
 		mean_kind_t m_mean_kind;
-		mean_t * m_lvm;		
 		int m_min_neighbours; // GSLIB ndmin: minimum conditioning data per node; nodes with fewer are left unsimulated (F-14).
 	};
 

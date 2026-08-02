@@ -49,6 +49,12 @@ class ValidationConstants:
     # Neighbor count limits
     MIN_NEIGHBORS = 1
     MAX_NEIGHBORS = 1000
+    # Hard upper bound aligned with the C++ API (api.cpp
+    # MAX_NEIGHBOURS_UPPER_BOUND = 100000, simple_cokriging_markI.cpp
+    # build_system: ms > 100000). Values above this are hard-rejected here
+    # so the Python surface fails fast with a clear error instead of a late
+    # RuntimeError from the C++ engine (M-20).
+    MAX_NEIGHBORS_HARD_LIMIT = 100000
     DEFAULT_MAX_NEIGHBORS = 12
 
     # Radius limits
@@ -627,7 +633,10 @@ class ParameterValidator:
         Raises:
             CriticalValidationError: If radius is invalid
         """
-        if isinstance(radius, (int, float, numpy.integer, numpy.floating)):
+        # M-10: bool is a subclass of int and would otherwise be accepted as
+        # radius 1 (True). The sibling field gates exclude it; validate_radius
+        # must too.
+        if isinstance(radius, (int, float, numpy.integer, numpy.floating)) and not isinstance(radius, bool):
             vals = [float(radius)] * 3
         elif isinstance(radius, (tuple, list)) and len(radius) == 3:
             vals = list(map(float, radius))
@@ -666,8 +675,8 @@ class ParameterValidator:
 
         Raises:
             TypeError: If max_neighbors is not an int (bool excluded).
-            CriticalValidationError: If max_neighbors is invalid
-            ValidationWarning: If max_neighbors is unusually large
+            CriticalValidationError: If max_neighbors is invalid.
+            ValidationWarning: If max_neighbors is unusually large.
         """
         if not isinstance(max_neighbors, (int, numpy.integer)) or isinstance(max_neighbors, bool):
             raise TypeError(
@@ -677,6 +686,21 @@ class ParameterValidator:
         if max_neighbors < ValidationConstants.MIN_NEIGHBORS:
             raise CriticalValidationError(
                 f"Max neighbors {max_neighbors} is less than minimum {ValidationConstants.MIN_NEIGHBORS}",
+                "max_neighbors",
+            )
+
+        # M-20: hard-reject above the C++ engine's upper bound. The C++ API
+        # rejects m_max_neighbours > 100000 at every kriging/simulation entry
+        # point (api.cpp MAX_NEIGHBOURS_UPPER_BOUND), so accepting such values
+        # in Python only defers the failure to a late, harder-to-read
+        # RuntimeError from deep inside the C++ call. Reject here with the
+        # same bound and a clear message. MAX_NEIGHBORS (1000) remains a
+        # performance-guidance warning threshold.
+        if max_neighbors > ValidationConstants.MAX_NEIGHBORS_HARD_LIMIT:
+            raise CriticalValidationError(
+                f"Max neighbors {max_neighbors} exceeds the maximum allowed "
+                f"{ValidationConstants.MAX_NEIGHBORS_HARD_LIMIT} (aligned with the "
+                f"C++ engine limit).",
                 "max_neighbors",
             )
 
@@ -865,14 +889,16 @@ class ParameterValidator:
 
         Raises:
             TypeError: If seed is not an integer.
-            ValidationError: If seed is negative (C++ contract requires non-negative).
+            CriticalValidationError: If seed is negative (C++ contract requires
+                non-negative). Matches the documented contract in the sgs/sis
+                entry points and the sibling validators in this chain (2-M-11).
         """
         if not isinstance(seed, (int, numpy.integer)) or isinstance(seed, bool):
             raise TypeError(
                 f"seed must be an int, got {type(seed).__name__}"
             )
         if seed < ValidationConstants.MIN_SEED:
-            raise ValidationError(
+            raise CriticalValidationError(
                 f"Seed value {seed} is negative (must be non-negative)",
                 "seed",
             )

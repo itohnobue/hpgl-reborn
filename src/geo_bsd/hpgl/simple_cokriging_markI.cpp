@@ -20,6 +20,26 @@
 namespace hpgl
 {
 
+/// Per-node workspace for the cokriging loop (2-M-9).  Cokriging Mark I/II
+/// was the only kriging family with no workspace reuse — calc_value /
+/// calc_weights / solve_system / build_system allocated ~7 heap vectors per
+/// node (coords, indices, weights, values, A, b, A_backup), all sequential
+/// (no OpenMP).  This workspace mirrors the kriging_ws_t pattern used by the
+/// other families: vectors are allocated once per loop and reused via
+/// resize() (allocation-free when capacity is sufficient).  resize() never
+/// shrinks capacity, so memory stays bounded by the largest neighbourhood
+/// seen; correctness is unchanged (find() clears indices/coords itself).
+template<typename coord_t>
+struct cokriging_ws_t {
+    std::vector<node_index_t> indices;
+    std::vector<coord_t> coords;
+    std::vector<kriging_weight_t> weights;
+    std::vector<cont_value_t> values;
+    std::vector<double> A;
+    std::vector<double> b;
+    std::vector<double> A_backup;
+};
+
 template<typename coord_t, typename primary_cov_model_t, typename cross_cov_model_t>
 bool build_system(	
 	const coord_t & center, 
@@ -28,8 +48,7 @@ bool build_system(
 	const cross_cov_model_t & cross_cov,
 	double secondary_variance,
 	bool secondary_present,
-	std::vector<double> & A,
-	std::vector<double> & b)
+	cokriging_ws_t<coord_t> & ws)
 {
 	// Int-range validation: coords.size() must fit in int
 	if (coords.size() > static_cast<size_t>(std::numeric_limits<int>::max() - 1))
@@ -68,9 +87,9 @@ bool build_system(
 		    << " exceeds upper bound (100000) in build_system";
 		throw hpgl_exception("simple_cokriging_markI", oss.str());
 	}
-	A.resize(matrix_elements);
-
-	b.resize(matrix_size);
+	// 2-M-9: reuse workspace buffers instead of allocating per node.
+	ws.A.resize(matrix_elements);
+	ws.b.resize(matrix_size);
 
 	for (int i = 0; i < neighbour_count; ++i)
 	{
@@ -79,8 +98,8 @@ bool build_system(
 			// I2-23: size_t indexing — i*matrix_size overflows signed int
 			// for >46340 neighbours (heap OOB write). Ported from
 			// my_kriging_weights.h's safe indexing pattern.
-			A[static_cast<size_t>(i) * ms + j] = primary_cov(coords[i], coords[j]);
-			A[static_cast<size_t>(j) * ms + i] = A[static_cast<size_t>(i) * ms + j];
+			ws.A[static_cast<size_t>(i) * ms + j] = primary_cov(coords[i], coords[j]);
+			ws.A[static_cast<size_t>(j) * ms + i] = ws.A[static_cast<size_t>(i) * ms + j];
 		}
 	}
 	
@@ -88,51 +107,54 @@ bool build_system(
 	{
 		for (int i = 0; i < neighbour_count; ++i)
 		{
-			A[static_cast<size_t>(neighbour_count) * ms + i] = cross_cov(center, coords[i]);
-			A[static_cast<size_t>(i) * ms + neighbour_count] = A[static_cast<size_t>(neighbour_count) * ms + i];
-			b[i] = primary_cov(coords[i], center);
+			ws.A[static_cast<size_t>(neighbour_count) * ms + i] = cross_cov(center, coords[i]);
+			ws.A[static_cast<size_t>(i) * ms + neighbour_count] = ws.A[static_cast<size_t>(neighbour_count) * ms + i];
+			ws.b[i] = primary_cov(coords[i], center);
 		}
 
-		b[neighbour_count] = cross_cov(coord_t(0,0,0), coord_t(0,0,0));
+		ws.b[neighbour_count] = cross_cov(coord_t(0,0,0), coord_t(0,0,0));
 
-		A[static_cast<size_t>(ms) * ms - 1] = secondary_variance;
+		ws.A[static_cast<size_t>(ms) * ms - 1] = secondary_variance;
 	}
 	else
 	{
 		for (int i = 0; i < neighbour_count; ++i)
 		{
-			b[i] = primary_cov(coords[i], center);
+			ws.b[i] = primary_cov(coords[i], center);
 		}
 	}
 
 	return true;
 }
 
-bool solve_system(std::vector<double> & A, std::vector<double> & b, std::vector<kriging_weight_t> & weights)
+template<typename coord_t>
+bool solve_system(cokriging_ws_t<coord_t> & ws, std::vector<kriging_weight_t> & weights)
 {
-	int size = static_cast<int>(b.size());
+	int size = static_cast<int>(ws.b.size());
 	weights.resize(static_cast<size_t>(size));
 
 #ifdef LAPACK_SOLVER
 	// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →
 	// (on success) dpotrs_.  Replaces the HPGL-only cholesky_decomposition/
 	// cholesky_solve with LAPACK-accelerated Cholesky + gauss_solve fallback.
-	std::vector<double> A_backup(A);
+	// 2-M-9: A_backup reused from the workspace instead of re-allocated.
+	ws.A_backup.resize(ws.A.size());
+	std::copy(ws.A.begin(), ws.A.end(), ws.A_backup.begin());
 
 	return detail::lapack_spd_solve_1rhs(
-		&A[0], size, &weights[0], &b[0],
-		&A_backup[0], "Cokriging SPD solve");
+		&ws.A[0], size, &weights[0], &ws.b[0],
+		&ws.A_backup[0], "Cokriging SPD solve");
 #else // HPGL_SOLVER
 	// Original HPGL internal solver (fallback for non-LAPACK builds)
 	size_t sz = static_cast<size_t>(size);
 	std::vector<double> A_U(sz * sz, 0.0);
 	std::vector<double> A_L(sz * sz, 0.0);
 
-	bool solved = cholesky_decomposition(&A[0], &A_U[0], &A_L[0], size);
+	bool solved = cholesky_decomposition(&ws.A[0], &A_U[0], &A_L[0], size);
 	if (!solved) {
-		return gauss_solve(&A[0], &b[0], &weights[0], size);
+		return gauss_solve(&ws.A[0], &ws.b[0], &weights[0], size);
 	}
-	cholesky_solve(&A_L[0], &A_U[0], &b[0], &weights[0], size);
+	cholesky_solve(&A_L[0], &A_U[0], &ws.b[0], &weights[0], size);
 	return true;
 #endif
 }
@@ -145,17 +167,16 @@ bool calc_weights(
 		const cross_cov_model_t & cross_cov,
 		double secondary_variance,
 		bool secondary_present,
-		std::vector<kriging_weight_t> & weights
+		std::vector<kriging_weight_t> & weights,
+		cokriging_ws_t<coord_t> & ws
 		)
 {
-	std::vector<double> A; 
-	std::vector<double> b;
-	
+	// 2-M-9: build/solve reuse the workspace buffers.
 	// build system
-	if (!build_system(center, coords, primary_cov, cross_cov, secondary_variance, secondary_present, A, b))
+	if (!build_system(center, coords, primary_cov, cross_cov, secondary_variance, secondary_present, ws))
 		return false;
 	// solve systemk
-	return solve_system(A, b, weights);
+	return solve_system(ws, weights);
 }
 
 bool combine(
@@ -203,26 +224,26 @@ ki_result_t calc_value(
 		const primary_cov_model_t & primary_cov,
 	       	const cross_cov_model_t & cross_cov,
 		const n_lookup_t & n_lookup,
-		cont_value_t & result)
+		cont_value_t & result,
+		cokriging_ws_t<typename n_lookup_t::coord_t> & ws)
 {
 	typedef typename n_lookup_t::coord_t coord_t;
-	std::vector<coord_t> coords;
-	std::vector<node_index_t> indices;
-	coord_t  center;
-	
-	n_lookup.find(node, is_informed_predicate_t<data_t>(primary_data), center, indices, coords);
+	coord_t center;
 
-	if (indices.size() <= 0)
+	// 2-M-9: reuse workspace vectors — find() clears indices/coords itself,
+	// and weights/values are resized by the callees below, so no per-node
+	// heap allocations occur on the hot path.
+	n_lookup.find(node, is_informed_predicate_t<data_t>(primary_data), center, ws.indices, ws.coords);
+
+	if (ws.indices.size() <= 0)
 		return ki_result_t::KI_NO_NEIGHBOURS;
 
-	std::vector<kriging_weight_t> weights;
-	if (!calc_weights(center, coords, primary_cov, cross_cov, secondary_variance, secondary_present, weights))
+	if (!calc_weights(center, ws.coords, primary_cov, cross_cov, secondary_variance, secondary_present, ws.weights, ws))
 		return ki_result_t::KI_SINGULARITY;
 
-	std::vector<cont_value_t> values;
-	select(primary_data, indices, values);
+	select(primary_data, ws.indices, ws.values);
 	
-	if (!combine(values, weights, primary_mean, secondary_value, secondary_mean, secondary_present, result))
+	if (!combine(ws.values, ws.weights, primary_mean, secondary_value, secondary_mean, secondary_present, result))
 		return ki_result_t::KI_SINGULARITY;
 
 	
@@ -323,6 +344,13 @@ static void process_node_loop(
 	unsigned long points_singularity = 0;
 	unsigned long points_processed = 0;
 	double sum = 0;
+	// 2-M-9: one workspace for the whole loop — eliminates ~7 heap
+	// allocations per node. Parallelism is deliberately NOT added here:
+	// the plain neighbour lookup's find() reads the live informed mask and
+	// the loop is shared with the stats/report bookkeeping; converting it to
+	// OpenMP would need per-thread workspaces and reduction rework, which
+	// is out of scope for this correctness-neutral allocation-churn fix.
+	cokriging_ws_t<typename n_lookup_t::coord_t> ws;
 	for (node_index_t i = 0; i < data_size; ++i)
 	{
 		cont_value_t result = -500;
@@ -339,7 +367,7 @@ static void process_node_loop(
 				? secondary_data[i] : secondary_mean;
 			ki_result_t ki_result = calc_value(i, input_prop, secondary_value,
 				secondary_present, primary_mean, secondary_mean,
-				secondary_variance, primary_cov, cross_cov, n_lookup, result);
+				secondary_variance, primary_cov, cross_cov, n_lookup, result, ws);
 			switch (ki_result)
 			{
 			case ki_result_t::KI_SUCCESS:

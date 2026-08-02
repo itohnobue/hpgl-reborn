@@ -54,16 +54,22 @@ from .sis import sis_simulation
 try:
     from importlib.metadata import PackageNotFoundError  # noqa: E402
     from importlib.metadata import version as _get_version
-except ImportError:
-        __version__ = "2.0.1"
+except ImportError:  # pragma: no cover - pre-3.8 fallback
+    __version__ = "2.0.2"
 else:
+    # M-23: the hardcoded fallback must apply ONLY when the installed
+    # package metadata cannot be found — never unconditionally. Pre-fix,
+    # the fallback assignment was dedented out of the except block
+    # (a23a079), so `__version__` was always overwritten with the hardcoded
+    # value and a version bump in pyproject.toml never surfaced. Keep the
+    # fallback value consistent with pyproject.toml's `version`.
     try:
         __version__ = _get_version("hpgl")
     except PackageNotFoundError:
         logging.warning(
-            "hpgl package not found via importlib.metadata; falling back to default version 2.0.1"
+            "hpgl package not found via importlib.metadata; falling back to default version 2.0.2"
         )
-    __version__ = "2.0.1"
+        __version__ = "2.0.2"
 
 __all__ = [
     # Kriging algorithms

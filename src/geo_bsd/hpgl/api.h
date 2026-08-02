@@ -265,9 +265,13 @@ hpgl_simple_kriging_weights(
 		int neighbours_count,
 		hpgl_cov_params_t * params,
 		float * weights);
-// NOTE: neighbours_count must be >= 0. The caller (Python ctypes wrapper)
-// guarantees that neighbours_x, neighbours_y, neighbours_z, and weights all
-// have at least neighbours_count valid elements. No bounds check is performed.
+// NOTE: neighbours_count must be in [0, 100000] — values above
+// MAX_NEIGHBOURS_UPPER_BOUND are rejected with a stored error and -1 return
+// (2-M-2: the gate bounds the neighbour-array dereference loop and the
+// O(count²) covariance system, preventing heap OOB reads and OOM for
+// pathologically large counts). The caller (Python ctypes wrapper)
+// additionally guarantees that neighbours_x, neighbours_y, neighbours_z,
+// and weights all have at least neighbours_count valid elements.
 
 HPGL_API void hpgl_lvm_kriging(
     float * input_data,

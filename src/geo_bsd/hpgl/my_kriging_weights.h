@@ -368,6 +368,29 @@ namespace hpgl
 
 		const int size = static_cast<int>(coord_size);
 
+		// M-3 (GSLIB sgsim OK→SK downgrade) — SGS-ONLY, moved OUT of the
+		// shared calculator (R-4/R-5). GSLIB sgsim switches from OK to SK
+		// when fewer than 4 conditioning data are available
+		// (sgsim.for: `if(ktype.eq.1.and.(nclose+ncnode).lt.4)lktype=0`) to
+		// avoid the "artificially inflated" OK kriging variance that the
+		// Lagrange multiplier introduces for very sparse neighbourhoods
+		// (a nugget-only model gives 2×sill for n=1). The OK solve below
+		// computes μ = (SumSK−1)/SumOnes and subtracts it from the variance;
+		// with 1-3 neighbours that correction inflates variance. The
+		// downgrade is implemented ONLY on the SGS-OK path via
+		// ok_sgs_weight_calculator_t (kriging_interpolation.h) because the
+		// GSLIB citation is sgsim-only (grep kt3d = 0 in the research
+		// report); the public hpgl_ordinary_kriging (the kt3d analog) keeps
+		// its OK contract here — weights sum to 1, no downgrade.
+		// R-5: the SGS-OK path passes no_mean_t() (sequential_gaussian_
+		// simulation.cpp), so the downgraded SK estimate Σλᵢzᵢ has no
+		// (1−Σλᵢ)·mean term, matching GSLIB's zero-mean normal-score
+		// semantics.
+		// (The coord_size < 4 delegation to sk_kriging_weights_3 that lived
+		// here in the s6 fix pass was removed — it silently changed the
+		// public hpgl_ordinary_kriging n<4 contract and added the mean term
+		// on the SGS-OK path.)
+
 		// SECURITY FIX: Use pre-validated size for allocation
 		std::vector<double> A(matrix_size);
 		std::vector<double> b(coord_size);
@@ -518,6 +541,14 @@ namespace hpgl
 		}
 
 		const int size = static_cast<int>(coord_size);
+
+		// M-3 (GSLIB sgsim OK→SK downgrade): see ok_kriging_weights_3 above.
+		// The downgrade is SGS-ONLY and lives in ok_sgs_weight_calculator_t
+		// (kriging_interpolation.h) — NOT in this shared calculator, so the
+		// public hpgl_ordinary_kriging keeps its OK contract for n<4
+		// (weights sum to 1). R-5: on the SGS-OK path the downgraded SK
+		// estimate is combined with no_mean_t(), so no (1−Σλᵢ)·mean term
+		// enters.
 
 		// Resize workspace vectors — allocation-free when capacity >= needed
 		ws.A.resize(matrix_size);

@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "hpgl"
-version = "2.0.1"
+version = "2.0.2"
 description = "High Performance Geostatistics Library - Modern C++ with Python bindings"
 readme = "readme.md"
 requires-python = ">=3.9"
@@ -108,10 +108,29 @@ cmake.args = [
     "-DHPGL_BUILD_PYTHON=ON",
     "-DHPGL_USE_OPENMP=ON",
     "-DHPGL_USE_MKL=OFF",
+    # H-3: pin the macOS deployment target at the CMake level. scikit-build-core
+    # computes the wheel platform tag from cmake.args/defines BEFORE running
+    # CMake (settings in CMakeLists.txt are not visible to the tagger), so
+    # without this a wheel built on macOS 15 tags macosx_15_0 and pip rejects
+    # it on macOS 11-14. CMakeLists.txt also pins it for standalone builds.
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0",
 ]
 
 # Wheel configuration
 wheel.py-api = "py3"
+
+# M-33: ship the license in the wheel's dist-info/licenses. scikit-build-core's
+# default license globs are uppercase-only (LICEN[CS]E*, COPYING*, NOTICE*,
+# AUTHORS*) and do NOT match this project's lowercase license.txt, violating
+# the BSD-3-Clause §1 binary-redistribution notice requirement. The list below
+# REPLACES the defaults, so the default patterns are preserved explicitly.
+wheel.license-files = [
+    "license.txt",
+    "LICEN[CS]E*",
+    "COPYING*",
+    "NOTICE*",
+    "AUTHORS*",
+]
 
 # Build directory settings
 build-dir = "build/{wheel_tag}"
@@ -141,8 +160,10 @@ include = [
     "CMakePresets.json",
     "license.txt",
     "readme.md",
+    "CHANGELOG.md",
     "src/",
     "cmake/",
+    "tests/",
 ]
 
 # Exclude these files from source distribution

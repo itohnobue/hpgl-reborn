@@ -4,6 +4,7 @@ import functools
 import logging
 import math
 import os
+import re
 from typing import Any
 
 import numpy
@@ -84,6 +85,45 @@ logger = logging.getLogger(__name__)
 # (specify `size` parameter in load_cont_property / load_ind_property).
 _MAX_SLOW_PARSER_ELEMENTS = 10_000_000
 
+# Maximum number of bytes in a single line for slow Python-based file
+# parsers (2-M-16). A crafted newline-free line with millions of tokens
+# would otherwise force line.split() to materialize a multi-GB token list
+# (and a multi-GB strip() copy) before the element cap could fire, OOM-ing
+# the process. HPGL-written files emit one value per line; GSLIB-style
+# files use short lines — this bound only rejects pathological single
+# lines far above any legitimate format.
+_MAX_SLOW_PARSER_LINE_BYTES = 1_000_000
+
+# Compiled token pattern for the slow parsers' streaming tokenizer (2-M-16).
+_SLOW_TOKEN_RE = re.compile(r"\S+")
+
+
+def _iter_slow_tokens(line, func_name):
+    """Yield whitespace-separated tokens from ``line`` one at a time (2-M-16).
+
+    ``line.split()`` materializes the full token list before the caller's
+    element cap can be checked — a crafted single line with billions of
+    tokens would OOM the process. This generator iterates regex matches
+    lazily and enforces the per-line token bound during tokenization, so
+    the parse aborts before any large list is built.
+
+    Args:
+        line: A single line read from the INC file.
+        func_name: Name of the calling parser for error messages.
+
+    Yields:
+        Each whitespace-separated token of ``line``.
+    """
+    count = 0
+    for m in _SLOW_TOKEN_RE.finditer(line):
+        if count >= _MAX_SLOW_PARSER_ELEMENTS:
+            raise MemoryError(
+                f"{func_name}: single line exceeds {_MAX_SLOW_PARSER_ELEMENTS} "
+                f"tokens. Use fast C++ reader by specifying `size` parameter."
+            )
+        count += 1
+        yield m.group()
+
 
 # Module-level handler references initialized to None
 _h = None
@@ -107,15 +147,14 @@ _progress_handler_param = None
 # since F-M5, and SGS/SIS since F-M6 — so the C++ thread-local stats are
 # always populated (matches the hpgl_wrap.py:649-651 producer list). The
 # Python sentinel is then populated via get_kriging_stats() only by
-# wrappers that call ``_finalize_kriging_stats`` (ordinary_kriging:1431,
-# simple_kriging:1536, lvm_kriging:1657, simple_cokriging_markI:1942,
-# simple_cokriging_markII:2045, sgs.py:255/268, sis.py:284/297). The
-# median_ik and indicator_kriging wrappers are deliberately RESET-ONLY by
-# design: they call ``_reset_kriging_stats()`` (geo.py:1755 / :1840) but
-# never ``_finalize_kriging_stats()``, so the Python sentinel stays None
-# even though the C++ side populated its own stats (retrievable via
-# hpgl_wrap.get_kriging_stats()) — an honest "no Python-level stats"
-# sentinel. Reset/populate run inside ``_hpgl_call_lock`` (atomic per-call
+# wrappers that call ``_finalize_kriging_stats`` (ordinary_kriging,
+# simple_kriging, lvm_kriging, median_ik, indicator_kriging,
+# simple_cokriging_markI/II, sgs.py, sis.py). Since M-9 the median_ik and
+# indicator_kriging wrappers also call ``_finalize_kriging_stats()``, so a
+# singular/degenerate kriging system surfaces a RuntimeError via
+# ``_check_kriging_failure_stats`` instead of being silently
+# marginal-substituted (they previously were deliberately RESET-ONLY).
+# Reset/populate run inside ``_hpgl_call_lock`` (atomic per-call
 # sentinel, F-M23/F-N12) via the ``_reset_kriging_stats`` /
 # ``_finalize_kriging_stats`` helpers. Callers can inspect
 # geo_bsd.geo._last_kriging_stats after a kriging call to detect partial
@@ -164,6 +203,13 @@ class ContProperty:
     def data(self, val):
         arr = numpy.require(val, "float32", "F")
         checkFWA(arr)
+        # 2-M-15: a caller replacing data with a different shape would
+        # desynchronize data/mask — the C++ backend indexes both arrays with
+        # the same strides and would read/write out of bounds.
+        if hasattr(self, "_mask") and arr.shape != self._mask.shape:
+            raise ValueError(
+                f"Data shape {arr.shape} does not match mask shape {self._mask.shape}"
+            )
         self._data = arr
 
     @property
@@ -175,6 +221,11 @@ class ContProperty:
     def mask(self, val):
         arr = numpy.require(val, "uint8", "F")
         checkFWA(arr)
+        # 2-M-15: same data/mask shape invariant as the data setter.
+        if hasattr(self, "_data") and arr.shape != self._data.shape:
+            raise ValueError(
+                f"Mask shape {arr.shape} does not match data shape {self._data.shape}"
+            )
         self._mask = arr
 
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray):
@@ -204,10 +255,20 @@ class ContProperty:
     def fix_shape(self, grid):
         if self.data.ndim != 3:
             if self.data.size == grid.x * grid.y * grid.z:
-                self.data = self.data.reshape((grid.x, grid.y, grid.z), order="F")
+                # Bypass the property setters: both arrays are reshaped to
+                # the same 3D shape together, preserving the data/mask shape
+                # invariant (the 2-M-15 setters would reject the transient
+                # 3D-vs-1D state while the second array is still 1D).
+                object.__setattr__(
+                    self, '_data',
+                    self.data.reshape((grid.x, grid.y, grid.z), order="F"),
+                )
         if self.mask.ndim != 3:
             if self.mask.size == grid.x * grid.y * grid.z:
-                self.mask = self.mask.reshape((grid.x, grid.y, grid.z), order="F")
+                object.__setattr__(
+                    self, '_mask',
+                    self.mask.reshape((grid.x, grid.y, grid.z), order="F"),
+                )
 
     def __getitem__(self, idx):
         if idx == 0:
@@ -259,6 +320,13 @@ class IndProperty:
     def data(self, val):
         arr = numpy.require(val, "uint8", "F")
         checkFWA(arr)
+        # 2-M-15: a caller replacing data with a different shape would
+        # desynchronize data/mask — the C++ backend indexes both arrays with
+        # the same strides and would read/write out of bounds.
+        if hasattr(self, "_mask") and arr.shape != self._mask.shape:
+            raise ValueError(
+                f"Data shape {arr.shape} does not match mask shape {self._mask.shape}"
+            )
         self._data = arr
 
     @property
@@ -270,6 +338,11 @@ class IndProperty:
     def mask(self, val):
         arr = numpy.require(val, "uint8", "F")
         checkFWA(arr)
+        # 2-M-15: same data/mask shape invariant as the data setter.
+        if hasattr(self, "_data") and arr.shape != self._data.shape:
+            raise ValueError(
+                f"Mask shape {arr.shape} does not match data shape {self._data.shape}"
+            )
         self._mask = arr
 
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray, indicator_count: int):
@@ -328,10 +401,20 @@ class IndProperty:
     def fix_shape(self, grid):
         if self.data.ndim != 3:
             if self.data.size == grid.x * grid.y * grid.z:
-                self.data = self.data.reshape((grid.x, grid.y, grid.z), order="F")
+                # Bypass the property setters: both arrays are reshaped to
+                # the same 3D shape together, preserving the data/mask shape
+                # invariant (the 2-M-15 setters would reject the transient
+                # 3D-vs-1D state while the second array is still 1D).
+                object.__setattr__(
+                    self, '_data',
+                    self.data.reshape((grid.x, grid.y, grid.z), order="F"),
+                )
         if self.mask.ndim != 3:
             if self.mask.size == grid.x * grid.y * grid.z:
-                self.mask = self.mask.reshape((grid.x, grid.y, grid.z), order="F")
+                object.__setattr__(
+                    self, '_mask',
+                    self.mask.reshape((grid.x, grid.y, grid.z), order="F"),
+                )
 
     def __getitem__(self, idx):
         if idx == 0:
@@ -490,13 +573,22 @@ def _load_prop_cont_slow(filename, undefined_value, basedir=None):
         basedir = PathValidator.DEFAULT_BASE_DIR
     with PathValidator.safe_open_read(filename, basedir=basedir) as f:
         for line in f:
+            # 2-M-16: bound the per-line processing BEFORE any strip/split
+            # work. A crafted newline-free line would otherwise materialize
+            # a multi-GB token list (and strip() copy) before the element
+            # cap fires, OOM-ing the process.
+            if len(line) > _MAX_SLOW_PARSER_LINE_BYTES:
+                raise MemoryError(
+                    f"_load_prop_cont_slow: line exceeds {_MAX_SLOW_PARSER_LINE_BYTES} bytes. "
+                    f"Use fast C++ reader by specifying `size` parameter."
+                )
             if line.strip().startswith("--"):
                 continue
             # Detect INC format end-of-data marker '/' — stop parsing.
             # The C++ writer emits '/' after all data values.
             if line.strip().startswith("/"):
                 break
-            for part in line.split():
+            for part in _iter_slow_tokens(line, "_load_prop_cont_slow"):
                 # F-54: a mid-line '--' token is a comment in the C++ fast
                 # reader — it skips the rest of the line. Match that here so
                 # both parsers consume identical token streams.
@@ -516,7 +608,20 @@ def _load_prop_cont_slow(filename, undefined_value, basedir=None):
                     values.append(val)
                     # IEEE 754 NaN≠NaN: equality check fails when both are NaN.
                     # Use math.isnan() to detect NaN sentinel values reliably.
-                    if (math.isnan(undefined_value) and math.isnan(val)) or val == undefined_value:
+                    # F-M18/M-16: values outside the ±1.0e21 window are missing
+                    # sentinels in addition to exact undefined_value matches
+                    # (strict inequality per the GSLIB convention, matching the
+                    # C++ fast reader read_inc_file.cpp:298-303 and
+                    # get_gslib_property). NaN-aware: comparisons with NaN are
+                    # false, so a NaN value is only masked when undefined_value
+                    # is itself NaN (consistent with the C++ reader, which
+                    # leaves NaN cells informed otherwise).
+                    if (
+                        (math.isnan(undefined_value) and math.isnan(val))
+                        or val == undefined_value
+                        or val < -1.0e21
+                        or val > 1.0e21
+                    ):
                         mask.append(0)
                     else:
                         mask.append(1)
@@ -570,13 +675,20 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values, basedir=None):
         basedir = PathValidator.DEFAULT_BASE_DIR
     with PathValidator.safe_open_read(filename, basedir=basedir) as f:
         for line in f:
+            # 2-M-16: bound the per-line processing BEFORE any strip/split
+            # work (see _load_prop_cont_slow — same crafted-line DoS).
+            if len(line) > _MAX_SLOW_PARSER_LINE_BYTES:
+                raise MemoryError(
+                    f"_load_prop_ind_slow: line exceeds {_MAX_SLOW_PARSER_LINE_BYTES} bytes. "
+                    f"Use fast C++ reader by specifying `size` parameter."
+                )
             if line.strip().startswith("--"):
                 continue
             # Detect INC format end-of-data marker '/' — stop parsing.
             # The C++ writer emits '/' after all data values.
             if line.strip().startswith("/"):
                 break
-            for part in line.split():
+            for part in _iter_slow_tokens(line, "_load_prop_ind_slow"):
                 # F-54: a mid-line '--' token is a comment in the C++ fast
                 # reader — it skips the rest of the line. Match that here so
                 # both parsers consume identical token streams.
@@ -924,8 +1036,18 @@ def _validate_and_reshape_fallback(result, size, func_name):
             f"The file may be corrupted or the size parameter is incorrect."
         )
     if isinstance(size, (tuple, list)) and len(size) == 3:
-        result.data = result.data.reshape((size[0], size[1], size[2]), order="F")
-        result.mask = result.mask.reshape((size[0], size[1], size[2]), order="F")
+        # Bypass the property setters: both arrays are reshaped to the same
+        # 3D shape together, preserving the data/mask shape invariant (the
+        # 2-M-15 setters would reject the transient 3D-vs-1D state while the
+        # second array is still 1D).
+        object.__setattr__(
+            result, '_data',
+            result.data.reshape((size[0], size[1], size[2]), order="F"),
+        )
+        object.__setattr__(
+            result, '_mask',
+            result.mask.reshape((size[0], size[1], size[2]), order="F"),
+        )
 
 
 def load_cont_property(filename, undefined_value, size=None, basedir=None):
@@ -1344,6 +1466,27 @@ def _check_kriging_failure_stats(stats, expected_calculated, func_name):
         )
 
 
+def _validate_prop_grid_shape(prop, grid, func_name):
+    """Validate per-dimension 3D property shape against the grid (H-2).
+
+    ``simple_kriging``/``lvm_kriging`` pass raw arrays to the C++ backend
+    (unlike ``ordinary_kriging``, which routes through
+    ``create_cont_masked_array``'s 3D shape check), so an equal-volume
+    shape mismatch such as a (2,2,2) prop with a (1,2,4) grid is silently
+    misread/miswritten without an explicit check. 1D (flat) properties are
+    covered by the existing size check and carry no per-dimension meaning.
+    """
+    if prop.data.ndim == 3 and (
+        prop.data.shape[0] != grid.x
+        or prop.data.shape[1] != grid.y
+        or prop.data.shape[2] != grid.z
+    ):
+        raise ValueError(
+            f"{func_name}: 3D data shape {prop.data.shape} does not match "
+            f"grid dimensions ({grid.x}, {grid.y}, {grid.z})"
+        )
+
+
 
 @accepts_tuple("prop", 0)
 def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
@@ -1376,8 +1519,12 @@ def ordinary_kriging(prop, grid, radiuses, max_neighbours, cov_model):
     CriticalValidationError
         If grid dimensions, radiuses, max_neighbours, or covariance
         parameters are invalid.
+    ValueError
+        If prop.data is empty, its size does not match the grid volume,
+        or it contains NaN or Inf values.
     RuntimeError
-        If the C++ computation produces an error.
+        If the C++ computation produces an error (including a singular
+        kriging system or non-finite output).
 
     Notes
     -----
@@ -1472,8 +1619,13 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
     CriticalValidationError
         If grid dimensions, radiuses, max_neighbours, or covariance
         parameters are invalid.
+    ValueError
+        If prop.data is empty, its size or per-dimension shape does not
+        match the grid, the explicit ``mean`` is non-finite, or prop.data
+        contains NaN or Inf values.
     RuntimeError
-        If the C++ computation produces an error.
+        If the C++ computation produces an error (including a singular
+        kriging system or non-finite output).
 
     Notes
     -----
@@ -1505,6 +1657,9 @@ def simple_kriging(prop, grid, radiuses, max_neighbours, cov_model, mean=None):
             f"simple_kriging: prop.data size {prop.data.size} does not match "
             f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
         )
+    # H-2: equal-volume per-dimension shape mismatch must raise, not silently
+    # misread (e.g. a (2,2,2) prop with a (1,2,4) grid — both volume 8).
+    _validate_prop_grid_shape(prop, grid, "simple_kriging")
 
     # Validate mean for NaN/Inf when explicitly provided
     if mean is not None and not numpy.isfinite(mean):
@@ -1579,10 +1734,12 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
         If grid dimensions, radiuses, max_neighbours, or covariance
         parameters are invalid.
     ValueError
-        If ``mean_data`` is not a NumPy array or its size doesn't match
-        the grid.
+        If ``mean_data`` is not a NumPy array, if ``mean_data`` or
+        prop.data is empty, if either size (or prop.data's per-dimension
+        shape) does not match the grid, or if either contains NaN or Inf.
     RuntimeError
-        If the C++ computation produces an error.
+        If the C++ computation produces an error (including a singular
+        kriging system or non-finite output).
 
     Notes
     -----
@@ -1612,6 +1769,21 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
             f"lvm_kriging: mean_data size {mean_data.size} does not match "
             f"grid dimensions {grid.x}x{grid.y}x{grid.z} = {expected_size}"
         )
+    # R-13 (H-2 residual): equal-volume per-dimension shape mismatch on
+    # mean_data must raise, not silently misread. The C++ mean provider
+    # consumes the buffer by flat node index (mean_provider.h:38-43), so a
+    # (2,2,2) mean_data with a (1,2,4) grid — both volume 8 — permutes the
+    # mean field with no exception. 1D (flat) mean vectors are covered by the
+    # size check above and carry no per-dimension meaning.
+    if mean_data.ndim == 3 and (
+        mean_data.shape[0] != grid.x
+        or mean_data.shape[1] != grid.y
+        or mean_data.shape[2] != grid.z
+    ):
+        raise ValueError(
+            f"lvm_kriging: 3D mean_data shape {mean_data.shape} does not match "
+            f"grid dimensions ({grid.x}, {grid.y}, {grid.z})"
+        )
 
     # Validate property data size against grid
     if prop.data.size == 0:
@@ -1621,6 +1793,9 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
             f"lvm_kriging: prop.data size {prop.data.size} does not match "
             f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
         )
+    # H-2: equal-volume per-dimension shape mismatch must raise, not silently
+    # misread (e.g. a (2,2,2) prop with a (1,2,4) grid — both volume 8).
+    _validate_prop_grid_shape(prop, grid, "lvm_kriging")
 
     # Validate data for NaN/Inf before C++ call
     if not numpy.all(numpy.isfinite(prop.data)):
@@ -1702,10 +1877,12 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
         If grid dimensions, radiuses, max_neighbours, or covariance
         parameters are invalid.
     ValueError
-        If ``marginal_probs`` does not have exactly 2 elements or
-        any probability is out of range.
+        If ``marginal_probs`` does not have exactly 2 elements or any
+        probability is out of range, if prop.indicator_count is not 2,
+        or if prop.data contains NaN or Inf values.
     RuntimeError
-        If the C++ computation produces an error.
+        If the C++ computation produces an error (including a singular
+        kriging system or non-finite output).
     """
     valid_radiuses = _validate_kriging_params(
         grid, radiuses, max_neighbours, cov_model,
@@ -1753,9 +1930,14 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
 
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
+    expected = grid.x * grid.y * grid.z - int(numpy.sum(prop.mask > 0))
     with _hpgl_call_lock:
         _reset_kriging_stats()
         call_median_ik(inp, miksp, outp)
+        # M-9: consume C++ stats so a singular system raises RuntimeError
+        # instead of being silently marginal-substituted (matches every
+        # sibling kriging wrapper).
+        _finalize_kriging_stats(expected, "median_ik")
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -1838,9 +2020,14 @@ def indicator_kriging(prop, grid, data, marginal_probs):
     inp = _create_hpgl_ind_masked_array(prop, grid)
     outp = _create_hpgl_ind_masked_array(out_prop, grid)
     params = __create_hpgl_ik_params(data, len(data), False, marginal_probs)
+    expected = grid.x * grid.y * grid.z - int(numpy.sum(prop.mask > 0))
     with _hpgl_call_lock:
         _reset_kriging_stats()
         call_indicator_kriging(inp, outp, params, len(data))
+        # M-9: consume C++ stats so a singular system raises RuntimeError
+        # instead of being silently marginal-substituted (matches every
+        # sibling kriging wrapper).
+        _finalize_kriging_stats(expected, "indicator_kriging")
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -2123,6 +2310,15 @@ def simple_kriging_weights(
             + call_get_last_exception_message().decode("utf-8", errors="replace")
         )
 
+    # M-19: dpotrs_ reports no error for near-singular systems — a success
+    # return code can still yield NaN weights, which would propagate
+    # silently. Validate finite output, consistent with the other kriging
+    # wrapper families.
+    if not numpy.all(numpy.isfinite(weights)):
+        raise RuntimeError(
+            "simple_kriging_weights: output weights contain NaN or Inf after C++ computation"
+        )
+
     return weights
 
 
@@ -2155,6 +2351,13 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
         param_name="prop_dict", type_name="a dict",
     )
     prop = prop_dict[prop_name]
+    # L-56: a non-ndarray value (e.g. a list) previously surfaced a raw
+    # AttributeError from prop.shape. Raise a clear TypeError instead.
+    if not isinstance(prop, numpy.ndarray):
+        raise TypeError(
+            f"get_gslib_property: property '{prop_name}' must be a numpy array, "
+            f"got {type(prop).__name__}"
+        )
     informed_array = numpy.zeros(prop.shape, dtype=numpy.uint8)
     # F-M18: GSLIB missing-value trimming — values outside the ±1.0e21
     # window (strict inequality per the GSLIB convention "less than
