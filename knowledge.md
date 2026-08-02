@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-02T01:58:25.846690
+Last updated: 2026-08-02T09:26:50.041694
 
 ## [got-20260616055758-f1d951]
 Category: gotcha
@@ -378,4 +378,81 @@ Tags: memory, validation, build, hpgl-reborn
 Changed: 2026-08-02T01:58:25.844107
 
 unbounded user-controlled sizes/counts cause memory exhaustion and infinite hangs: parameters that size allocations or drive loop counts (max_neighbours, grid volume, radius, lag counts, file sizes) need magnitude caps at BOTH the Python boundary AND the C++ side. Python-side caps that only warn (validate_max_neighbors warns >1000 but continues) or are absent entirely let C++ allocate 16-80GB or run 7.7e11 iterations. C++ internal limits must match API-boundary caps - a mismatch (API allows 1e7, internal limit 1e5) silently routes to fallback (mean-fill) instead of erroring. In hpgl-reborn: F-25 (no hard upper bound on max_neighbours -> ~32GB reserve), F-49 (1e9 volume threshold -> 40-80GB), F-38 (lag_sep=1e6 x num_lags=10000 -> 7.7e11 iterations, effectively infinite hang), I2-04 (mgrid no volume cap -> 1152 TB), I2-05 (per-token loop no size cap), PR-07 (1e7 API bound vs 1e5 internal limit -> silent mean-fill) - all CONFIRMED MEDIUM. Fix: enforce hard caps in Python validation, re-enforce in C++, and align boundary caps with internal algorithm limits. Checklist: (a) every size/count parameter has a hard cap, (b) Python warning is not a cap - C++ must reject, (c) API-boundary caps match internal limits, (d) exceeding a cap raises, not mean-fills silently.
+
+## [ref-20260802033523-af9675]
+Category: reference
+Tags: gslib, file-format, geostatistics, interop
+Changed: 2026-08-02T03:35:23.239174
+
+GSLIB file format (Deutsch & Journel): GEO-EAS family ASCII. Data files: title/nvar/nvar-names/rows. Grid property files: line1=title, line2=min max, then values one per line. Ordering: X fastest then Y then Z, loc=(iz-1)*nx*ny+(iy-1)*nx+ix (1-based). Missing = outside ±1.0e21 trimming window (no NaN/Inf text). No byte/float marker in file; categorical = integer codes, same 2-line header. Sources: gslib.com format.html (official), sgsim.fpp, PyGSLIB issue #24. Full report: tmp/s1-research-gslib-report.md
+
+## [pat-20260802092553-868986]
+Category: pattern
+Tags: regression, fix, verification, stats-wiring, hpgl-reborn
+Changed: 2026-08-02T09:25:53.396614
+
+fix-introduced regression escapes on fix-modified lines: fix agents routinely ship new defects on the exact lines they ADD or MODIFY, and their own verification misses them because it checks the fix intent, not the new code. In hpgl-reborn v2.0.1: F1 (SIS expected-count formula added by F-M6-py produced spurious 'could not be kriged' warning on every successful 2-category run - empirically 65/128), F2 (geo.py doc block modified by F-N1 left a false median_ik/IK claim - F-N1 doc-error class recurring on the same lines), F8/F9/F10 (m_mean numerator/denominator scale mismatches in NEW F-M5/F-M6 stats code), F11 (sgs expected overcounts ndmin-skips - line added by F-M6-py), F12 (F-M16 rejection over-applied to ellipse-mask path). The F-33 stats-wiring class was repeatedly half-applied across wrappers (geo.py hotspot: 6 PRIOR_FIX_ATTEMPT findings; cokriging/OK/SGS/SIS each missed the same wiring SK/LVM got). Fix: post-fix review MUST treat fix-added lines with the same adversarial rigor as pre-existing code - diff-verify every added/modified line, test the exact branch the fix touches (2-category not just 3-category SIS), and when a wiring pattern is applied to one wrapper, mechanically audit ALL sibling wrappers for the same wiring. Checklist: (a) after any fix, re-audit git diff added lines as new defects, (b) test the fix's edge-case branch (not just the nominal path), (c) for cross-layer counters (Python expected formula vs C++ per-branch eval counts), verify the counting semantics match branch-by-branch.
+
+## [pat-20260802092600-9a144b]
+Category: pattern
+Tags: caps, validation, radius, sibling, hpgl-reborn
+Changed: 2026-08-02T09:26:00.050441
+
+radius magnitude caps must be applied to ALL sibling paths at the SAME threshold: a guard added to ONE path (precalculated_covariances_t INT_MAX guard) is repeatedly missed on sibling paths that allocate the same (2r+1)^3 volume (covariance_field_t::init, calc_cov_field, OK-default, median_ik, cokriging markI/markII). In hpgl-reborn v2.0.1: F-M2/F-M3/F-N7 (covariance_field.h:84-99 and covariance_field.cpp:54-107 lack the INT_MAX/radius-magnitude guard that precalculated_covariances_t has - radius 1e6 -> (2r+1)^3 = 64 EB / tens of GB; 3ad77ee added the guard to only one of two sibling classes), F-N11 (clusterizer total_volume cap permits exactly 1e9 -> 8GB vector + 1e9 heap objects hang), F-M16 (mask allocated BEFORE volume cap fires). Fix: when adding a cap/guard, grep ALL sibling classes and entry points that construct the same quantity and apply the identical threshold; verify by enumerating every entry point (OK-default api.cpp:634, median_ik.cpp:43, cokriging m1/m2) not just the class where the bug was found. Checklist: (a) for any (2r+1)^n-style allocation, enumerate every constructor/call site, (b) same threshold at every site - a guard in one sibling is not a guard, (c) caps must fire BEFORE allocation, not after.
+
+## [pat-20260802092606-5ce233]
+Category: pattern
+Tags: caps, performance, work-estimate, complexity, hpgl-reborn
+Changed: 2026-08-02T09:26:06.445447
+
+work-based caps vs count caps: a count cap (MAX_POINT_SET_SIZE, MAX_NEIGHBORS, grid cell count) does NOT bound the WORK a loop performs when the loop is O(n^2 x lag) or grid x window. Count caps bound allocations, not iteration complexity. In hpgl-reborn v2.0.1: F-H2 (calc_variograms_from_point_set has NO work cap - O(size^2 x lag_count); 1e6 points x 1e4 lags = 1e16 ops; empty tunnel still O(size^2)=1e12 iterations ~ 3+ hours; grid path got MAX_WINDOW_VOLUME but point-set path only count caps), F-M12 (MAX_WINDOW_VOLUME=1e8 caps window OFFSETS only; inner loop iterates ALL grid cells per offset - total = window x grid up to 1e17). Fix: for every nested loop, compute the effective product (outer x inner complexity) and cap THAT - a work-estimate cap (pairs x lags, window x grid) - not just each count individually. Checklist: (a) identify loops that are O(n^2)/O(n^3) or product-of-two-counts, (b) derive the worst-case total work as a single number, (c) cap the total work estimate, not the individual counts, (d) apply the same work cap to ALL entry points of the algorithm (grid AND point-set paths).
+
+## [got-20260802092612-329455]
+Category: gotcha
+Tags: documentation, gotcha, docstring, cross-language, hpgl-reborn
+Changed: 2026-08-02T09:26:12.403923
+
+module docstrings that factually misdescribe C++ wiring are a repeat-regression source: a false reason in a docstring misled 3+ fix attempts in hpgl-reborn v2.0.1. F-N1/F2: geo.py:102-105 module sentinel doc falsely claimed cokriging/median_ik/IK 'do not call set_kriging_stats' when they DO (simple_cokriging_markI.cpp:439/:498, median_ik.cpp:201, indicator_kriging.h:323) - the doc-error class recurred on the same lines across fix attempts (F-N1 corrected the cokriging claim, F2 found the median_ik/IK claim still false). F5: a fix-added header comment (covariance_field.h:82-87) falsely claimed entry-point guards existed (grep: zero matches). F-M14: '1D or 3D' comment false for all three sibling functions. Fix: when a docstring states a fact about wiring ('X does/does not call Y'), verify against grep of the actual call sites BEFORE trusting it, and after ANY fix that changes wiring, re-check the docstring it references. Checklist: (a) docstrings describing cross-language wiring must be verified by grep, not trusted, (b) fix agents must re-read the docstring after changing the code it describes, (c) a false reason in a doc is as dangerous as a false assertion in code - it steers subsequent fix attempts to the wrong conclusion.
+
+## [got-20260802092618-6b077c]
+Category: gotcha
+Tags: testing, regression-mask, test-contract, hpgl-reborn
+Changed: 2026-08-02T09:26:18.600661
+
+tests that assert the BROKEN behavior become regression masks: when a test asserts the current buggy behavior (or a documented limitation), the suite stays green while the defect ships - the test actively prevents the fix from landing and hides the regression. In hpgl-reborn v2.0.1: F-M6/F-N4 - test_geo_state_fixes.py:119/:133 assert 'geo._last_kriging_stats is None' after SUCCESSFUL sgs/sis, and test_cpp_fixes.py:555-590 asserts stats UNCHANGED after SGS - both codify the missing stats wiring as the expected contract; the suite was green while SGS/SIS failure detection was broken. F-M15: gtsim.py:216-223 3ad77ee commit message claims a regression test exists (grep: 0 tests exercise the clamp path) - a claimed-but-missing test. Fix: when fixing a behavior, find and flip every test asserting the old behavior IN THE SAME CHANGE; treat a commit message claiming a test as unverified until grep confirms it; add a test that would FAIL on the old behavior. Checklist: (a) grep for tests asserting None/stale/unchanged state that a fix should populate, (b) behavior-surface changes must update BOTH test contracts in the same change (F-M6 wiring flips test_cpp_fixes.py:555-590 AND test_geo_state_fixes.py:106-133), (c) a green suite is not evidence of correctness when tests codify the bug.
+
+## [got-20260802092624-d7ef9a]
+Category: gotcha
+Tags: concurrency, openmp, deadlock, handler, hpgl-reborn
+Changed: 2026-08-02T09:26:24.111358
+
+RLock fixes SAME-thread re-entry only - cross-thread handler deadlock: a progress/output handler invoked from an OpenMP WORKER thread that re-enters a lock-guarded API deadlocks even with threading.RLock, because the worker thread does not hold the lock (the main thread does, and waits at the OpenMP barrier). In hpgl-reborn v2.0.1: F-M22 - geo.py:2168-2265 progress handler fired 7/11 times on OpenMP worker threads; worker calling any _hpgl_call_lock-guarded geo function (re-entering kriging/set_output_handler) blocks forever; main waits at barrier; empirically reproduced (acquire(blocking=False) returned False on workers); thread-local t_in_handler only guards same-thread recursion. This extends got-20260802015758-6e1cf2 (same-thread reentrancy): switching Lock->RLock fixes the same-thread case but NOT the cross-thread case. Fix: serialize handler invocation so callbacks never run on worker threads, or make the handler path lock-free (defer/queue the re-entrant call), or ensure the lock is never held across the C++ call that fires the callback. Checklist: (a) after RLock conversion, test the callback path under OpenMP (multi-threaded), not just same-thread, (b) verify which thread the C++ callback actually fires on (OpenMP workers are real threads), (c) a thread-local guard is same-thread-only - it cannot protect against worker-thread re-entry.
+
+## [got-20260802092630-2eec8a]
+Category: gotcha
+Tags: gslib, interop, io, security, hpgl-reborn
+Changed: 2026-08-02T09:26:30.576629
+
+GSLIB interop: missing-value sentinels (+/-1.0e21) must be trimmed on EVERY read path and property names must be validated before header writes: third-party GSLIB files use the standard sentinel convention; loading sentinels as real data silently corrupts statistics, and writing untrusted property names into a 2-line header is header injection (leading whitespace, '--', newlines break the format / can inject rows). In hpgl-reborn v2.0.1: F-M18 (no +/-1.0e21 trimming on ANY read path - grep 1e21 -> 0 hits src+tests; LoadGslibFile keeps sentinels as data; get_gslib_property masks exact equality only), F3 (get_gslib_property NaN-undefined branch skips the +/-1.0e21 window while C++ read_inc_file.cpp:303 applies it unconditionally - empirically [1,1,1,1] vs [1,0,0,1]), F-N16/F-N17 (raw property-name/keys/Caption writes into GSLIB headers - no validate_property_name at any sink; 'A\nB' key and 'cap\ninjected\n3' caption execution-reproduced RuntimeError/ValueError). Fix: apply the sentinel window (isnan | < -1.0e21 | > 1.0e21) consistently across Python AND C++ read paths including the NaN-undefined branch; validate property names (reject \n, --, leading ws, empty) at EVERY write sink (Python wrappers AND C++ writers). Checklist: (a) grep 1.0e21/1e21 in read paths - sentinel trimming must be unconditional, not exact-equality, (b) every GSLIB header write must validate property names first, (c) Python and C++ read paths must apply the SAME sentinel window.
+
+## [got-20260802092636-bfc185]
+Category: gotcha
+Tags: concurrency, data-race, ffi, state, hpgl-reborn
+Changed: 2026-08-02T09:26:36.976729
+
+module-global FFI state written OUTSIDE the serialization lock is a data race: when a Python wrapper family shares a module-global (_last_kriging_stats) and the design explicitly supports concurrent kriging via RLock, reset+populate of that global OUTSIDE the lock is a race - two threads kriging concurrently cross-contaminate stats, producing spurious RuntimeError or missed failure warnings. In hpgl-reborn v2.0.1: F-M23/F-N12 - all 12 write sites (geo.py:1364/1369,1471/1478,1600/1615,1727,1813,1913,2013; sis.py:133; sgs.py:155) reset AND populate OUTSIDE 'with _hpgl_call_lock' (grep 20 uses, none cover stats); reads via _check_kriging_failure_stats are lock-free; RLock design explicitly supports concurrent kriging (ffi_adapter.py:106). Fix: move shared-state reset+populate INSIDE the same lock that serializes the C++ calls; every write and read of the module-global must be under the lock. Checklist: (a) for every module-level shared variable written by FFI wrappers, verify reset AND populate are both inside the serialization lock, (b) concurrent-call design (RLock) makes unsynchronized shared state a real race even if stress tests don't trigger it, (c) reads of the shared state must also take the lock.
+
+## [got-20260802092643-d2d982]
+Category: gotcha
+Tags: openmp, exception-safety, ffi, terminate, hpgl-reborn
+Changed: 2026-08-02T09:26:43.882248
+
+C++ exception escaping an OpenMP worksharing region is uncatchable (std::terminate/UB): a bad_alloc or any exception thrown inside an omp for/parallel-for region and NOT caught inside the region propagates out of the worksharing construct - the OpenMP runtime calls std::terminate (uncatchable by Python/ctypes) and the region is UB. Guards must either validate BEFORE the parallel region (catchable) or catch inside it. In hpgl-reborn v2.0.1: F-H1 (missing validate_max_neighbours_or_throw on hpgl_indicator_kriging -> 2e9 c_int -> reserve(2e9)x2 = 32GB/thread inside OpenMP -> bad_alloc escaping worksharing = std::terminate, 10/11 siblings DO guard), F-M8 (BLAS thread guard not RAII: bad_alloc from ws.A.resize(1e10) inside worksharing -> restore never runs -> BLAS pinned to 1 thread for process lifetime + exception escapes = UB, documented property_array.h:9-14), F-M9 (legal-cap 100000 -> 80GB matrix -> bad_alloc inside OpenMP -> std::terminate). Fix: validate/allocate on the caller thread BEFORE the parallel region (exceptions there are catchable -> clean -1/error return), or wrap the parallel region body in try/catch and record an exception_ptr to rethrow after the region; never let an exception cross the worksharing boundary. Checklist: (a) grep for allocations/throws inside omp for/parallel regions, (b) any allocation sized by user input must be hoisted out of the region or validated before entry, (c) C++-side guard exceptions must reach Python as catchable RuntimeError, not SIGABRT/terminate.
+
+## [got-20260802092650-41b872]
+Category: gotcha
+Tags: regression, sibling, propagation, arithmetic, hpgl-reborn
+Changed: 2026-08-02T09:26:50.038509
+
+sibling fix not propagated - a fix applied to ONE fallback/sibling path silently leaves the same defect in parallel paths: when an arithmetic/guard fix lands in one location (e.g. solver_entry_point.h size_t), the identical pattern in sibling paths (gauss_solve fallback :158/:273/:276) is missed because the fixer only touched the discovered instance. In hpgl-reborn v2.0.1: F-M10 (I2-23 size_t fix went to solver_entry_point.h only, not propagated to gauss_solve fallback - signed-int size*size overflow for size>46340 -> heap OOB read UB; same-commit sibling miss), F-M3 (3ad77ee INT_MAX guard added to precalculated_covariances_t only, missed covariance_field_t), F-M14 (F-02 tuple fix applied to CalcCovarianceFunction/CalcIndCorrelationFunction but NOT CalcVariogramFunction), F-N15 (write-side O_NOFOLLOW hardened property_writer.cpp:74 but read-side read_inc_file.cpp:218/:274 still plain fopen). Fix: when fixing a class of bug (overflow, guard, hardening), grep the codebase for ALL instances of the same pattern (sibling functions, fallback paths, symmetric read/write sides) and fix every one in the same change. Checklist: (a) after any fix, grep for the same arithmetic/guard pattern across sibling and fallback code, (b) symmetric operations (read/write, entry/fallback, LHS/RHS) must both be hardened, (c) verify each call site reaches the fixed path, not an unfixed sibling.
 
