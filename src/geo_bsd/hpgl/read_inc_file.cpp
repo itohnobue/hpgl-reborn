@@ -2,6 +2,7 @@
 #include "locale_keeper.h"
 #include "hpgl_exception.h"
 #include "load_property_from_file.h"
+#include "api.h"
 #include <cmath>
 #include <climits>
 #include <cerrno>
@@ -339,9 +340,11 @@ namespace hpgl
 				// inequality per the GSLIB convention ("less than -1.0e21 or
 				// greater than 1.0e21"); an exact ±1.0e21 value still relies on
 				// exact undefined_value equality (float32 round-trip of the
-				// HPGL writer's own sentinel is exact).
-				const float sentinel_min = -1.0e21f;
-				const float sentinel_max =  1.0e21f;
+				// HPGL writer's own sentinel is exact). The window constant is
+				// the shared GSLIB reference-fact table value (api.h
+				// HPGL_GSLIB_SENTINEL_WINDOW, got-20260802092630).
+				const float sentinel_min = -static_cast<float>(HPGL_GSLIB_SENTINEL_WINDOW);
+				const float sentinel_max =  static_cast<float>(HPGL_GSLIB_SENTINEL_WINDOW);
 				for (int i = 0; i < size; ++i)
 				{
 					const float v = data_buffer[i];

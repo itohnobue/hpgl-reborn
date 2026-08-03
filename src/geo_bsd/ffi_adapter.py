@@ -269,6 +269,160 @@ def checkFWA(a: numpy.ndarray) -> None:
 
 
 # ============================================================================
+# FFI output-buffer contract (got-20260802015741 — recurring class: the
+# contiguity → size → writeability → full-init facets surface one per run).
+#
+# ONE shared helper enforces the complete contract on every FFI output
+# buffer, so a future call site cannot skip a facet the way sibling call
+# sites did across runs (F-06/F-08 contiguity → 2-M-15 size → III-39
+# writeability → III-40 full-init). Route ALL output-buffer validations
+# through require_output_buffer.
+# ============================================================================
+
+# Sentinel value the C++ kernels use to mark "cell not written" where a
+# full-init is contractually required (e.g. top-tail cells of stack_layers).
+_UNWRITTEN_CELL_SENTINEL = -500.0
+
+
+def require_output_buffer(
+    arr: numpy.ndarray,
+    expected_size: int,
+    context: str,
+    dtype: numpy.dtype | None = None,
+) -> None:
+    """Enforce the complete FFI output-buffer contract on ``arr``.
+
+    The contract is: C-contiguous or F-contiguous layout (contiguity), exact
+    element count (size), writable memory (writeability), and — when
+    ``require_full_init`` is True — all cells finite (full initialization).
+    Contiguity comes first: a strided view would be read/written by the C
+    kernel as if it were flat, producing garbage or OOB access. Size second:
+    the C kernel computes ``min(num_lags, result_length)``-style truncation
+    or writes past a short buffer. Writeability third: a read-only buffer is
+    silently mutated (or SIGBUS). Every check raises ``ValueError`` with the
+    caller's ``context`` in the message.
+
+    Args:
+        arr: The output numpy array the C kernel will write into.
+        expected_size: The exact number of elements the kernel will write.
+        context: Operation name for error messages.
+        dtype: Optional required dtype. When None, the dtype is not checked
+            (callers that enforce a dtype via ``ndpointer`` argtypes or
+            explicit checks keep their existing behavior).
+
+    Raises:
+        ValueError: If any facet of the contract is violated.
+    """
+    if not isinstance(arr, numpy.ndarray):
+        raise ValueError(
+            f"{context}: output buffer must be a numpy.ndarray, "
+            f"got {type(arr).__name__}"
+        )
+    if not (arr.flags["C_CONTIGUOUS"] or arr.flags["F_CONTIGUOUS"]):
+        raise ValueError(
+            f"{context}: output buffer must be contiguous (got a strided view "
+            "— the C kernel reads/writes the buffer as flat memory)"
+        )
+    if arr.size != expected_size:
+        raise ValueError(
+            f"{context}: output buffer size {arr.size} does not match expected "
+            f"{expected_size} (the C kernel computes with min(size, expected) "
+            "or writes past a short buffer)"
+        )
+    if not arr.flags["W"]:
+        raise ValueError(
+            f"{context}: output buffer must be writable (read-only buffer would "
+            "be silently mutated or SIGBUS)"
+        )
+    if dtype is not None and arr.dtype != dtype:
+        raise ValueError(
+            f"{context}: output buffer dtype {arr.dtype} does not match expected "
+            f"{dtype}"
+        )
+
+
+def require_output_buffer_full_init(arr: numpy.ndarray, context: str) -> None:
+    """Verify the C kernel fully initialized an output buffer.
+
+    A C kernel that loops ``for i < nz`` over an output buffer that has more
+    layers than ``nz`` leaves the top-tail cells holding their pre-call
+    garbage (or a sentinel). The caller must have pre-initialized the buffer
+    to ``_UNWRITTEN_CELL_SENTINEL``; this check asserts no cell still holds
+    that sentinel after the call, proving the kernel wrote every cell it was
+    contracted to (full-init facet of the FFI output-buffer contract).
+
+    Args:
+        arr: The output buffer after the C call.
+        context: Operation name for error messages.
+
+    Raises:
+        ValueError: If any cell still holds the unwritten-cell sentinel.
+    """
+    if numpy.any(arr == _UNWRITTEN_CELL_SENTINEL):
+        raise ValueError(
+            f"{context}: output buffer not fully initialized — cells still hold "
+            f"the pre-call sentinel ({_UNWRITTEN_CELL_SENTINEL}). The C kernel "
+            "did not write every contracted cell."
+        )
+
+
+def prefill_output_buffer(arr: numpy.ndarray) -> None:
+    """Pre-fill an output buffer with the unwritten-cell sentinel.
+
+    Call BEFORE the C call when the kernel is contracted to write every cell
+    (e.g. CStackLayers with ``nz`` layers into a deeper buffer): the sentinel
+    makes unwritten cells detectable after the call via
+    ``require_output_buffer_full_init``.
+
+    Args:
+        arr: The output buffer to pre-fill.
+    """
+    arr[:] = _UNWRITTEN_CELL_SENTINEL
+
+
+# ============================================================================
+# Mask semantics contract (got-20260803180153 — recurring class: mask
+# semantics must be ONE definition everywhere). The library-wide contract is
+# "non-zero = informed". C++ kernels gate on ``mask[node] == 1``
+# (sequential_simulation.h:124, sequential_indicator_simulation.cpp:114), so
+# any non-zero value must be normalized to 1 at the FFI boundary BEFORE the
+# C++ kernel sees it — otherwise a mask value of 2 is counted as informed by
+# Python (mask != 0) but silently skipped by C++ (mask == 1). Centralized
+# here so every boundary uses the same normalization.
+# ============================================================================
+
+
+def normalize_mask_binary(mask: numpy.ndarray, context: str) -> numpy.ndarray | None:
+    """Normalize a mask array to the binary (0/1) contract used by the C++.
+
+    ``None`` input stays ``None`` (no mask). A non-binary mask (any value
+    outside {0, 1}, e.g. 2) is converted to binary with ``mask != 0`` — the
+    library-wide "non-zero = informed" definition — so the Python expected-
+    cell count (mask != 0) and the C++ simulation gate (mask == 1) agree on
+    the SAME set of cells after normalization.
+
+    Returns a float64/uint8-compatible binary mask. The returned array is a
+    new uint8 array (values 0/1); the caller's array is not mutated.
+
+    Args:
+        mask: The user-supplied mask array or ``None``.
+        context: Operation name for error messages.
+
+    Raises:
+        TypeError: If ``mask`` is not a numpy array.
+    """
+    if mask is None:
+        return None
+    if not isinstance(mask, numpy.ndarray):
+        raise TypeError(
+            f"{context}: mask must be a numpy.ndarray, got {type(mask).__name__}"
+        )
+    if numpy.all((mask == 0) | (mask == 1)):
+        return mask
+    return (mask != 0).astype(numpy.uint8)
+
+
+# ============================================================================
 # ctypes struct construction helpers
 # ============================================================================
 

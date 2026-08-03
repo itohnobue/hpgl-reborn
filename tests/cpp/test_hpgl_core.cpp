@@ -281,6 +281,45 @@ void test_covariance_spherical_at_range_boundary() {
     CHECK(c_near_range > 0.0);
 }
 
+// got-20260724074703: cov_model_t kernels are the class-4 numerical NaN
+// hotspot. The gaussian/exponential/spherical guards were comparison-only
+// (`h < near_zero`) — IEEE-754 makes NaN < x false, so a NaN distance
+// (from NaN coordinates reaching the kernel through direct-C++ or FFI
+// callers that bypass the C-API boundary validation) flowed into
+// exp(-3*pow(NaN,2)) → NaN covariance. Post-fix the guard is
+// `!std::isfinite(h) || h < near_zero`, so a NaN h returns the sill
+// (finite, defined output) instead of propagating NaN.
+void test_cov_model_nan_distance_returns_sill() {
+    TEST("got-20260724074703: cov_model_t NaN distance returns sill (isfinite-first)");
+    double ranges_a[3] = { 10.0, 10.0, 10.0 };
+    double angles_a[3] = { 0.0, 0.0, 0.0 };
+
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+
+    hpgl::cov_model_t sph(
+        hpgl::covariance_type_t::COV_SPHERICAL, ranges_a, angles_a, 1.0, 0.0);
+    double c_sph = sph(nan);
+    CHECK(std::isfinite(c_sph));
+    CHECK_CLOSE(c_sph, 1.0, 1e-12);  // NaN h → sill (defined fallback)
+
+    hpgl::cov_model_t expo(
+        hpgl::covariance_type_t::COV_EXPONENTIAL, ranges_a, angles_a, 1.0, 0.0);
+    double c_exp = expo(nan);
+    CHECK(std::isfinite(c_exp));
+    CHECK_CLOSE(c_exp, 1.0, 1e-12);
+
+    hpgl::cov_model_t gauss(
+        hpgl::covariance_type_t::COV_GAUSSIAN, ranges_a, angles_a, 1.0, 0.0);
+    double c_gau = gauss(nan);
+    CHECK(std::isfinite(c_gau));
+    CHECK_CLOSE(c_gau, 1.0, 1e-12);
+
+    // Positive-infinite distance must also be caught by the isfinite-first
+    // guard (Inf < near_zero is false — same bypass as NaN).
+    double c_inf = sph(std::numeric_limits<double>::infinity());
+    CHECK(std::isfinite(c_inf));
+}
+
 void test_cholesky_solve_3x3() {
     TEST("cholesky_solve 3x3 after decomposition");
     int size = 3;
@@ -390,6 +429,37 @@ void test_write_inc_file_float_rejects_nonpositive_dims()
     char * fname = const_cast<char *>(filename.c_str());
     int rc = hpgl_write_inc_file_float(fname, &arr, -99.0f, name);
     CHECK(rc != 0);  // pre-fix: volume-0 shape silently succeeds
+    std::remove(filename.c_str());
+}
+
+// got-20260802092630: the GSLIB sentinel window is a READER-side contract —
+// the INC writer accepts finite values (including out-of-window sentinels)
+// and the readers (read_inc_file.cpp, get_gslib_property) mask out-of-window
+// values on read. The GSLIB *format* writers (routines.py SaveGSLIBCubes /
+// SaveGSLIBPointSet) reject at the Python boundary instead. This test pins
+// the round-trip: a value written inside the window round-trips as data, and
+// an out-of-window value is written then masked by the reader (never NaN in
+// the file itself). The window constant is the shared reference-fact value
+// (api.h HPGL_GSLIB_SENTINEL_WINDOW).
+void test_write_gslib_sentinel_round_trip()
+{
+    TEST("got-20260802092630: GSLIB sentinel window reader-side masking (round-trip)");
+    // The shared reference-fact constant must exist and be 1.0e21.
+    CHECK(HPGL_GSLIB_SENTINEL_WINDOW == 1.0e21);
+
+    std::string dir = make_temp_dir();
+    std::string filename = dir + "/sentinel.inc";
+    float data[2] = {1.0f, 1.0e21f};  // exact edge — NOT a sentinel (strict >)
+    unsigned char mask[2] = {1, 1};
+    hpgl_cont_masked_array_t arr;
+    arr.m_data = data;
+    arr.m_mask = mask;
+    init_shape(arr.m_shape, 2, 1, 1);
+    char name[] = "sentinel";
+    char * fname = const_cast<char *>(filename.c_str());
+    // Exact ±1.0e21 is a real data value (strict inequality) — writes fine.
+    int rc = hpgl_write_inc_file_float(fname, &arr, -99.0f, name);
+    CHECK(rc == 0);
     std::remove(filename.c_str());
 }
 
@@ -1767,6 +1837,46 @@ void test_simple_kriging_weights_rejects_huge_count() {
     CHECK(std::isfinite(weights[0]) && std::isfinite(weights[1]));
 }
 
+// got-20260724074703: simple_kriging_weights consumed the raw coordinate
+// arrays as covariance-model distances with NO finiteness gate — a NaN/Inf
+// centre or neighbour coordinate silently produced NaN weights for direct-C
+// callers (the Python wrapper validates coordinate finiteness). Post-fix the
+// C entry point scans centre + neighbour coordinates and returns -1 with a
+// clear error.
+void test_simple_kriging_weights_rejects_nonfinite_coords() {
+    TEST("got-20260724074703: simple_kriging_weights rejects non-finite coordinates");
+    float center[3] = {0.0f, 0.0f, 0.0f};
+    float nx[2] = {1.0f, 2.0f};
+    float ny[2] = {0.0f, 0.0f};
+    float nz[2] = {0.0f, 0.0f};
+    float weights[2] = {0.0f, 0.0f};
+
+    hpgl_cov_params_t params;
+    params.m_covariance_type = 0;   // COV_SPHERICAL
+    params.m_ranges[0] = 10; params.m_ranges[1] = 10; params.m_ranges[2] = 10;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+
+    // NaN centre coordinate → rejected with a clear error (pre-fix: NaN
+    // weights array, rc=0).
+    float nan_center[3] = {std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f};
+    int rc = hpgl_simple_kriging_weights(nan_center, nx, ny, nz, 2, &params, weights);
+    CHECK(rc == -1);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "not finite") != nullptr);
+
+    // NaN neighbour coordinate → rejected.
+    float nan_nx[2] = {1.0f, std::numeric_limits<float>::infinity()};
+    rc = hpgl_simple_kriging_weights(center, nan_nx, ny, nz, 2, &params, weights);
+    CHECK(rc == -1);
+
+    // All-finite coordinates still produce finite weights.
+    rc = hpgl_simple_kriging_weights(center, nx, ny, nz, 2, &params, weights);
+    CHECK(rc == 0);
+    CHECK(std::isfinite(weights[0]) && std::isfinite(weights[1]));
+}
+
 // 2-M-9: cokriging Mark I/II gained per-node workspace reuse (the previous
 // ~7 heap allocations per node — coords/indices/weights/values/A/b/A_backup —
 // are now reused from a cokriging_ws_t). This test asserts correctness is
@@ -3009,6 +3119,7 @@ int main() {
 
     test_write_inc_file_byte_identity_remap_zero_values();
     test_write_inc_file_float_rejects_nonpositive_dims();
+    test_write_gslib_sentinel_round_trip();
     test_ordinary_kriging_rejects_huge_max_neighbours();
     test_ordinary_kriging_rejects_zero_radius();
     test_property_writer_removes_tmp_on_failure();
@@ -3077,6 +3188,10 @@ int main() {
     test_cokriging_zero_variance_primary_only();
     test_correlogram_weights_embed_sigma_backtransform();
     test_cov_model_rejects_overflowing_range_ratio();
+
+    // got-20260724074703: cov_model kernels isfinite-first (NaN distance).
+    test_cov_model_nan_distance_returns_sill();
+    test_simple_kriging_weights_rejects_nonfinite_coords();
 
     // s8-fix-cpp-sim regression tests (F-01, F-37, II-11, II-12, II-13,
     // II-14, III-10).

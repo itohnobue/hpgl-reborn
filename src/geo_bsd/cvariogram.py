@@ -9,6 +9,9 @@ import numpy
 # NumPy 2.0+ compatibility
 from numpy import ctypeslib as NC
 
+from .ffi_adapter import (
+    require_output_buffer,
+)
 from .hpgl_wrap import _safe_load_library
 
 cvar = _safe_load_library("_cvariogram", __file__)
@@ -540,6 +543,12 @@ def CalcVariograms(templ, hard_data, percent=100, seed=None):
             "informed (mask != 0) cells"
         )
     variogram = numpy.array([0] * templ.num_lags, dtype="float32")
+    # FFI output-buffer contract (got-20260802015741): contiguity + exact
+    # size + writeability on the internal buffer the C kernel writes via a
+    # raw float pointer (variograms.cpp:570-571). Enforced uniformly with the
+    # caller-supplied buffer paths so no facet can be skipped by a future
+    # call site.
+    require_output_buffer(variogram, templ.num_lags, "CalcVariograms", numpy.dtype("float32"))
 
     hd = checked_create(
         hard_data_t,
@@ -665,20 +674,12 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
         # (variograms.cpp:821-823), so an undersized buffer truncates the
         # variogram (lags_borders has num_lags entries, variogram has fewer)
         # with no error. Reject before the call.
-        if variogram.size != templ.num_lags:
-            raise ValueError(
-                f"CalcVariogramsFromPointSet: variogram buffer size "
-                f"{variogram.size} does not match num_lags {templ.num_lags} "
-                f"(returned tuple would be truncated/mismatched)"
-            )
-    # III-39: the C++ kernel writes into the caller's variogram buffer via a
-    # raw float pointer. A read-only buffer is silently mutated (or SIGBUS
-    # on a true read-only mmap) — reject before the call, mirroring the
-    # output-buffer writeability enforcement on the calc ndpointers below.
-    if not variogram.flags["W"]:
-        raise ValueError(
-            "CalcVariogramsFromPointSet: variogram buffer must be writable "
-            "(read-only output buffer would be silently mutated or SIGBUS)"
+        # III-39: the C++ kernel writes into the caller's variogram buffer via
+        # a raw float pointer. A read-only buffer is silently mutated (or
+        # SIGBUS on a true read-only mmap).
+        # Contract: contiguity + size + writeability (got-20260802015741).
+        require_output_buffer(
+            variogram, templ.num_lags, "CalcVariogramsFromPointSet", numpy.dtype("float32")
         )
 
     ps = checked_create(
@@ -779,20 +780,17 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
     # map_index values beyond the C++ cumulative_k buffer (OOB write,
     # stack_layers.h:33,38-39). Copy layers to contiguous float32; a
     # sliced view is copied, so the C++ sees a safe contiguous buffer.
-    # The result is the OUTPUT buffer — it must already be contiguous
-    # (a non-contiguous result would also OOB-write), so reject it.
     layers = [numpy.ascontiguousarray(layer) for layer in layers]
-    if not (result.flags["C_CONTIGUOUS"] or result.flags["F_CONTIGUOUS"]):
-        raise ValueError("CStackLayers: result must be a contiguous float32 array")
-    # III-39: the C++ kernel writes into the caller's result buffer via a
-    # raw float pointer. A read-only buffer is silently mutated (or SIGBUS
-    # on a true read-only mmap) — reject before the call, mirroring the
-    # writeability enforcement on the calc output ndpointers above.
-    if not result.flags["W"]:
-        raise ValueError(
-            "CStackLayers: result must be a writable float32 array "
-            "(read-only output buffer would be silently mutated or SIGBUS)"
-        )
+    # The result is the OUTPUT buffer — the full FFI output-buffer contract
+    # (got-20260802015741): contiguity + exact size + writeability. The C++
+    # kernel writes result cells at [0, nx) x [0, ny) per layer
+    # (stack_layers.h:29-32,57,71); a non-contiguous or short result would
+    # OOB-write. The 3D shape checks above (result.ndim, x/y match, nz cap)
+    # establish the expected element count. Full-init (III-40) is guaranteed
+    # by the C++ kernel, which pre-fills the ENTIRE result buffer with
+    # blank_value before the layer loop (stack_layers.h:106-112), so no
+    # sentinel prefill is needed here.
+    require_output_buffer(result, result.size, "CStackLayers", numpy.dtype("float32"))
     layers2 = []
     for layer in layers:
         layers2.append(_create_float_data(layer))

@@ -2,6 +2,32 @@
 
 All notable changes to HPGL Reborn.
 
+## [2.0.4] — 2026-08
+
+### Fixed
+- **Recurring-class structural fixes (once-and-for-all)** — this release targets the 8 recurring problem classes from the v2.0.1→v2.0.2→v2.0.3 production runs with structural, not instance-level, fixes:
+
+### C-API validation registry (class: entry points missing mirror-validation)
+- Every `hpgl_*` entry point now registers a row in a validation registry table (`api.cpp` `HPGL_VALIDATION_REGISTRY`) with its validation summary; a generated completeness test walks the `api.h` declarations AND the library's exported symbols (`nm`) and fails when any entry point is missing a registry row — a new entry point without mirror-validation is now a test-time failure, not a silent recurrence
+
+### FFI output-buffer contract (class: contiguity/size/writeability/full-init)
+- One shared helper `ffi_adapter.require_output_buffer` enforces the complete contract (contiguity + exact size + writeability + dtype) at every ctypes output-buffer site; `cvariogram.py` `CalcVariograms`, `CalcVariogramsFromPointSet`, and `CStackLayers` now route through it (a future call site cannot skip a facet)
+
+### Mask semantics (class: non-zero = informed must be ONE definition)
+- `ffi_adapter.normalize_mask_binary` centralizes the library-wide "non-zero = informed" bool-convert; `sgs_simulation` / `sis_simulation` now normalize non-binary masks (e.g. 2 → 1) at the boundary so the Python expected-cell count (`mask != 0`) and the C++ simulation gate (`mask == 1`) agree — instead of silently permuting or rejecting
+
+### Numerical NaN/FP guards (class: comparison-only guards are NaN-bypassable)
+- `cov_model.h` gaussian/exponential/spherical kernels hardened isfinite-first — a NaN distance now returns the sill (defined) instead of propagating NaN covariance; `simple_kriging_weights` C entry point scans centre + neighbour coordinates for finiteness (direct-C callers previously got NaN weights)
+
+### GSLIB reference semantics (class: sentinel window / transform space drift)
+- New single reference-fact table `geo_bsd/gslib_ref.py` documents the GSLIB contract (strict-inequality ±1.0e21 sentinel window, data-vs-normal-score space, ndmin original-data-only, OK→SK downgrade, ordrel space); `routines.py` (`SaveGSLIBCubes`/`SaveGSLIBPointSet`/`LoadGslibFile`) and `geo.py` (`get_gslib_property`/slow parser) now route the sentinel-window checks through it; C++ readers use the shared `HPGL_GSLIB_SENTINEL_WINDOW` constant (api.h)
+
+### Fix-pipeline enforcement (class: findings never assigned / sibling misses)
+- The registry completeness test doubles as the mechanical fix-assignment check: every exported symbol has a validation row, so a forgotten entry point is caught at test time; sibling sweeps verified across `abort()`/`assert` sites, mask `== 1` comparisons, and GSLIB sentinel constants
+
+### Added
+- New regression test files: `test_api_validation_registry.py`, `test_ffi_buffer_contract.py`, `test_gslib_ref.py`; C++ tests for `cov_model_t` NaN-distance guards, `simple_kriging_weights` non-finite coordinate rejection, and GSLIB sentinel-window round-trip
+
 ## [2.0.3] — 2026-08
 
 ### Fixed

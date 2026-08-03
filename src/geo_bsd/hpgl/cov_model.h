@@ -191,8 +191,13 @@ namespace hpgl
 		{
 			// Range-relative near-zero threshold: prevents unit-dependent
 			// nugget-blind zone at micro-scales and overflow at macro-scales.
+			// got-20260724074703: a comparison-only `h < near_zero` guard is
+			// NaN-bypassable (IEEE-754: NaN < x is false), so a NaN h flows
+			// into exp(-3*pow(NaN,2)) → NaN covariance. isfinite must be
+			// checked FIRST; the C API validates coordinate/mean finiteness
+			// at the boundary, but direct-C++ and FFI callers bypass it.
 			double near_zero = 1e-5 * m_params.m_ranges[0];
-			if(h < near_zero)
+			if (!std::isfinite(h) || h < near_zero)
 			{
 				return m_params.m_sill;
 			}
@@ -206,8 +211,10 @@ namespace hpgl
 		{
 			// Range-relative near-zero threshold: prevents unit-dependent
 			// nugget-blind zone at micro-scales and overflow at macro-scales.
+			// got-20260724074703: comparison-only guard is NaN-bypassable —
+			// isfinite first (see gaussian).
 			double near_zero = 1e-5 * m_params.m_ranges[0];
-			if(h < near_zero)
+			if(!std::isfinite(h) || h < near_zero)
 			{
 				return m_params.m_sill;
 			}
@@ -221,8 +228,10 @@ namespace hpgl
 		{
 			// Range-relative near-zero threshold: prevents unit-dependent
 			// nugget-blind zone at micro-scales and overflow at macro-scales.
+			// got-20260724074703: comparison-only guard is NaN-bypassable —
+			// isfinite first (see gaussian).
 			double near_zero = 1e-5 * m_params.m_ranges[0];
-			if(h < near_zero)
+			if(!std::isfinite(h) || h < near_zero)
 			{
 				return m_params.m_sill;
 			}

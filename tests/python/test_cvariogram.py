@@ -1050,7 +1050,7 @@ class TestS8OutputBufferValidation:
 
     def test_undersized_buffer_raises(self):
         ps = _s8_point_set()
-        with pytest.raises(ValueError, match="does not match num_lags"):
+        with pytest.raises(ValueError, match="does not match expected"):
             CalcVariogramsFromPointSet(_s8_templ(5), ps, np.zeros(2, dtype="float32"))
 
     def test_exact_buffer_still_works(self):
@@ -1084,7 +1084,7 @@ class TestS8WriteabilityEnforcement:
         layer = np.random.RandomState(1).rand(5, 5, 1).astype("float32")
         ro = np.zeros((5, 5, 10), dtype="float32")
         ro.setflags(write=False)
-        with pytest.raises(ValueError, match="must be a writable"):
+        with pytest.raises(ValueError, match="must be writable"):
             CStackLayers([layer], [7], nz=5, scalez=1.0, blank_value=-99.0, result=ro)
 
     def test_writable_buffers_still_work(self):

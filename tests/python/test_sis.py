@@ -88,13 +88,13 @@ class TestSisLvmShapeValidation:
 
 @pytest.mark.hpgl
 class TestSisMaskSemantics:
-    """III-13: mask must be binary (0/1) at the Python boundary.
+    """Mask semantics contract: non-zero = informed (got-20260803180153).
 
     The C++ SIS kernel gates simulation on mask[node] == 1
-    (sequential_indicator_simulation.cpp:114) while the Python
-    expected-cell count uses mask != 0 — a mask value like 2 is counted as
-    simulate in Python but silently skipped by C++. Reject non-binary masks
-    loudly.
+    (sequential_indicator_simulation.cpp:114) while the Python expected-cell
+    count uses mask != 0. The centralized normalization
+    (ffi_adapter.normalize_mask_binary) converts any non-zero mask to binary
+    1 at the boundary so both sides agree after normalization.
     """
 
     def _prop_grid(self):
@@ -104,13 +104,18 @@ class TestSisMaskSemantics:
         mask[0] = 0
         return grid, IndProperty(data, mask, 2)
 
-    def test_non_binary_mask_raises(self):
+    def test_non_binary_mask_is_normalized_not_rejected(self):
         grid, prop = self._prop_grid()
         bad_mask = np.ones(8, dtype="uint8")
         bad_mask[1] = 2
-        with pytest.raises(ValueError, match="mask must be binary"):
-            sis_simulation(prop, grid, _sis_data(), seed=42,
-                           marginal_probs=[0.5, 0.5], mask=bad_mask)
+        from geo_bsd.ffi_adapter import normalize_mask_binary
+
+        normalized = normalize_mask_binary(bad_mask, "test")
+        assert set(np.unique(normalized)) <= {0, 1}
+        assert normalized[1] == 1
+        out = sis_simulation(prop, grid, _sis_data(), seed=42,
+                             marginal_probs=[0.5, 0.5], mask=bad_mask)
+        assert np.all(np.isfinite(np.asarray(out.data, dtype="float32")))
 
     def test_binary_mask_still_succeeds(self):
         grid, prop = self._prop_grid()

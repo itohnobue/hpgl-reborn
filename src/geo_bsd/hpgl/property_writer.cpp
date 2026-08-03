@@ -11,6 +11,7 @@
 #include "property_writer.h"
 #include "locale_keeper.h"
 #include "hpgl_exception.h"
+#include "api.h"
 
 #ifndef _WIN32
 #include <fcntl.h>
@@ -77,6 +78,17 @@ namespace hpgl
 	{
 		// Reject NaN and Inf before writing — these values cannot be
 		// read back correctly by parse routines, breaking round-trip.
+		// NOTE: finite values OUTSIDE the GSLIB ±1.0e21 sentinel window are
+		// NOT rejected here — the INC/GSLIB readers (read_inc_file.cpp,
+		// get_gslib_property, LoadGslibFile) mask out-of-window values on
+		// read (HPGL_GSLIB_SENTINEL_WINDOW, api.h), so a sentinel-bearing
+		// file round-trips correctly (masked on read) rather than failing the
+		// write. The GSLIB *format* writers (routines.py SaveGSLIBCubes /
+		// SaveGSLIBPointSet) reject out-of-window values at the Python
+		// boundary instead (F-29) — the format readers treat them as NaN on
+		// round-trip, so those writers must not produce them. Both behaviors
+		// are documented against the same reference-fact constant
+		// (got-20260802092630).
 		if (!std::isfinite(value))
 		{
 			std::ostringstream oss;

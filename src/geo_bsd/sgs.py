@@ -11,6 +11,7 @@ from .ffi_adapter import (
     _hpgl_call_lock,
     call_sgs_lvm_simulation,
     call_sgs_simulation,
+    normalize_mask_binary,
 )
 from .ffi_adapter import (
     create_cont_masked_array as _create_hpgl_cont_masked_array,
@@ -141,8 +142,10 @@ def sgs_simulation(
         If ``True``, use source data values for simulation. If ``False``,
         ignore source data values. Default: ``True``.
     mask : numpy.ndarray or None, optional
-        3D array where ``1`` marks cells to simulate and ``0`` marks cells to skip.
-        If ``None``, all cells are simulated. Default: ``None``.
+        3D array where non-zero marks cells to simulate and ``0`` marks cells
+        to skip (the library-wide "non-zero = informed" mask contract,
+        got-20260803180153 — non-binary values like 2 are normalized to 1 at
+        the boundary). If ``None``, all cells are simulated. Default: ``None``.
     min_neighbours : int, optional
         Minimum number of neighbours required for kriging. Default: ``0``.
     config : SGSConfig or None, optional
@@ -200,19 +203,15 @@ def sgs_simulation(
 
     out_prop, mean, mask = __prepare_sgs(prop=prop, mean=mean, use_harddata=use_harddata, mask=mask)
 
-    # III-13: the C++ SGS kernel gates simulation on mask[node] == 1
-    # (sequential_simulation.h:124) while the Python expected-cell count
-    # below counts mask != 0 — a mask value like 2 is counted as "simulate"
-    # in Python but silently skipped by C++. Validate the documented binary
-    # contract (docstring: "1 marks cells to simulate and 0 marks cells to
-    # skip") at the Python boundary so non-binary masks fail loudly instead
-    # of silently permuting the simulated field.
-    if mask is not None and not numpy.all((mask == 0) | (mask == 1)):
-        raise ValueError(
-            "sgs_simulation: mask must be binary (values 0 or 1) — the "
-            "C++ kernel gates simulation on mask == 1, so non-zero values "
-            "like 2 are silently skipped"
-        )
+    # Mask semantics (got-20260803180153): the library-wide contract is
+    # "non-zero = informed". The C++ SGS kernel gates simulation on
+    # mask[node] == 1 (sequential_simulation.h:124) while the Python
+    # expected-cell count below counts mask != 0 — a mask value like 2 is
+    # counted as "simulate" in Python but silently skipped by C++. The
+    # centralized normalization converts any non-zero mask to binary 1 at
+    # the boundary, so both sides agree on the SAME cell set after
+    # normalization (instead of rejecting the mask as invalid).
+    mask = normalize_mask_binary(mask, "sgs_simulation")
 
     kriging_kind_map = {"sk": _HPGL_KRIGING_KIND.simple, "ok": _HPGL_KRIGING_KIND.ordinary}
     if kriging_type not in kriging_kind_map:

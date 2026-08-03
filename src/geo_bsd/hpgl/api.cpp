@@ -241,6 +241,72 @@ namespace hpgl {
 
 extern "C" {
 
+// ============================================================================
+// C-API validation registry (pat-20260802223236 — recurring class: entry
+// points that don't validate what the Python wrapper validates). EVERY
+// exported hpgl_* entry point MUST have a row here. The generated
+// completeness test (test_api_validation_registry.py) walks the api.h
+// declarations and the library's exported symbols, and fails when any entry
+// point is missing a registry row. When adding a NEW entry point, add its
+// row here at the same time — the test enforces the pairing.
+// ============================================================================
+struct hpgl_validation_registry_entry_t {
+	const char * m_name;
+	const char * m_validation;
+};
+
+static const hpgl_validation_registry_entry_t HPGL_VALIDATION_REGISTRY[] = {
+	{ "hpgl_get_api_validation_registry_count", "accessor — no user input" },
+	{ "hpgl_get_api_validation_registry_name", "index bounds (see registry accessors)" },
+	{ "hpgl_get_api_validation_registry_validation", "index bounds (see registry accessors)" },
+	{ "hpgl_get_last_exception_message", "accessor — no user input" },
+	{ "hpgl_set_output_handler", "handler pointer (null clears)" },
+	{ "hpgl_set_progress_handler", "handler pointer (null clears)" },
+	{ "hpgl_set_thread_num", "thread count (set_thread_num.cpp validates > 0)" },
+	{ "hpgl_get_thread_num", "accessor — no user input" },
+	{ "hpgl_get_kriging_stats", "accessor — no user input" },
+	{ "hpgl_read_inc_file_float", "filename/data/mask pointers; size > 0" },
+	{ "hpgl_read_inc_file_byte", "filename/data/mask/values pointers; size > 0; values_count in [1, 256]; remap coverage" },
+	{ "hpgl_write_inc_file_float", "filename/arr/name pointers; shape dims > 0; volume; data non-null" },
+	{ "hpgl_write_inc_file_byte", "filename/arr/name pointers; shape dims > 0; volume; values_count >= 0; remap table; undefined_value in [0, 255]" },
+	{ "hpgl_write_gslib_cont_property", "data/filename/name pointers; shape dims > 0; volume; data non-null" },
+	{ "hpgl_write_gslib_byte_property", "data/filename/name/values pointers; shape dims > 0; volume; values_count >= 0; remap table; undefined_value in [0, 255]" },
+	{ "hpgl_ordinary_kriging", "input/params/output pointers; shape dims > 0; equal volumes; data non-null; max_neighbours in [1, 100000]; non-zero radius; cov params" },
+	{ "hpgl_simple_kriging", "data/mask/shape/params/output pointers; shape dims > 0; equal volumes; max_neighbours in [1, 100000]; non-zero radius; mean finite; cov params" },
+	{ "hpgl_simple_kriging_weights", "params/weights/center/neighbour pointers; neighbours_count in [0, 100000]; weights2 size match" },
+	{ "hpgl_lvm_kriging", "data/mean/params/output pointers; shape dims > 0; equal volumes; mean volume == input volume; mean finite; max_neighbours in [1, 100000]; non-zero radius" },
+	{ "hpgl_sgs_simulation", "data/params pointers; shape dims > 0; data non-null; max_neighbours in [0, 100000]; kriging_kind valid; cdf size in [0, 1e8] + non-null arrays; mean finite; mask shape match" },
+	{ "hpgl_sgs_lvm_simulation", "data/params/means pointers; shape dims > 0; data/means non-null; means volume == grid volume; means finite; max_neighbours in [0, 100000]; cdf size in [0, 1e8]; mask shape match" },
+	{ "hpgl_indicator_kriging", "in/out/params pointers; shape dims > 0; indicator_count in [1, 255] matches in/out; data non-null; per-category max_neighbours in [1, 100000]; non-zero radius" },
+	{ "hpgl_median_ik", "in/params/out pointers; shape dims > 0; equal volumes; data non-null; indicator_count == 2; max_neighbours in [1, 100000]; non-zero radius; marginal_probs in [0, 1] sum ~1" },
+	{ "hpgl_sis_simulation", "data/params pointers; shape dims > 0; indicator_count in [1, 255] matches data; data non-null; per-category max_neighbours in [0, 100000]; mask shape match" },
+	{ "hpgl_sis_simulation_lvm", "data/params/mean pointers; shape dims > 0; indicator_count in [1, 255] matches data; data non-null; per-category max_neighbours in [0, 100000]; per-mean volume == grid volume; means finite; mask shape match" },
+	{ "hpgl_simple_cokriging_mark1", "input/secondary/output/params pointers; shape dims > 0; equal volumes + per-dim equality; data non-null; max_neighbours in [1, 100000]; non-zero radius; means finite; secondary_variance finite >= 0" },
+	{ "hpgl_simple_cokriging_mark2", "primary/secondary/output/params pointers; shape dims > 0; equal volumes + per-dim equality; data non-null; max_neighbours in [1, 100000]; non-zero radius; means finite" },
+};
+
+static const int HPGL_VALIDATION_REGISTRY_COUNT =
+	static_cast<int>(sizeof(HPGL_VALIDATION_REGISTRY) / sizeof(HPGL_VALIDATION_REGISTRY[0]));
+
+HPGL_API int hpgl_get_api_validation_registry_count()
+{
+	return HPGL_VALIDATION_REGISTRY_COUNT;
+}
+
+HPGL_API const char * hpgl_get_api_validation_registry_name(int index)
+{
+	if (index < 0 || index >= HPGL_VALIDATION_REGISTRY_COUNT)
+		return "";
+	return HPGL_VALIDATION_REGISTRY[index].m_name;
+}
+
+HPGL_API const char * hpgl_get_api_validation_registry_validation(int index)
+{
+	if (index < 0 || index >= HPGL_VALIDATION_REGISTRY_COUNT)
+		return "";
+	return HPGL_VALIDATION_REGISTRY[index].m_validation;
+}
+
 HPGL_API hpgl_kriging_stats_t hpgl_get_kriging_stats()
 {
 	hpgl_kriging_stats_t result;
@@ -824,6 +890,34 @@ hpgl_simple_kriging_weights(
 	try
 	{
 	using namespace hpgl;
+	// got-20260724074703: the neighbour coordinates are consumed directly
+	// as covariance-model distances (cov_model.h operator() → transfrom_and_norm
+	// → spherical/gaussian/exponential). A NaN/Inf coordinate silently
+	// produces NaN weights (the Python wrapper validates coordinate
+	// finiteness; a direct C caller bypasses it). Scan before the kernel
+	// runs — the cov_model_t isfinite-first guards (cov_model.h) would catch
+	// it downstream, but a loud error here is far cheaper than a NaN
+	// weights array.
+	for (int i = 0; i < 3; ++i)
+	{
+		if (!std::isfinite(center_coords[i]))
+		{
+			hpgl::set_last_exception_message(
+				("simple_kriging_weights: center_coords[" + std::to_string(i)
+				 + "] is not finite").c_str());
+			return -1;
+		}
+	}
+	for (int i = 0; i < neighbours_count; ++i)
+	{
+		if (!std::isfinite(neighbours_x[i]) || !std::isfinite(neighbours_y[i]) || !std::isfinite(neighbours_z[i]))
+		{
+			hpgl::set_last_exception_message(
+				("simple_kriging_weights: neighbour_coords[" + std::to_string(i)
+				 + "] is not finite").c_str());
+			return -1;
+		}
+	}
 	real_location_t center(center_coords[0], center_coords[1], center_coords[2]);
 
 	std::vector<real_location_t> neighbour_coords(neighbours_count);

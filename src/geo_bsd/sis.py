@@ -12,6 +12,7 @@ from .ffi_adapter import (
     call_sis_simulation,
     call_sis_simulation_lvm,
     create_ik_params,
+    normalize_mask_binary,
 )
 from .ffi_adapter import (
     create_float_array as _create_hpgl_float_array,
@@ -97,8 +98,10 @@ def sis_simulation(
         If ``True``, use correlogram-based simulation. Only applicable in LVM mode.
         Default: ``True``.
     mask : numpy.ndarray or None, optional
-        3D uint8 array where ``1`` marks cells to simulate and ``0`` marks cells
-        to skip. If ``None``, all cells are simulated. Default: ``None``.
+        3D uint8 array where non-zero marks cells to simulate and ``0`` marks
+        cells to skip (the library-wide "non-zero = informed" mask contract,
+        got-20260803180153 — non-binary values like 2 are normalized to 1 at
+        the boundary). If ``None``, all cells are simulated. Default: ``None``.
     use_harddata : bool, optional
         If ``True``, use source data values for simulation. If ``False``,
         ignore source data values. Default: ``True``.
@@ -201,19 +204,14 @@ def sis_simulation(
         prop, data, marginal_probs, mask, use_harddata
     )
 
-    # III-13: the C++ SIS kernel gates simulation on mask[node] == 1
-    # (sequential_indicator_simulation.cpp:114) while the Python
-    # expected-cell count below counts mask != 0 — a mask value like 2 is
-    # counted as "simulate" in Python but silently skipped by C++. Validate
-    # the documented binary contract (docstring: "1 marks cells to simulate
-    # and 0 marks cells to skip") at the Python boundary so non-binary masks
-    # fail loudly instead of silently permuting the simulated field.
-    if mask is not None and not numpy.all((mask == 0) | (mask == 1)):
-        raise ValueError(
-            "sis_simulation: mask must be binary (values 0 or 1) — the "
-            "C++ kernel gates simulation on mask == 1, so non-zero values "
-            "like 2 are silently skipped"
-        )
+    # Mask semantics (got-20260803180153): the library-wide contract is
+    # "non-zero = informed". The C++ SIS kernel gates simulation on
+    # mask[node] == 1 (sequential_indicator_simulation.cpp:114) while the
+    # Python expected-cell count counts mask != 0 — a mask value like 2 is
+    # counted as "simulate" in Python but silently skipped by C++. The
+    # centralized normalization converts any non-zero mask to binary 1 at
+    # the boundary so both sides agree on the SAME cell set.
+    mask = normalize_mask_binary(mask, "sis_simulation")
 
     ParameterValidator.validate_property_type(out_prop, IndProperty, "sis_simulation")
 

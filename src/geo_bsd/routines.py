@@ -22,6 +22,10 @@ from numpy import (
     zeros,
 )
 
+from .gslib_ref import (
+    GSLIB_SENTINEL_WINDOW,
+    is_gslib_missing_sentinel,
+)
 from .validation import (
     GridValidator,
     ParameterValidator,
@@ -314,20 +318,15 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption, basedir=None):
             "SaveGSLIBPointSet: All properties in GSLIB dictionary must have equal size"
         )
 
-    # F-32/F-29: reject non-finite values before writing, matching the C++
-    # writer contract (property_writer.cpp write_value). GSLIB has no NaN/Inf
-    # representation; writing them produces a file the loader refuses to read.
     # F-29: ALSO reject FINITE values outside the ±1.0e21 sentinel window
-    # (strict inequality per the GSLIB convention "less than -1.0e21 or
-    # greater than 1.0e21"). The reader (LoadGslibFile, read_inc_file.cpp)
-    # converts those to NaN, so accepting them at write time would silently
-    # corrupt the round-trip (probe: SaveGSLIBCubes [2.0e21] → LoadGslibFile
-    # [NaN]). The C++ writer's write_value has the same gap and is fixed in
-    # the same contract (property_writer.cpp).
-    GSLIB_SENTINEL_WINDOW = 1.0e21
+    # (strict inequality per the GSLIB convention — see gslib_ref.py
+    # reference-fact table, got-20260802092630). The reader (LoadGslibFile,
+    # read_inc_file.cpp) converts those to NaN, so accepting them at write
+    # time would silently corrupt the round-trip (probe: SaveGSLIBCubes
+    # [2.0e21] → LoadGslibFile [NaN]).
     for Key in PointSet.keys():
         arr = PointSet[Key]
-        if not numpy.all(numpy.isfinite(arr)) or numpy.any(numpy.abs(arr) > GSLIB_SENTINEL_WINDOW):
+        if not numpy.all(numpy.isfinite(arr)) or numpy.any(is_gslib_missing_sentinel(arr)):
             raise ValueError(
                 f"SaveGSLIBPointSet: property '{Key}' contains non-finite values "
                 f"(NaN or Inf) or values outside the GSLIB ±{GSLIB_SENTINEL_WINDOW:g} "
@@ -421,17 +420,14 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g", basedir=None
             "SaveGSLIBCubes: All properties in GSLIB dictionary must have equal size"
         )
 
-    # F-32/F-29: reject non-finite values before writing, matching the C++
-    # writer contract (property_writer.cpp write_value). GSLIB has no NaN/Inf
-    # representation; writing them produces a file the loader refuses to read.
     # F-29: ALSO reject FINITE values outside the ±1.0e21 sentinel window
-    # (strict inequality per the GSLIB convention). The reader
-    # (LoadGslibFile, read_inc_file.cpp) converts those to NaN, so accepting
-    # them at write time would silently corrupt the round-trip.
-    GSLIB_SENTINEL_WINDOW = 1.0e21
+    # (strict inequality per the GSLIB convention — see gslib_ref.py
+    # reference-fact table, got-20260802092630). The reader (LoadGslibFile,
+    # read_inc_file.cpp) converts those to NaN, so accepting them at write
+    # time would silently corrupt the round-trip.
     for Key in CubesDictionary.keys():
         arr = CubesDictionary[Key]
-        if not numpy.all(numpy.isfinite(arr)) or numpy.any(numpy.abs(arr) > GSLIB_SENTINEL_WINDOW):
+        if not numpy.all(numpy.isfinite(arr)) or numpy.any(is_gslib_missing_sentinel(arr)):
             raise ValueError(
                 f"SaveGSLIBCubes: property '{Key}' contains non-finite values "
                 f"(NaN or Inf) or values outside the GSLIB ±{GSLIB_SENTINEL_WINDOW:g} "
@@ -910,7 +906,7 @@ def LoadGslibFile(filename, property_size, basedir=None):
         # downstream mean/variogram/kriging do not silently compute with
         # third-party sentinel magnitudes. Matches the C++ fast reader
         # (read_inc_file.cpp:287-305) and get_gslib_property.
-        out_of_window = numpy.abs(data) > 1.0e21
+        out_of_window = is_gslib_missing_sentinel(data)
         data[out_of_window] = numpy.nan
 
         for j, key in enumerate(list_prop):

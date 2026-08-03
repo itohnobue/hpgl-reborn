@@ -77,6 +77,10 @@ from .ffi_adapter import (
 from .ffi_adapter import (
     create_ind_masked_array as _create_hpgl_ind_masked_array,
 )
+from .gslib_ref import (
+    GSLIB_SENTINEL_WINDOW,
+    is_gslib_missing_sentinel,
+)
 from .validation import (
     GridValidator,
     ParameterValidator,
@@ -688,17 +692,17 @@ def _load_prop_cont_slow(filename, undefined_value, basedir=None):
                     # Use math.isnan() to detect NaN sentinel values reliably.
                     # F-M18/M-16: values outside the ±1.0e21 window are missing
                     # sentinels in addition to exact undefined_value matches
-                    # (strict inequality per the GSLIB convention, matching the
-                    # C++ fast reader read_inc_file.cpp:298-303 and
-                    # get_gslib_property). NaN-aware: comparisons with NaN are
-                    # false, so a NaN value is only masked when undefined_value
-                    # is itself NaN (consistent with the C++ reader, which
-                    # leaves NaN cells informed otherwise).
+                    # (strict inequality per the GSLIB convention — see
+                    # gslib_ref.py reference-fact table, got-20260802092630).
+                    # NaN-aware: comparisons with NaN are false, so a NaN value
+                    # is only masked when undefined_value is itself NaN
+                    # (consistent with the C++ reader, which leaves NaN cells
+                    # informed otherwise).
                     if (
                         (math.isnan(undefined_value) and math.isnan(val))
                         or val == undefined_value
-                        or val < -1.0e21
-                        or val > 1.0e21
+                        or val < -GSLIB_SENTINEL_WINDOW
+                        or val > GSLIB_SENTINEL_WINDOW
                     ):
                         mask.append(0)
                     else:
@@ -2506,15 +2510,16 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
         )
     informed_array = numpy.zeros(prop.shape, dtype=numpy.uint8)
     # F-M18: GSLIB missing-value trimming — values outside the ±1.0e21
-    # window (strict inequality per the GSLIB convention "less than
-    # -1.0e21 or greater than 1.0e21") are missing sentinels in addition
-    # to exact undefined_value matches, matching the C++ fast reader
-    # (read_inc_file.cpp:287-305). NaN sentinels are handled separately
-    # since NaN != NaN.
+    # window (strict inequality per the GSLIB convention; see gslib_ref.py
+    # reference-fact table, got-20260802092630) are missing sentinels in
+    # addition to exact undefined_value matches, matching the C++ fast
+    # reader (read_inc_file.cpp:287-305). NaN sentinels are handled
+    # separately since NaN != NaN.
+    out_of_window = is_gslib_missing_sentinel(prop)
     if numpy.isnan(undefined_value):
-        uninformed = numpy.isnan(prop) | (prop < -1.0e21) | (prop > 1.0e21)
+        uninformed = numpy.isnan(prop) | out_of_window
     else:
-        uninformed = (prop == undefined_value) | (prop < -1.0e21) | (prop > 1.0e21)
+        uninformed = (prop == undefined_value) | out_of_window
     informed_array = numpy.where(uninformed, 0, 1).astype(numpy.uint8)
     return (prop_dict[prop_name], informed_array)
 

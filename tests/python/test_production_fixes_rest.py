@@ -143,7 +143,7 @@ class TestVersionMetadata:
         else:
             # No source tree: the metadata lookup must run; a
             # PackageNotFoundError falls back to the documented literal.
-            expected = "2.0.3"
+            expected = "2.0.4"
 
             def _raise_not_found(name):
                 raise importlib.metadata.PackageNotFoundError(name)

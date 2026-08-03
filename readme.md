@@ -1,4 +1,4 @@
-# HPGL Reborn - High Performance Geostatistics Library (v2.0.3)
+# HPGL Reborn - High Performance Geostatistics Library (v2.0.4)
 
 ## Table of Contents
 

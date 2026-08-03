@@ -119,14 +119,14 @@ try:
     from importlib.metadata import PackageNotFoundError  # noqa: E402
     from importlib.metadata import version as _get_version
 except ImportError:  # pragma: no cover - pre-3.8 fallback
-    __version__ = _source_version_value or "2.0.3"
+    __version__ = _source_version_value or "2.0.4"
 else:
     if _source_version_value is not None:
         # II-28: the source tree is authoritative when present — a stale
         # installed dist-info must not make __version__ disagree with the
         # code actually imported (pre-fix: __init__.py:66-72 read
         # importlib.metadata unconditionally, reporting 1.6.0 against
-        # 2.0.3 source/wheel). PRIOR_FIX_ATTEMPT bde1e24 narrowed the
+        # 2.0.4 source/wheel). PRIOR_FIX_ATTEMPT bde1e24 narrowed the
         # except clause only and could not fix stale metadata.
         __version__ = _source_version_value
     else:
@@ -134,9 +134,9 @@ else:
             __version__ = _get_version("hpgl")
         except PackageNotFoundError:
             logging.warning(
-                "hpgl package not found via importlib.metadata; falling back to default version 2.0.3"
+                "hpgl package not found via importlib.metadata; falling back to default version 2.0.4"
             )
-            __version__ = "2.0.3"
+            __version__ = "2.0.4"
 
 __all__ = [
     # Kriging algorithms

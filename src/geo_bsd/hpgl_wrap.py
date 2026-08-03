@@ -540,6 +540,19 @@ _hpgl_so.hpgl_set_thread_num.argtypes = [C.c_int]
 _hpgl_so.hpgl_get_thread_num.restype = C.c_int
 _hpgl_so.hpgl_get_thread_num.argtypes = []
 
+# C-API validation registry (pat-20260802223236). The generated completeness
+# test (test_api_validation_registry.py) walks the exported hpgl_* symbols and
+# fails when any entry point is missing a registry row — a new entry point
+# without mirror-validation is a test-time failure, not a silent recurrence.
+_hpgl_so.hpgl_get_api_validation_registry_count.restype = C.c_int
+_hpgl_so.hpgl_get_api_validation_registry_count.argtypes = []
+
+_hpgl_so.hpgl_get_api_validation_registry_name.restype = C.c_char_p
+_hpgl_so.hpgl_get_api_validation_registry_name.argtypes = [C.c_int]
+
+_hpgl_so.hpgl_get_api_validation_registry_validation.restype = C.c_char_p
+_hpgl_so.hpgl_get_api_validation_registry_validation.argtypes = [C.c_int]
+
 _hpgl_so.hpgl_read_inc_file_float.restype = C.c_int
 _hpgl_so.hpgl_read_inc_file_float.argtypes = [
     C.c_char_p,

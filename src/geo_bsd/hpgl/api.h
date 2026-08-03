@@ -166,9 +166,42 @@ struct hpgl_kriging_stats_t
 	double m_speed_nps;
 };
 
+// GSLIB missing-value sentinel window (got-20260802092630 — single
+// reference-fact table for the GSLIB contract). Per the GSLIB convention
+// ("less than -1.0e21 or greater than 1.0e21"), a value with magnitude
+// STRICTLY greater than GSLIB_SENTINEL_WINDOW is a missing sentinel;
+// an exact ±1.0e21 value is a real (extreme) data value. Every reader
+// (read_inc_file.cpp, get_gslib_property, LoadGslibFile) and writer
+// (property_writer.cpp, SaveGSLIBCubes) MUST use this constant — a new
+// path that hardcodes its own window is a fresh drift instance.
+#define HPGL_GSLIB_SENTINEL_WINDOW 1.0e21
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// ============================================================================
+// C-API validation registry (pat-20260802223236 — recurring class: entry
+// points that don't validate what the Python wrapper validates).
+//
+// EVERY exported hpgl_* entry point MUST register a row here (in api.cpp
+// HPGL_VALIDATION_REGISTRY). The generated completeness test walks the
+// api.h declarations AND the library's exported symbols and fails when any
+// entry point is missing a registry row, so forgetting the mirror-validation
+// for a NEW entry point becomes a test-time failure instead of a silent
+// recurrence. The registry is data-only (no execution); it is the
+// single source of truth for "which entry points exist and what they
+// validate".
+// ============================================================================
+
+/// Number of rows in the C-API validation registry.
+HPGL_API int hpgl_get_api_validation_registry_count();
+
+/// Name of the entry point at registry ``index`` (0-based).
+HPGL_API const char * hpgl_get_api_validation_registry_name(int index);
+
+/// Validation summary of the entry point at registry ``index`` (0-based).
+HPGL_API const char * hpgl_get_api_validation_registry_validation(int index);
 
 // NOTE: Global error state is protected by internal mutex + thread_local
 // caching (see api_helpers.cpp). Python ctypes caller snapshots the message
