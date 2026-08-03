@@ -311,6 +311,61 @@ if(NOT MSVC)
     list(FILTER HPGL_CORE_SOURCES EXCLUDE REGEX ".*stdafx.cpp$")
 endif()
 
+# III-27: automated GLOB <-> vcxproj sync check. The MSVC project
+# (src/msvc/hpgl.vcxproj) lists every source explicitly, so a new .cpp added
+# to src/geo_bsd/hpgl/ is picked up by this GLOB on CMake builds but silently
+# missing on MSVC builds (undefined symbols / missing functionality on
+# Windows) — the header comment above says "no automated sync", which made
+# the drift invisible until a Windows user hit it. Fail configure with a
+# precise diff instead. stdafx.cpp is the precompiled-header TU, listed in
+# the vcxproj with PrecompiledHeader=Create and filtered from non-MSVC GLOB
+# results — excluded from the comparison on both sides.
+set(_hpgl_vcxproj_path "${CMAKE_CURRENT_SOURCE_DIR}/src/msvc/hpgl.vcxproj")
+if(EXISTS "${_hpgl_vcxproj_path}")
+    file(STRINGS "${_hpgl_vcxproj_path}" _hpgl_vcx_lines REGEX "ClCompile Include=")
+    set(_hpgl_vcx_sources "")
+    foreach(_line IN LISTS _hpgl_vcx_lines)
+        if(_line MATCHES "ClCompile Include=\"([^\"]+)\"")
+            set(_hpgl_vcx_rel "${CMAKE_MATCH_1}")
+            string(REPLACE "\\" "/" _hpgl_vcx_rel "${_hpgl_vcx_rel}")      # ..\geo_bsd\hpgl\x.cpp -> ../geo_bsd/hpgl/x.cpp
+            string(REPLACE "../" "" _hpgl_vcx_rel "${_hpgl_vcx_rel}")      # geo_bsd/hpgl/x.cpp
+            set(_hpgl_vcx_rel "src/${_hpgl_vcx_rel}")                      # src/geo_bsd/hpgl/x.cpp
+            list(APPEND _hpgl_vcx_sources "${_hpgl_vcx_rel}")
+        endif()
+    endforeach()
+    list(REMOVE_ITEM _hpgl_vcx_sources "src/geo_bsd/hpgl/stdafx.cpp")
+    set(_hpgl_glob_relative "")
+    foreach(_src IN LISTS HPGL_CORE_SOURCES)
+        file(RELATIVE_PATH _rel "${CMAKE_CURRENT_SOURCE_DIR}" "${_src}")
+        list(APPEND _hpgl_glob_relative "${_rel}")
+    endforeach()
+    list(REMOVE_ITEM _hpgl_glob_relative "src/geo_bsd/hpgl/stdafx.cpp")
+    list(SORT _hpgl_vcx_sources)
+    list(SORT _hpgl_glob_relative)
+    if(NOT _hpgl_vcx_sources STREQUAL _hpgl_glob_relative)
+        set(_hpgl_missing "")
+        set(_hpgl_extra "")
+        foreach(_vcx IN LISTS _hpgl_vcx_sources)
+            list(FIND _hpgl_glob_relative "${_vcx}" _idx)
+            if(_idx EQUAL -1)
+                list(APPEND _hpgl_extra "${_vcx}")
+            endif()
+        endforeach()
+        foreach(_glob IN LISTS _hpgl_glob_relative)
+            list(FIND _hpgl_vcx_sources "${_glob}" _idx)
+            if(_idx EQUAL -1)
+                list(APPEND _hpgl_missing "${_glob}")
+            endif()
+        endforeach()
+        message(FATAL_ERROR
+            "GLOB <-> vcxproj sync check FAILED (src/msvc/hpgl.vcxproj):\n"
+            "  In vcxproj but not in the source GLOB: ${_hpgl_extra}\n"
+            "  In the source GLOB but not in vcxproj: ${_hpgl_missing}\n"
+            "  Add/remove the corresponding <ClCompile Include=...> entry in src/msvc/hpgl.vcxproj.")
+    endif()
+    message(STATUS "vcxproj sync check: OK (${_hpgl_vcx_sources} matches source GLOB)")
+endif()
+
 # ============================================================================
 # Library: hpgl_core
 # ============================================================================
@@ -332,6 +387,29 @@ if(NOT SKBUILD)
     set_target_properties(hpgl_core PROPERTIES
         VERSION "${PROJECT_VERSION}"
         SOVERSION "${PROJECT_VERSION_MAJOR}"
+    )
+endif()
+
+# II-25: Windows CMake builds. Two defects fixed:
+#  1. No DEBUG_POSTFIX — Debug and Release both emitted hpgl.dll, so a Debug
+#     build silently overwrote the Release DLL (name collision) and neither
+#     was distinguishable; the vcxproj convention is hpgl_d.dll for Debug.
+#  2. No deploy step — CMake's install() places DLLs under the install
+#     prefix, which Python's _safe_load_library() (searches ref_path.parent)
+#     never looks at. build.bat copies DLLs to src/geo_bsd; the CMake path
+#     must do the same so CMake-built DLLs are findable at runtime.
+#     PREFIX "" matches the MSVC default (no lib prefix) and the vcxproj
+#     output names (hpgl.dll / hpgl_d.dll).
+if(WIN32)
+    set_target_properties(hpgl_core PROPERTIES
+        PREFIX ""
+        DEBUG_POSTFIX "_d"
+    )
+    add_custom_command(TARGET hpgl_core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:hpgl_core>
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/"
+        COMMENT "Deploying hpgl DLL to src/geo_bsd (Python runtime location)"
     )
 endif()
 
@@ -511,6 +589,16 @@ if(HPGL_BUILD_VARIOGRAM)
         set_target_properties(hpgl_variogram PROPERTIES
             PREFIX ""
             OUTPUT_NAME "_cvariogram"
+            # II-25: Debug builds emit _cvariogram_d.dll (matching the vcxproj
+            # convention) so Debug/Release do not name-collide, and deploy the
+            # built DLL to the Python runtime location.
+            DEBUG_POSTFIX "_d"
+        )
+        add_custom_command(TARGET hpgl_variogram POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:hpgl_variogram>
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/"
+            COMMENT "Deploying _cvariogram DLL to src/geo_bsd (Python runtime location)"
         )
     elseif(UNIX)
         # On Unix, Python expects underscore prefix for extension modules

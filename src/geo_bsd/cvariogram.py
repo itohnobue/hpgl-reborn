@@ -99,11 +99,30 @@ def _snapshot_cvar_error():
     cleared by _check_cvar_error's clear-on-consume; the flag also covers
     stale libraries that lack cvar_clear_last_error) so a fresh identical
     error in a new call window raises instead of being suppressed as stale.
+
+    III-32: on a STALE library (no cvar_clear_last_error) the clear-on-
+    consume in _check_cvar_error is a NO-OP — the C++ error from the
+    raising call is still set. A forced None snapshot would then make that
+    persistent error look NEW on every subsequent call, permanently
+    poisoning all later calls with spurious RuntimeErrors. When clear is
+    unavailable, snapshot the CURRENT (persistent) error so a subsequent
+    successful call suppresses it as stale instead of locking out.
     """
     with _cvar_error_snapshot_lock:
         if getattr(_cvar_error_local, "_cvar_last_check_raised", False):
-            _cvar_error_local._cvar_error_snapshot = None
             _cvar_error_local._cvar_last_check_raised = False
+            if hasattr(cvar, "cvar_clear_last_error"):
+                # Clear-on-consume succeeded (fresh library): the C++ error
+                # was emptied, so a fresh identical error in a new call
+                # window raises (F-37).
+                _cvar_error_local._cvar_error_snapshot = None
+            else:
+                # III-32: stale library without cvar_clear_last_error — the
+                # C++ error from the raising call is still set (clear was a
+                # no-op). Snapshot the CURRENT error so a subsequent call
+                # (successful or failing with the same persistent message)
+                # suppresses it as stale rather than locking out forever.
+                _cvar_error_local._cvar_error_snapshot = cvar.cvar_get_last_error()
         else:
             _cvar_error_local._cvar_error_snapshot = cvar.cvar_get_last_error()
 
@@ -245,7 +264,7 @@ cvar.calc_variograms.restype = None
 cvar.calc_variograms.argtypes = [
     C.POINTER(variogram_search_template_t),
     C.POINTER(hard_data_t),
-    NC.ndpointer(dtype=numpy.float32),
+    NC.ndpointer(dtype=numpy.float32, flags=["W"]),
     C.c_int,
     C.c_int,
 ]
@@ -254,7 +273,7 @@ cvar.calc_variograms_from_point_set.restype = None
 cvar.calc_variograms_from_point_set.argtypes = [
     C.POINTER(variogram_search_template_t),
     C.POINTER(cont_point_set_t),
-    NC.ndpointer(dtype=numpy.float32),
+    NC.ndpointer(dtype=numpy.float32, flags=["W"]),
     C.c_int,
 ]
 
@@ -508,6 +527,18 @@ def CalcVariograms(templ, hard_data, percent=100, seed=None):
             f"CalcVariograms: hard_data[0].shape {hard_data[0].shape} does not match "
             f"hard_data[1].shape {hard_data[1].shape}"
         )
+    # III-16: the C++ grid scan silently SKIPS non-finite informed values
+    # (variograms.cpp:690,704 `if (!std::isfinite(v1)) continue;`), producing
+    # a silently under-counted variogram, while the pure-Python path raises
+    # ValueError (variogram.py:830-835). Reject non-finite INFORMED cells at
+    # the FFI boundary for parity. Masked-out cells may legitimately hold
+    # sentinel garbage (e.g. -999 / NaN "undefined" values), and the C++
+    # never reads them — only informed cells are validated.
+    if not numpy.all(numpy.isfinite(hard_data[0][hard_data[1] != 0])):
+        raise ValueError(
+            "CalcVariograms: hard_data[0] contains NaN or Inf values in "
+            "informed (mask != 0) cells"
+        )
     variogram = numpy.array([0] * templ.num_lags, dtype="float32")
 
     hd = checked_create(
@@ -531,7 +562,7 @@ def CalcVariograms(templ, hard_data, percent=100, seed=None):
             _seeded.argtypes = [
                 C.POINTER(variogram_search_template_t),
                 C.POINTER(hard_data_t),
-                NC.ndpointer(dtype=numpy.float32),
+                NC.ndpointer(dtype=numpy.float32, flags=["W"]),
                 C.c_int,
                 C.c_int,
                 C.c_uint64,
@@ -614,9 +645,41 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
                 f"CalcVariogramsFromPointSet: point_set['{key}'] must be "
                 f"1-dimensional, got {arr.ndim}d"
             )
+    # III-16: the C++ point-set scan silently SKIPS non-finite property
+    # values (variograms.cpp:899 `if (!std::isfinite(v1) || !std::isfinite(v2))
+    # continue;`), producing a silently under-counted variogram, while the
+    # pure-Python path raises ValueError (variogram.py:830-835). Point sets
+    # have no mask — every point is used — so validate all property values
+    # for parity at the FFI boundary.
+    if not numpy.all(numpy.isfinite(point_set["Property"])):
+        raise ValueError(
+            "CalcVariogramsFromPointSet: point_set['Property'] contains "
+            "NaN or Inf values"
+        )
     point_set = {key: numpy.ascontiguousarray(arr) for key, arr in point_set.items()}
     if variogram is None:
         variogram = numpy.array([0] * templ.num_lags, dtype="float32")
+    else:
+        # II-40: caller-provided output buffer size must match num_lags. The
+        # C++ kernel silently computes min(num_lags, result_length)
+        # (variograms.cpp:821-823), so an undersized buffer truncates the
+        # variogram (lags_borders has num_lags entries, variogram has fewer)
+        # with no error. Reject before the call.
+        if variogram.size != templ.num_lags:
+            raise ValueError(
+                f"CalcVariogramsFromPointSet: variogram buffer size "
+                f"{variogram.size} does not match num_lags {templ.num_lags} "
+                f"(returned tuple would be truncated/mismatched)"
+            )
+    # III-39: the C++ kernel writes into the caller's variogram buffer via a
+    # raw float pointer. A read-only buffer is silently mutated (or SIGBUS
+    # on a true read-only mmap) — reject before the call, mirroring the
+    # output-buffer writeability enforcement on the calc ndpointers below.
+    if not variogram.flags["W"]:
+        raise ValueError(
+            "CalcVariogramsFromPointSet: variogram buffer must be writable "
+            "(read-only output buffer would be silently mutated or SIGBUS)"
+        )
 
     ps = checked_create(
         cont_point_set_t,
@@ -721,6 +784,15 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
     layers = [numpy.ascontiguousarray(layer) for layer in layers]
     if not (result.flags["C_CONTIGUOUS"] or result.flags["F_CONTIGUOUS"]):
         raise ValueError("CStackLayers: result must be a contiguous float32 array")
+    # III-39: the C++ kernel writes into the caller's result buffer via a
+    # raw float pointer. A read-only buffer is silently mutated (or SIGBUS
+    # on a true read-only mmap) — reject before the call, mirroring the
+    # writeability enforcement on the calc output ndpointers above.
+    if not result.flags["W"]:
+        raise ValueError(
+            "CStackLayers: result must be a writable float32 array "
+            "(read-only output buffer would be silently mutated or SIGBUS)"
+        )
     layers2 = []
     for layer in layers:
         layers2.append(_create_float_data(layer))

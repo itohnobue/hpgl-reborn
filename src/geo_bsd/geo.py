@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+# III-24: postponed evaluation of annotations is required for Python 3.9
+# (declared-supported, requires-python >=3.9). Without it the module-level
+# PEP 604 union below (`_last_kriging_stats: dict | None = None`) is
+# evaluated at import time and raises TypeError on 3.9 (type.__or__ landed
+# in 3.10). Other package modules (config.py, ffi_adapter.py, validation.py)
+# already carry this future import.
+from __future__ import annotations
+
 import functools
 import logging
 import math
@@ -236,11 +244,20 @@ class ContProperty:
             raise ValueError(
                 f"ContProperty data must be 1D or 3D, got {ndarray.ndim}D"
             )
-        if not numpy.all(numpy.isfinite(ndarray)):
+        # III-11: the isfinite check must run on the STORED float32 array,
+        # not the pre-downcast view. A float64 value such as 1e300 passes
+        # the float64 check but overflows to inf in the float32 downcast
+        # (numpy.require emits only a RuntimeWarning), silently storing inf
+        # — which then propagates NaN through calc_mean and other consumers.
+        # errstate keeps that intermediate warning out of the user's way:
+        # the ValueError below is the authoritative signal.
+        with numpy.errstate(over="ignore", invalid="ignore"):
+            stored = numpy.require(ndarray, "float32", "F")
+        if not numpy.all(numpy.isfinite(stored)):
             raise ValueError("ContProperty data contains NaN or Inf values")
         # Bypass property setters: validation is already done above,
         # and self.validate() below covers F/W/A checks.
-        object.__setattr__(self, '_data', numpy.require(data, "float32", "F"))
+        object.__setattr__(self, '_data', stored)
         object.__setattr__(self, '_mask', numpy.require(mask, "uint8", "F"))
         self.validate()
 
@@ -277,6 +294,49 @@ class ContProperty:
             return self.mask
         else:
             raise RuntimeError("Index out of range.")
+
+
+def _validate_indicator_data(ndarray, func_name):
+    """Validate indicator values BEFORE the uint8 conversion (F-23/II-37).
+
+    Shared by the ``IndProperty`` constructor and the public ``data``
+    setter so both enforce the same invariants: 1D/3D ndim, finite values,
+    values in [0, 255], and integrality. numpy.require(..., "uint8") would
+    otherwise silently wrap out-of-range values (300 -> 44) and truncate
+    fractional values (1.5 -> 1) before any range check could fire,
+    defeating the indicator-range invariant.
+
+    Args:
+        ndarray: Raw input (array-like) to validate.
+        func_name: Caller name for error messages.
+
+    Returns:
+        numpy.ndarray: The validated array (asarray view of the input).
+
+    Raises:
+        ValueError: If ndim is not 1 or 3, or any value is non-finite,
+            outside [0, 255], or non-integral.
+    """
+    ndarray = numpy.asarray(ndarray)
+    if ndarray.ndim not in (1, 3):
+        raise ValueError(
+            f"{func_name}: IndProperty data must be 1D or 3D, got {ndarray.ndim}D"
+        )
+    # Validate NaN/Inf before uint8 conversion which silently maps NaN→0.
+    if not numpy.all(numpy.isfinite(numpy.asarray(ndarray, dtype=float))):
+        raise ValueError(f"{func_name}: IndProperty data contains NaN or Inf values")
+    # Validate values are in [0, 255] and integral BEFORE the uint8
+    # conversion: numpy.require(..., "uint8") silently wraps out-of-range
+    # values (256.0 → 0) and truncates fractional values (1.5 → 1), which
+    # would defeat the post-conversion range check below.
+    if numpy.any(ndarray < 0) or numpy.any(ndarray > 255):
+        raise ValueError(
+            f"{func_name}: IndProperty data values must be in [0, 255], "
+            "got values outside the range"
+        )
+    if not numpy.all(numpy.equal(ndarray, numpy.floor(ndarray))):
+        raise ValueError(f"{func_name}: IndProperty data must contain integer values")
+    return ndarray
 
 
 class IndProperty:
@@ -318,7 +378,12 @@ class IndProperty:
 
     @data.setter
     def data(self, val):
-        arr = numpy.require(val, "uint8", "F")
+        # F-23 + II-37: reuse the constructor's full validation block BEFORE
+        # the uint8 conversion — numpy.require(..., "uint8") would otherwise
+        # silently truncate fractional values (1.5 -> 1) and wrap out-of-range
+        # values (300 -> 44), defeating the indicator-range invariant below.
+        ndarray = _validate_indicator_data(val, "IndProperty.data")
+        arr = numpy.require(ndarray, "uint8", "F")
         checkFWA(arr)
         # 2-M-15: a caller replacing data with a different shape would
         # desynchronize data/mask — the C++ backend indexes both arrays with
@@ -326,6 +391,21 @@ class IndProperty:
         if hasattr(self, "_mask") and arr.shape != self._mask.shape:
             raise ValueError(
                 f"Data shape {arr.shape} does not match mask shape {self._mask.shape}"
+            )
+        # F-23: re-validate the indicator-range invariant for the new data —
+        # the constructor enforces it (e19aa84) but the setter previously
+        # accepted out-of-range values that the C++ backend then silently
+        # dropped via equality matching.
+        if (
+            hasattr(self, "indicator_count")
+            and numpy.sum(
+                numpy.bitwise_and((self._mask > 0), (arr >= self.indicator_count))
+            )
+            > 0
+        ):
+            raise RuntimeError(
+                "Property contains some indicators outside of [0..%s] range."
+                % (self.indicator_count - 1)
             )
         self._data = arr
 
@@ -343,6 +423,24 @@ class IndProperty:
             raise ValueError(
                 f"Mask shape {arr.shape} does not match data shape {self._data.shape}"
             )
+        # II-36: re-validate the indicator-range invariant for newly-informed
+        # cells. The constructor checks only cells that are informed AT
+        # CONSTRUCTION, so a masked cell holding the 255 sentinel (the
+        # library's own masked-cell convention — _load_prop_ind_slow and
+        # append_mask) is legal while masked; unmasking it via this setter
+        # would produce an informed out-of-range value that the constructor
+        # rejects (e19aa84 added the constructor check only).
+        if (
+            hasattr(self, "indicator_count")
+            and numpy.sum(
+                numpy.bitwise_and((arr > 0), (self._data >= self.indicator_count))
+            )
+            > 0
+        ):
+            raise RuntimeError(
+                "Property contains some indicators outside of [0..%s] range."
+                % (self.indicator_count - 1)
+            )
         self._mask = arr
 
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray, indicator_count: int):
@@ -352,28 +450,8 @@ class IndProperty:
             )
         # Use asarray() so lists/tuples are supported; ndim check must
         # happen before require() which may change ndim.
-        ndarray = numpy.asarray(data)
+        ndarray = _validate_indicator_data(data, "IndProperty")
         mask_array = numpy.asarray(mask)
-        if ndarray.ndim not in (1, 3):
-            raise ValueError(
-                f"IndProperty data must be 1D or 3D, got {ndarray.ndim}D"
-            )
-        # Validate NaN/Inf before uint8 conversion which silently maps NaN→0.
-        if not numpy.all(numpy.isfinite(numpy.asarray(ndarray, dtype=float))):
-            raise ValueError("IndProperty data contains NaN or Inf values")
-        # Validate values are in [0, 255] and integral BEFORE the uint8
-        # conversion: numpy.require(..., "uint8") silently wraps out-of-range
-        # values (256.0 → 0) and truncates fractional values (1.5 → 1), which
-        # would defeat the post-conversion range check below.
-        if numpy.any(ndarray < 0) or numpy.any(ndarray > 255):
-            raise ValueError(
-                "IndProperty data values must be in [0, 255], "
-                "got values outside the range"
-            )
-        if not numpy.all(numpy.equal(ndarray, numpy.floor(ndarray))):
-            raise ValueError(
-                "IndProperty data must contain integer values"
-            )
         # Bypass property setters: validation is already done above,
         # and self.validate() below covers F/W/A checks.
         object.__setattr__(self, '_data', numpy.require(ndarray, "uint8", "F"))
@@ -497,7 +575,7 @@ class CovarianceModel:
         ``spherical`` (0), ``exponential`` (1), or ``gaussian`` (2).
         Default is spherical.
     ranges : tuple of float, optional
-        Anisotropy ranges ``(rx, ry, rz)``. Default ``(0, 0, 0)``.
+        Anisotropy ranges ``(rx, ry, rz)``. Default ``(1, 1, 1)``.
     angles : tuple of float, optional
         Anisotropy angles ``(azimuth, dip, rotation)`` in degrees.
         Default ``(0.0, 0.0, 0.0)``.
@@ -524,7 +602,7 @@ class CovarianceModel:
     def __init__(
         self,
         type: int = 0,
-        ranges: tuple = (0, 0, 0),
+        ranges: tuple = (1, 1, 1),
         angles: tuple = (0.0, 0.0, 0.0),
         sill: float = 1.0,
         nugget: float = 0.0,
@@ -873,14 +951,20 @@ def write_property(
 
     if isinstance(prop, ContProperty):
         marr = _create_hpgl_cont_masked_array(prop, None)
-        rc = call_write_inc_file_float(
-            marr, safe_path.encode("utf-8"), undefined_value, prop_name.encode("utf-8")
-        )
-        if rc != 0:
-            raise RuntimeError(
-                "write_property failed: "
-                + call_get_last_exception_message().decode("utf-8", errors="replace")
+        # II-35: hold _hpgl_call_lock around the FFI call AND the error-message
+        # read. The C++ writers set a process-global locale during the file
+        # write (locale_keeper); without serialization a concurrent I/O call on
+        # another thread can interleave its parse window with this call's,
+        # producing silently wrong output and corrupting the process locale.
+        with _hpgl_call_lock:
+            rc = call_write_inc_file_float(
+                marr, safe_path.encode("utf-8"), undefined_value, prop_name.encode("utf-8")
             )
+            if rc != 0:
+                raise RuntimeError(
+                    "write_property failed: "
+                    + call_get_last_exception_message().decode("utf-8", errors="replace")
+                )
     else:
         # F-44: validate indicator values BEFORE the uint8 conversion so an
         # out-of-range value raises a clear ValueError instead of a confusing
@@ -893,22 +977,29 @@ def write_property(
                 f"write_property: undefined_value must be an integer in [0, 255] "
                 f"for indicator (byte) properties, got {undefined_value!r}"
             )
+        # II-38: a sentinel that collides with a mapped category makes
+        # informed cells indistinguishable from masked ones on read-back.
+        _validate_undefined_value_collision(
+            undefined_value, indicator_values, "write_property"
+        )
         # Security: Keep reference to indicator_values array
         ind_arr = numpy.array(indicator_values, dtype="uint8")
         marr = _create_hpgl_ind_masked_array(prop, None)
-        rc = call_write_inc_file_byte(
-            marr,
-            safe_path.encode("utf-8"),
-            undefined_value,
-            prop_name.encode("utf-8"),
-            ind_arr,
-            len(indicator_values),
-        )
-        if rc != 0:
-            raise RuntimeError(
-                "write_property failed: "
-                + call_get_last_exception_message().decode("utf-8", errors="replace")
+        # II-35: serialize the FFI call + error-message read (locale race).
+        with _hpgl_call_lock:
+            rc = call_write_inc_file_byte(
+                marr,
+                safe_path.encode("utf-8"),
+                undefined_value,
+                prop_name.encode("utf-8"),
+                ind_arr,
+                len(indicator_values),
             )
+            if rc != 0:
+                raise RuntimeError(
+                    "write_property failed: "
+                    + call_get_last_exception_message().decode("utf-8", errors="replace")
+                )
 
 
 @accepts_tuple("prop", 0)
@@ -933,17 +1024,19 @@ def write_gslib_property(
     )
 
     if isinstance(prop, ContProperty):
-        rc = call_write_gslib_cont_property(
-            _create_hpgl_cont_masked_array(prop, None),
-            safe_path.encode("utf-8"),
-            prop_name.encode("utf-8"),
-            undefined_value,
-        )
-        if rc != 0:
-            raise RuntimeError(
-                "write_gslib_property failed: "
-                + call_get_last_exception_message().decode("utf-8", errors="replace")
+        # II-35: serialize the FFI call + error-message read (locale race).
+        with _hpgl_call_lock:
+            rc = call_write_gslib_cont_property(
+                _create_hpgl_cont_masked_array(prop, None),
+                safe_path.encode("utf-8"),
+                prop_name.encode("utf-8"),
+                undefined_value,
             )
+            if rc != 0:
+                raise RuntimeError(
+                    "write_gslib_property failed: "
+                    + call_get_last_exception_message().decode("utf-8", errors="replace")
+                )
     else:
         # F-44 + I2-55: validate indicator values and undefined_value before
         # the FFI call — _c_array(c_ubyte, ...) silently wraps 300 -> 44 and
@@ -954,19 +1047,25 @@ def write_gslib_property(
                 f"write_gslib_property: undefined_value must be an integer in "
                 f"[0, 255] for indicator (byte) properties, got {undefined_value!r}"
             )
-        rc = call_write_gslib_byte_property(
-            _create_hpgl_ind_masked_array(prop, None),
-            safe_path.encode("utf-8"),
-            prop_name.encode("utf-8"),
-            undefined_value,
-            _c_array(c_ubyte, len(indicator_values), indicator_values),
-            len(indicator_values),
+        # II-38: sentinel/category collision → silent round-trip data loss.
+        _validate_undefined_value_collision(
+            undefined_value, indicator_values, "write_gslib_property"
         )
-        if rc != 0:
-            raise RuntimeError(
-                "write_gslib_property failed: "
-                + call_get_last_exception_message().decode("utf-8", errors="replace")
+        # II-35: serialize the FFI call + error-message read (locale race).
+        with _hpgl_call_lock:
+            rc = call_write_gslib_byte_property(
+                _create_hpgl_ind_masked_array(prop, None),
+                safe_path.encode("utf-8"),
+                prop_name.encode("utf-8"),
+                undefined_value,
+                _c_array(c_ubyte, len(indicator_values), indicator_values),
+                len(indicator_values),
             )
+            if rc != 0:
+                raise RuntimeError(
+                    "write_gslib_property failed: "
+                    + call_get_last_exception_message().decode("utf-8", errors="replace")
+                )
 
 
 def _validate_indicator_values(indicator_values, func_name):
@@ -1007,6 +1106,33 @@ def _is_valid_byte_value(value):
     if isinstance(value, (float, numpy.floating)):
         return numpy.isfinite(value) and float(value).is_integer() and 0 <= value <= 255
     return False
+
+
+def _validate_undefined_value_collision(undefined_value, indicator_values, func_name):
+    """Reject an undefined_value that collides with a mapped indicator value (II-38).
+
+    The byte writers emit ``remap_table[val]`` for informed cells and
+    ``undefined_value`` for uninformed ones; if an informed cell's mapped
+    output value equals the undefined sentinel, the file is read back with
+    that cell marked MASKED — silent round-trip data loss. The prior fix
+    (3ad77ee) added ``_validate_indicator_values`` / ``_is_valid_byte_value``
+    but missed this collision.
+
+    Args:
+        undefined_value: The undefined sentinel for the byte write.
+        indicator_values: List of mapped indicator output values.
+        func_name: Caller name for error messages.
+
+    Raises:
+        ValueError: If ``int(undefined_value)`` appears in ``indicator_values``.
+    """
+    if int(undefined_value) in {int(v) for v in indicator_values}:
+        raise ValueError(
+            f"{func_name}: undefined_value {undefined_value!r} is also an "
+            f"indicator value; informed cells written with this value would be "
+            f"read back as masked (silent round-trip data loss). Choose an "
+            f"undefined_value that is not in indicator_values."
+        )
 
 
 def _validate_and_reshape_fallback(result, size, func_name):
@@ -1147,14 +1273,20 @@ def read_inc_file_float(filename, undefined_value, size, basedir=None):
     data = numpy.zeros(total_elements, dtype="float32", order="F")
     mask = numpy.zeros(total_elements, dtype="uint8", order="F")
 
-    rc = call_read_inc_file_float(
-        safe_path.encode("utf-8"), undefined_value, total_elements, data, mask
-    )
-    if rc != 0:
-        raise RuntimeError(
-            "read_inc_file_float failed: "
-            + call_get_last_exception_message().decode("utf-8", errors="replace")
+    # II-35: serialize the FFI call + error-message read. The C++ fast
+    # reader sets a process-global locale for the sscanf parse window
+    # (locale_keeper); concurrent I/O from another thread could interleave
+    # with this call's parse window and silently corrupt the numeric parse
+    # AND the process locale on non-glibc platforms.
+    with _hpgl_call_lock:
+        rc = call_read_inc_file_float(
+            safe_path.encode("utf-8"), undefined_value, total_elements, data, mask
         )
+        if rc != 0:
+            raise RuntimeError(
+                "read_inc_file_float failed: "
+                + call_get_last_exception_message().decode("utf-8", errors="replace")
+            )
 
     return ContProperty(data, mask)
 
@@ -1186,20 +1318,23 @@ def read_inc_file_byte(filename, undefined_value, size, indicator_values, basedi
         )
     data = numpy.zeros(total_elements, dtype="uint8", order="F")
     mask = numpy.zeros(total_elements, dtype="uint8", order="F")
-    rc = call_read_inc_file_byte(
-        safe_path.encode("utf-8"),
-        undefined_value,
-        total_elements,
-        data,
-        mask,
-        numpy.array(indicator_values, dtype="uint8"),
-        len(indicator_values),
-    )
-    if rc != 0:
-        raise RuntimeError(
-            "read_inc_file_byte failed: "
-            + call_get_last_exception_message().decode("utf-8", errors="replace")
+    # II-35: serialize the FFI call + error-message read (locale race —
+    # see read_inc_file_float).
+    with _hpgl_call_lock:
+        rc = call_read_inc_file_byte(
+            safe_path.encode("utf-8"),
+            undefined_value,
+            total_elements,
+            data,
+            mask,
+            numpy.array(indicator_values, dtype="uint8"),
+            len(indicator_values),
         )
+        if rc != 0:
+            raise RuntimeError(
+                "read_inc_file_byte failed: "
+                + call_get_last_exception_message().decode("utf-8", errors="replace")
+            )
     return IndProperty(data, mask, len(indicator_values))
 
 
@@ -1373,6 +1508,12 @@ def calc_mean(prop):
     masked = numpy.ma.masked_where(prop.mask == 0, prop.data)
     if masked.count() == 0:
         raise ValueError("calc_mean: no informed values (all masked)")
+    # III-11: a non-finite informed value (NaN/Inf) would silently produce
+    # NaN from the masked mean — reject it instead. Reachable via the
+    # ContProperty.data setter (which is deliberately the NaN injection
+    # path for the kriging wrappers' own validation tests).
+    if not numpy.all(numpy.isfinite(prop.data)):
+        raise ValueError("calc_mean: prop.data contains NaN or Inf values")
     return float(masked.mean())
 
 
@@ -2001,12 +2142,17 @@ def indicator_kriging(prop, grid, data, marginal_probs):
         # uses a single set of covariance/radius/neighbour parameters.
         # Only data[0] configuration is used; data[1] is discarded.
         # marginal_probs[0] is passed as-is; median_ik derives p1 = 1 - p0.
+        # III-12: honor the "data[1] is ignored" contract even in the
+        # warning — data[1] may be a minimal dict (no radiuses/cov_model),
+        # which the validation above deliberately skips (validate_entries =
+        # data[:1]). .get() keeps the minimal-dict path from KeyError-ing.
+        data1 = data[1]
         logger.warning(
             "indicator_kriging: 2-category case redirects to median_ik. "
             "data[1] configuration (radiuses=%s, cov_model=%s) is ignored; "
             "only data[0] params are used.",
-            data[1]["radiuses"],
-            data[1]["cov_model"],
+            data1.get("radiuses", "<not provided>"),
+            data1.get("cov_model", "<not provided>"),
         )
         return median_ik(
             prop,

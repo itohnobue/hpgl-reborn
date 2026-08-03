@@ -9,6 +9,10 @@
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+# F-47 pattern: geo_bsd lives in the repo's src/ directory (it is not
+# installed in the environment); without this the `from geo_bsd import *`
+# below fails with ModuleNotFoundError.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 import numpy as np
 from geo_bsd import *
@@ -125,7 +129,10 @@ print("SK_transformed_data result:", krigged_transformed_data[0])
 # print("XVariogram:")
 # print(Variogram1)
 
-back_krigged_transformed_data = np.copy(krigged_transformed_data)
+# F-10: np.copy of a ContProperty produces a 0-d object array and
+# back_krigged_transformed_data[0] raises IndexError. Copy the underlying
+# .data/.mask arrays instead and rebuild the property.
+back_krigged_transformed_data = ContProperty(np.copy(krigged_transformed_data[0]), np.copy(krigged_transformed_data[1]))
 # Back transform to original data space
 back_cdf_transform(back_krigged_transformed_data[0], props, values, -99)
 
@@ -166,14 +173,20 @@ back_cdf_transform(back_krigged_transformed_data[0], props, values, -99)
 # Generate a simulated field by performing SGS on transformed property with 315 azimuth direction
 variogram2 = CovarianceModel(type=covariance.spherical, ranges=(80, 20, 1), sill=1, angles=(315, 0, 0))
 sgs_params = {"cov_model": variogram2, "radiuses": (160, 40, 1), "max_neighbours": 20}
-sgs_transformed_data = sgs_simulation(prop_transformed, grid, seed=542783, **sgs_params)
+# F-12: sgs_simulation requires cdf_data. The transformed property is
+# already in normal-score space, so pass None (no CDF transform).
+sgs_transformed_data = sgs_simulation(prop_transformed, grid, seed=542783, cdf_data=None, **sgs_params)
 print("SGS_transformed_data result:", sgs_transformed_data[0])
 
 # Generate a simulated field by performing SGS on initial property with 315 azimuth direction
-sgs_initial_data = sgs_simulation(prop_initial, grid, seed=542783, **sgs_params)
+# F-12: the initial (raw) property needs a CdfData so the simulation can
+# map raw values <-> normal scores internally (II-01 makes calc_cdf valid).
+sgs_initial_data = sgs_simulation(prop_initial, grid, seed=542783, cdf_data=calc_cdf(ContProperty(initial_data, array_defined)), **sgs_params)
 print("SGS_initial_data result:", sgs_initial_data[0])
 
-sgs_res = np.copy(sgs_transformed_data)
+# F-10: same np.copy fix as above — rebuild a ContProperty from copies of
+# the .data/.mask arrays before the in-place back transform.
+sgs_res = ContProperty(np.copy(sgs_transformed_data[0]), np.copy(sgs_transformed_data[1]))
 # Back transform to original data space
 back_cdf_transform(sgs_res[0], props, values, -99)
 

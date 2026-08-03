@@ -352,6 +352,48 @@ void test_2rhs_nan_in_a_rejected() {
     CHECK(!ok);
 }
 
+// II-09: near-singular-but-SPD systems must be rejected on the dpotrs_
+// success path. dpotrs_ returns INFO=0 for these matrices (they ARE SPD),
+// but the solution is garbage-huge (probe: [1.0e12, -1.0e12]) and would be
+// reported as KI_SUCCESS by SK/correlogram/cokriging without the
+// solution-quality guard. Pre-fix: ok == true. Post-fix: the magnitude
+// guard (|X|_inf > 1e10) rejects the wild solution.
+void test_1rhs_near_singular_spd_rejected() {
+    TEST("lapack_spd_solve_1rhs near-singular SPD rejected (II-09)");
+    int size = 2;
+    // A = [[1, 1-eps], [1-eps, 1]] with eps=1e-12: det ~ 2e-12 > 0 → SPD
+    // (dpotrf INFO=0) but nearly singular; the solution for B=[1,-1] is
+    // ~[1e12, -1e12] — huge garbage weights.
+    const double eps = 1e-12;
+    std::vector<double> A = {
+        1.0, 1.0 - eps,
+        1.0 - eps, 1.0
+    };
+    std::vector<double> B = { 1.0, -1.0 };
+    std::vector<double> X(size, 0.0);
+    std::vector<double> A_backup(A);
+
+    // Confirm the matrix genuinely IS SPD — dpotrf_ must succeed, otherwise
+    // this test would be exercising the gauss fallback, not the new guard.
+    {
+        char uplo = 'U';
+        integer n = size;
+        integer info = 0;
+        std::vector<double> probe(A);
+        dpotrf_(&uplo, &n, probe.data(), &n, &info);
+        CHECK(info == 0);   // SPD — dpotrs_ success path is reached
+    }
+
+    bool ok = hpgl::detail::lapack_spd_solve_1rhs(
+        A.data(), size, X.data(), B.data(),
+        A_backup.data(), "test near-singular SPD");
+
+    // Pre-fix: INFO=0 → returns true with |X| ~ 1e12. Post-fix: rejected.
+    CHECK(!ok);
+    // The guard must have caught the wild magnitude (not some other path).
+    CHECK(std::max(std::abs(X[0]), std::abs(X[1])) > 1e10 || !std::isfinite(X[0]) || !std::isfinite(X[1]));
+}
+
 // ---- Main ----
 
 int main() {
@@ -368,6 +410,9 @@ int main() {
     test_2rhs_non_spd_fallback();
     test_2rhs_singular_returns_false();
     test_2rhs_nan_in_a_rejected();
+
+    // II-09: near-singular SPD rejection on the dpotrs_ success path.
+    test_1rhs_near_singular_spd_rejected();
 
     std::printf("C++ solver entry point tests: %d run, %d failed\n",
                 g_tests_run, g_tests_failed);

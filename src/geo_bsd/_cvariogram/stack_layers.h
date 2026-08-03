@@ -93,6 +93,24 @@ void stack_layers(
 
 	std::vector<double> cumulative_k(nx*ny, 0.0);
 
+	// III-40: initialize the ENTIRE result buffer to blank_value before the
+	// layer loop. Previously every cell never touched by a deposit or
+	// erosion — notably the top-tail cells above the final surface, and any
+	// cell outside the layer x/y footprint — kept whatever the caller
+	// pre-filled: a NaN prefill produced a spurious RuntimeError from the
+	// Python wrapper's post-call NaN check (cvariogram.py:740-745), and
+	// buffer reuse silently corrupted stale cells. Writing a defined value
+	// for every cell makes the output independent of the input buffer
+	// contents. The deposit/erosion branches below overwrite the cells they
+	// own; everything else (top tail, out-of-footprint) stays blank_value.
+	for (int z = 0; z < result.m_data_shape[2]; ++z)
+		for (int y = 0; y < result.m_data_shape[1]; ++y)
+			for (int x = 0; x < result.m_data_shape[0]; ++x)
+			{
+				int cube_index = result.m_data_strides[0]*x + result.m_data_strides[1]*y + result.m_data_strides[2]*z;
+				result.m_data[cube_index] = static_cast<float>(blank_value);
+			}
+
 	for(size_t layer = 0; layer < thick_layers.size(); layer++)
 	{
 		for(int i = 0; i < nx; i++)
@@ -159,7 +177,7 @@ void stack_layers(
 						}
 				}
 				// negative layer
-				else
+				else if(thickness < 0)
 				{
 					int k_start = static_cast<int>(ceil(new_k));
 					if (k_start < 0)
@@ -173,6 +191,16 @@ void stack_layers(
 					cumulative_k[map_index] = new_k;
 
 				}
+				// II-57: zero-thickness layer (thickness == 0.0). Previously
+				// the else branch treated 0.0 as erosion and blanked the
+				// column from ceil(new_k) up — including the ENTIRE column
+				// when a zero-thickness layer came first — a silent behavior
+				// change vs the same model without the zero layer (realistic
+				// in pinch-out / empty-column data). A zero-thickness layer
+				// deposits nothing and erodes nothing: skip it, keeping the
+				// prior cell values (blank_value or the last layer marker).
+				// cumulative_k is unchanged because new_k == old_k here.
+				// else: thickness == 0.0 -> no-op
 			}
 		}
 	}

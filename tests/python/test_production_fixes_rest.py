@@ -38,55 +38,173 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 
 # =============================================================================
-# M-23 — __version__ must track installed metadata
+# II-28 — __version__ must report the SOURCE version, not stale dist metadata
 # =============================================================================
 
 
+def _pyproject_version():
+    """Read the version from the source tree's pyproject.toml, or None.
+
+    Independent of geo_bsd._source_version — the test asserts the reported
+    __version__ against the pyproject literal, so it must not share the
+    implementation under test.
+    """
+    pyproject = (
+        Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
+    )
+    if not pyproject.is_file():
+        return None
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:  # pragma: no cover - Python 3.9/3.10
+        try:
+            import tomli as tomllib  # type: ignore[no-redef]
+        except ImportError:
+            tomllib = None
+    if tomllib is not None:
+        try:
+            with pyproject.open("rb") as fh:
+                data = tomllib.load(fh)
+        except (OSError, ValueError, TypeError):
+            data = {}
+        version = data.get("project", {}).get("version")
+        if isinstance(version, str) and version:
+            return version
+    return None
+
+
 class TestVersionMetadata:
-    def test_version_matches_installed_metadata(self):
-        """M-23: __version__ must equal importlib.metadata.version("hpgl")
-        when the package is installed.
+    def test_version_matches_source_when_source_tree_present(self):
+        """II-28: when the source tree is reachable, __version__ must equal
+        pyproject.toml's version — the code actually imported.
 
-        Pre-fix: __init__.py:66 unconditionally overwrote __version__ with
-        the hardcoded "2.0.1" after the metadata lookup (fallback dedented
-        out of the except block), so a version bump in pyproject.toml never
-        surfaced and the installed metadata was ignored.
+        Pre-fix: __init__.py:66-72 read importlib.metadata.version("hpgl"),
+        which returns the INSTALLED dist version; a stale hpgl-1.6.0.dist-
+        info in the venv made __version__ == '1.6.0' against 2.0.2 source.
         """
-        from importlib.metadata import PackageNotFoundError, version
-
         import geo_bsd
 
-        try:
-            meta = version("hpgl")
-        except PackageNotFoundError:
-            # Not installed in this environment — the fallback assertion in
-            # test_version_fallback_only_on_not_found covers the path.
-            pytest.skip("hpgl not installed via importlib.metadata")
-        assert geo_bsd.__version__ == meta, (
-            f"geo_bsd.__version__ ({geo_bsd.__version__!r}) must match "
-            f"importlib.metadata.version('hpgl') ({meta!r})"
+        expected = _pyproject_version()
+        if expected is None:
+            pytest.skip("pyproject.toml not reachable from source tree")
+        assert geo_bsd.__version__ == expected, (
+            f"geo_bsd.__version__ ({geo_bsd.__version__!r}) must match the "
+            f"source pyproject.toml version ({expected!r}) — a stale "
+            f"installed dist-info must not shadow the source version"
         )
 
-    def test_version_fallback_only_on_not_found(self, monkeypatch):
-        """M-23: the hardcoded fallback applies ONLY when the metadata lookup
-        raises PackageNotFoundError — never unconditionally."""
+    def test_version_prefers_source_over_stale_installed_metadata(self, monkeypatch):
+        """II-28 regression: even when importlib.metadata reports a stale
+        (different) installed version, __version__ must report the source.
+
+        Pre-fix this test failed: reloading with a monkeypatched metadata
+        version of '9.9.9' made __version__ == '9.9.9'. Post-fix the source
+        tree is authoritative, so '9.9.9' is never consulted.
+        """
+        import importlib
         import importlib.metadata
 
         import geo_bsd
 
-        def _raise_not_found(name):
-            raise importlib.metadata.PackageNotFoundError(name)
+        expected = _pyproject_version()
+        if expected is None:
+            pytest.skip("pyproject.toml not reachable from source tree")
 
-        # Force the fallback path: re-import the package with a metadata
-        # lookup that always raises. importlib.reload re-executes __init__.py
-        # (submodules are cached, so only the version block re-runs).
-        monkeypatch.setattr(importlib.metadata, "version", _raise_not_found)
+        monkeypatch.setattr(importlib.metadata, "version", lambda name: "9.9.9")
         importlib.reload(geo_bsd)
-        assert geo_bsd.__version__ == "2.0.2"
+        assert geo_bsd.__version__ == expected, (
+            f"stale installed metadata ('9.9.9') must not override the source "
+            f"version ({expected!r}); got {geo_bsd.__version__!r}"
+        )
+        # Restore the live lookup so subsequent tests see the real state.
+        monkeypatch.undo()
+        importlib.reload(geo_bsd)
+        assert isinstance(geo_bsd.__version__, str) and geo_bsd.__version__
+
+    def test_version_fallback_only_on_not_found(self, monkeypatch):
+        """The installed-metadata lookup falls back to the source version
+        when the package metadata cannot be found (or when running without a
+        source tree). The fallback literal must stay consistent with
+        pyproject.toml."""
+        import importlib.metadata
+
+        import geo_bsd
+
+        expected = _pyproject_version()
+        if expected is not None:
+            # Source tree present: the metadata monkeypatch is never even
+            # consulted — __version__ is the source version regardless.
+            def _raise_not_found(name):
+                raise importlib.metadata.PackageNotFoundError(name)
+
+            monkeypatch.setattr(importlib.metadata, "version", _raise_not_found)
+            importlib.reload(geo_bsd)
+            assert geo_bsd.__version__ == expected
+        else:
+            # No source tree: the metadata lookup must run; a
+            # PackageNotFoundError falls back to the documented literal.
+            expected = "2.0.3"
+
+            def _raise_not_found(name):
+                raise importlib.metadata.PackageNotFoundError(name)
+
+            monkeypatch.setattr(importlib.metadata, "version", _raise_not_found)
+            importlib.reload(geo_bsd)
+            assert geo_bsd.__version__ == expected
         # Restore the live lookup so subsequent tests see the metadata version.
         monkeypatch.undo()
         importlib.reload(geo_bsd)
         assert isinstance(geo_bsd.__version__, str) and geo_bsd.__version__
+
+
+# =============================================================================
+# II-29 — gtsim_2ind exported at the package top level
+# =============================================================================
+
+
+class TestGtsim2IndTopLevelExport:
+    def test_gtsim_2ind_accessible_at_top_level(self):
+        """II-29: gtsim_2ind is a first-class simulation entry point; it must
+        be reachable as geo_bsd.gtsim_2ind like its siblings
+        sgs_simulation / sis_simulation. Pre-fix it raised AttributeError."""
+        import geo_bsd
+
+        assert callable(geo_bsd.gtsim_2ind), (
+            "geo_bsd.gtsim_2ind must be exported at the top level (II-29)"
+        )
+
+    def test_gtsim_2ind_in_all(self):
+        """The export must be part of the package's public __all__."""
+        import geo_bsd
+
+        assert "gtsim_2ind" in geo_bsd.__all__
+
+
+# =============================================================================
+# II-30 — SGSConfig/SISConfig/GTSIMConfig exported at the package top level
+# =============================================================================
+
+
+class TestConfigClassesTopLevelExport:
+    @pytest.mark.parametrize(
+        "name", ["SGSConfig", "SISConfig", "GTSIMConfig"]
+    )
+    def test_config_class_accessible_at_top_level(self, name):
+        """II-30: the frozen-config dataclasses are documented public API
+        (config.py); they must be reachable as geo_bsd.<name>. Pre-fix each
+        raised AttributeError at the top level."""
+        import geo_bsd
+
+        assert hasattr(geo_bsd, name), (
+            f"geo_bsd.{name} must be exported at the top level (II-30)"
+        )
+
+    def test_config_classes_in_all(self):
+        """The exports must be part of the package's public __all__."""
+        import geo_bsd
+
+        for name in ("SGSConfig", "SISConfig", "GTSIMConfig"):
+            assert name in geo_bsd.__all__
 
 
 # =============================================================================
@@ -952,3 +1070,800 @@ class TestLoadGslibFileTruncationMemory:
         with pytest.raises(RuntimeError, match="expected 3"):
             LoadGslibFile(str(fpath), property_size=(1, 1, 3), basedir=str(tmp_path))
 
+
+# =============================================================================
+# F-20 / II-10 — cokriging NaN-proof guards + zero-variance primary-only
+# degradation (simple_cokriging_markI.cpp)
+# =============================================================================
+
+
+class TestCokrigingKrigingHardening:
+    """Python-side regression tests for the C++ kriging fixes in
+    simple_cokriging_markI.cpp (F-20 isfinite-first entry guards, II-10
+    secondary-equation drop on non-strictly-positive variance).
+
+    The C++ entry-point guards are the chokepoint for direct-C++ callers; the
+    Python validation layer already rejects NaN correlation_coef/variance
+    (validate_correlation_coef / validate_variance), so these tests exercise
+    the end-to-end behavior the C++ fixes guarantee: NaN correlation_coef is
+    rejected at the C++ boundary even when the Python gate is bypassed, and
+    secondary_variance=0 (Python-ACCEPTED; validation.py:962 rejects only < 0)
+    degrades to primary-only kriging instead of raising RuntimeError from a
+    singular system.
+    """
+
+    def test_cokriging_markI_zero_secondary_variance_degrades_primary_only(self):
+        """II-10: secondary_variance=0.0 must NOT produce a singular system.
+
+        Pre-fix: build_system wrote the raw 0 to the diagonal → singular
+        matrix every node → KI_SINGULARITY → _check_kriging_failure_stats
+        raises RuntimeError ("kriging system was singular"). Post-fix: the
+        secondary equation is dropped entirely (primary-only kriging) → the
+        call succeeds with finite output.
+        """
+        from geo_bsd.geo import (
+            ContProperty,
+            CovarianceModel,
+            SugarboxGrid,
+            covariance,
+            simple_cokriging_markI,
+        )
+
+        grid = SugarboxGrid(x=5, y=5, z=3)
+        size = 5 * 5 * 3
+        rng = np.random.RandomState(7)
+        primary = ContProperty(
+            rng.rand(size).astype("float32") * 100,
+            np.ones(size, dtype="uint8"),
+        )
+        # Secondary fully informed — the variance, not the data, is the trigger.
+        secondary = ContProperty(
+            rng.rand(size).astype("float32") * 100,
+            np.ones(size, dtype="uint8"),
+        )
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(3.0, 3.0, 2.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.1,
+        )
+
+        result = simple_cokriging_markI(
+            prop=primary,
+            grid=grid,
+            radiuses=(3, 3, 2),
+            max_neighbours=8,
+            cov_model=cov_model,
+            secondary_data=secondary,
+            primary_mean=50.0,
+            secondary_mean=50.0,
+            secondary_variance=0.0,  # Python-ACCEPTED; pre-fix singular → RuntimeError
+            correlation_coef=0.5,
+        )
+        assert isinstance(result, ContProperty)
+        assert result.data.size == size
+        assert np.all(np.isfinite(result.data.astype("float64")))
+
+    def test_cokriging_markI_negative_variance_rejected(self):
+        """Negative secondary_variance must be rejected end-to-end.
+
+        F-20 hardened the C++ entry guard (isfinite-first) so a negative/NaN
+        variance can never reach the kernel even for direct-C++ callers. The
+        Python path surfaces the rejection via the validation layer and/or the
+        C++ entry guard (both fire); the assertion is that an error is raised
+        rather than silent NaN output.
+        """
+        from geo_bsd.geo import (
+            ContProperty,
+            CovarianceModel,
+            SugarboxGrid,
+            covariance,
+            simple_cokriging_markI,
+        )
+        from geo_bsd.validation import CriticalValidationError
+
+        grid = SugarboxGrid(x=5, y=5, z=3)
+        size = 5 * 5 * 3
+        rng = np.random.RandomState(8)
+        primary = ContProperty(
+            rng.rand(size).astype("float32") * 100,
+            np.ones(size, dtype="uint8"),
+        )
+        secondary = ContProperty(
+            rng.rand(size).astype("float32") * 100,
+            np.ones(size, dtype="uint8"),
+        )
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(3.0, 3.0, 2.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.1,
+        )
+
+        with pytest.raises((ValueError, RuntimeError, CriticalValidationError)):
+            simple_cokriging_markI(
+                prop=primary,
+                grid=grid,
+                radiuses=(3, 3, 2),
+                max_neighbours=8,
+                cov_model=cov_model,
+                secondary_data=secondary,
+                primary_mean=50.0,
+                secondary_mean=50.0,
+                secondary_variance=-1.0,
+                correlation_coef=0.5,
+            )
+
+
+class TestCovModelRangeRatioOverflow:
+    """III-09: anisotropy range ratios that overflow to Inf/NaN must be
+    rejected. Pre-fix, ranges {1e10, 1e-300, 1} produced ratio 1e310 → Inf
+    scale → silent NaN/0 covariance for direct cov_model consumers. The
+    Python validation layer accepts these ranges (each is finite and within
+    MIN_RANGE/MAX_RANGE), so the C++ guard is the first line of defense; a
+    kriging call that constructs the model must surface the C++ exception as
+    a RuntimeError (via the FFI error guard), not silently emit NaN."""
+
+    def test_cokriging_markI_overflowing_range_ratio_surfaces_error(self):
+        from geo_bsd.geo import (
+            ContProperty,
+            CovarianceModel,
+            SugarboxGrid,
+            covariance,
+            simple_cokriging_markI,
+        )
+        from geo_bsd.validation import CriticalValidationError
+
+        grid = SugarboxGrid(x=3, y=3, z=1)
+        size = 3 * 3 * 1
+        rng = np.random.RandomState(9)
+        primary = ContProperty(
+            rng.rand(size).astype("float32") * 100,
+            np.ones(size, dtype="uint8"),
+        )
+        secondary = ContProperty(
+            rng.rand(size).astype("float32") * 100,
+            np.ones(size, dtype="uint8"),
+        )
+        # ranges[0]/ranges[1] = 1e10/1e-300 = 1e310 → Inf ratio. Python
+        # validation accepts each range (finite, >= MIN_RANGE, <= MAX_RANGE).
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(1e10, 1e-300, 1.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.0,
+        )
+
+        with pytest.raises((RuntimeError, ValueError, CriticalValidationError)):
+            simple_cokriging_markI(
+                prop=primary,
+                grid=grid,
+                radiuses=(1, 1, 1),
+                max_neighbours=4,
+                cov_model=cov_model,
+                secondary_data=secondary,
+                primary_mean=50.0,
+                secondary_mean=50.0,
+                secondary_variance=1.0,
+                correlation_coef=0.5,
+            )
+
+
+
+# =============================================================================
+# III-37 — SGS scalar stationary mean must be CDF-transformed
+# =============================================================================
+
+
+@pytest.mark.hpgl
+class TestSgsScalarMeanCdfTransform:
+    """III-37: the user-supplied scalar stationary mean is in DATA space while
+    the hard data have already been forward-transformed to normal-score space.
+    Pre-fix the raw data-space mean was used in normal-score space, pinning
+    simulated cells to the CDF's max datum (live probe: frac==100 = 0.122 with
+    mean=50 vs 0 with mean=None). The existing test_sgs_with_scalar_mean
+    assertion (\"closer to 50 than 0\") passes for the wrong reason because a
+    pinned-at-max output is still closer to 50 than to 0.
+    """
+
+    def test_scalar_mean_does_not_pin_to_cdf_max(self):
+        import geo_bsd.geo as geo
+        from geo_bsd.cdf import CdfData
+        from geo_bsd.sgs import sgs_simulation
+
+        grid = geo.SugarboxGrid(x=10, y=10, z=5)  # 500 cells
+        size = grid.x * grid.y * grid.z
+        rng = np.random.RandomState(42)
+        data = rng.rand(size).astype("float32") * 100
+        mask = np.zeros(size, dtype="uint8")
+        mask[::10] = 1  # sparse: 10% informed
+        prop = geo.ContProperty(data, mask)
+        prop.fix_shape(grid)
+        cov_model = geo.CovarianceModel(
+            type=geo.covariance.spherical,
+            ranges=(5.0, 5.0, 3.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.1,
+        )
+        cdf = CdfData(
+            np.array([0.0, 20.0, 40.0, 60.0, 80.0, 100.0], dtype="float32"),
+            np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0], dtype="float32"),
+        )
+        result = sgs_simulation(
+            prop=prop,
+            grid=grid,
+            cdf_data=cdf,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=cov_model,
+            seed=42,
+            mean=50.0,
+        )
+        assert np.all(np.isfinite(result.data.astype("float64")))
+        simulated = result.data[result.mask > 0].astype("float64")
+        # Pre-fix: a data-space mean of 50 was treated as normal score 50
+        # (CDF prob ≈ 1.0), pinning a large fraction of simulated cells to the
+        # CDF max datum (100). Post-fix the mean is transformed to normal-score
+        # 0, so essentially no cells land on the max datum.
+        frac_at_max = float(np.mean(simulated >= 99.999))
+        assert frac_at_max < 0.05, (
+            f"SGS mean=50: {frac_at_max:.3f} of simulated cells pinned to CDF max "
+            f"(mean {np.mean(simulated):.2f})"
+        )
+
+
+# =============================================================================
+# III-10 — fast reader must not split long tokens into two values
+# =============================================================================
+
+
+@pytest.mark.hpgl
+class TestReadIncFileLongToken:
+    """III-10: the C++ fast reader's token_stream_t truncated tokens longer
+    than the 255-char caller buffer and resumed mid-token, silently splitting
+    one logical value into two (a 294-char \"0.000...5\" became 0.0 AND 5.0).
+    On a truncated file the split produced exactly `size` tokens, so the I2-56
+    count check never fired and load_cont_property returned SILENT WRONG DATA.
+    Post-fix the reader rejects the over-long token; the slow-parser fallback
+    (or the count-mismatch validation) then raises instead.
+    """
+
+    def test_truncated_long_token_raises_not_silent_wrong_data(self, tmp_path):
+        import geo_bsd.geo as geo
+
+        token = "0." + "0" * 291 + "5"  # 294 chars, value ~5e-292
+        # Truncated file: 9 real tokens + the 294-char token = 10 tokens at
+        # size=10. Pre-fix the split produced exactly 10 tokens → rc==0 with
+        # [1,2,3,4,0,5,6,7,8,9] (true 5e-292 replaced by 0.0 AND 5.0).
+        content = "long\n1 2 3 4 " + token + " 6 7 8 9"  # no trailing '\n'
+        fpath = tmp_path / "longtoken.inc"
+        fpath.write_text(content)
+
+        with pytest.raises((RuntimeError, ValueError)):
+            geo.load_cont_property(str(fpath), -99.0, size=10, basedir=str(tmp_path))
+
+
+# =============================================================================
+# F-39: Python validation must reject covariance range <= 0 at the boundary
+# =============================================================================
+
+
+class TestCovarianceRangeRejectsZero:
+    """F-39: C++ set_ranges rejects range <= 0; the Python validator must
+    reject it with a clean CriticalValidationError instead of deferring to
+    a late RuntimeError inside the FFI call. Pre-fix MIN_RANGE=0.0 and the
+    `r < MIN_RANGE` comparison accepted range=0.0."""
+
+    def test_validate_covariance_rejects_zero_range(self):
+        from geo_bsd.validation import CriticalValidationError, ParameterValidator
+
+        with pytest.raises(CriticalValidationError, match="must be > 0"):
+            ParameterValidator.validate_covariance_parameters(
+                sill=1.0, nugget=0.0, ranges=(0.0, 5.0, 5.0)
+            )
+
+    def test_validate_covariance_rejects_negative_range(self):
+        from geo_bsd.validation import CriticalValidationError, ParameterValidator
+
+        with pytest.raises(CriticalValidationError, match="must be > 0"):
+            ParameterValidator.validate_covariance_parameters(
+                sill=1.0, nugget=0.0, ranges=(-1.0, 5.0, 5.0)
+            )
+
+    def test_validate_covariance_accepts_positive_range(self):
+        from geo_bsd.validation import ParameterValidator
+
+        # Tiny-but-positive ranges (including the III-09 ratio-overflow
+        # config's 1e-300) must still pass the range bound; the ratio guard
+        # is the C++ layer's concern.
+        ParameterValidator.validate_covariance_parameters(
+            sill=1.0, nugget=0.0, ranges=(1e-300, 1.0, 1.0)
+        )
+        ParameterValidator.validate_covariance_parameters(
+            sill=1.0, nugget=0.0, ranges=(5.0, 5.0, 5.0)
+        )
+
+    def test_covariance_model_rejects_zero_range(self):
+        """End-to-end: CovarianceModel(ranges=(0,...)) must raise a clean
+        CriticalValidationError at construction (F-39 boundary)."""
+        from geo_bsd.geo import CovarianceModel, covariance
+        from geo_bsd.validation import CriticalValidationError
+
+        with pytest.raises(CriticalValidationError, match="must be > 0"):
+            CovarianceModel(
+                type=covariance.spherical, ranges=(0.0, 5.0, 5.0), sill=1.0
+            )
+
+
+# =============================================================================
+# F-03: CubeScan total-work cap regression (library-level guard)
+# =============================================================================
+
+
+class TestCubeScanGridWorkCap:
+    def test_cube_scan_rejects_total_work_over_cap(self, monkeypatch):
+        import geo_bsd.variogram as v
+
+        monkeypatch.setattr(v, "MAX_TOTAL_GRID_WORK", 500.0)
+        ell = v.TVEllipsoid(R1=10, R2=5, R3=3)
+        templ = v.TVVariogramSearchTemplate(
+            LagWidth=1.0, LagSeparation=1.0, TolDistance=1.0,
+            NumLags=3, Ellipsoid=ell,
+        )
+        mask = np.ones((10, 10, 5), dtype="uint8")  # 500 cells, >1 offset
+        with pytest.raises(ValueError, match="total grid work"):
+            v.CubeScan(templ, mask, lambda *a: np.zeros(3), None)
+
+
+# =============================================================================
+# F-04/III-19/II-43/II-44/II-45: sample-script regressions
+# =============================================================================
+
+
+class TestSampleScriptImports:
+    """F-04: the gtsim/gtsimk scripts import _clone_prop/_create_cont_prop
+    from geo_bsd.geo (the defining module), not the geo_bsd top level."""
+
+    def test_gtsim_imports_from_geo_module(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "gtsim_script",
+            str(REPO_ROOT / "sample-scripts/gtsim.py"),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        assert mod is not None
+
+    def test_gtsim_script_source_uses_geo_import(self):
+        with open(REPO_ROOT / "sample-scripts/gtsim.py") as fh:
+            src = fh.read()
+        assert "from geo_bsd.geo import _clone_prop" in src
+        assert "from geo_bsd import (" in src
+        with open(REPO_ROOT / "sample-scripts/gtsimk.py") as fh:
+            src = fh.read()
+        assert "from geo_bsd.geo import _clone_prop, _create_cont_prop" in src
+        with open(REPO_ROOT / "sample-scripts/gtsimk_const_prob.py") as fh:
+            src = fh.read()
+        assert "from geo_bsd.geo import _clone_prop" in src
+
+    def test_gtsim_truncation_uses_elif(self):
+        """II-43: the double-if truncation (all-facies-1 when tk <= 0) must
+        be an if/elif."""
+        with open(REPO_ROOT / "sample-scripts/gtsim.py") as fh:
+            src = fh.read()
+        # After the first `if <` block there must be an `else:` (not a
+        # second independent `if >=`).
+        assert "        else:" in src
+
+    def test_gtsim_pk_only_flow_validates_sgs_params(self):
+        """III-20: the user-pk flow must not leave sgs_params=None (`**None`
+        TypeError)."""
+        with open(REPO_ROOT / "sample-scripts/gtsim.py") as fh:
+            src = fh.read()
+        assert "sgs_params is None" in src
+        assert "raise ValueError" in src
+
+    def test_gtsimk_truncation_snapshots_value(self):
+        """II-44: the truncation loop must compare the ORIGINAL value, not
+        the overwritten integer."""
+        with open(REPO_ROOT / "sample-scripts/gtsimk.py") as fh:
+            src = fh.read()
+        assert "value = prop1.data.flat[i]" in src
+
+    def test_gtsimk_pseudo_gaussian_value_driven(self):
+        """III-19: interval selected by the cell facies value, not the last
+        j iteration."""
+        with open(REPO_ROOT / "sample-scripts/gtsimk.py") as fh:
+            src = fh.read()
+        assert "val = int(result.data.flat[i])" in src
+
+    def test_gtsimk_pk_prop_list_form(self):
+        """II-45: user pk_prop must be a list of ContProperty (one per
+        indicator), not a single ContProperty."""
+        with open(REPO_ROOT / "sample-scripts/gtsimk.py") as fh:
+            src = fh.read()
+        assert "all(isinstance(p, ContProperty) for p in pk_prop)" in src
+
+
+# =============================================================================
+# BUILD DOMAIN — s8-fix-build regression tests
+# (F-32, II-19, II-20, II-21, II-22, II-24, II-25, II-28-coord, III-24-build,
+#  III-26, III-27, III-28, III-29, III-30, III-31)
+# =============================================================================
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _read(path: str) -> str:
+    return (REPO_ROOT / path).read_text(encoding="utf-8")
+
+
+class TestBuildShCliExitCodes:
+    """F-32: error paths must exit non-zero; --help exits 0."""
+
+    def test_unknown_argument_fails_non_zero(self):
+        """Pre-fix: './build.sh --bogus' exited 0 (usage() ended exit 0) —
+        a silent success on an invalid invocation."""
+        import shutil
+        import subprocess
+
+        if not shutil.which("bash"):
+            pytest.skip("bash not available")
+        r = subprocess.run(
+            ["bash", str(REPO_ROOT / "build.sh"), "--bogus"],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert r.returncode != 0
+        assert "Unknown argument" in (r.stdout + r.stderr)
+
+    def test_help_exits_zero(self):
+        import shutil
+        import subprocess
+
+        if not shutil.which("bash"):
+            pytest.skip("bash not available")
+        r = subprocess.run(
+            ["bash", str(REPO_ROOT / "build.sh"), "--help"],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert r.returncode == 0
+
+
+class TestSdistIncludesBuildScripts:
+    """II-19: the sdist must ship build.bat/build.sh — the README-documented
+    Windows/Unix build entry points. Pre-fix: neither was in the include
+    list, so a tarball user had no build script."""
+
+    def test_sdist_include_has_build_scripts(self):
+        import tomllib
+
+        pyproject = tomllib.loads(_read("pyproject.toml"))
+        includes = pyproject["tool"]["scikit-build"]["sdist"]["include"]
+        assert "build.bat" in includes
+        assert "build.sh" in includes
+
+
+class TestValidateEnvironmentPlatformTable:
+    """II-20: check_build_files must accept the platform's ACTUAL native
+    library extension (.dylib on macOS), not only .dll/.so — which
+    false-FAILed every healthy macOS build."""
+
+    @staticmethod
+    def _load_ve():
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "validate_environment", REPO_ROOT / "tests" / "validate_environment.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_darwin_table_contains_dylib(self):
+        ve = self._load_ve()
+        darwin = ve._NATIVE_LIB_GLOBS["darwin"]
+        assert "hpgl.dylib" in darwin
+        assert "_cvariogram.dylib" in darwin
+
+    def test_build_files_present_accepts_host_platform(self, tmp_path):
+        ve = self._load_ve()
+        key = ve._platform_lib_key()
+        hpgl_name = next(n for n in ve._NATIVE_LIB_GLOBS[key] if n.startswith("hpgl."))
+        cvar_name = next(n for n in ve._NATIVE_LIB_GLOBS[key] if n.startswith("_cvariogram."))
+        (tmp_path / hpgl_name).write_bytes(b"x")
+        (tmp_path / cvar_name).write_bytes(b"x")
+        found, cvar_found = ve._build_files_present(tmp_path)
+        assert found is True
+        assert cvar_found is True
+
+
+class TestVcxprojBlasLinkage:
+    """II-21: hpgl.vcxproj must not silently link zero BLAS/LAPACK when
+    UseMKL=false (LNK2019 from the unconditional dpotrf_/dpotrs_ calls)."""
+
+    def test_honest_comment_and_openblas_hookup(self):
+        vcx = _read("src/msvc/hpgl.vcxproj")
+        assert "OpenBLASRoot" in vcx
+        assert "openblas.lib" in vcx
+
+    def test_clear_error_when_no_blas_configured(self):
+        vcx = _read("src/msvc/hpgl.vcxproj")
+        assert "HpglCheckBlas" in vcx
+        assert "BeforeTargets=\"Link\"" in vcx
+        assert "LNK2019" in vcx
+
+
+class TestWindowsMsvcPresetRelease:
+    """II-22: the windows-msvc build preset must pin configuration=Release —
+    multi-config generators ignore CMAKE_BUILD_TYPE, so without it the preset
+    silently built Debug."""
+
+    def test_windows_msvc_build_preset_has_release_configuration(self):
+        import json
+
+        presets = json.loads(_read("CMakePresets.json"))
+        bp = next(b for b in presets["buildPresets"] if b["name"] == "windows-msvc")
+        assert bp.get("configuration") == "Release"
+
+
+class TestDeploymentTargetSingleSource:
+    """II-24: the wheel verification gate must derive the deployment target
+    from the wheel tag (accepting the documented CMAKE_OSX_DEPLOYMENT_TARGET
+    override), not reject anything but a hardcoded macosx_11_0."""
+
+    def test_wheel_gate_derives_target_from_tag(self):
+        sh = _read("build.sh")
+        assert "DEPLOYMENT_TARGET = float(f\"{tag_m.group(1)}.{tag_m.group(2)}\")" in sh
+        assert "macosx_11_0" not in sh
+
+    def test_pyproject_documents_override(self):
+        pyproject = _read("pyproject.toml")
+        assert "CMAKE_ARGS" in pyproject
+        assert "CMAKE_OSX_DEPLOYMENT_TARGET" in pyproject
+
+
+class TestCmakeWindowsDllDeploy:
+    """II-25: CMake Windows builds must deploy DLLs to src/geo_bsd (the
+    Python runtime location) and use a DEBUG_POSTFIX so Debug/Release DLLs
+    do not name-collide."""
+
+    def test_debug_postfix_and_post_build_copy(self):
+        cm = _read("CMakeLists.txt")
+        assert "DEBUG_POSTFIX" in cm
+        assert "POST_BUILD" in cm
+        assert "copy_if_different" in cm
+        assert "src/geo_bsd/" in cm
+
+
+class TestWheelSmokeVersionConsistency:
+    """II-28 (build-side coordinate): the wheel smoke test must assert the
+    installed __version__ matches the wheel filename version."""
+
+    def test_wheel_smoke_asserts_version(self):
+        sh = _read("build.sh")
+        assert "__version__" in sh
+        assert "WHEEL_VERSION" in sh
+
+
+class TestPy39GrammarSmoke:
+    """III-24 (build-side): the build pipeline must check Python 3.9 grammar
+    compatibility on both dev and wheel paths (no CI exists to catch it)."""
+
+    def test_grammar_check_wired_into_both_paths(self):
+        sh = _read("build.sh")
+        assert "py39_grammar_check" in sh
+        assert "feature_version=(3, 9)" in sh
+        assert sh.count("py39_grammar_check") >= 3  # def + wheel call + dev call
+
+
+class TestWheelLinuxRejection:
+    """III-26: --wheel must be rejected on Linux with a clear message instead
+    of failing deterministically inside the macOS-only gate."""
+
+    def test_linux_wheel_rejection_present(self):
+        sh = _read("build.sh")
+        assert "macOS-only" in sh
+        assert "cibuildwheel" in sh
+
+
+class TestVcxprojGlobSync:
+    """III-27: every .cpp under src/geo_bsd/hpgl (except stdafx.cpp) must be
+    listed in src/msvc/hpgl.vcxproj — a new source must not ship broken on
+    Windows silently."""
+
+    def test_vcxproj_matches_source_glob(self):
+        import re
+
+        cpps = {p.name for p in (REPO_ROOT / "src/geo_bsd/hpgl").glob("*.cpp")}
+        vcx = _read("src/msvc/hpgl.vcxproj")
+        listed = set(
+            re.findall(
+                r'ClCompile Include="\.\.\\geo_bsd\\hpgl\\([^"]+\.cpp)"', vcx
+            )
+        )
+        assert cpps - {"stdafx.cpp"} == listed - {"stdafx.cpp"}
+
+
+class TestLinuxRelocatabilityGate:
+    r"""III-28: the non-wheel build must run a Linux relocatability check
+    (readelf/ldd) equivalent to the macOS R-26 gate — and the gate must
+    actually FAIL on absolute non-system RPATH/RUNPATH entries.
+
+    R-01: the pre-fix sed pattern 's/.*(RPATH\|RUNPATH)[^[]*\[\(.*\)\]/\1/p'
+    mis-parsed under GNU BRE (unescaped parens literal, `\|` top-level
+    alternation) — single-entry absolute RPATH AND RUNPATH both bypassed the
+    gate with a false "PASSED". These tests pipe readelf -d fixtures through
+    the REAL gate pipeline extracted from build.sh (sed program + grep
+    filter read from the file, so a pattern regression is caught), and assert
+    the gate would FAIL (non-empty ABS) on absolute non-system paths while
+    still allowing relative $ORIGIN markers."""
+
+    RPATH_FILTER = r"^/(opt|usr/local|home/|Users/|Applications)"
+
+    @staticmethod
+    def _gate_sed_program(sh: str) -> str:
+        """Extract the sed program from build.sh's Linux gate verbatim."""
+        import re
+        m = re.search(r"sed -n '([^']+)'", sh)
+        assert m, "Linux gate sed program not found in build.sh"
+        return m.group(1)
+
+    @staticmethod
+    def _gate_grep_filter(sh: str, sed_end: int) -> str:
+        import re
+        m = re.search(r"grep -E '([^']+)'", sh[sed_end:])
+        assert m, "Linux gate grep filter not found in build.sh"
+        return m.group(1)
+
+    @staticmethod
+    def _gnu_sed() -> str:
+        r"""GNU sed (the Linux runtime) — gsed when present, else `sed` if it
+        reports GNU. macOS BSD sed lacks `\|` alternation and would not
+        faithfully execute the gate."""
+        import shutil
+        import subprocess
+        for cand in ("gsed", "sed"):
+            path = shutil.which(cand)
+            if path is None:
+                continue
+            try:
+                v = subprocess.run(
+                    [path, "--version"], capture_output=True, text=True, timeout=15
+                )
+            except OSError:
+                continue
+            if "GNU sed" in v.stdout:
+                return path
+        return ""
+
+    @staticmethod
+    def _run_gate_pipeline(sh: str, fixture_lines) -> list:
+        """Run the extracted sed|tr|grep gate pipeline over readelf -d
+        fixture lines with GNU sed. Returns the filtered absolute paths
+        (non-empty == the gate would FAIL, i.e. ABS would be set)."""
+        import re
+        import subprocess
+        sed = TestLinuxRelocatabilityGate._gnu_sed()
+        if not sed:
+            pytest.skip("GNU sed (gsed) not available — cannot exercise gate pipeline")
+        prog = TestLinuxRelocatabilityGate._gate_sed_program(sh)
+        sed_idx = sh.index(prog)
+        filter_ = TestLinuxRelocatabilityGate._gate_grep_filter(sh, sed_idx)
+        proc = subprocess.run(
+            [sed, "-n", prog],
+            input="".join(fixture_lines),
+            capture_output=True, text=True, timeout=30,
+        )
+        assert proc.returncode == 0, proc.stderr
+        # replicate: | tr ':' '\n' | grep -E '^/(opt|usr/local|home/|Users/|Applications)'
+        return [
+            part for part in proc.stdout.replace(":", "\n").split("\n")
+            if re.search(filter_, part)
+        ]
+
+    def test_linux_reloc_gate_present(self):
+        sh = _read("build.sh")
+        assert "readelf -d" in sh
+        assert "RPATH" in sh
+        # R-01: the corrected GNU BRE pattern (escaped parens, group 2) must
+        # be the program in build.sh — the pre-fix unescaped \1 variant let
+        # absolute RPATH/RUNPATH bypass the gate.
+        assert TestLinuxRelocatabilityGate._gate_sed_program(sh) == (
+            r"s/.*\(RPATH\|RUNPATH\)[^[]*\[\(.*\)\]/\2/p"
+        ), "gate sed program regressed to the broken GNU BRE variant"
+
+    def test_gate_fails_on_absolute_non_system_rpath(self):
+        """Single-entry absolute non-system RPATH must fail the gate."""
+        sh = _read("build.sh")
+        abs_paths = TestLinuxRelocatabilityGate._run_gate_pipeline(sh, [
+            " 0x000000000000000f (RPATH)            Library rpath: [/opt/OpenBLAS/lib]\n",
+        ])
+        assert "/opt/OpenBLAS/lib" in abs_paths, (
+            f"absolute RPATH bypassed the gate (filtered={abs_paths!r})"
+        )
+
+    def test_gate_fails_on_absolute_non_system_runpath(self):
+        """Single-entry absolute non-system RUNPATH must fail the gate."""
+        sh = _read("build.sh")
+        abs_paths = TestLinuxRelocatabilityGate._run_gate_pipeline(sh, [
+            " 0x000000000000001d (RUNPATH)            Library runpath: [/usr/local/lib]\n",
+        ])
+        assert "/usr/local/lib" in abs_paths, (
+            f"absolute RUNPATH bypassed the gate (filtered={abs_paths!r})"
+        )
+
+    def test_gate_fails_on_multi_entry_absolute(self):
+        """Multi-entry absolute RPATH must fail the gate (every entry)."""
+        sh = _read("build.sh")
+        abs_paths = TestLinuxRelocatabilityGate._run_gate_pipeline(sh, [
+            " 0x000000000000000f (RPATH)            Library rpath: [/opt/a:/opt/b]\n",
+        ])
+        assert "/opt/a" in abs_paths and "/opt/b" in abs_paths, (
+            f"multi-entry absolute RPATH bypassed the gate (filtered={abs_paths!r})"
+        )
+
+    def test_gate_allows_relative_origin_marker(self):
+        """$ORIGIN markers are relative and allowed — no false positive."""
+        sh = _read("build.sh")
+        abs_paths = TestLinuxRelocatabilityGate._run_gate_pipeline(sh, [
+            " 0x000000000000000f (RPATH)            Library rpath: [$ORIGIN/../lib]\n",
+        ])
+        assert abs_paths == [], (
+            f"$ORIGIN relative marker falsely flagged (filtered={abs_paths!r})"
+        )
+
+    def test_ldd_fallback_reads_resolved_path_column(self):
+        """R-01: the ldd fallback must read column 3 (the resolved path in
+        'soname => /path (0x...)' lines), not column 1 (the soname, which
+        never matches the absolute-path filter)."""
+        sh = _read("build.sh")
+        import re as _re
+        m = _re.search(r"ldd \"\$lib\"[^\n]*awk '([^']+)'", sh)
+        assert m, "ldd fallback awk program not found in build.sh"
+        awk_prog = m.group(1)
+        assert "{print $3}" in awk_prog, (
+            f"ldd fallback awk program still reads the soname column: {awk_prog!r}"
+        )
+
+
+class TestCtestExecutedInPipeline:
+    """III-29: the build pipeline must execute the registered CTest suite
+    (build.sh) / Python test suite (build.bat) — the registrations were dead
+    weight before."""
+
+    def test_build_sh_runs_ctest(self):
+        sh = _read("build.sh")
+        assert "ctest --output-on-failure" in sh
+
+    def test_build_bat_runs_pytest(self):
+        bat = _read("build.bat")
+        assert "pytest tests/python" in bat
+
+
+class TestPresetGeneratorCollision:
+    """III-30: release/debug presets must pin an explicit Ninja generator so
+    alternating standard-path and preset builds in the SAME binaryDir do not
+    hard-fail on a generator mismatch."""
+
+    def test_single_config_presets_pin_ninja(self):
+        import json
+
+        presets = json.loads(_read("CMakePresets.json"))
+        for name in ("release", "debug", "release-mkl"):
+            cp = next(c for c in presets["configurePresets"] if c["name"] == name)
+            assert cp.get("generator") == "Ninja", name
+
+
+class TestCtestPythonTargetConfig:
+    """III-31: the CTest hpgl_python_tests target must mirror run_tests.py's
+    default marker selection (-m "not slow") and set a timeout."""
+
+    def test_ctest_python_target_excludes_slow_and_times_out(self):
+        cm = _read("tests/CMakeLists.txt")
+        assert '"not slow"' in cm
+        assert "TIMEOUT" in cm

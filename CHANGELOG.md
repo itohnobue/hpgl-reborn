@@ -2,6 +2,23 @@
 
 All notable changes to HPGL Reborn.
 
+## [2.0.3] — 2026-08
+
+### Fixed
+- **Kriging / solver hardening** — NaN/Inf finiteness validation at the C API boundary (SK/LVM/SGS-LVM/SIS-LVM means, cokriging means+variance, SGS CDF internal pointers + size); SIS/indicator-kriging `marginal_prob` [0,1] gate; cokriging NaN-bypassable guards made isfinite-first + markII `primary_variance` guard; incomplete secondary-equation degradation closed (drop secondary when variance not strictly-positive-finite); per-dimension primary↔secondary shape validation; clean kriging-failure error message (no raw libstdc++ text); weight-magnitude/residual guard on the `dpotrs_` success path; range-ratio overflow guard in anisotropy transform; `select.h` abort() replaced with catchable exceptions (no more uncatchable SIGABRT)
+- **Simulation** — GTSIM truncation maps thresholds through the same empirical CDF as the SGS back-transform (correct category proportions); non-default `tk_mean`/`tk_std_dev` normalized to standard-normal space; SIS 2-category and multi-category probability clamps made NaN-safe; IK pre-correction sanitization; SGS scalar stationary mean transformed through the CDF; `max_neighbours=0` unconditional simulation no longer falls back to 1-neighbour conditioning
+- **Variogram** — CubeScan total-work cap (no multi-hour hang / 24GB mgrid); GridStyle work-cap formula corrected; fractional grid-spacing lag matching via continuous binning; CalcIndCorrelationFunction excludes soft-prob 0/1 pairs; cvariogram input isfinite validation + output buffer size/writeability enforcement; 64-bit seed honored (no mod-2^32 collision); `tol_distance` template validation; stack_layers zero-thickness + full-buffer initialization
+- **File I/O** — Windows write path atomic (temp+rename with handle closed before replace); tokenizer reassembly fixes silent token-splitting corruption at chunk boundaries; GSLIB writers reject finite out-of-window values; LoadGslibFile line-length/token bound; Cubes2PointSet equal-shape validation; CalcMean/CalcVPC isfinite gates
+- **Property / validation** — IndProperty data/mask setters re-validate the indicator-range invariant; `undefined_value` collision check; ContProperty ctor validates the stored float32 array; I/O wrappers hold the FFI lock; CovarianceModel default ranges (1,1,1) aligned with C++; Python 3.9 import fixed (PEP 604 future-import)
+- **Packaging / build** — `__version__` derived from source; `gtsim_2ind` + `SGSConfig`/`SISConfig`/`GTSIMConfig` exported at top level; Linux wheel/relocatability gates corrected (GNU-sed-safe RPATH/RUNPATH extraction, ldd column fix); CTest executed in the build pipeline; preset generator collisions resolved; sdist ships build scripts; MSVC Release config + OpenBLAS default link
+
+### Added
+- 200+ regression tests for the above across C++ and Python suites
+
+### Fixed examples/scripts
+- `solved_problems_book`: gaussian_cdf sign inversion, normal_score symmetry, cdf_transform value-rank quantiles, corr_coef bias, variance-of-mean intervals, grid Z-extent, crash-chains (np.copy, cdf_data, 2D/byte props), self-pair exclusion
+- `sample-scripts`: private-import fixes, marginal_probs arg, filename/data-path fixes, truncation loops, pk_prop flow, hard-data facies preservation
+
 ## [2.0.2] — 2026-08
 
 ### Fixed

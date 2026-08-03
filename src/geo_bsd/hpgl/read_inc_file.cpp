@@ -97,19 +97,64 @@ namespace hpgl
 						++m_pos;
 					if (m_pos >= m_len)
 						continue; // blank remainder of line — refill
-					size_t start = m_pos;
+				size_t start = m_pos;
+				size_t tok_len = 0;
+				// III-10: a token may be longer than one fgets chunk (m_line
+				// holds at most 511 chars). Accumulate across chunk boundaries
+				// so a long token is never split into two values — the old
+				// code truncated to buffer_size-1 and resumed mid-token,
+				// silently turning one logical value into two (a 294-char
+				// "0.000...5" became 0.0 AND 5.0, defeating the I2-56 count
+				// check on truncated files).
+				// R-02: the token is REASSEMBLED chunk-by-chunk into the
+				// caller's buffer as each chunk is scanned. The first III-10
+				// implementation only accumulated a LENGTH and memcpy'd from
+				// the FINAL chunk — a short token (< 256 chars) straddling the
+				// 511-char fgets boundary lost its leading bytes and gained
+				// the trailing delimiter (a "99" straddling the boundary
+				// loaded as "9" with rc==0 — silent wrong data). Copying per
+				// chunk keeps straddling tokens exact and keeps the memcpy
+				// within m_line (it never crosses m_pos, so no OOB read).
+				for (;;)
+				{
 					while (m_pos < m_len && !isspace(static_cast<unsigned char>(m_line[m_pos])))
 						++m_pos;
-					size_t tok_len = m_pos - start;
-					if (tok_len >= buffer_size)
+					const size_t chunk_len = m_pos - start;
+					if (tok_len + chunk_len >= buffer_size)
 					{
-						// Token longer than the caller's buffer: split it the
-						// way fscanf("%Ns") did (hardening, no overflow).
-						tok_len = buffer_size - 1;
-						m_pos = start + tok_len;
+						// The token cannot be represented in the caller's
+						// fixed buffer. Reject loudly instead of truncating:
+						// the Python slow-parser fallback
+						// (load_cont_property) reads tokens unbounded and
+						// loads the file correctly, so a clear error here
+						// beats silent wrong data (III-10).
+						std::ostringstream oss;
+						oss << func_name << ": token of " << (tok_len + chunk_len)
+							<< " chars exceeds the " << (buffer_size - 1)
+							<< "-char limit";
+						throw hpgl_exception(func_name, oss.str());
 					}
-					memcpy(buffer, m_line + start, tok_len);
-					buffer[tok_len] = '\0';
+					memcpy(buffer + tok_len, m_line + start, chunk_len);
+					tok_len += chunk_len;
+					// The token terminates when the scan stopped at
+					// whitespace (which includes a trailing newline) — the
+					// only case where m_pos reaches m_len is a chunk cut at
+					// the 511-char fgets limit with no newline, i.e. the
+					// token continues on the next chunk.
+					if (m_pos < m_len || (m_len > 0 && m_line[m_len - 1] == '\n'))
+						break;
+					if (m_at_end || fgets(m_line, static_cast<int>(sizeof(m_line)), m_file) == nullptr)
+					{
+						if (ferror(m_file))
+							throw hpgl_exception(func_name, "Error reading file.");
+						m_at_end = true;
+						break; // EOF terminates the token
+					}
+					m_len = strlen(m_line);
+					m_pos = 0;
+					start = 0;
+				}
+				buffer[tok_len] = '\0';
 					// Comment token anywhere in the line skips the rest of the
 					// line (preserves the historical C++ reader behaviour).
 					if (tok_len >= 2 && buffer[0] == '-' && buffer[1] == '-')

@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "hpgl"
-version = "2.0.2"
+version = "2.0.3"
 description = "High Performance Geostatistics Library - Modern C++ with Python bindings"
 readme = "readme.md"
 requires-python = ">=3.9"
@@ -113,6 +113,12 @@ cmake.args = [
     # CMake (settings in CMakeLists.txt are not visible to the tagger), so
     # without this a wheel built on macOS 15 tags macosx_15_0 and pip rejects
     # it on macOS 11-14. CMakeLists.txt also pins it for standalone builds.
+    # II-24: this is the DEFAULT — override it for a specific deployment
+    # target via the standard pip convention, which appends AFTER these args
+    # (later -D wins, and the wheel tagger honors it):
+    #   CMAKE_ARGS="-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0" python -m build
+    # The build.sh wheel verification gate derives the target from the wheel
+    # tag, so an override is accepted instead of rejected.
     "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0",
 ]
 
@@ -158,6 +164,11 @@ include = [
     "pyproject.toml",
     "CMakeLists.txt",
     "CMakePresets.json",
+    # II-19: build entry points documented in readme.md (Windows build via
+    # build.bat, Unix via build.sh) — previously omitted, so an sdist was a
+    # source tree whose README-documented build commands did not exist.
+    "build.bat",
+    "build.sh",
     "license.txt",
     "readme.md",
     "CHANGELOG.md",

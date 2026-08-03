@@ -200,6 +200,20 @@ def sgs_simulation(
 
     out_prop, mean, mask = __prepare_sgs(prop=prop, mean=mean, use_harddata=use_harddata, mask=mask)
 
+    # III-13: the C++ SGS kernel gates simulation on mask[node] == 1
+    # (sequential_simulation.h:124) while the Python expected-cell count
+    # below counts mask != 0 — a mask value like 2 is counted as "simulate"
+    # in Python but silently skipped by C++. Validate the documented binary
+    # contract (docstring: "1 marks cells to simulate and 0 marks cells to
+    # skip") at the Python boundary so non-binary masks fail loudly instead
+    # of silently permuting the simulated field.
+    if mask is not None and not numpy.all((mask == 0) | (mask == 1)):
+        raise ValueError(
+            "sgs_simulation: mask must be binary (values 0 or 1) — the "
+            "C++ kernel gates simulation on mask == 1, so non-zero values "
+            "like 2 are silently skipped"
+        )
+
     kriging_kind_map = {"sk": _HPGL_KRIGING_KIND.simple, "ok": _HPGL_KRIGING_KIND.ordinary}
     if kriging_type not in kriging_kind_map:
         raise ValueError(
@@ -274,6 +288,21 @@ def sgs_simulation(
     else:
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
         GridValidator.validate_array_size(mean, (grid.x, grid.y, grid.z))
+        # II-18: equal-volume per-dimension shape mismatch on the LVM mean
+        # silently permutes the mean field — the C++ LVM provider consumes
+        # the buffer by flat node index, so a (2,2,2) mean on a (1,2,4)
+        # grid (both volume 8) is misread with no exception. Mirror the
+        # lvm_kriging R-13 guard (geo.py:1919-1927). 1D (flat) mean vectors
+        # are covered by the size check and carry no per-dim meaning.
+        if mean.ndim == 3 and (
+            mean.shape[0] != grid.x
+            or mean.shape[1] != grid.y
+            or mean.shape[2] != grid.z
+        ):
+            raise ValueError(
+                f"sgs_simulation: 3D LVM mean shape {mean.shape} does not match "
+                f"grid dimensions ({grid.x}, {grid.y}, {grid.z})"
+            )
         if not numpy.all(numpy.isfinite(mean)):
             raise ValueError(
                 "sgs_simulation: LVM mean array contains NaN or Inf values"

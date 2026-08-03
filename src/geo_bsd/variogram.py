@@ -33,6 +33,17 @@ from .validation import GridValidator
 MAX_NUM_LAGS = 10000
 MAX_POINT_SET_SIZE = 1_000_000
 MAX_WINDOW_VOLUME = 100_000_000
+# F-03: total-work cap for the pure-Python CubeScan grid path. The C++
+# grid kernel rejects window_volume × grid_volume > 1e12
+# (variograms.cpp:592); the Python CubeScan previously had only the
+# MAX_WINDOW_VOLUME offset cap, so a legal 100^3 grid with a large
+# search template ran ~8e12 numpy ops (~2 h) and a 1000^3 grid
+# allocated a 24 GB mgrid before any cap fired. The real work is
+# len(LagIndexes) × NI·NJ·NK (one sliced-intersection pass per lag
+# offset over the full grid), so the cap bounds that product. The
+# value is Python-scaled (deliberately lower than the C++ 1e12 for
+# pure-Python throughput, matching MAX_TOTAL_PAIR_LAG_WORK).
+MAX_TOTAL_GRID_WORK = 1e8
 # H-1/R-1: total-work cap for the pure-Python point-set scans. The pair loop
 # is O(n^2) and each in-tunnel pair bins into up to NumLags lags, so the
 # worst-case work is n^2 * NumLags. MAX_POINT_SET_SIZE (1e6) combined with
@@ -609,6 +620,15 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
     PJ = PointSetXYZ[1]
     PK = PointSetXYZ[2]
 
+    # III-15: continuous (tolerance-based) lag binning requires the lag
+    # band boundaries (LagStart/LagEnd) and the principal anisotropy
+    # direction, exactly as PointSetScanContStyle and the C++ point-set
+    # kernel (variograms.cpp:905-912) use them. The exact-integer offset
+    # matching below was replaced by continuous band binning so fractional
+    # grid spacing (0.5/0.25 m) is binned like integer spacing.
+    D1 = VariogramSearchTemplate.Ellipsoid.Direction1
+    _, LagDistance, LagStart, LagEnd = _CalcLagDistances(VariogramSearchTemplate)
+
     # Validate coordinate arrays for NaN/Inf (F-046)
     GridValidator.validate_coordinate_arrays(PI, PJ, PK, "PointSetXYZ")
 
@@ -618,11 +638,21 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
             f"MAX_POINT_SET_SIZE ({MAX_POINT_SET_SIZE})"
         )
 
-    # H-1/R-1: total-work cap (Python-specific 1e8 — see module constant;
-    # deliberately lower than the C++ kernel's 1e12 for pure-Python
-    # throughput) shared with PointSetScanContStyle above. The scan
-    # is O(n^2) and each candidate pair bins into up to NumLags lags, so the
-    # worst-case work is n^2 * NumLags. Reject the product before the loop.
+    # H-1/R-1/F-27: total-work cap (Python-specific 1e8 — see module
+    # constant; deliberately lower than the C++ kernel's 1e12 for
+    # pure-Python throughput) shared with PointSetScanContStyle above.
+    # The scan is O(n^2) and each candidate pair is binned by the
+    # directional projection into up to NumLags lag bands (continuous
+    # binning, matching the C++ point-set kernel variograms.cpp:905-912).
+    # The old exact-integer offset matching performed three full-array
+    # comparisons (FDI[j] == LI, FDJ[j] == LJ, FDK[j] == LK), each
+    # O(len(LI)) where len(LI) is the number of lag-area offsets (up to
+    # the search window volume, 1e8) — the n^2 × NumLags estimate
+    # under-stated the real work by up to len(LI)/NumLags (~1e7×), so a
+    # legal input could run ~1e14 pure-Python comparisons. III-15
+    # replaced that exact matching with continuous band binning whose
+    # per-pair cost IS NumLags, so n^2 × NumLags now bounds the real
+    # work (same formula as the C++ point-set cap, variograms.cpp:833).
     pair_lag_work = len(PI) * len(PI) * VariogramSearchTemplate.NumLags
     if pair_lag_work > MAX_TOTAL_PAIR_LAG_WORK:
         raise ValueError(
@@ -650,10 +680,26 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
         Filter = bitwise_and(Filter, KMin <= DK)
         Filter = bitwise_and(Filter, DK <= KMax)
 
-        FPI, FPJ, FPK = PI[Filter], PJ[Filter], PK[Filter]
-        FDI, FDJ, FDK = FPI - I1, FPJ - J1, FPK - K1
+        FDI, FDJ, FDK = DI[Filter], DJ[Filter], DK[Filter]
         FIndex = Index[Filter]
 
+        # III-15: continuous (tolerance-based) lag binning by the
+        # directional projection onto the principal anisotropy axis,
+        # matching the C++ point-set kernel (variograms.cpp:905-912) and
+        # PointSetScanContStyle. The old exact-integer offset matching
+        # (FDI[j] == LI, FDJ[j] == LJ, FDK[j] == LK) dropped EVERY pair on
+        # fractional grid spacing (0.5/0.25 m) because no integer lag-area
+        # offset equals a fractional displacement — the variogram silently
+        # came out empty/under-counted (live repro: 6 points at 0..2.5 →
+        # 0 of 30 ordered pairs counted). Continuous band binning assigns
+        # each pair to the lag whose [LagStart, LagEnd) band contains its
+        # projection, exactly like the C++/ContStyle paths. The per-candidate
+        # tunnel filter keeps parity with _CalcLagsAreas (the old exact
+        # matching inherited the tunnel implicitly from LI/LJ/LK).
+        Tunnel = _IsInTunnel(VariogramSearchTemplate, column_stack((FDI, FDJ, FDK)))
+        FDI, FDJ, FDK = FDI[Tunnel], FDJ[Tunnel], FDK[Tunnel]
+        FIndex = FIndex[Tunnel]
+        FDistance = numpy.abs(FDI * D1[0] + FDJ * D1[1] + FDK * D1[2])
         for j in range(len(FDI)):
             # M-21: skip the self-pair (j == i), mirroring the C++ point-set
             # kernel (variograms.cpp:793) and PointSetScanContStyle's F-M24
@@ -664,14 +710,8 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
             # offset lands in no lag band, so the skip is a no-op there.
             if FIndex[j] == i:
                 continue
-            LFilter = FDI[j] == LI
-            LFilter = bitwise_and(LFilter, FDJ[j] == LJ)
-            LFilter = bitwise_and(LFilter, FDK[j] == LK)
-
-            ActiveLags = LagIndexes[LFilter]
-
-            if Function is not None:
-                for Lag in ActiveLags:
+            for Lag in range(VariogramSearchTemplate.NumLags):
+                if LagStart[Lag] <= FDistance[j] < LagEnd[Lag]:
                     Result[Lag, :] = Function(i, FIndex[j], Result[Lag, :], Params)
 
     return Result, LagDistance
@@ -719,6 +759,22 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
             "CubeScan: _CalcLagsAreas returned empty LagIndexes — "
             "no lag offsets found. Check search template parameters "
             "(NumLags, LagSeparation, LagWidth, Ellipsoid ranges)."
+        )
+
+    # F-03: total-work cap. CubeScan performs one sliced-intersection pass
+    # over the whole grid per lag offset, so the real work is
+    # len(LagIndexes) × NI·NJ·NK. The C++ grid kernel rejects the same
+    # product above 1e12 (variograms.cpp:592); the Python cap is scaled
+    # down for pure-Python throughput. Pre-fix a legal 100^3 grid with a
+    # large template ran ~8e12 numpy ops (~2 h) and a 1000^3 grid
+    # allocated a 24 GB mgrid before any check fired.
+    total_grid_work = len(LagIndexes) * NI * NJ * NK
+    if total_grid_work > MAX_TOTAL_GRID_WORK:
+        raise ValueError(
+            f"CubeScan: estimated total grid work {total_grid_work} "
+            f"(grid {NI}x{NJ}x{NK}, {len(LagIndexes)} lag offsets) exceeds "
+            f"maximum {MAX_TOTAL_GRID_WORK}. Reduce the grid size, NumLags, "
+            f"or Ellipsoid ranges."
         )
 
     # F-N14: guard the search-template extent against the grid size before
@@ -1007,18 +1063,36 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
             SoftValues1[i] = numpy.take(SoftData[i], P1)
             SoftValues2[i] = numpy.take(SoftData[i], P2)
 
-        # Guard negative/NaN before sqrt to prevent silent NaN propagation.
-        # NaN <= 0 is False, so denom[denom <= 0] alone misses NaN.
+        # II-34: exclude pairs whose soft-prob variance product is
+        # non-positive (soft prob 0 or 1) instead of substituting
+        # denom=1.0. The old substitution let the unnormalized raw
+        # covariance term dominate the sum, silently diluting/inflating
+        # the "correlation" outside [-1,1] whenever a soft probability is
+        # exactly 0 or 1 (realistic for indicator data). The standard
+        # guard (and the C++ kernel, variograms.cpp calc_ind_correlation
+        # family) excludes the pair entirely. The pair-count slot is
+        # incremented only for retained pairs so the average is computed
+        # over the valid subset.
         product = SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1 - SoftValues2)
-        invalid = (product <= 0) | numpy.isnan(product)
-        product[invalid] = 1.0
-        denom = product**0.5
+        # NaN <= 0 is False, so an explicit isnan check is required in
+        # addition to the <= 0 test (the input isfinite gate above rules
+        # NaN out of Values/SoftData, but keep the guard defensive).
+        valid = (product > 0) & ~numpy.isnan(product)
 
-        Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2) / denom)
+        denom = numpy.zeros_like(product)
+        denom[valid] = product[valid] ** 0.5
+
+        # Excluded pairs contribute 0 covariance (and are not counted in
+        # the pair-count slot below). Divide only where valid to avoid
+        # 0/0 NaN intermediate values (numpy.where evaluates both branches,
+        # so masking after division would still warn on invalid entries).
+        with numpy.errstate(divide="ignore", invalid="ignore"):
+            raw = (Values1 - SoftValues1) * (Values2 - SoftValues2) / denom
+        Covariances = numpy.where(valid, raw, 0.0).astype(float32)
         Result[NumValues + 0 : NumValues + NumValues] = (
             Result[NumValues + 0 : NumValues + NumValues] + Covariances.sum(axis=1)
         )
-        Result[NumValues + NumValues] += NumPoints
+        Result[NumValues + NumValues] += int(valid.sum())
 
         # Normalize after all pairs accumulated; guard against empty lags
         if Result[NumValues + NumValues] > 0:

@@ -458,6 +458,30 @@ class TestCalcVariograms:
         assert variogram.dtype == np.float32
         assert np.all(np.isfinite(variogram)), "Variogram with tol_distance=2.0 contains Inf/NaN"
 
+    # II-15: the 64-bit seed must be honored in full. Pre-fix the C++ kernel
+    # truncated the seed to mt19937's 32-bit result_type, so seeds that differ
+    # only above 2^32 produced bit-identical variograms (seed=5 ≡ seed=2^32+5).
+    # Post-fix the full 64-bit seed is expanded through std::seed_seq, so every
+    # distinct seed value produces a distinct sampled subset.
+    def test_seed_full_64bit_no_truncation(self):
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+        templ = VariogramSearchTemplate(
+            lag_width=1.0,
+            lag_separation=2.0,
+            tol_distance=1.0,
+            num_lags=5,
+            first_lag_distance=0.0,
+            ellipsoid=ell,
+        )
+        hard_data = self._make_grid_data()
+        _, v_small = CalcVariograms(templ, hard_data, percent=50, seed=5)
+        _, v_big   = CalcVariograms(templ, hard_data, percent=50, seed=2**32 + 5)
+        # Pre-fix: both truncated to 32-bit 5 → bit-identical → this FAILS.
+        assert not np.array_equal(v_small, v_big), (
+            "seeds 5 and 2^32+5 must produce different variograms (64-bit seed "
+            "must not be truncated)"
+        )
+
 
 @pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
 class TestCalcVariogramsFromPointSet:
@@ -619,6 +643,59 @@ class TestCStackLayers:
         # Verify multiple layers were stacked — result should not be all zeros
         assert not np.all(result == 0), "Result should contain non-zero data from multiple layers"
         assert not np.any(np.isnan(result))
+
+    # II-57: a zero-thickness layer must not be treated as erosion. Pre-fix the
+    # C++ else branch (thickness > 0 is false) blanked [ceil(new_k), nz) — the
+    # entire column when the zero layer is first — silently changing the model
+    # vs the same model without the zero layer.
+    def test_zero_thickness_layer_does_not_erode(self):
+        nx = ny = 2
+        # Constant thickness: deposit 2.0 marker 5 in every column.
+        dep = np.full((nx, ny, 1), 2.0, dtype="float32")
+        zero = np.zeros((nx, ny, 1), dtype="float32")
+
+        base = np.full((nx, ny, 4), -99.0, dtype="float32")
+        CStackLayers([dep], [5], nz=4, scalez=1.0, blank_value=-99, result=base)
+
+        # Same model with a leading zero-thickness layer.
+        result = np.full((nx, ny, 4), -99.0, dtype="float32")
+        CStackLayers([zero, dep], [9, 5], nz=4, scalez=1.0, blank_value=-99, result=result)
+
+        # The zero layer must not change the deposit footprint or markers.
+        np.testing.assert_array_equal(result, base)
+        # Deposit occupies cells [0,2) with marker 5; top tail stays blank.
+        np.testing.assert_array_equal(result[..., 0], np.full((nx, ny), 5.0))
+        np.testing.assert_array_equal(result[..., 1], np.full((nx, ny), 5.0))
+        np.testing.assert_array_equal(result[..., 2], np.full((nx, ny), -99.0))
+        np.testing.assert_array_equal(result[..., 3], np.full((nx, ny), -99.0))
+
+    # III-40: CStackLayers must define every result cell, including the top
+    # tail above the final surface. Pre-fix those cells were left unwritten: a
+    # NaN-prefilled buffer triggered the wrapper's post-call NaN RuntimeError
+    # (cvariogram.py:740-745), and buffer reuse silently corrupted stale cells.
+    def test_nan_prefilled_result_no_runtime_error(self):
+        nx = ny = 2
+        dep = np.full((nx, ny, 1), 1.0, dtype="float32")
+        result = np.full((nx, ny, 4), np.nan, dtype="float32")   # stale/NaN prefill
+        # Post-fix: no RuntimeError; all cells defined (blank_value above tail).
+        CStackLayers([dep], [7], nz=4, scalez=1.0, blank_value=-99, result=result)
+        assert not np.any(np.isnan(result)), "result contains NaN after stack_layers"
+        assert np.all(result[..., 0] == 7.0)
+        assert np.all(result[..., 1] == -99.0)
+        assert np.all(result[..., 2] == -99.0)
+        assert np.all(result[..., 3] == -99.0)
+
+    def test_stale_buffer_reuse_fully_overwritten(self):
+        """III-40: a reused buffer with stale nonzero cells must not leak."""
+        nx = ny = 2
+        dep = np.full((nx, ny, 1), 1.0, dtype="float32")
+        result = np.full((nx, ny, 4), 42.0, dtype="float32")    # stale data
+        CStackLayers([dep], [3], nz=4, scalez=1.0, blank_value=-99, result=result)
+        # Cells the layer owns get the marker; every other cell is blank_value,
+        # never the stale 42.0.
+        assert not np.any(result == 42.0)
+        assert np.all(result[..., 0] == 3.0)
+        assert np.all(result[..., 1] == -99.0)
 
 
 # =============================================================================
@@ -885,3 +962,235 @@ class TestCvarCheckError:
         cvmod._cvar_error_local._cvar_error_snapshot = msg
         # Should not raise (stale error suppressed)
         _check_cvar_error("test_ctx")
+
+
+# =============================================================================
+# s8-fix-py-sim: III-16 / II-40 / III-39 / III-32 regression tests
+# =============================================================================
+
+
+def _s8_templ(num_lags=5):
+    ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
+    return VariogramSearchTemplate(
+        lag_width=1.0, lag_separation=2.0, tol_distance=1.0,
+        num_lags=num_lags, first_lag_distance=0.0, ellipsoid=ell,
+    )
+
+
+def _s8_point_set(n=10, seed=42):
+    rng = np.random.RandomState(seed)
+    return {
+        "X": rng.rand(n).astype("float32") * 10,
+        "Y": rng.rand(n).astype("float32") * 10,
+        "Z": rng.rand(n).astype("float32") * 5,
+        "Property": rng.rand(n).astype("float32") * 100,
+    }
+
+
+@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
+class TestS8CvarInputValidation:
+    """III-16: cvariogram FFI must reject NaN/Inf hard_data like pure-Python.
+
+    The C++ kernel silently SKIPS non-finite informed values
+    (variograms.cpp:690,704,899 `continue`) while the pure-Python path
+    raises ValueError (variogram.py:830-835) — a silent-divergence parity
+    gap. The Python boundary now validates before the C++ call.
+    """
+
+    def test_grid_path_nan_informed_cell_raises(self):
+        np.random.seed(42)
+        data = np.random.rand(5, 5, 3).astype("float32")
+        data[2, 2, 1] = np.nan
+        mask = np.ones((5, 5, 3), dtype="uint8")
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcVariograms(_s8_templ(3), (data, mask))
+
+    def test_grid_path_inf_informed_cell_raises(self):
+        np.random.seed(42)
+        data = np.random.rand(5, 5, 3).astype("float32")
+        data[0, 1, 2] = np.inf
+        mask = np.ones((5, 5, 3), dtype="uint8")
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcVariograms(_s8_templ(3), (data, mask))
+
+    def test_grid_path_nan_in_masked_out_cell_allowed(self):
+        """Masked-out cells may hold sentinel garbage (C++ never reads them);
+        only informed cells are validated."""
+        np.random.seed(42)
+        data = np.random.rand(5, 5, 3).astype("float32")
+        data[0, 0, 0] = np.nan
+        mask = np.ones((5, 5, 3), dtype="uint8")
+        mask[0, 0, 0] = 0
+        _, variogram = CalcVariograms(_s8_templ(3), (data, mask))
+        assert len(variogram) == 3
+        assert np.all(np.isfinite(variogram))
+
+    def test_point_set_nan_property_raises(self):
+        ps = _s8_point_set()
+        ps["Property"][3] = np.nan
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcVariogramsFromPointSet(_s8_templ(3), ps, None)
+
+    def test_point_set_inf_property_raises(self):
+        ps = _s8_point_set()
+        ps["Property"][2] = np.inf
+        with pytest.raises(ValueError, match="contains NaN or Inf"):
+            CalcVariogramsFromPointSet(_s8_templ(3), ps, None)
+
+
+@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
+class TestS8OutputBufferValidation:
+    """II-40: caller output buffer size must match num_lags.
+
+    The C++ kernel silently computes min(num_lags, result_length)
+    (variograms.cpp:821-823), so an undersized buffer truncates the
+    variogram with no error — the returned tuple then mismatches
+    lags_borders. Validate at the Python boundary.
+    """
+
+    def test_undersized_buffer_raises(self):
+        ps = _s8_point_set()
+        with pytest.raises(ValueError, match="does not match num_lags"):
+            CalcVariogramsFromPointSet(_s8_templ(5), ps, np.zeros(2, dtype="float32"))
+
+    def test_exact_buffer_still_works(self):
+        ps = _s8_point_set()
+        lags, variogram = CalcVariogramsFromPointSet(
+            _s8_templ(5), ps, np.zeros(5, dtype="float32")
+        )
+        assert len(lags) == 5
+        assert len(variogram) == 5
+
+
+@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
+class TestS8WriteabilityEnforcement:
+    """III-39: output buffers must be writable.
+
+    The C++ kernel writes into the caller's output buffer via a raw float
+    pointer — a read-only buffer is silently mutated (or SIGBUS on a true
+    read-only mmap). The Python boundary enforces writeability before the
+    call (ndpointer flags=["W"] for the calc paths; explicit check for
+    CStackLayers which routes through a struct).
+    """
+
+    def test_point_set_readonly_buffer_raises(self):
+        ps = _s8_point_set()
+        ro = np.zeros(5, dtype="float32")
+        ro.setflags(write=False)
+        with pytest.raises(ValueError, match="must be writable"):
+            CalcVariogramsFromPointSet(_s8_templ(5), ps, ro)
+
+    def test_cstack_layers_readonly_result_raises(self):
+        layer = np.random.RandomState(1).rand(5, 5, 1).astype("float32")
+        ro = np.zeros((5, 5, 10), dtype="float32")
+        ro.setflags(write=False)
+        with pytest.raises(ValueError, match="must be a writable"):
+            CStackLayers([layer], [7], nz=5, scalez=1.0, blank_value=-99.0, result=ro)
+
+    def test_writable_buffers_still_work(self):
+        ps = _s8_point_set()
+        lags, variogram = CalcVariogramsFromPointSet(
+            _s8_templ(5), ps, np.zeros(5, dtype="float32")
+        )
+        assert len(lags) == 5
+
+
+@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
+class TestS8StaleLibErrorLockout:
+    """III-32: one genuine failure on a stale library (no
+    cvar_clear_last_error) must NOT permanently poison all subsequent calls.
+
+    On a fresh library the clear-on-consume empties the C++ error after a
+    raise, so the next snapshot can be reset to None (a fresh identical
+    error raises — F-37). On a STALE library the clear is a no-op and the
+    C++ error persists; the snapshot must capture the CURRENT (persistent)
+    error so a later call suppresses it as stale instead of locking out.
+    """
+
+    def _reset_thread_local(self, monkeypatch):
+        import geo_bsd.cvariogram as cvmod
+
+        monkeypatch.setattr(cvmod, "_cvar_error_local", type(cvmod._cvar_error_local)())
+
+    def test_stale_lib_success_after_failure_does_not_false_raise(self, monkeypatch):
+        import geo_bsd.cvariogram as cvmod
+
+        self._reset_thread_local(monkeypatch)
+        state = {"err": None}
+
+        class _StaleCvar:
+            """Stale library: cvar_get_last_error only, NO cvar_clear_last_error."""
+
+            def cvar_get_last_error(self):
+                return state["err"]
+
+        monkeypatch.setattr(cvmod, "cvar", _StaleCvar())
+
+        # CALL1: genuine failure sets error E1.
+        cvmod._snapshot_cvar_error()
+        state["err"] = b"genuine failure"
+        with pytest.raises(RuntimeError, match="genuine failure"):
+            cvmod._check_cvar_error("op1")
+
+        # CALL2: subsequent successful call with the persistent error must NOT
+        # raise — pre-fix the raised-flag reset forced snapshot=None, so the
+        # persistent error looked NEW and false-raised forever (lockout).
+        cvmod._snapshot_cvar_error()
+        cvmod._check_cvar_error("op2")  # must NOT raise
+
+    def test_stale_lib_new_error_still_raises(self, monkeypatch):
+        """After suppressing the persistent error, a DIFFERENT new error must
+        still raise."""
+        import geo_bsd.cvariogram as cvmod
+
+        self._reset_thread_local(monkeypatch)
+        state = {"err": None}
+
+        class _StaleCvar:
+            def cvar_get_last_error(self):
+                return state["err"]
+
+        monkeypatch.setattr(cvmod, "cvar", _StaleCvar())
+
+        cvmod._snapshot_cvar_error()
+        state["err"] = b"genuine failure"
+        with pytest.raises(RuntimeError, match="genuine failure"):
+            cvmod._check_cvar_error("op1")
+
+        # Suppress the persistent error (op2 succeeds).
+        cvmod._snapshot_cvar_error()
+        cvmod._check_cvar_error("op2")
+
+        # op3 fails with a genuinely new message — must raise.
+        cvmod._snapshot_cvar_error()
+        state["err"] = b"a different failure"
+        with pytest.raises(RuntimeError, match="a different failure"):
+            cvmod._check_cvar_error("op3")
+
+    def test_fresh_lib_consecutive_identical_failures_still_both_raise(self, monkeypatch):
+        """F-37 must not regress on fresh libraries: with
+        cvar_clear_last_error available, two consecutive identical failures
+        both raise."""
+        import geo_bsd.cvariogram as cvmod
+
+        self._reset_thread_local(monkeypatch)
+        state = {"err": None}
+
+        class _FreshCvar:
+            def cvar_get_last_error(self):
+                return state["err"]
+
+            def cvar_clear_last_error(self):
+                state["err"] = b""
+
+        monkeypatch.setattr(cvmod, "cvar", _FreshCvar())
+
+        cvmod._snapshot_cvar_error()
+        state["err"] = b"singular matrix"
+        with pytest.raises(RuntimeError, match="singular matrix"):
+            cvmod._check_cvar_error("op1")
+
+        cvmod._snapshot_cvar_error()
+        state["err"] = b"singular matrix"
+        with pytest.raises(RuntimeError, match="singular matrix"):
+            cvmod._check_cvar_error("op2")

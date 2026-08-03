@@ -12,13 +12,27 @@ from geo_bsd.sgs import sgs_simulation
 from geo_bsd.cdf import calc_cdf
 from python_property import load_property_python
 
+# F-54: sample data lives in tests/python/test_data/ — derive the real
+# path from this script's location (works regardless of CWD).
+# R-06: abspath removes the literal '..' component — PathValidator
+# rejects '..' before normalization (CriticalValidationError).
+TEST_DATA_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', 'tests', 'python', 'test_data'
+))
+
 
 def mean_calc_hist(x, y, z, n, prop):
     print("Creating Grid... ")
     grid = SugarboxGrid(x, y, z)
     print("Done.\n")
     print("Loading property... ")
-    prop = load_cont_property("NEW_TEST_PROP.INC", -99, (x, y, z))
+    # F-53: the old path "NEW_TEST_PROP.INC" did not exist anywhere in the
+    # repo (deleted 6e6ae94, restored verbatim 761f9d5) and the workflow
+    # failed with CriticalValidationError. The real data file is
+    # NEW_TEST_PROP_01.INC under tests/python/test_data/.
+    prop = load_cont_property(
+        os.path.join(TEST_DATA_DIR, "NEW_TEST_PROP_01.INC"), -99, (x, y, z)
+    )
     print("Done.\n")
 
     cov = CovarianceModel(

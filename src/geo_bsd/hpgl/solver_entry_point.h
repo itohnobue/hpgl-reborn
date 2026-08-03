@@ -32,7 +32,9 @@
 // ====================================================================
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 #include "lapack_compat.h"
@@ -169,7 +171,64 @@ inline bool lapack_spd_solve_1rhs(
 	// Report any LAPACK solve errors
 	handle_lapack_error(info_solve, label, size);
 
-	return (info_solve == 0);
+	if (info_solve != 0)
+		return false;
+
+	// II-09: solution-quality validation on the dpotrs_ success path.
+	// dpotrs_ returns INFO=0 even for near-singular-but-SPD systems, which
+	// can yield huge/garbage weights (compiled LAPACK probe: near-singular
+	// SPD A → INFO=0, weights [1.0e12, -1.0e12] reported as success) →
+	// wild estimates reported as KI_SUCCESS by every 1rhs caller
+	// (SK, correlogram, cokriging). Two guards, mirroring existing
+	// conventions:
+	//   - magnitude: |X|_inf > 1e10 → fail, consistent with the OK mu guard
+	//     (ok_kriging_weights_3: `std::abs(mu) > 1e10` → false).
+	//   - residual: ||A_orig·X − B||_inf vs sqrt(eps)·data_scale·size,
+	//     identical to gauss_solve's residual check (gauss_solver.cpp:96-121).
+	// A_orig holds the original matrix (unmodified on the dpotrs_ path),
+	// so the residual is computable after the in-place Cholesky solve.
+	{
+		double max_abs_weight = 0.0;
+		for (int i = 0; i < size; ++i)
+			max_abs_weight = std::max(max_abs_weight, std::abs(X[i]));
+		if (!std::isfinite(max_abs_weight) || max_abs_weight > 1e10)
+		{
+			char error_msg[256];
+			snprintf(error_msg, sizeof(error_msg),
+				"LAPACK Error in %s: solution magnitude |X|_inf = %.3g exceeds stability bound 1e10 (near-singular system). Matrix size: %d",
+				label, max_abs_weight, size);
+			HPGL_LOG_STRING(error_msg);
+			return false;
+		}
+
+		double max_residual = 0.0;
+		double data_scale = 1.0;
+		for (int i = 0; i < size; ++i)
+		{
+			double ax = 0.0;
+			for (int j = 0; j < size; ++j)
+				ax += A_orig[static_cast<size_t>(i) * size + j] * X[j];
+			double res = std::abs(ax - B[i]);
+			if (res > max_residual) max_residual = res;
+			for (int j = 0; j < size; ++j)
+				data_scale = std::max(data_scale, std::abs(A_orig[static_cast<size_t>(i) * size + j]));
+			data_scale = std::max(data_scale, std::abs(B[i]));
+		}
+		// sqrt(eps) * size ≈ 1.5e-8 * n: tolerance for acceptable round-off,
+		// matching gauss_solve's residual gate (gauss_solver.cpp:115-118).
+		double tol = std::sqrt(std::numeric_limits<double>::epsilon()) * data_scale * size;
+		if (max_residual > tol)
+		{
+			char error_msg[256];
+			snprintf(error_msg, sizeof(error_msg),
+				"LAPACK Error in %s: solution residual ||Ax-b||_inf = %.3g exceeds tolerance %.3g (unreliable solution). Matrix size: %d",
+				label, max_residual, tol, size);
+			HPGL_LOG_STRING(error_msg);
+			return false;
+		}
+	}
+
+	return true;
 }
 
 // -----------------------------------------------------------------------

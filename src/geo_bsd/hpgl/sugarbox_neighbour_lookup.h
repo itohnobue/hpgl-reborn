@@ -48,11 +48,31 @@ namespace hpgl
 			const std::vector<sugarbox_vector_t> & vectors = *m_vectors;
 			sugarbox_location_t center = (*m_grid)[node];
 			node_coord = coord_t(center[0], center[1], center[2]);
+			// II-13: max_neighbours == 0 is the documented "unconditional
+			// simulation" mode — an empty neighbourhood by contract. The
+			// pure-nugget fallback below would otherwise fire on count == 0
+			// and silently convert unconditional simulation into 1-neighbour
+			// conditioned kriging (live probe: mean 4.7493 conditioned vs
+			// 0 unconditional). node_coord is set above so callers keep the
+			// pre-fix behaviour for the empty result.
+			if (m_max_neighbours <= 0)
+				return;
 			int count = 0;
 			if (!vectors.empty())
 			{
 				const sugarbox_vector_t * vec = &vectors[0];
-				for (int idx = 0, end_idx = (int) vectors.size(); idx < end_idx && count < m_max_neighbours; ++idx, ++vec)
+				// III-38: cap the per-node SCAN, not just the result. The
+				// covariance-field offset list is radius-bounded and can reach
+				// O((2r+1)³) entries; when conditioning data are sparse the
+				// loop previously evaluated every offset to find a handful of
+				// neighbours. calc_cov_field sorts the list by covariance
+				// descending (covariance_field.h predicate_2), so the tail is
+				// just above the C(0)/100 threshold — negligible weight. Bound
+				// the scan with the same (2·8+1)³ = 4913-cell cap the R-6
+				// fallback window uses, keeping the per-node worst case
+				// constant regardless of search radius.
+				const int SCAN_LIMIT = 4913;
+				for (int idx = 0, end_idx = (int) vectors.size(); idx < end_idx && count < m_max_neighbours && idx < SCAN_LIMIT; ++idx, ++vec)
 				{
 					sugarbox_location_t point = center + *vec; //vectors[idx];
 					int index = m_grid->get_index(point);

@@ -10,12 +10,22 @@ from geo_bsd import (
 
 from gtsim import gtsim_2ind
 
+# F-54: sample data lives in tests/python/test_data/ — derive the real
+# path from this script's location (works regardless of CWD).
+# R-06: abspath removes the literal '..' component — PathValidator
+# rejects '..' before normalization (CriticalValidationError).
+TEST_DATA_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', 'tests', 'python', 'test_data'
+))
+
 if not os.path.exists("results/"):
     os.mkdir("results/")
 
 # gtsim test
 time1 = time.time()
-prop = load_cont_property("test_data/BIG_SOFT_DATA_160_141_20.INC", -99, (166, 141, 20))
+prop = load_cont_property(
+    os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_160_141_20.INC"), -99, (166, 141, 20)
+)
 grid = SugarboxGrid(166, 141, 20)
 
 cov = CovarianceModel(type=covariance.exponential, ranges=(10, 10, 10), sill=1)
@@ -38,7 +48,9 @@ write_property(result, "results/GTSIM_BIG_SOFT_RESULT.INC", "GTSIM", -99)
 
 print("Checking result...")
 print("Hard data saving test...")
-prop_init = load_cont_property("test_data/BIG_SOFT_DATA_160_141_20.INC", -99, (166, 141, 20))
+prop_init = load_cont_property(
+    os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_160_141_20.INC"), -99, (166, 141, 20)
+)
 
 errors_hard = 0
 all_points = 0

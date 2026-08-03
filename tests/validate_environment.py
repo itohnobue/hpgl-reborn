@@ -91,6 +91,52 @@ def check_hpgl():
     return False
 
 
+# II-20: platform-aware native-library name table, mirroring hpgl_wrap.py's
+# lib_paths so check_build_files accepts the platform's ACTUAL extension
+# (.dylib on macOS, .dll on Windows, .so on Linux) instead of only .dll/.so
+# — which false-FAILed every healthy macOS build (hpgl.dylib was never
+# checked). Keys follow sys.platform conventions; the fallback entry covers
+# any other POSIX platform.
+_NATIVE_LIB_GLOBS = {
+    "win32": [
+        "hpgl.dll", "libhpgl.dll", "hpgl_d.dll", "libhpgl_d.dll",
+        "_cvariogram.dll", "lib_cvariogram.dll", "_cvariogram_d.dll", "lib_cvariogram_d.dll",
+    ],
+    "darwin": [
+        "hpgl.dylib", "hpgl.so", "libhpgl.dylib", "libhpgl.so",
+        "_cvariogram.dylib", "_cvariogram.so", "lib_cvariogram.dylib", "lib_cvariogram.so",
+    ],
+    "linux": [
+        "hpgl.so", "libhpgl.so",
+        "_cvariogram.so", "lib_cvariogram.so",
+    ],
+}
+
+
+def _platform_lib_key() -> str:
+    """Map sys.platform to the _NATIVE_LIB_GLOBS key."""
+    if sys.platform.startswith("win"):
+        return "win32"
+    if sys.platform == "darwin":
+        return "darwin"
+    return "linux"
+
+
+def _build_files_present(geo_bsd_dir: Path):
+    """Return (hpgl_found, cvariogram_found) for the platform's library names.
+
+    Pure and testable: the caller resolves the directory, this function only
+    checks existence against the platform table.
+    """
+    platform_key = _platform_lib_key()
+    names = _NATIVE_LIB_GLOBS[platform_key]
+    hpgl_names = [n for n in names if n.startswith(("hpgl", "libhpgl"))]
+    cvar_names = [n for n in names if n.startswith(("_cvariogram", "lib_cvariogram"))]
+    hpgl_found = any((geo_bsd_dir / n).exists() for n in hpgl_names)
+    cvar_found = any((geo_bsd_dir / n).exists() for n in cvar_names)
+    return hpgl_found, cvar_found
+
+
 def check_build_files():
     """Check for built extension files"""
     print("\nChecking for built native libraries...")
@@ -98,31 +144,37 @@ def check_build_files():
     project_root = Path(__file__).parent.parent
     geo_bsd_dir = project_root / "src" / "geo_bsd"
 
-    # Look for native libraries (DLL on Windows, SO on Linux)
-    dll_files = list(geo_bsd_dir.glob("hpgl.dll")) + list(geo_bsd_dir.glob("hpgl.so"))
-    cvar_files = list(geo_bsd_dir.glob("_cvariogram.dll")) + list(
-        geo_bsd_dir.glob("_cvariogram.so")
-    )
+    # Look for native libraries with the platform's actual names/extensions
+    # (II-20: .dylib on macOS, .dll on Windows, .so on Linux).
+    platform_names = _NATIVE_LIB_GLOBS[_platform_lib_key()]
+    hpgl_globs = [n for n in platform_names if n.startswith(("hpgl", "libhpgl"))]
+    cvar_globs = [n for n in platform_names if n.startswith(("_cvariogram", "lib_cvariogram"))]
+    dll_files, cvar_files = [], []
+    hpgl_found, cvar_found = _build_files_present(geo_bsd_dir)
+    if hpgl_found:
+        dll_files = [geo_bsd_dir / n for n in hpgl_globs if (geo_bsd_dir / n).exists()]
+    if cvar_found:
+        cvar_files = [geo_bsd_dir / n for n in cvar_globs if (geo_bsd_dir / n).exists()]
 
     found = bool(dll_files)
     if dll_files:
         for f in dll_files:
             print(f"  [OK] {f.name}")
     else:
-        print("  [MISSING] hpgl.dll / hpgl.so")
+        print(f"  [MISSING] hpgl library ({' / '.join(hpgl_globs)})")
 
     if cvar_files:
         for f in cvar_files:
             print(f"  [OK] {f.name}")
     else:
-        print("  [MISSING] _cvariogram.dll / _cvariogram.so")
+        print(f"  [MISSING] _cvariogram library ({' / '.join(cvar_globs)})")
 
     if found:
         print("  [PASS] Native libraries exist")
         return True
     else:
         print("  [FAIL] Native libraries not found")
-        print("\n  Build with: build.bat (Windows) or cmake (Linux)")
+        print("\n  Build with: build.bat (Windows) or cmake (Linux/macOS)")
         return False
 
 

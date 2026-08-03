@@ -119,7 +119,7 @@ class TestCovarianceModel:
         """Test constructor with default parameters"""
         cov = CovarianceModel()
         assert cov.type == 0  # spherical
-        assert cov.ranges == (0, 0, 0)
+        assert cov.ranges == (1, 1, 1)
         assert cov.angles == (0.0, 0.0, 0.0)
         assert cov.sill == 1.0
         assert cov.nugget == 0.0

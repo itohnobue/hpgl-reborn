@@ -310,14 +310,16 @@ class TestF06F08CStackLayers:
         assert result[1, 0, 0] == 7.0
         assert result[1, 0, 1] == 7.0
         assert result[1, 0, 2] == 7.0
-        assert result[1, 0, 3] == 0.0
-        assert result[1, 0, 4] == 0.0
+        # top-tail cells above the final surface → blank_value (III-40)
+        assert result[1, 0, 3] == -99.0
+        assert result[1, 0, 4] == -99.0
         # layer[2,0] = base[0,0] = 0 → not positive → blank_value
         assert result[2, 0, 0] == -99.0
         # layer[2,1] = base[0,1] = 1 → F-39: thickness 1 fills exactly z [0,1)
         assert result[2, 1, 0] == 7.0
-        assert result[2, 1, 1] == 0.0
-        assert result[2, 1, 2] == 0.0
+        # top-tail cells above the final surface → blank_value (III-40)
+        assert result[2, 1, 1] == -99.0
+        assert result[2, 1, 2] == -99.0
 
 
 # ===========================================================================

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -126,6 +127,16 @@ static void validate_shape_dims_or_throw(hpgl_shape_t * shape, const char * cont
 /// silently degraded to mean-fill (KI_SINGULARITY); the API must reject
 /// beyond the solver's safe limit with a clear error.
 static const int MAX_NEIGHBOURS_UPPER_BOUND = 100000;
+
+/// Hard upper bound on hpgl_non_parametric_cdf_t::m_size accepted by the C
+/// API. The kernel trusts m_size as the length of the m_values/m_probs
+/// arrays in std::lower_bound (non_parametric_cdf.h:233,271) — raw C
+/// pointers carry no length metadata, so an unbounded m_size makes the range
+/// walk perform heap OOB reads (III-34). The bound is far above any
+/// legitimate non-parametric CDF (built from conditioning data values; the
+/// Python layer passes the CdfData length) while keeping the worst-case
+/// array footprint (values + probs, 8 bytes/pair) bounded.
+static const long long MAX_NON_PARAMETRIC_CDF_SIZE = 100000000;
 
 /// Validates m_max_neighbours for a C API kriging/simulation entry point.
 /// Throws hpgl_exception (caught by the caller's try/catch) on negative or
@@ -333,6 +344,16 @@ HPGL_API int hpgl_read_inc_file_byte(
 		hpgl::set_last_exception_message("read_inc_file_byte: values_count must be positive");
 		return -1;
 	}
+	// II-50(a) / III-03: values_count maps a byte value to the index j
+	// written into data[i]. values_count > 256 makes `data[i] = j` overflow
+	// the unsigned char cell for j >= 256 (mod-256 wrap) and is nonsensical
+	// for a byte domain. Sibling writers cap via init_remap_table (<= 255
+	// indicators); the reader admits the full 256 distinct byte values.
+	if (values_count > 256)
+	{
+		hpgl::set_last_exception_message("read_inc_file_byte: values_count must be <= 256");
+		return -1;
+	}
 	if (size <= 0)
 	{
 		hpgl::set_last_exception_message("read_inc_file_byte: size must be positive");
@@ -347,17 +368,23 @@ HPGL_API int hpgl_read_inc_file_byte(
 				data,
 				mask);
 
+		// II-50(b): build the remap in a temp buffer and copy to the caller
+		// ONLY on success. Pre-fix the remap mutated the caller's buffer in
+		// place, so an unmapped-byte throw midway left a torn buffer (some
+		// cells remapped, others not) observable by the caller even though
+		// the call returned an error.
+		std::vector<unsigned char> mapped_data(data, data + size);
 		for (int i = 0; i < size; ++i)
 		{
 			if (mask[i] != 0)
 			{
-				unsigned char original_value = data[i];
+				unsigned char original_value = mapped_data[i];
 				bool mapped = false;
 				for (int j = 0; j < values_count; ++j)
 				{
 					if (original_value == values[j])
 					{
-						data[i] = j;
+						mapped_data[i] = j;
 						mapped = true;
 						break;
 					}
@@ -371,6 +398,7 @@ HPGL_API int hpgl_read_inc_file_byte(
 				}
 			}
 		}
+		std::copy(mapped_data.begin(), mapped_data.end(), data);
 		return 0;
 	}
 	catch (const std::exception & ex)
@@ -691,6 +719,12 @@ static void init_sk_params(hpgl_sk_params_t * params, hpgl::sk_params_t & sk_p)
 
 	if (!params->m_automatic_mean)
 	{
+		// II-02: m_mean is consumed directly as the SK mean — a NaN/Inf
+		// mean silently produces all-NaN output for direct-C callers (the
+		// Python wrapper validates finiteness itself). No sibling isfinite
+		// gate existed at the C boundary.
+		if (!std::isfinite(params->m_mean))
+			throw hpgl_exception("init_sk_params", "m_mean must be finite");
 		sk_p.set_mean(params->m_mean);
 	}
 }
@@ -754,6 +788,12 @@ hpgl_simple_kriging_weights(
 		hpgl_cov_params_t * params,
 		float * weights)
 {
+	// F-N2 / II-49: zero thread-local stats BEFORE the validation gates.
+	// The 6 pointer checks and the neighbours_count gate all return -1
+	// without entering the try block — pre-fix, reset_kriging_stats() sat
+	// inside the try, so a validation failure left stale stats from a prior
+	// kriging call observable via hpgl_get_kriging_stats().
+	hpgl::reset_kriging_stats();
 	if (validate_pointer(params, "params (simple_kriging_weights)") != 0) return -1;
 	if (validate_pointer(weights, "weights (simple_kriging_weights)") != 0) return -1;
 	if (validate_pointer(center_coords, "center_coords (simple_kriging_weights)") != 0) return -1;
@@ -784,9 +824,6 @@ hpgl_simple_kriging_weights(
 	try
 	{
 	using namespace hpgl;
-	// F-N2: zero thread-local stats before the call (stale-stat promise).
-	// simple_kriging_weights is a stats-less path; leave honest zeros.
-	reset_kriging_stats();
 	real_location_t center(center_coords[0], center_coords[1], center_coords[2]);
 
 	std::vector<real_location_t> neighbour_coords(neighbours_count);
@@ -810,6 +847,19 @@ hpgl_simple_kriging_weights(
 			weights2,
 			variance);
 
+	// F-38: on kriging solve failure (e.g. a singular matrix from
+	// all-identical neighbour points) simple_kriging_weights raises a clean
+	// hpgl_exception, caught below. Guard the copy anyway so a short
+	// weights2 can never surface the standard library's internal
+	// out-of-range text ("vector" on libc++, "vector::_M_range_check..." on
+	// libstdc++) — the caller must get a meaningful kriging-failure message
+	// instead.
+	if (weights2.size() != static_cast<size_t>(neighbours_count))
+	{
+		hpgl::set_last_exception_message(
+			"simple_kriging_weights: kriging solve failed (check for identical or degenerate neighbour points)");
+		return -1;
+	}
 	for (int i = 0; i < neighbours_count; ++i)
 	{
 		weights[i] = weights2.at(i);
@@ -867,6 +917,20 @@ HPGL_API void hpgl_lvm_kriging(
 		throw hpgl_exception("hpgl_lvm_kriging", oss.str());
 	}
 
+	// II-03: mean_data contents are consumed directly as the per-node local
+	// mean by subtract_means/add_means (lvm_utils.h) — a NaN/Inf mean
+	// silently poisons every kriged estimate. Pointer/shape/volume are
+	// already validated; scan the contents for finiteness.
+	for (int i = 0; i < mean_size; ++i)
+	{
+		if (!std::isfinite(mean_data[i]))
+		{
+			std::ostringstream oss;
+			oss << "lvm_kriging: mean_data[" << i << "] is not finite";
+			throw hpgl_exception("hpgl_lvm_kriging", oss.str());
+		}
+	}
+
 	cont_property_array_t input_prop(input_data, input_mask, size);
 	sugarbox_grid_t grid;
 	init_grid(grid, input_data_shape);
@@ -915,6 +979,15 @@ hpgl_indicator_kriging(
 	if (indicator_count != in_data->m_indicator_count)
 		throw hpgl_exception("hpgl_indicator_kriging",
 			"indicator_count mismatch with in_data->m_indicator_count");
+
+	// III-35: indicator_count <= 0 silently no-ops — the kernel loops zero
+	// categories and every node falls through to the fallback
+	// (indicator_kriging.h:150-151), so a 0-category call looks successful
+	// but writes nothing meaningful. SIS siblings throw on <= 0
+	// (api.cpp:1249-1251,1327-1329) — mirror that guard.
+	if (indicator_count <= 0)
+		throw hpgl_exception("hpgl_indicator_kriging",
+			"indicator_count must be positive");
 
 	// Defense-in-depth: indicator_index_t is unsigned char (max 255).
 	// indicator_count > 255 causes wrap-around in cdf_utils.cpp most_probable_category loop.
@@ -1019,8 +1092,41 @@ hpgl_sgs_simulation(
 	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_sgs_simulation");
 	init_sgs_params(params, &sgs_p);
 
+	// F-18 / III-34: validate the non-parametric CDF struct at the C
+	// boundary before handing it to the kernel. null m_values/m_probs with
+	// m_size > 0 cause SIGSEGV inside non_parametric_cdf_2_t::operator()
+	// (std::lower_bound over a null range); m_size is trusted verbatim as
+	// the lower_bound range (non_parametric_cdf.h:233,271), so a negative or
+	// absurdly large size performs heap OOB reads. A null cdf pointer is
+	// valid — the kernel treats it as "no transform".
+	if (cdf != nullptr)
+	{
+		if (cdf->m_size < 0 || cdf->m_size > MAX_NON_PARAMETRIC_CDF_SIZE)
+		{
+			std::ostringstream oss;
+			oss << "sgs_simulation: cdf m_size " << cdf->m_size
+			    << " out of range [0, " << MAX_NON_PARAMETRIC_CDF_SIZE << "]";
+			throw hpgl_exception("hpgl_sgs_simulation", oss.str());
+		}
+		if (cdf->m_size > 0)
+		{
+			if (cdf->m_values == nullptr)
+				throw hpgl_exception("hpgl_sgs_simulation",
+					"cdf m_values is null (m_size > 0)");
+			if (cdf->m_probs == nullptr)
+				throw hpgl_exception("hpgl_sgs_simulation",
+					"cdf m_probs is null (m_size > 0)");
+		}
+	}
+
 	if (mean != 0)
+	{
+		// F-18: a non-finite stationary mean silently produces NaN
+		// simulated values (the kernel consumes it directly).
+		if (!std::isfinite(*mean))
+			throw hpgl_exception("hpgl_sgs_simulation", "mean must be finite");
 		sgs_p.set_mean(*mean);
+	}
 	// 2-M-1(c): m_mean_kind is consumed by sequential_gaussian_simulation
 	// (auto vs user stationary mean); e_mean_varying is set on the LVM path.
 	sgs_p.m_mean_kind = mean != 0 ? mean_kind_t::e_mean_stationary : mean_kind_t::e_mean_stationary_auto;
@@ -1076,6 +1182,30 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_sgs_lvm_simulation");
 	init_sgs_params(params, &sgs_p);
 
+	// F-18 / III-34: validate the non-parametric CDF struct at the C
+	// boundary (sibling of the hpgl_sgs_simulation gate). null
+	// m_values/m_probs with m_size > 0 SIGSEGV in the kernel's
+	// std::lower_bound; m_size is trusted verbatim as the range length.
+	if (cdf != nullptr)
+	{
+		if (cdf->m_size < 0 || cdf->m_size > MAX_NON_PARAMETRIC_CDF_SIZE)
+		{
+			std::ostringstream oss;
+			oss << "sgs_lvm_simulation: cdf m_size " << cdf->m_size
+			    << " out of range [0, " << MAX_NON_PARAMETRIC_CDF_SIZE << "]";
+			throw hpgl_exception("hpgl_sgs_lvm_simulation", oss.str());
+		}
+		if (cdf->m_size > 0)
+		{
+			if (cdf->m_values == nullptr)
+				throw hpgl_exception("hpgl_sgs_lvm_simulation",
+					"cdf m_values is null (m_size > 0)");
+			if (cdf->m_probs == nullptr)
+				throw hpgl_exception("hpgl_sgs_lvm_simulation",
+					"cdf m_probs is null (m_size > 0)");
+		}
+	}
+
 	// Defensive: ensure means data pointer is valid before use
 	if (means->m_data == nullptr)
 	{
@@ -1092,6 +1222,19 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 		oss << "sgs_lvm_simulation: means volume (" << mean_vol
 		    << ") != grid volume (" << size << ")";
 		throw hpgl_exception("hpgl_sgs_lvm_simulation", oss.str());
+	}
+
+	// II-04: means contents are consumed as the per-node local mean — NaN
+	// means produce NaN simulated values silently. Volume is already
+	// validated; scan the contents for finiteness.
+	for (int i = 0; i < mean_vol; ++i)
+	{
+		if (!std::isfinite(means->m_data[i]))
+		{
+			std::ostringstream oss;
+			oss << "sgs_lvm_simulation: means data[" << i << "] is not finite";
+			throw hpgl_exception("hpgl_sgs_lvm_simulation", oss.str());
+		}
 	}
 
 	// 2-M-1(c): m_mean_kind is consumed by sequential_gaussian_simulation
@@ -1370,6 +1513,23 @@ hpgl_sis_simulation_lvm(
 			    << ") != grid volume (" << size << ")";
 			throw hpgl_exception("hpgl_sis_simulation_lvm", oss.str());
 		}
+		// II-05: per-mean contents are consumed directly as the local mean
+		// in the LVM indicator kernel — a NaN mean produces NaN category
+		// probabilities and sample() silently returns category 0. Scan the
+		// contents for finiteness.
+		{
+			const float * mean_vals = mean_data[i].m_data;
+			for (int j = 0; j < mean_vol; ++j)
+			{
+				if (!std::isfinite(mean_vals[j]))
+				{
+					std::ostringstream oss;
+					oss << "sis_simulation_lvm: means[" << i << "] data[" << j
+					    << "] is not finite";
+					throw hpgl_exception("hpgl_sis_simulation_lvm", oss.str());
+				}
+			}
+		}
 		means.push_back(mean_data[i].m_data);
 	}
 
@@ -1432,6 +1592,25 @@ hpgl_simple_cokriging_mark1(
 			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
 		}
 
+		// III-36: volume-only validation admits equal-volume per-dimension
+		// mismatches (e.g. primary (2,2,2) with secondary (1,2,4) — both
+		// volume 8). The markI kernel indexes secondary_data by the primary
+		// flat index (simple_cokriging_markI.cpp:365-367), so a per-dim
+		// mismatch silently permutes the secondary field. Validate per-dim
+		// equality (mirror of the lvm_kriging R-13 per-dim pattern).
+		for (int i = 0; i < 3; ++i)
+		{
+			if (input_data->m_shape.m_data[i] != secondary_data->m_shape.m_data[i])
+			{
+				std::ostringstream oss;
+				oss << "cokriging_m1: secondary shape[" << i << "] ("
+				    << secondary_data->m_shape.m_data[i]
+				    << ") != primary shape[" << i << "] ("
+				    << input_data->m_shape.m_data[i] << ")";
+				throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
+			}
+		}
+
 		// Validate m_data pointers before constructing property arrays.
 		// A null m_data pointer causes HPGL_CHECK→abort() (SIGABRT) which
 		// Python cannot catch (F-28).
@@ -1476,6 +1655,25 @@ hpgl_simple_cokriging_mark1(
 
 		sugarbox_grid_t grid;
 		init_grid(grid, &input_data->m_shape);
+
+		// II-06: means/variance are consumed directly by the markI kernel
+		// (simple_cokriging_markI.cpp) — a NaN primary/secondary mean or
+		// secondary_variance silently produces NaN output (mean-fill) for
+		// direct-C callers. Validate finiteness at the C boundary.
+		if (!std::isfinite(params->m_primary_mean) || !std::isfinite(params->m_secondary_mean))
+		{
+			std::ostringstream oss;
+			oss << "cokriging_m1: primary_mean/secondary_mean must be finite (got "
+			    << params->m_primary_mean << " / " << params->m_secondary_mean << ")";
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
+		}
+		if (!std::isfinite(params->m_secondary_variance) || params->m_secondary_variance < 0.0)
+		{
+			std::ostringstream oss;
+			oss << "cokriging_m1: secondary_variance must be finite and >= 0 (got "
+			    << params->m_secondary_variance << ")";
+			throw hpgl_exception("hpgl_simple_cokriging_mark1", oss.str());
+		}
 
 		simple_cokriging_markI(
 				grid,
@@ -1537,6 +1735,25 @@ hpgl_simple_cokriging_mark2(
 			throw hpgl_exception("hpgl_simple_cokriging_mark2", oss.str());
 		}
 
+		// III-36: volume-only validation admits equal-volume per-dimension
+		// mismatches (e.g. primary (2,2,2) with secondary (1,2,4) — both
+		// volume 8). The markII kernel indexes secondary_data by the primary
+		// flat index, so a per-dim mismatch silently permutes the secondary
+		// field. Validate per-dim equality (mirror of the lvm_kriging R-13
+		// per-dim pattern; sibling of the mark1 gate above).
+		for (int i = 0; i < 3; ++i)
+		{
+			if (primary_data->m_shape.m_data[i] != secondary_data->m_shape.m_data[i])
+			{
+				std::ostringstream oss;
+				oss << "cokriging_m2: secondary shape[" << i << "] ("
+				    << secondary_data->m_shape.m_data[i]
+				    << ") != primary shape[" << i << "] ("
+				    << primary_data->m_shape.m_data[i] << ")";
+				throw hpgl_exception("hpgl_simple_cokriging_mark2", oss.str());
+			}
+		}
+
 		// Validate m_data pointers before constructing property arrays.
 		// A null m_data pointer causes HPGL_CHECK→abort() (SIGABRT) which
 		// Python cannot catch (F-28).
@@ -1571,6 +1788,19 @@ hpgl_simple_cokriging_mark2(
 			params->m_radiuses[1],
 			params->m_radiuses[2]);
 		validate_kriging_radiuses_or_throw(np.m_radiuses, "hpgl_simple_cokriging_mark2");
+
+		// II-06: means are consumed directly by the markII kernel — a NaN
+		// primary/secondary mean silently produces NaN output (mean-fill)
+		// for direct-C callers. correlation_coef range/NaN validation lives
+		// in the simple_cokriging_markI.cpp entry guards; the means are not
+		// checked anywhere before this gate.
+		if (!std::isfinite(params->m_primary_mean) || !std::isfinite(params->m_secondary_mean))
+		{
+			std::ostringstream oss;
+			oss << "cokriging_m2: primary_mean/secondary_mean must be finite (got "
+			    << params->m_primary_mean << " / " << params->m_secondary_mean << ")";
+			throw hpgl_exception("hpgl_simple_cokriging_mark2", oss.str());
+		}
 
 		simple_cokriging_markII(
 				grid, primary_prop,

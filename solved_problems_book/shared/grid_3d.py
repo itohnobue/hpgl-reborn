@@ -21,7 +21,14 @@ class Grid:
 		if (x <= self.x_max) and (y <= self.y_max) and (z <= self.z_max):
 			i = int((x - self.x0) / self.nx)
 			j = int((y - self.y0) / self.ny)
-			k = int((z - self.z0) / self.nz)
+			# F-08: with 2D data the scripts build the grid with nz == 0
+			# (array3 is all zeros, so (max-min)/dz == 0). Dividing by a
+			# zero nz gives int(0/0) = int(NaN) -> ValueError. Treat nz == 0
+			# as "2D grid": every point lies in the k = 0 plane.
+			if self.nz == 0:
+				k = 0
+			else:
+				k = int((z - self.z0) / self.nz)
 			return i, j, k
 		else:
 			return -1, -1, -1

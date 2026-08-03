@@ -21,10 +21,6 @@ def get_random_uniform_values(n):
 		x[i] = np.random.uniform(0, 1)
 	return x
 
-# Since RVs are independent we can calculate variance simplier
-def calc_var_sum(std_dev, n):
-	return std_dev**2 / n
-
 
 # Number of random variables
 n = 10
@@ -53,7 +49,10 @@ for j in range(S_num):
 		summary_vec[j] = summary_vec[j] + random_variables[i]
 
 sum_mean = summary_vec.mean()
-sum_var = calc_var_sum(calc_quadr_var(summary_vec, sum_mean), n)
+# II-47: summary_vec holds SUMS of n uniforms, so its empirical variance
+# IS Var(sum) = n * Var(U) (CLT). The old call fed it through
+# calc_var_sum(..., n) = var/n, under-reporting by a factor of 10.
+sum_var = calc_quadr_var(summary_vec, sum_mean)
 
 print("Summary mean is: ", sum_mean)
 print("Summary variance is:", sum_var)

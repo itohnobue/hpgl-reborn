@@ -173,7 +173,10 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         FIndex = Index[Filter]
 
         FDistance2 = FDX ** 2 + FDY ** 2 + FDZ ** 2
-        Filter = MinDistance2 <= FDistance2
+        # II-46: exclude zero-distance (self) pairs. When FirstLagDistance=0
+        # the min-lag-start floor below collapses to 0 and every point pairs
+        # with itself in the lag-0 bin, biasing the first variogram point.
+        Filter = np.bitwise_and(MinDistance2 <= FDistance2, FDistance2 > 0)
         Filter = np.bitwise_and(Filter, FDistance2 <= MaxDistance2)
 
         FDX, FDY, FDZ = FDX[Filter], FDY[Filter], FDZ[Filter]
@@ -295,7 +298,12 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
             Values2[i] = Values[i][Point2]
             SoftValues1[i] = SoftData[i][Point1]
             SoftValues2[i] = SoftData[i][Point2]
-        Covariances = np.float32((Values1 - SoftValues1)*(Values2 - SoftValues2) / (SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1-SoftValues2)) ** 0.5)
+        # III-22: guard against division by zero when a soft probability is
+        # exactly 0 or 1 (the denominator -> 0 -> NaN/Inf). The src twin
+        # (src/geo_bsd/variogram.py) substitutes 1.0 for those pairs.
+        denom = (SoftValues1 * (1 - SoftValues1) * SoftValues2 * (1 - SoftValues2)) ** 0.5
+        with np.errstate(divide='ignore', invalid='ignore'):
+            Covariances = np.float32((Values1 - SoftValues1) * (Values2 - SoftValues2) / np.where(denom == 0, 1.0, denom))
         Result[NumValues + 0:NumValues + NumValues] = Result[NumValues + 0:NumValues + NumValues] + Covariances
         Result[NumValues + NumValues] += 1
         Result[0:NumValues] = Result[NumValues + 0:NumValues + NumValues] / Result[NumValues + NumValues] / 2

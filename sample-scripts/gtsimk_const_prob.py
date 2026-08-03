@@ -5,12 +5,13 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from geo_bsd import (
-    ContProperty, SugarboxGrid, CovarianceModel,
+    SugarboxGrid, CovarianceModel,
     simple_kriging, write_property,
-    # WARNING: _clone_prop is a private/internal API — no public equivalent exists.
-    # This import is for advanced usage only and may break with future HPGL versions.
-    _clone_prop,
 )
+# F-04: _clone_prop is a private helper defined in geo_bsd.geo, not exported
+# from the geo_bsd top level. Importing it from `geo_bsd` raised ImportError
+# (verified; pre-existing breakage). Import from the defining module instead.
+from geo_bsd.geo import _clone_prop
 from geo_bsd.sgs import sgs_simulation
 from geo_bsd.cdf import calc_cdf
 from gaussian_cdf import inverse_normal_score
@@ -92,10 +93,22 @@ def gtsim_Kind_const_prop(grid, prop, indicator, sk_params=None, pk_prop=None, s
         print("Calculating pk_prop...")
         pk_prop = mean_ind(prop, indicator)
     else:
-        if isinstance(pk_prop, ContProperty):
-            print("User-defined probability properties FOUND.")
-        else:
+        # II-45: the user-provided-probability flow for the const-prob
+        # variant passes a sequence of SCALAR marginal probabilities, one
+        # per indicator category (0..indicator-1), consumed by calc_ver()
+        # below as pk_prop[i]. The old isinstance(ContProperty) check
+        # rejected that documented form and then a single ContProperty was
+        # subscripted as pk_prop[i] (AttributeError 'ContProperty' object
+        # has no attribute...), so the user-pk path could never work (live
+        # probe II-45). Accept any sequence of indicator-1 scalars.
+        try:
+            pk_prop = list(pk_prop)
+        except TypeError:
             print("ERROR: WRONG TYPE of user-defined probability properties")
+            return
+        if len(pk_prop) != indicator - 1:
+            print("ERROR: WRONG NUMBER of user-defined probability properties")
+            print(f"Expected {indicator - 1} marginal probabilities, got {len(pk_prop)}.")
             return
     print(pk_prop)
 
@@ -121,9 +134,22 @@ def gtsim_Kind_const_prop(grid, prop, indicator, sk_params=None, pk_prop=None, s
 
     # 4. SGS on prop (after transform in 3)
     print("Starting SGS on transformed property...")
-
+    # III-20: the pk_prop-only path (user provided probability properties,
+    # sk_params omitted) previously left sgs_params=None → `**None`
+    # TypeError at the sgs_simulation call (live probe: deterministic
+    # crash on the documented user-pk flow). Derive the SGS parameters from
+    # sk_params when no explicit sgs_params were given; if BOTH are missing
+    # the SGS step has no covariance/neighbour configuration at all, so
+    # raise a clear error instead of failing with TypeError.
     if sgs_params is None:
         sgs_params = sk_params
+    if sgs_params is None:
+        raise ValueError(
+            "gtsim_Kind_const_prop: sgs_params (or sk_params) is required "
+            "for the SGS step. When providing user-defined pk_prop, pass "
+            "sk_params (radiuses/max_neighbours/cov_model) or sgs_params "
+            "explicitly."
+        )
     cdf = calc_cdf(prop1)
     prop1 = sgs_simulation(prop1, grid, cdf, seed=3439275, **sgs_params)
     write_property(prop1, "results/GTSIM_SGS_RESULT.INC", "SGS_RESULT_GT", -99)

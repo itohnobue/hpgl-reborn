@@ -11,13 +11,23 @@ from geo_bsd import (
 from geo_bsd.sis import sis_simulation
 from python_property import load_property_python
 
+# F-54: sample data lives in tests/python/test_data/ — derive the real
+# path from this script's location (works regardless of CWD).
+# R-06: abspath removes the literal '..' component — PathValidator
+# rejects '..' before normalization (CriticalValidationError).
+TEST_DATA_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', 'tests', 'python', 'test_data'
+))
+
 
 def ntg_calc_hist(x, y, z, n, sis_prop):
     print("Creating Grid... ")
     grid = SugarboxGrid(x, y, z)
     print("Done.\n")
     print("Loading property... ")
-    sis_prop = load_ind_property("NEW_TEST_PROP_01.INC", -99, [0, 1], (x, y, z))
+    sis_prop = load_ind_property(
+        os.path.join(TEST_DATA_DIR, "NEW_TEST_PROP_01.INC"), -99, [0, 1], (x, y, z)
+    )
     print("Done.\n")
 
     cov = CovarianceModel(
@@ -46,7 +56,15 @@ def ntg_calc_hist(x, y, z, n, sis_prop):
             },
         ]
         print("Done.\n")
-        sis_result = sis_simulation(sis_prop, grid, sis_data, seed=3141347 - 1000 * c + 500)
+        # F-05: sis_simulation requires the marginal_probs positional
+        # argument (sis.py:67-78 signature); the old call omitted it and
+        # raised TypeError (live repro F-05). The two categories here have
+        # marginal_prob 0.5 each in the per-indicator data dicts, so pass
+        # the equivalent marginal_probs list.
+        sis_result = sis_simulation(
+            sis_prop, grid, sis_data, seed=3141347 - 1000 * c + 500,
+            marginal_probs=[0.5, 0.5],
+        )
         write_property(sis_result, "RESULT.INC", "S_RESULT", -99)
         values_result = load_property_python(x, y, z, "RESULT.INC", True)
 

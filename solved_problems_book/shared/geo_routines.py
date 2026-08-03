@@ -4,8 +4,11 @@ import numpy as np
 import numpy.ma as ma
 from numpy import savetxt
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-from geo_bsd import *
+# F-47: the old path ('..','..','..') resolved above the repo root, and
+# `from geo_bsd import *` is unused in this module (no geo_bsd names are
+# referenced). Point the path at the repo's src/ directory and drop the
+# unused wildcard import.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 
 def CalcMean(Cube, Mask):
@@ -23,7 +26,9 @@ def CalcMarginalProbsIndicator(Cube, Mask, Indicators):
 def CalcVPC(Cube, Mask, MarginalMean):
     NZ = Cube.shape[2]
     MaskSum = Mask.sum(0).sum(0)
-    CubeMasked = Cube
+    # III-21: do not alias the caller's Cube — the zero-fill below would
+    # mutate the input array in place (mirrors the src twin's copy(Cube)).
+    CubeMasked = Cube.copy()
     CubeMasked[Mask == False] = 0
 
     CubeSum = Cube.sum(0).sum(0)

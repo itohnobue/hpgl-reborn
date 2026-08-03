@@ -201,6 +201,20 @@ def sis_simulation(
         prop, data, marginal_probs, mask, use_harddata
     )
 
+    # III-13: the C++ SIS kernel gates simulation on mask[node] == 1
+    # (sequential_indicator_simulation.cpp:114) while the Python
+    # expected-cell count below counts mask != 0 — a mask value like 2 is
+    # counted as "simulate" in Python but silently skipped by C++. Validate
+    # the documented binary contract (docstring: "1 marks cells to simulate
+    # and 0 marks cells to skip") at the Python boundary so non-binary masks
+    # fail loudly instead of silently permuting the simulated field.
+    if mask is not None and not numpy.all((mask == 0) | (mask == 1)):
+        raise ValueError(
+            "sis_simulation: mask must be binary (values 0 or 1) — the "
+            "C++ kernel gates simulation on mask == 1, so non-zero values "
+            "like 2 are silently skipped"
+        )
+
     ParameterValidator.validate_property_type(out_prop, IndProperty, "sis_simulation")
 
     # Validate prop.data for NaN/Inf before C++ call (defensive consistency).
@@ -254,6 +268,23 @@ def sis_simulation(
                 )
         for i in range(len(data)):
             GridValidator.validate_array_size(marginal_probs[i], (grid.x, grid.y, grid.z))
+            # II-18: equal-volume per-dimension shape mismatch on an LVM
+            # marginal-probability field silently permutes the probability
+            # field — the C++ LVM provider consumes the buffer by flat node
+            # index, so a (2,2,2) marginal_probs[i] on a (1,2,4) grid (both
+            # volume 8) is misread with no exception. Mirror the lvm_kriging
+            # R-13 guard (geo.py:1919-1927). 1D (flat) vectors are covered
+            # by the size check and carry no per-dim meaning.
+            if marginal_probs[i].ndim == 3 and (
+                marginal_probs[i].shape[0] != grid.x
+                or marginal_probs[i].shape[1] != grid.y
+                or marginal_probs[i].shape[2] != grid.z
+            ):
+                raise ValueError(
+                    f"sis_simulation: 3D LVM marginal_probs[{i}] shape "
+                    f"{marginal_probs[i].shape} does not match grid "
+                    f"dimensions ({grid.x}, {grid.y}, {grid.z})"
+                )
             if not numpy.all(numpy.isfinite(marginal_probs[i])):
                 raise ValueError(
                     f"sis_simulation: LVM marginal_probs[{i}] "

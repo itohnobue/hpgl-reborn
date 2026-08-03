@@ -14,6 +14,7 @@
 #include "cov_model.h"
 #include "kriging_stats.h"
 #include "api.h"
+#include <cmath>
 #include <exception>
 
 // OpenBLAS thread-control API — file-scope declarations so the in-function
@@ -64,9 +65,15 @@ namespace hpgl
 			std::vector<indicator_probability_t> ccdf2(n);
 
 			// Step 1: Clip probabilities to [0, 1] (both working copies).
+			// NaN-safe (II-12): NaN bypasses relational comparisons, so treat
+			// it as 0.0 — a NaN probability would otherwise propagate through
+			// both passes and the average, then make most_probable_category
+			// (cdf_utils.cpp) silently return category 0.
 			for (size_t i = 0; i < n; ++i)
 			{
 				indicator_probability_t v = probs[i];
+				if (!std::isfinite(v))
+					v = 0.0f;
 				if (v < 0.0)
 					v = 0.0;
 				else if (v > 1.0)
@@ -255,6 +262,13 @@ namespace hpgl
 					case ki_result_t::KI_NO_NEIGHBOURS: ++points_without_neighbours; break;
 					case ki_result_t::KI_SINGULARITY: ++points_singularity; break;
 					}
+					// II-12: sanitize each kriged probability (finite + [0,1],
+					// marginal fallback) BEFORE the cumulative-CDF conversion and
+					// order-relations correction. A NaN probability survives
+					// correct_order_relations (NaN comparisons are false) and
+					// makes most_probable_category silently return category 0.
+					prob = static_cast<indicator_probability_t>(
+						detail::sanitize_probability(prob, mps[idx][node_idx]));
 					probs.push_back(prob);
 				}
 

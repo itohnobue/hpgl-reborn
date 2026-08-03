@@ -194,6 +194,17 @@ bool validate_template(variogram_search_template_t * templ)
         cvar_set_last_error("variogram template: lag_width must be finite and positive");
         return false;
     }
+    // II-56: m_tol_distance was the only template field left unvalidated.
+    // NaN makes every is_in_tunnel test false (silent all-zero variogram);
+    // <= 0 degenerates the off-axis acceptance test (tol_distance * dist
+    // <= s1) to accepting every pair in the tunnel. The Python wrapper
+    // already gates tol_distance (cvariogram.py:371-375); mirror it here so
+    // direct-C callers get the same loud failure instead of silent zeros.
+    if (!std::isfinite(templ->m_tol_distance) || templ->m_tol_distance <= 0.0)
+    {
+        cvar_set_last_error("variogram template: tol_distance must be finite and positive");
+        return false;
+    }
     if (templ->m_num_lags <= 0 || templ->m_num_lags > MAX_NUM_LAGS)
     {
         cvar_set_last_error("variogram template: num_lags must be in [1, 10000]");
@@ -495,10 +506,43 @@ update_lags(
 		cvar_set_last_error("update_lags: lag_separation is zero, cannot bin lags");
 		return;
 	}
-	int lag_min = (int) ceil( (dist - (templ->m_lag_width / 2) - templ->m_first_lag_distance) / templ->m_lag_separation);
+
+	// F-31: guard the FP->int casts below. For a legal template with tiny
+	// lag_separation (validate_template only bounds it > 0), the quotient
+	// (dist +/- lag_width/2 - first_lag) / lag_separation can exceed
+	// INT_MAX; casting an out-of-range double to int is UB per
+	// [conv.fpint]. On x86-64 the cast saturates to INT_MIN (silently
+	// dropping the pair); on arm64 it saturates to INT_MAX (counting the
+	// pair in every lag). Both are silent wrongness. Mirror the I2-25
+	// guard in stack_layers.h: reject non-finite quotients and clamp into
+	// the representable lag range before casting.
+	double min_q = (dist - (templ->m_lag_width / 2) - templ->m_first_lag_distance)
+		/ templ->m_lag_separation;
+	double max_q = (dist + (templ->m_lag_width / 2) - templ->m_first_lag_distance)
+		/ templ->m_lag_separation;
+	if (!std::isfinite(min_q) || !std::isfinite(max_q))
+	{
+		cvar_set_last_error("update_lags: non-finite lag distance quotient");
+		return;
+	}
+	// Range checks in double BEFORE any cast (a huge quotient must never
+	// reach the FP->int conversions). A band entirely beyond the last lag
+	// or entirely before the first cannot bin into any lag.
+	if (min_q >= static_cast<double>(lag_count))
+		return;
+	if (max_q < 0.0)
+		return;
+	// Clamp into the representable lag range before casting so the
+	// conversions are always defined; the existing bounds checks below
+	// handle the clamped edge values.
+	if (min_q < 0.0)
+		min_q = 0.0;
+	if (max_q >= static_cast<double>(lag_count))
+		max_q = static_cast<double>(lag_count);
+	int lag_min = static_cast<int>(std::ceil(min_q));
 	if (lag_min >= lag_count)
 		return;
-	int lag_max = (int) floor( (dist + (templ->m_lag_width / 2) - templ->m_first_lag_distance) / templ->m_lag_separation);
+	int lag_max = static_cast<int>(std::floor(max_q));
 	if (lag_max < 0)
 		return;
 	if (lag_max >= lag_count)
@@ -533,6 +577,22 @@ static void calc_variograms_impl(
 	if (!validate_ptr(templ, "templ (calc_variograms)")) return;
 	if (!validate_ptr(data, "data (calc_variograms)")) return;
 	if (!validate_ptr(result_covariations, "result_covariations (calc_variograms)")) return;
+
+	// II-16: validate the grid member pointers before the scan loop
+	// dereferences data->m_data / data->m_mask (lines 617-624 below). The
+	// point-set sibling validates all four members (calc_variograms_from_
+	// point_set); without this check a direct-C caller passing a
+	// hard_data_t with null members SIGSEGVs inside the nested loop,
+	// uncatchable by the Python wrapper.
+	if (data->m_data == nullptr || data->m_mask == nullptr)
+	{
+		fprintf(stderr,
+			"[HPGL ERROR] calc_variograms: data member pointer is null (m_data=%p m_mask=%p)\n",
+			(void*)data->m_data, (void*)data->m_mask);
+		fflush(stderr);
+		cvar_set_last_error("calc_variograms: null member pointer in data");
+		return;
+	}
 
 	// F-38/F-40: reject degenerate or oversized templates before the
 	// search loop so we fail loudly instead of looping ~1e11 times or
@@ -704,7 +764,17 @@ void calc_variograms_seeded(
     // 2-M-3: deterministic re-seed of the thread_local engine on the calling
     // thread. The unseeded entry point leaves the engine at its
     // random_device^time default (legacy non-deterministic behavior).
-    g_tls_rng.seed(static_cast<std::mt19937::result_type>(seed));
+    // II-15: mt19937's result_type is 32-bit, so a direct
+    // static_cast<result_type>(seed) silently truncates seeds >= 2^32
+    // modulo 2^32 — distinct 64-bit seeds produced bit-identical
+    // variograms, violating the documented "seed honored literally"
+    // contract. Expand the FULL 64-bit seed through std::seed_seq so
+    // every distinct seed value produces a distinct engine state.
+    std::seed_seq full_seed = {
+        static_cast<uint32_t>(seed >> 32),
+        static_cast<uint32_t>(seed & 0xFFFFFFFFu)
+    };
+    g_tls_rng.seed(full_seed);
     calc_variograms_impl(templ, data, result_covariations, result_length, percentToUse);
 }
 

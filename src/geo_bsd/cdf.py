@@ -78,6 +78,66 @@ class CdfData:
                     "CdfData: values must be monotonically non-decreasing"
                 )
 
+    def inverse(self, prob):
+        """Map probabilities back to property-value space (F⁻¹).
+
+        Mirrors the C++ ``non_parametric_cdf_2_t::inverse``
+        (non_parametric_cdf.h:263-292) so Python-side threshold mapping
+        agrees with the C++ SGS back-transform: a probability below the
+        first cumulative probability maps to the smallest value, above the
+        last maps to the largest value, and interior probabilities are
+        linearly interpolated between the bracketing (value, prob) pairs
+        (same lower_bound semantics as the C++ std::lower_bound over the
+        probs array).
+
+        Parameters
+        ----------
+        prob : float or numpy.ndarray
+            Cumulative probabilities in [0, 1] to invert.
+
+        Returns
+        -------
+        float or numpy.ndarray
+            The value(s) whose cumulative probability equals ``prob``
+            (linear interpolation between bracketing pairs).
+
+        Raises
+        ------
+        ValueError
+            If the CDF is empty (no values).
+        """
+        p = numpy.asarray(prob, dtype=numpy.float64)
+        scalar = p.ndim == 0
+        p = p.reshape(-1)
+        size = self.values.size
+        if size == 0:
+            raise ValueError("CdfData.inverse: empty CDF (no values)")
+        # std::lower_bound over the probs array: first index with probs[i] >= p.
+        idx = numpy.searchsorted(self.probs, p, side="left")
+        result = numpy.empty(p.shape, dtype=numpy.float64)
+        lo = idx == 0
+        result[lo] = self.values[0]
+        hi = idx == size
+        result[hi] = self.values[size - 1]
+        mid = ~(lo | hi)
+        if numpy.any(mid):
+            i2 = idx[mid]
+            i1 = i2 - 1
+            x1 = self.values[i1].astype(numpy.float64)
+            x2 = self.values[i2].astype(numpy.float64)
+            y1 = self.probs[i1].astype(numpy.float64)
+            y2 = self.probs[i2].astype(numpy.float64)
+            with numpy.errstate(divide="ignore", invalid="ignore"):
+                interp = numpy.where(
+                    y2 == y1,
+                    (x1 + x2) / 2.0,
+                    x1 + (x2 - x1) / (y2 - y1) * (p[mid] - y1),
+                )
+            result[mid] = interp
+        if scalar:
+            return result[0]
+        return result
+
 
 def calc_cdf(prop):
     """Compute the empirical CDF from a ``ContProperty``.

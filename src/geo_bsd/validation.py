@@ -46,6 +46,15 @@ class ValidationConstants:
     # paths share this bound to prevent a hang/OOM from oversized grids.
     MAX_MOVING_AVERAGE_VOLUME = 1000000
 
+    # Work cap for the pure-Python moving-average per-cell (ellipse-mask)
+    # path (F-30). The loop is O(N·V): every grid cell runs MeanCalc over
+    # a (2rx·2ry·2rz) window. MAX_MOVING_AVERAGE_VOLUME bounds the grid
+    # volume (memory) only; N × window_volume bounds the actual work.
+    # 1e8 (~2.5 s worst case at measured pure-Python throughput) mirrors
+    # the MAX_TOTAL_PAIR_LAG_WORK philosophy for the other pure-Python
+    # hot loops (variogram.py).
+    MAX_MOVING_AVERAGE_WORK = 100000000
+
     # Neighbor count limits
     MIN_NEIGHBORS = 1
     MAX_NEIGHBORS = 1000
@@ -74,6 +83,12 @@ class ValidationConstants:
     MAX_SILL = 1e10
     MIN_NUGGET = 0.0
     MAX_NUGGET = 1e10
+    # F-39: the covariance range must be STRICTLY positive, matching the C++
+    # contract (covariance_param.cpp set_ranges rejects range <= 0, and
+    # create_transform rejects range=0). MIN_RANGE is kept at 0.0 so the
+    # comparison below (`r <= MIN_RANGE`) rejects both zero and negative
+    # values with a clean CriticalValidationError instead of deferring the
+    # failure to a late RuntimeError inside the FFI call.
     MIN_RANGE = 0.0
     MAX_RANGE = 1e10
 
@@ -802,9 +817,19 @@ class ParameterValidator:
             for i, r in enumerate(ranges):
                 if numpy.isnan(r) or numpy.isinf(r):
                     raise CriticalValidationError(f"Range[{i}] is NaN or infinite", "ranges")
-                if r < ValidationConstants.MIN_RANGE:
+                # F-39: reject range <= 0 at the Python boundary. Pre-fix the
+                # comparison was `r < MIN_RANGE` with MIN_RANGE=0.0, so a zero
+                # covariance range passed Python validation and only failed
+                # late inside the FFI call — C++ set_ranges throws
+                # hpgl_exception → RuntimeError instead of a clean
+                # CriticalValidationError (live probe, boundary-found F-39).
+                # C++ rejects range <= 0 (covariance_param.cpp:27-32), so
+                # Python must too. The strict-inequality message mirrors the
+                # C++ "range must be > 0" text.
+                if r <= ValidationConstants.MIN_RANGE:
                     raise CriticalValidationError(
-                        f"Range[{i}] = {r} is less than minimum {ValidationConstants.MIN_RANGE}",
+                        f"Range[{i}] = {r} must be > 0 (C++ rejects range <= 0). "
+                        f"Minimum {ValidationConstants.MIN_RANGE} is not inclusive.",
                         "ranges",
                     )
                 if r > ValidationConstants.MAX_RANGE:

@@ -79,5 +79,13 @@ namespace hpgl
 			if (!std::isfinite(m_angles[i]))
 				throw hpgl_exception("covariance_param_t::validate", "angle must be finite");
 		}
+		// III-09: anisotropy range ratios must not overflow to Inf/NaN. The
+		// transform builder (cov_model.h create_transform) guards the same
+		// ratios; this check closes the source for consumers that validate
+		// without building the transform. ratios[0]/ratios[1] overflows only
+		// for physically meaningless parameter sets.
+		if (!std::isfinite(m_ranges[0] / m_ranges[1]) || !std::isfinite(m_ranges[0] / m_ranges[2]))
+			throw hpgl_exception("covariance_param_t::validate",
+				"anisotropy range ratio overflows to non-finite (ranges must be comparable in magnitude)");
 	}
 }

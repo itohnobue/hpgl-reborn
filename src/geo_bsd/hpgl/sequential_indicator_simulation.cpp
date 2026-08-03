@@ -143,12 +143,14 @@ void do_sis(
 					}
 
 					// Clamp kriged probability to [0,1] before computing the
-					// complement so both probabilities are well-formed.
+					// complement so both probabilities are well-formed (F-37).
 					// SK weights are unconstrained — poorly conditioned matrices,
 					// sparse neighbours, or extreme anisotropy can push the
-					// combine() result outside [0,1].
-					if (prob < 0.0) prob = 0.0;
-					else if (prob > 1.0) prob = 1.0;
+					// combine() result outside [0,1]. NaN-safe (II-11): NaN
+					// bypasses the relational clamps (NaN < 0.0 is false), so
+					// non-finite values fall back to the marginal probability
+					// exactly like the KI-failure path above.
+					prob = detail::sanitize_probability(prob, marginal_probs[idx][node]);
 					probs.push_back(prob);
 					probs.push_back(1.0 - prob);
 
@@ -174,6 +176,14 @@ void do_sis(
 				case ki_result_t::KI_NO_NEIGHBOURS: ++points_without_neighbours; break;
 				case ki_result_t::KI_SINGULARITY: ++points_singularity; break;
 				}
+				// F-37: the multi-category branch pushed the RAW kriged
+				// probability with no clamp. A value outside [0,1] — or NaN,
+				// which survives correct_order_relations below because NaN
+				// comparisons are false — silently biased the CDF and made
+				// the sampler return category 0. Sanitize each probability
+				// (finite + [0,1], marginal fallback) before the cumulative
+				// sum, mirroring the 2-category branch.
+				prob = detail::sanitize_probability(prob, marginal_probs[idx][node]);
 				probs.push_back(prob);
 			}
 		}

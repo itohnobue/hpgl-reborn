@@ -16,6 +16,7 @@
       "name": "release",
       "displayName": "Release Build",
       "inherits": "base",
+      "generator": "Ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "HPGL_BUILD_PYTHON": "ON",
@@ -27,6 +28,7 @@
       "name": "debug",
       "displayName": "Debug Build",
       "inherits": "base",
+      "generator": "Ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "HPGL_BUILD_PYTHON": "ON",
@@ -38,6 +40,7 @@
       "name": "release-mkl",
       "displayName": "Release with Intel MKL",
       "inherits": "base",
+      "generator": "Ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "HPGL_BUILD_TESTS": "ON",
@@ -97,7 +100,8 @@
     {
       "name": "windows-msvc",
       "displayName": "Build Windows (MSVC)",
-      "configurePreset": "windows-msvc"
+      "configurePreset": "windows-msvc",
+      "configuration": "Release"
     },
     {
       "name": "linux-ninja",

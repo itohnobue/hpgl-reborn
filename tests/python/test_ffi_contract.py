@@ -360,5 +360,138 @@ class TestValidationContract:
         assert isinstance(exc, Exception)
 
 
+class _FakePropSize:
+    """Property stub with distinct data/mask sizes (F-24/F-25)."""
+
+    def __init__(self, data, mask, indicator_count=1):
+        self.data = data
+        self.mask = mask
+        self.ndim = data.ndim
+        self.indicator_count = indicator_count
+
+
+class _FakeGrid:
+    def __init__(self, x, y, z):
+        self.x, self.y, self.z = x, y, z
+
+
+class TestMaskedArraySizeValidation:
+    """F-24/F-25: grid=None paths must validate data.size == mask.size.
+
+    C++ indexes both arrays with the same stride values, so a
+    data.size != mask.size mismatch reads/writes past the end of the shorter
+    array (heap OOB read/write). The stride check alone misses length
+    mismatches.
+    """
+
+    @pytest.mark.hpgl
+    def test_cont_masked_array_size_mismatch_raises(self):
+        from geo_bsd.ffi_adapter import create_cont_masked_array
+
+        data = np.arange(6, dtype="float32").reshape(2, 3, order="F")
+        mask = np.ones(3, dtype="uint8").reshape(1, 3, order="F")  # size 3 vs 6
+
+        with pytest.raises(ValueError, match="data size 6 does not match mask size 3"):
+            create_cont_masked_array(_FakePropSize(data, mask), grid=None)
+
+    @pytest.mark.hpgl
+    def test_ind_masked_array_size_mismatch_raises(self):
+        from geo_bsd.ffi_adapter import create_ind_masked_array
+
+        data = np.arange(6, dtype="uint8").reshape(2, 3, order="F")
+        mask = np.ones(3, dtype="uint8").reshape(1, 3, order="F")
+
+        with pytest.raises(ValueError, match="data size 6 does not match mask size 3"):
+            create_ind_masked_array(_FakePropSize(data, mask), grid=None)
+
+    @pytest.mark.hpgl
+    def test_cont_masked_array_equal_sizes_still_constructs(self):
+        from geo_bsd.ffi_adapter import create_cont_masked_array
+
+        data = np.arange(6, dtype="float32").reshape(2, 3, order="F")
+        mask = np.ones(6, dtype="uint8").reshape(2, 3, order="F")
+        result = create_cont_masked_array(_FakePropSize(data, mask), grid=None)
+        assert result._array_refs == (data, mask)
+
+    @pytest.mark.hpgl
+    def test_ind_masked_array_equal_sizes_still_constructs(self):
+        from geo_bsd.ffi_adapter import create_ind_masked_array
+
+        data = np.arange(6, dtype="uint8").reshape(2, 3, order="F")
+        mask = np.ones(6, dtype="uint8").reshape(2, 3, order="F")
+        result = create_ind_masked_array(_FakePropSize(data, mask), grid=None)
+        assert result._array_refs == (data, mask)
+
+
+class TestFloatArrayGridSizeValidation:
+    """F-26: create_float_array must validate grid size in the grid path.
+
+    Pre-fix a float array smaller than the grid volume was passed to C++
+    with a grid-sized shape struct, and the kernel read past the end of the
+    buffer (heap OOB read).
+    """
+
+    @pytest.mark.hpgl
+    def test_grid_size_mismatch_raises(self):
+        from geo_bsd.ffi_adapter import create_float_array
+
+        arr = np.zeros(5, dtype="float32", order="F")
+        with pytest.raises(RuntimeError, match="Invalid data size"):
+            create_float_array(arr, _FakeGrid(2, 2, 2))  # volume 8 != 5
+
+    @pytest.mark.hpgl
+    def test_grid_size_match_still_constructs(self):
+        from geo_bsd.ffi_adapter import create_float_array
+
+        arr = np.zeros(8, dtype="float32", order="F")
+        result = create_float_array(arr, _FakeGrid(2, 2, 2))
+        assert result._array_ref is arr
+
+    @pytest.mark.hpgl
+    def test_grid_none_still_constructs(self):
+        from geo_bsd.ffi_adapter import create_float_array
+
+        arr = np.zeros((2, 2, 2), dtype="float32", order="F")
+        result = create_float_array(arr, None)
+        assert tuple(result.shape.m_data) == (2, 2, 2)
+
+
+class TestUbyteArrayShapePreservation:
+    """III-14: create_ubyte_array must preserve the caller's 3D mask shape.
+
+    Pre-fix the shape was stamped to (grid.x, grid.y, grid.z), so an
+    equal-volume (2,8,1) mask on a (4,4,1) grid passed the volume check AND
+    the C++ per-dimension shape guard (the stamped shape always matched the
+    grid), silently permuting the simulated cells.
+    """
+
+    @pytest.mark.hpgl
+    def test_preserves_3d_caller_shape(self):
+        from geo_bsd.ffi_adapter import create_ubyte_array
+
+        mask3d = np.ones((2, 8, 1), dtype="uint8", order="F")  # volume 16
+        result = create_ubyte_array(mask3d, _FakeGrid(4, 4, 1))
+        assert tuple(result.shape.m_data) == (2, 8, 1), (
+            "III-14: create_ubyte_array must preserve the caller's 3D mask "
+            "shape so the C++ per-dim guard can fire"
+        )
+
+    @pytest.mark.hpgl
+    def test_flat_mask_uses_grid_dims(self):
+        from geo_bsd.ffi_adapter import create_ubyte_array
+
+        flat = np.ones(16, dtype="uint8", order="F")
+        result = create_ubyte_array(flat, _FakeGrid(4, 4, 1))
+        assert tuple(result.shape.m_data) == (4, 4, 1)
+
+    @pytest.mark.hpgl
+    def test_volume_mismatch_still_raises(self):
+        from geo_bsd.ffi_adapter import create_ubyte_array
+
+        small = np.ones(8, dtype="uint8", order="F")
+        with pytest.raises(RuntimeError, match="Invalid data size"):
+            create_ubyte_array(small, _FakeGrid(4, 4, 1))
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

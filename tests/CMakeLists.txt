@@ -20,10 +20,14 @@ if(HPGL_BUILD_PYTHON)
     # monkeypatches pathlib.Path.__truediv__ globally; under pytest's verbose
     # nodeid reporting (pytest 9.0.2 AND 9.0.3) that leaks into cwd_relative_nodeid
     # and crashes pytest with INTERNALERROR ('str' object has no attribute 'parts').
+    # III-31: mirror run_tests.py's default marker selection (-m "not slow" —
+    # slow/perf/memory/simulation tests are excluded from the default suite)
+    # and set a timeout so a hung test cannot wedge the CTest run forever.
     add_test(NAME hpgl_python_tests
-        COMMAND ${_hpgl_test_python} -m pytest
+        COMMAND ${_hpgl_test_python} -m pytest -m "not slow"
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/python
     )
+    set_tests_properties(hpgl_python_tests PROPERTIES TIMEOUT 1800)
 endif()
 
 # ============================================================================

@@ -5,6 +5,16 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from geo_bsd import load_cont_property
 
+# F-54: the sample data lives in tests/python/test_data/ — the old
+# relative paths ("test_data/...") resolved to nothing at repo root and
+# the workflow failed with CriticalValidationError. Derive the real path
+# from this script's location so it works regardless of the CWD.
+# R-06: abspath removes the literal '..' component — PathValidator
+# rejects '..' before normalization (CriticalValidationError).
+TEST_DATA_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', 'tests', 'python', 'test_data'
+))
+
 
 def test_gtsim(prop1, prop2):
     n = 0
@@ -36,7 +46,9 @@ def ind_ver(prop, indicator):
     print(ind_prob)
 
 
-prop1 = load_cont_property("test_data/BIG_SOFT_DATA_160_141_20.INC", -99, (166, 141, 20))
+prop1 = load_cont_property(
+    os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_160_141_20.INC"), -99, (166, 141, 20)
+)
 prop2 = load_cont_property("results/GTSIM_TRUNC_RESULT.INC", -99, (166, 141, 20))
 test_gtsim(prop1, prop2)
 ind_ver(prop2, 3)

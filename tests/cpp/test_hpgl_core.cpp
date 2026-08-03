@@ -49,6 +49,8 @@
 #include "src/geo_bsd/hpgl/output.h"
 #include "src/geo_bsd/hpgl/property_writer.h"
 #include "src/geo_bsd/hpgl/property_array.h"
+#include "src/geo_bsd/hpgl/select.h"
+#include "src/geo_bsd/hpgl/cdf_utils.h"
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -1873,7 +1875,1126 @@ void test_clusterizer_rejects_memory_unsafe_volume() {
     CHECK(threw);
 }
 
+// ---- s8-fix-cpp-api regression tests (C-boundary validation cluster) ----
+//
+// F-18 / F-19 / II-02..II-06 / II-49 / II-50 / III-03 / III-34 / III-35 /
+// III-36: every test drives the C API directly with the malformed input the
+// fix rejects and asserts the error surfaces via
+// hpgl_get_last_exception_message(). Each FAILS against pre-fix code (silent
+// corruption, SIGSEGV, stale stats, torn buffer) and PASSES against the
+// fixed code. The Python layer pre-validates these inputs, so the direct-C
+// boundary is the only reachable regression surface.
+
+static hpgl_sgs_params_t make_sgs_params()
+{
+    hpgl_sgs_params_t params;
+    params.m_covariance_type = 0;  // COV_SPHERICAL
+    params.m_ranges[0] = 3; params.m_ranges[1] = 3; params.m_ranges[2] = 3;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 8;
+    params.m_kriging_kind = 1;  // KRIG_SIMPLE
+    params.m_seed = 42;
+    params.m_min_neighbours = 0;
+    return params;
+}
+
+static hpgl_ok_params_t make_ok_params()
+{
+    hpgl_ok_params_t params;
+    params.m_covariance_type = 0;  // COV_SPHERICAL
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 8;
+    return params;
+}
+
+static void init_ik_param(hpgl_ik_params_t & p, double marginal_prob)
+{
+    p.m_covariance_type = 0;  // COV_SPHERICAL
+    p.m_ranges[0] = 1; p.m_ranges[1] = 1; p.m_ranges[2] = 1;
+    p.m_angles[0] = 0; p.m_angles[1] = 0; p.m_angles[2] = 0;
+    p.m_sill = 1.0;
+    p.m_nugget = 0.0;
+    p.m_radiuses[0] = 1; p.m_radiuses[1] = 1; p.m_radiuses[2] = 1;
+    p.m_max_neighbours = 8;
+    p.m_marginal_prob = marginal_prob;
+}
+
+// F-18 + III-34: hpgl_sgs_simulation must validate the non-parametric CDF
+// struct at the C boundary. Pre-fix: null m_values/m_probs with m_size > 0
+// SIGSEGVed in std::lower_bound (uncatchable); negative/huge m_size was
+// trusted verbatim as the range length (heap OOB read).
+void test_sgs_rejects_invalid_cdf_struct() {
+    TEST("F-18/III-34: sgs rejects invalid cdf internal pointers / m_size");
+    float data[4] = {1.0f, 0, 0, 0};
+    unsigned char mask[4] = {1, 0, 0, 0};
+    hpgl_cont_masked_array_t in;
+    in.m_data = data; in.m_mask = mask;
+    init_shape(in.m_shape, 2, 2, 1);
+
+    hpgl_sgs_params_t params = make_sgs_params();
+    double mean = 0.0;
+
+    // (a) null m_values with m_size > 0 → clear error (pre-fix SIGSEGV).
+    {
+        float probs[2] = {0.5f, 1.0f};
+        hpgl_non_parametric_cdf_t cdf;
+        cdf.m_values = nullptr; cdf.m_probs = probs; cdf.m_size = 2;
+        hpgl_sgs_simulation(&in, &params, &cdf, &mean, nullptr);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "m_values") != nullptr);
+    }
+    // (b) null m_probs → clear error (pre-fix SIGSEGV).
+    {
+        float values[2] = {0.0f, 1.0f};
+        hpgl_non_parametric_cdf_t cdf;
+        cdf.m_values = values; cdf.m_probs = nullptr; cdf.m_size = 2;
+        hpgl_sgs_simulation(&in, &params, &cdf, &mean, nullptr);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "m_probs") != nullptr);
+    }
+    // (c) negative m_size → clear error (pre-fix UB pointer arithmetic).
+    {
+        float values[2] = {0.0f, 1.0f};
+        float probs[2] = {0.5f, 1.0f};
+        hpgl_non_parametric_cdf_t cdf;
+        cdf.m_values = values; cdf.m_probs = probs; cdf.m_size = -1;
+        hpgl_sgs_simulation(&in, &params, &cdf, &mean, nullptr);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "m_size") != nullptr);
+    }
+    // (d) absurdly large m_size → clear error (pre-fix heap OOB read).
+    {
+        float values[2] = {0.0f, 1.0f};
+        float probs[2] = {0.5f, 1.0f};
+        hpgl_non_parametric_cdf_t cdf;
+        cdf.m_values = values; cdf.m_probs = probs; cdf.m_size = 5000000000LL;
+        hpgl_sgs_simulation(&in, &params, &cdf, &mean, nullptr);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "m_size") != nullptr);
+    }
+}
+
+// F-18: a non-finite stationary mean silently produces NaN simulated values.
+void test_sgs_rejects_nonfinite_mean() {
+    TEST("F-18: sgs rejects non-finite stationary mean");
+    float data[4] = {1.0f, 0, 0, 0};
+    unsigned char mask[4] = {1, 0, 0, 0};
+    hpgl_cont_masked_array_t in;
+    in.m_data = data; in.m_mask = mask;
+    init_shape(in.m_shape, 2, 2, 1);
+
+    hpgl_sgs_params_t params = make_sgs_params();
+    double nan_mean = std::numeric_limits<double>::quiet_NaN();
+    hpgl_sgs_simulation(&in, &params, nullptr, &nan_mean, nullptr);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "mean") != nullptr);
+}
+
+// F-19: SIS and indicator-kriging must validate m_marginal_prob ∈ [0,1] at
+// the C boundary (sibling of the median_ik 2-M-35 gate). Pre-fix a finite
+// out-of-range value (5.0) silently corrupted category selection.
+void test_sis_rejects_out_of_range_marginal_prob() {
+    TEST("F-19: sis/ik reject marginal_prob outside [0,1]");
+    const int cells = 4;   // 2x2x1
+    const int cats = 2;
+    unsigned char in_data[cells * cats] = {0,1, 0,1, 0,1, 0,1};
+    unsigned char in_mask[cells * cats] = {1,1, 1,1, 1,1, 1,1};
+    unsigned char out_data[cells * cats] = {0};
+    unsigned char out_mask[cells * cats] = {0};
+    hpgl_ind_masked_array_t in, out;
+    in.m_data = in_data; in.m_mask = in_mask;
+    init_shape(in.m_shape, 2, 2, 1);
+    in.m_indicator_count = cats;
+    out.m_data = out_data; out.m_mask = out_mask;
+    init_shape(out.m_shape, 2, 2, 1);
+    out.m_indicator_count = cats;
+
+    // (a) hpgl_sis_simulation with finite out-of-range 5.0 → error.
+    {
+        hpgl_ik_params_t params[cats];
+        init_ik_param(params[0], 5.0);      // corrupt
+        init_ik_param(params[1], 0.5);
+        hpgl_sis_simulation(&in, params, cats, 42, nullptr);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "marginal_prob") != nullptr);
+    }
+    // (b) hpgl_sis_simulation with NaN → error (NaN fails the range check).
+    {
+        hpgl_ik_params_t params[cats];
+        init_ik_param(params[0], 0.5);
+        init_ik_param(params[1], std::numeric_limits<double>::quiet_NaN());
+        hpgl_sis_simulation(&in, params, cats, 42, nullptr);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "marginal_prob") != nullptr);
+    }
+    // (c) hpgl_indicator_kriging with finite out-of-range 5.0 → error.
+    {
+        hpgl_ik_params_t params[cats];
+        init_ik_param(params[0], 0.5);
+        init_ik_param(params[1], 5.0);      // corrupt
+        hpgl_indicator_kriging(&in, &out, params, cats);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "marginal_prob") != nullptr);
+    }
+    // (d) control: valid [0,1] marginals still run. The C ABI keeps the
+    // last error message indefinitely — there is no clear-error function
+    // (documented limitation III-06), so after a SUCCESSFUL call the stale
+    // "marginal_prob" message from case (c) is still observable. The
+    // success contract is "no NEW error stored for THIS call": snapshot
+    // the message before and assert it is unchanged after. A failure would
+    // overwrite it with a fresh error message.
+    {
+        hpgl_ik_params_t params[cats];
+        init_ik_param(params[0], 0.5);
+        init_ik_param(params[1], 0.5);
+        const std::string before = hpgl_get_last_exception_message();
+        hpgl_sis_simulation(&in, params, cats, 42, nullptr);
+        const std::string after = hpgl_get_last_exception_message();
+        CHECK(before == after);
+    }
+}
+
+// II-02: hpgl_simple_kriging with a user mean must reject NaN/Inf.
+void test_simple_kriging_rejects_nonfinite_mean() {
+    TEST("II-02: simple_kriging rejects non-finite m_mean");
+    float in_data[4] = {1.0f, 0, 0, 0};
+    unsigned char in_mask[4] = {1, 0, 0, 0};
+    float out_data[4] = {0.0f, 0, 0, 0};
+    unsigned char out_mask[4] = {0, 0, 0, 0};
+    hpgl_shape_t shape;
+    init_shape(shape, 2, 2, 1);
+
+    hpgl_sk_params_t params;
+    params.m_covariance_type = 0;
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 8;
+    params.m_automatic_mean = 0;
+    params.m_mean = std::numeric_limits<double>::quiet_NaN();
+
+    hpgl_simple_kriging(in_data, in_mask, &shape, &params, out_data, out_mask, &shape);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "m_mean") != nullptr);
+}
+
+// II-03: hpgl_lvm_kriging must scan mean_data contents for finiteness
+// (pointer/shape/volume were validated; the values were not).
+void test_lvm_kriging_rejects_nonfinite_means_contents() {
+    TEST("II-03: lvm_kriging rejects non-finite mean_data contents");
+    float in_data[4] = {1.0f, 0, 0, 0};
+    unsigned char in_mask[4] = {1, 0, 0, 0};
+    float out_data[4] = {0.0f, 0, 0, 0};
+    unsigned char out_mask[4] = {0, 0, 0, 0};
+    hpgl_shape_t shape;
+    init_shape(shape, 2, 2, 1);
+
+    // NaN in the mean contents — passes pointer/shape/volume checks.
+    float mean_data[4] = {1.0f, std::numeric_limits<float>::quiet_NaN(), 3.0f, 4.0f};
+    hpgl_shape_t mean_shape;
+    init_shape(mean_shape, 2, 2, 1);
+    hpgl_ok_params_t params = make_ok_params();
+
+    hpgl_lvm_kriging(in_data, in_mask, &shape, mean_data, &mean_shape,
+                     &params, out_data, out_mask, &shape);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "mean_data") != nullptr);
+
+    // Control: finite means still krige. The C ABI keeps the last error
+    // message indefinitely (no clear-error function, limitation III-06), so
+    // the stale "mean_data" message from the failing case above is still
+    // observable after a SUCCESSFUL call. Assert no NEW error was stored
+    // for THIS call: message must be unchanged.
+    float good_mean[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    const std::string before = hpgl_get_last_exception_message();
+    hpgl_lvm_kriging(in_data, in_mask, &shape, good_mean, &mean_shape,
+                     &params, out_data, out_mask, &shape);
+    const std::string after = hpgl_get_last_exception_message();
+    CHECK(before == after);
+}
+
+// II-04: hpgl_sgs_lvm_simulation must scan means contents for finiteness.
+void test_sgs_lvm_rejects_nonfinite_means() {
+    TEST("II-04: sgs_lvm rejects non-finite means contents");
+    float data[4] = {1.0f, 0, 0, 0};
+    unsigned char mask[4] = {1, 0, 0, 0};
+    hpgl_cont_masked_array_t in;
+    in.m_data = data; in.m_mask = mask;
+    init_shape(in.m_shape, 2, 2, 1);
+
+    hpgl_sgs_params_t params = make_sgs_params();
+
+    float means_data[4] = {1.0f, std::numeric_limits<float>::quiet_NaN(), 1.0f, 1.0f};
+    hpgl_float_array_t means;
+    means.m_data = means_data;
+    init_shape(means.m_shape, 2, 2, 1);
+
+    hpgl_sgs_lvm_simulation(&in, &params, nullptr, &means, nullptr);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "means data") != nullptr);
+}
+
+// II-05: hpgl_sis_simulation_lvm must scan each category's mean contents.
+void test_sis_lvm_rejects_nonfinite_means() {
+    TEST("II-05: sis_lvm rejects non-finite per-category mean contents");
+    const int cells = 4;   // 2x2x1
+    const int cats = 2;
+    unsigned char in_data[cells * cats] = {0,1, 0,1, 0,1, 0,1};
+    unsigned char in_mask[cells * cats] = {1,1, 1,1, 1,1, 1,1};
+    hpgl_ind_masked_array_t in;
+    in.m_data = in_data; in.m_mask = in_mask;
+    init_shape(in.m_shape, 2, 2, 1);
+    in.m_indicator_count = cats;
+
+    hpgl_ik_params_t params[cats];
+    init_ik_param(params[0], 0.5);
+    init_ik_param(params[1], 0.5);
+
+    // Category 0 mean contents contain NaN.
+    float m0[4] = {1.0f, std::numeric_limits<float>::quiet_NaN(), 1.0f, 1.0f};
+    float m1[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    hpgl_float_array_t mean_data[cats];
+    mean_data[0].m_data = m0;
+    init_shape(mean_data[0].m_shape, 2, 2, 1);
+    mean_data[1].m_data = m1;
+    init_shape(mean_data[1].m_shape, 2, 2, 1);
+
+    hpgl_sis_simulation_lvm(&in, params, mean_data, cats, 42, nullptr, 0);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "means[0]") != nullptr);
+}
+
+// II-06: cokriging mark1/mark2 must reject NaN primary/secondary means and
+// (mark1) NaN/negative secondary_variance at the C boundary.
+void test_cokriging_rejects_nonfinite_means() {
+    TEST("II-06: cokriging mark1/mark2 reject non-finite means/variance");
+    float in_data[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    unsigned char in_mask[4] = {1, 1, 1, 1};
+    float sec_data[4] = {4.0f, 3.0f, 2.0f, 1.0f};
+    unsigned char sec_mask[4] = {1, 1, 1, 1};
+    float out_data[4] = {0.0f, 0, 0, 0};
+    unsigned char out_mask[4] = {0, 0, 0, 0};
+    hpgl_cont_masked_array_t in, sec, out;
+    in.m_data = in_data;  in.m_mask = in_mask;  init_shape(in.m_shape, 2, 2, 1);
+    sec.m_data = sec_data; sec.m_mask = sec_mask; init_shape(sec.m_shape, 2, 2, 1);
+    out.m_data = out_data; out.m_mask = out_mask; init_shape(out.m_shape, 2, 2, 1);
+
+    // (a) mark1 NaN primary_mean → error (pre-fix silent NaN output).
+    {
+        hpgl_cokriging_m1_params_t params;
+        params.m_covariance_type = 0;
+        params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_primary_mean = std::numeric_limits<double>::quiet_NaN();
+        params.m_secondary_mean = 0.0;
+        params.m_secondary_variance = 1.0;
+        params.m_correlation_coef = 0.5;
+        hpgl_simple_cokriging_mark1(&in, &sec, &params, &out);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "primary_mean") != nullptr);
+    }
+    // (b) mark1 negative secondary_variance → error.
+    {
+        hpgl_cokriging_m1_params_t params;
+        params.m_covariance_type = 0;
+        params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_primary_mean = 0.0;
+        params.m_secondary_mean = 0.0;
+        params.m_secondary_variance = -1.0;
+        params.m_correlation_coef = 0.5;
+        hpgl_simple_cokriging_mark1(&in, &sec, &params, &out);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "secondary_variance") != nullptr);
+    }
+    // (c) mark2 NaN secondary_mean → error.
+    {
+        hpgl_cokriging_m2_params_t params;
+        params.m_primary_cov_params.m_covariance_type = 0;
+        params.m_primary_cov_params.m_ranges[0] = 1;
+        params.m_primary_cov_params.m_ranges[1] = 1;
+        params.m_primary_cov_params.m_ranges[2] = 1;
+        params.m_primary_cov_params.m_angles[0] = 0;
+        params.m_primary_cov_params.m_angles[1] = 0;
+        params.m_primary_cov_params.m_angles[2] = 0;
+        params.m_primary_cov_params.m_sill = 1.0;
+        params.m_primary_cov_params.m_nugget = 0.0;
+        params.m_secondary_cov_params = params.m_primary_cov_params;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_primary_mean = 0.0;
+        params.m_secondary_mean = std::numeric_limits<double>::quiet_NaN();
+        params.m_correlation_coef = 0.5;
+        hpgl_simple_cokriging_mark2(&in, &sec, &params, &out);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "secondary_mean") != nullptr);
+    }
+}
+
+// II-49: hpgl_simple_kriging_weights must zero thread-local stats BEFORE its
+// validation gates. Pre-fix reset_kriging_stats() sat inside the try, so the
+// 6 pointer checks + count gate returned -1 leaving stale stats from a prior
+// kriging call observable via hpgl_get_kriging_stats().
+void test_simple_kriging_weights_resets_stats_before_validation() {
+    TEST("II-49: simple_kriging_weights resets stats on validation failure");
+    // Populate stats with a successful kriging call.
+    float in_data[4] = {1.0f, 0, 0, 0};
+    unsigned char in_mask[4] = {1, 0, 0, 0};
+    float out_data[4] = {0.0f, 0, 0, 0};
+    unsigned char out_mask[4] = {0, 0, 0, 0};
+    hpgl_shape_t shape;
+    init_shape(shape, 2, 2, 1);
+
+    hpgl_sk_params_t sk_params;
+    sk_params.m_covariance_type = 0;
+    sk_params.m_ranges[0] = 1; sk_params.m_ranges[1] = 1; sk_params.m_ranges[2] = 1;
+    sk_params.m_angles[0] = 0; sk_params.m_angles[1] = 0; sk_params.m_angles[2] = 0;
+    sk_params.m_sill = 1.0;
+    sk_params.m_nugget = 0.0;
+    sk_params.m_radiuses[0] = 1; sk_params.m_radiuses[1] = 1; sk_params.m_radiuses[2] = 1;
+    sk_params.m_max_neighbours = 8;
+    sk_params.m_automatic_mean = 1;
+    sk_params.m_mean = 0.0;
+    hpgl_simple_kriging(in_data, in_mask, &shape, &sk_params, out_data, out_mask, &shape);
+    hpgl_kriging_stats_t stats = hpgl_get_kriging_stats();
+    CHECK(stats.m_points_calculated > 0);  // precondition: stats non-zero
+
+    // Validation failure on the weights entry point (null params) — returns
+    // -1 BEFORE the try block.
+    int rc = hpgl_simple_kriging_weights(nullptr, nullptr, nullptr, nullptr, 0, nullptr, nullptr);
+    CHECK(rc == -1);
+    hpgl_kriging_stats_t after = hpgl_get_kriging_stats();
+    CHECK(after.m_points_calculated == 0);
+    CHECK(after.m_points_without_neighbours == 0);
+    CHECK(after.m_points_singularity == 0);
+    CHECK(after.m_mean == 0.0);
+    CHECK(after.m_speed_nps == 0.0);
+}
+
+// II-50(b): hpgl_read_inc_file_byte must not leave a torn caller buffer when
+// the remap throws on an unmapped byte. Pre-fix the remap mutated data[i]
+// in place, so cells remapped before the throw stayed remapped.
+void test_read_inc_file_byte_preserves_buffer_on_unmapped_throw() {
+    TEST("II-50: read_inc_file_byte preserves buffer on unmapped-byte throw");
+    std::string dir = make_temp_dir();
+    std::string filename = dir + "/torn.inc";
+    // Raw byte values {5,6,7,200}; undefined=255 → all cells informed.
+    write_inc_text_file(filename, "prop\n5\n6\n7\n200\n/\n");
+
+    unsigned char data[4] = {0, 0, 0, 0};
+    unsigned char mask[4] = {0, 0, 0, 0};
+    unsigned char values[3] = {5, 6, 7};   // 200 is unmapped → throws
+    char * fname = const_cast<char *>(filename.c_str());
+    int rc = hpgl_read_inc_file_byte(fname, 255, 4, data, mask, values, 3);
+    CHECK(rc != 0);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "Unmapped byte value") != nullptr);
+    // Post-fix the caller's buffer holds the raw file bytes (read only);
+    // pre-fix cells 0-2 were already remapped to {0,1,2} → torn.
+    CHECK(data[0] == 5);
+    CHECK(data[1] == 6);
+    CHECK(data[2] == 7);
+    CHECK(data[3] == 200);
+    std::remove(filename.c_str());
+}
+
+// II-50(a) / III-03: hpgl_read_inc_file_byte must reject values_count > 256
+// (a `data[i] = j` write with j >= 256 overflows the unsigned char cell).
+void test_read_inc_file_byte_rejects_huge_values_count() {
+    TEST("II-50(a)/III-03: read_inc_file_byte rejects values_count > 256");
+    std::string dir = make_temp_dir();
+    std::string filename = dir + "/hugecount.inc";
+    write_inc_text_file(filename, "prop\n1\n2\n/\n");
+
+    unsigned char data[2] = {0, 0};
+    unsigned char mask[2] = {0, 0};
+    unsigned char values[2] = {1, 2};
+    char * fname = const_cast<char *>(filename.c_str());
+    int rc = hpgl_read_inc_file_byte(fname, 255, 2, data, mask, values, 1000);
+    CHECK(rc != 0);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "values_count") != nullptr);
+    std::remove(filename.c_str());
+}
+
+// III-35: hpgl_indicator_kriging must reject indicator_count <= 0 (pre-fix
+// silent no-op — every node falls through the kernel's zero-category loop).
+void test_indicator_kriging_rejects_zero_indicator_count() {
+    TEST("III-35: indicator_kriging rejects indicator_count <= 0");
+    unsigned char in_data[1] = {0};
+    unsigned char in_mask[1] = {1};
+    unsigned char out_data[1] = {0};
+    unsigned char out_mask[1] = {0};
+    hpgl_ind_masked_array_t in, out;
+    in.m_data = in_data; in.m_mask = in_mask;
+    init_shape(in.m_shape, 1, 1, 1);
+    in.m_indicator_count = 0;
+    out.m_data = out_data; out.m_mask = out_mask;
+    init_shape(out.m_shape, 1, 1, 1);
+    out.m_indicator_count = 0;
+
+    hpgl_ik_params_t params[1];
+    init_ik_param(params[0], 1.0);
+    hpgl_indicator_kriging(&in, &out, params, 0);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "indicator_count") != nullptr);
+}
+
+// III-36: cokriging mark1/mark2 must validate per-dimension primary↔secondary
+// shape equality, not just volume. Pre-fix (2,2,2)+(1,2,4) — both volume 8 —
+// silently permuted the secondary field via the primary flat index.
+void test_cokriging_rejects_per_dim_shape_mismatch() {
+    TEST("III-36: cokriging rejects equal-volume per-dim shape mismatch");
+    // Primary (2,2,2) volume 8; secondary (1,2,4) volume 8 — per-dim differs.
+    float in_data[8] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};
+    unsigned char in_mask[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    float sec_data[8] = {8.0f, 7.0f, 6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f};
+    unsigned char sec_mask[8] = {1, 1, 1, 1, 1, 1, 1, 1};
+    float out_data[8] = {0.0f, 0, 0, 0, 0, 0, 0, 0};
+    unsigned char out_mask[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    hpgl_cont_masked_array_t in, sec, out;
+    in.m_data = in_data;  in.m_mask = in_mask;  init_shape(in.m_shape, 2, 2, 2);
+    sec.m_data = sec_data; sec.m_mask = sec_mask; init_shape(sec.m_shape, 1, 2, 4);
+    out.m_data = out_data; out.m_mask = out_mask; init_shape(out.m_shape, 2, 2, 2);
+
+    // (a) mark1 → per-dim error.
+    {
+        hpgl_cokriging_m1_params_t params;
+        params.m_covariance_type = 0;
+        params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_primary_mean = 0.0;
+        params.m_secondary_mean = 0.0;
+        params.m_secondary_variance = 1.0;
+        params.m_correlation_coef = 0.5;
+        hpgl_simple_cokriging_mark1(&in, &sec, &params, &out);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "shape[") != nullptr);
+    }
+    // (b) mark2 → per-dim error.
+    {
+        hpgl_cokriging_m2_params_t params;
+        params.m_primary_cov_params.m_covariance_type = 0;
+        params.m_primary_cov_params.m_ranges[0] = 1;
+        params.m_primary_cov_params.m_ranges[1] = 1;
+        params.m_primary_cov_params.m_ranges[2] = 1;
+        params.m_primary_cov_params.m_angles[0] = 0;
+        params.m_primary_cov_params.m_angles[1] = 0;
+        params.m_primary_cov_params.m_angles[2] = 0;
+        params.m_primary_cov_params.m_sill = 1.0;
+        params.m_primary_cov_params.m_nugget = 0.0;
+        params.m_secondary_cov_params = params.m_primary_cov_params;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_primary_mean = 0.0;
+        params.m_secondary_mean = 0.0;
+        params.m_correlation_coef = 0.5;
+        hpgl_simple_cokriging_mark2(&in, &sec, &params, &out);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "shape[") != nullptr);
+    }
+    // (c) control: matching per-dim shapes (2,2,2)+(2,2,2) still run.
+    // The C ABI keeps the last error message indefinitely (no clear-error
+    // function, limitation III-06), so the stale "shape[" message from
+    // cases (a)/(b) is still observable after a SUCCESSFUL call. Assert no
+    // NEW error was stored for THIS call: message must be unchanged.
+    {
+        init_shape(sec.m_shape, 2, 2, 2);
+        hpgl_cokriging_m1_params_t params;
+        params.m_covariance_type = 0;
+        params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_primary_mean = 0.0;
+        params.m_secondary_mean = 0.0;
+        params.m_secondary_variance = 1.0;
+        params.m_correlation_coef = 0.5;
+        const std::string before = hpgl_get_last_exception_message();
+        hpgl_simple_cokriging_mark1(&in, &sec, &params, &out);
+        const std::string after = hpgl_get_last_exception_message();
+        CHECK(before == after);
+    }
+}
+
+// F-20: simple_cokriging_markI/markII entry guards must be NaN-bypass-proof.
+// Pre-fix the correlation_coef guard was comparison-only (`< -1.0 || > 1.0`),
+// which IEEE-754 NaN passes (NaN < x and NaN > x are both false) → NaN
+// correlation_coef flowed into cross_cov_model_mark_i_t → NaN m_coef → NaN
+// covariance matrix → silent mean-fill. Post-fix the entry guards prepend
+// !std::isfinite(x) and add means/variance finiteness validation at the C++
+// chokepoint (direct-C++ + C callers alike).
+void test_cokriging_direct_cpp_rejects_nonfinite_params() {
+    TEST("F-20: direct C++ markI/markII reject NaN coef/means/variance");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(4, 4, 1);
+    const int n = 16;
+    std::vector<float> primary_data(n, 0.0f);
+    std::vector<unsigned char> primary_mask(n, 0);
+    primary_data[0] = 1.0f;  primary_mask[0] = 1;
+    primary_data[1] = 3.0f;  primary_mask[1] = 1;
+    std::vector<float> secondary_data(n, 0.0f);
+    std::vector<unsigned char> secondary_mask(n, 0);
+    secondary_data[0] = 1.0f; secondary_mask[0] = 1;
+    std::vector<float> output_data(n, 0.0f);
+    std::vector<unsigned char> output_mask(n, 0);
+    hpgl::cont_property_array_t primary(primary_data.data(), primary_mask.data(), n);
+    hpgl::cont_property_array_t secondary(secondary_data.data(), secondary_mask.data(), n);
+    hpgl::cont_property_array_t output(output_data.data(), output_mask.data(), n);
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(1, 1, 0);
+    nb.m_max_neighbours = 8;
+    hpgl::covariance_param_t cp;
+    cp.m_covariance_type = hpgl::covariance_type_t::COV_EXPONENTIAL;
+    cp.set_ranges(3.0, 3.0, 3.0);
+    cp.set_angles(0.0, 0.0, 0.0);
+    cp.set_sill(1.0);
+    cp.set_nugget(0.0);
+
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const hpgl::mean_t nan_mean = static_cast<hpgl::mean_t>(nan);
+    auto throws = [](const std::function<void()> & fn) {
+        try { fn(); } catch (const hpgl::hpgl_exception &) { return true; }
+        return false;
+    };
+
+    // (a) markI NaN correlation_coef → throw (pre-fix: silent NaN mean-fill).
+    CHECK(throws([&]{ hpgl::simple_cokriging_markI(grid, primary, secondary, 0.0f, 0.0f, 1.0, nan, nb, cp, output); }));
+    // (b) markI NaN secondary_variance → throw.
+    CHECK(throws([&]{ hpgl::simple_cokriging_markI(grid, primary, secondary, 0.0f, 0.0f, nan, 0.5, nb, cp, output); }));
+    // (c) markI NaN primary_mean → throw.
+    CHECK(throws([&]{ hpgl::simple_cokriging_markI(grid, primary, secondary, nan_mean, 0.0f, 1.0, 0.5, nb, cp, output); }));
+    // (d) markI NaN secondary_mean → throw.
+    CHECK(throws([&]{ hpgl::simple_cokriging_markI(grid, primary, secondary, 0.0f, nan_mean, 1.0, 0.5, nb, cp, output); }));
+    // (e) markI Inf correlation_coef → throw (isfinite-first also catches Inf).
+    CHECK(throws([&]{ hpgl::simple_cokriging_markI(grid, primary, secondary, 0.0f, 0.0f, 1.0, std::numeric_limits<double>::infinity(), nb, cp, output); }));
+
+    hpgl::covariance_param_t cp2 = cp;
+    // (f) markII NaN correlation_coef → throw.
+    CHECK(throws([&]{ hpgl::simple_cokriging_markII(grid, primary, secondary, 0.0f, 0.0f, nan, nb, cp, cp2, output); }));
+    // (g) markII NaN primary_mean → throw.
+    CHECK(throws([&]{ hpgl::simple_cokriging_markII(grid, primary, secondary, nan_mean, 0.0f, 0.5, nb, cp, cp2, output); }));
+    // (h) markII NaN secondary_mean → throw.
+    CHECK(throws([&]{ hpgl::simple_cokriging_markII(grid, primary, secondary, 0.0f, nan_mean, 0.5, nb, cp, cp2, output); }));
+    // (i) control: valid params still run.
+    CHECK(!throws([&]{ hpgl::simple_cokriging_markI(grid, primary, secondary, 0.0f, 0.0f, 1.0, 0.5, nb, cp, output); }));
+}
+
+// II-10: when the secondary variance is 0 (Python-ACCEPTED — validation.py
+// rejects only < 0) or NaN, the secondary equation must be DROPPED entirely
+// (primary-only kriging, GSLIB convention) instead of writing the raw
+// variance to the diagonal. Pre-fix: d2=0 → raw 0 diagonal → singular matrix
+// every node → KI_SINGULARITY → mean-fill for every uninformed node (silent
+// for C-API). Post-fix: primary-only kriging succeeds, no singularity.
+void test_cokriging_zero_variance_primary_only() {
+    TEST("II-10: cokriging markI secondary_variance=0 → primary-only kriging (no singular matrix)");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(4, 4, 1);
+    const int n = 16;
+    std::vector<float> primary_data(n, 0.0f);
+    std::vector<unsigned char> primary_mask(n, 0);
+    primary_data[0] = 1.0f;  primary_mask[0] = 1;
+    primary_data[1] = 3.0f;  primary_mask[1] = 1;
+    primary_data[4] = 2.0f;  primary_mask[4] = 1;
+    // Secondary IS informed at every node — the variance, not the data, is
+    // the trigger.
+    std::vector<float> secondary_data(n, 5.0f);
+    std::vector<unsigned char> secondary_mask(n, 1);
+    std::vector<float> output_data(n, 0.0f);
+    std::vector<unsigned char> output_mask(n, 0);
+
+    hpgl::cont_property_array_t primary(primary_data.data(), primary_mask.data(), n);
+    hpgl::cont_property_array_t secondary(secondary_data.data(), secondary_mask.data(), n);
+    hpgl::cont_property_array_t output(output_data.data(), output_mask.data(), n);
+
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(2, 2, 0);
+    nb.m_max_neighbours = 8;
+
+    hpgl::covariance_param_t cp;
+    cp.m_covariance_type = hpgl::covariance_type_t::COV_EXPONENTIAL;
+    cp.set_ranges(3.0, 3.0, 3.0);
+    cp.set_angles(0.0, 0.0, 0.0);
+    cp.set_sill(1.0);
+    cp.set_nugget(0.0);
+
+    // secondary_variance=0.0: pre-fix singular matrix every node → mean-fill
+    // (points_singularity == uninformed count, points_calculated == 0).
+    hpgl::simple_cokriging_markI(grid, primary, secondary,
+        0.0f, 0.0f, 0.0, 0.5, nb, cp, output);
+
+    hpgl_kriging_stats_t stats = hpgl_get_kriging_stats();
+    // 13 uninformed nodes, all within radius 2 of an informed cell on a 4x4
+    // grid. Post-fix: all kriged (KI_SUCCESS), zero singularity.
+    CHECK(stats.m_points_calculated > 0);
+    CHECK(stats.m_points_singularity == 0);
+    bool any_output = false;
+    for (int i = 0; i < n; ++i) {
+        if (output_mask[i]) {
+            CHECK(std::isfinite(output_data[i]));
+            any_output = true;
+        }
+    }
+    CHECK(any_output);
+}
+
+// II-08: the SIS-LVM correlogram path solves the σ_i·σ_j scaled system
+// A_ij = C(h)·σ_i·σ_j, b_i = C(h_ic)·σ_i·σ_c. Algebraically that solution is
+// w_j = λ_j·σ_c/σ_j where λ solves the plain system — the back-transform is
+// EMBEDDED in the σ-scaled system. This numeric test pins that invariant:
+// corellogramed_weights_3 (active path) must return the plain-SK solution
+// scaled by σ_c/σ_j. It FAILS if someone "restores" the commented-out
+// double-transform block.
+void test_correlogram_weights_embed_sigma_backtransform() {
+    TEST("II-08: corellogramed_weights_3 == plain-SK + σ back-transform (varying means)");
+    double ranges[3] = {10.0, 10.0, 10.0};
+    double angles[3] = {0.0, 0.0, 0.0};
+    hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_EXPONENTIAL,
+                          ranges, angles, 1.0, 0.0);
+
+    std::vector<hpgl::sugarbox_location_t> coords;
+    coords.push_back(hpgl::sugarbox_location_t(1, 0, 0));
+    coords.push_back(hpgl::sugarbox_location_t(0, 1, 0));
+    coords.push_back(hpgl::sugarbox_location_t(0, 0, 1));
+    hpgl::sugarbox_location_t center(0, 0, 0);
+
+    // Varying means — the LVM scenario. Means are probabilities in [0,1];
+    // σ_i = sqrt(m_i·(1−m_i)).
+    double center_mean = 0.3;
+    std::vector<hpgl::mean_t> means;
+    means.push_back(0.2f);
+    means.push_back(0.5f);
+    means.push_back(0.8f);
+    const double sigmac = std::sqrt(center_mean * (1.0 - center_mean));
+
+    // Active path: σ-scaled system.
+    std::vector<hpgl::kriging_weight_t> active_weights;
+    bool ok = hpgl::corellogramed_weights_3<hpgl::cov_model_t, hpgl::sugarbox_location_t>(
+        center, center_mean, coords, cov, means, active_weights);
+    CHECK(ok);
+
+    // Reference: plain SK solve λ, then back-transform w_j = λ_j·σ_c/σ_j.
+    std::vector<hpgl::kriging_weight_t> plain_weights;
+    double variance = 0.0;
+    ok = hpgl::sk_kriging_weights_3<hpgl::cov_model_t, false, hpgl::sugarbox_location_t>(
+        center, coords, cov, plain_weights, variance);
+    CHECK(ok);
+
+    CHECK(active_weights.size() == plain_weights.size());
+    for (size_t i = 0; i < plain_weights.size(); ++i) {
+        double sigmai = std::sqrt(static_cast<double>(means[i]) * (1.0 - static_cast<double>(means[i])));
+        double expected = plain_weights[i] * sigmac / sigmai;
+        // mean_t is float32 — the plain-SK solve stores float means, so the
+        // reference carries ~1e-7 relative float32 round-off. Compare at 1e-6.
+        CHECK_CLOSE(active_weights[i], expected, 1e-6);
+    }
+}
+
+// III-09: cov_model_t / create_transform must reject anisotropy range ratios
+// that overflow to Inf/NaN. Pre-fix ranges {1e300, 1e-10, 1} → ratio 1e310 →
+// Inf scale entry → Inf transform → silent NaN/0 covariance for every
+// cov_model_t consumer. Post-fix: create_transform throws and
+// covariance_param_t::validate() throws.
+void test_cov_model_rejects_overflowing_range_ratio() {
+    TEST("III-09: cov_model_t rejects range-ratio overflow (Inf/NaN transform)");
+    // 1e300 / 1e-10 = 1e310 > DBL_MAX → Inf ratio.
+    hpgl::covariance_param_t cp;
+    cp.m_covariance_type = hpgl::covariance_type_t::COV_EXPONENTIAL;
+    cp.set_ranges(1e300, 1e-10, 1.0);
+    cp.set_angles(0.0, 0.0, 0.0);
+    cp.set_sill(1.0);
+    cp.set_nugget(0.0);
+
+    // validate() must reject the overflowing ratio.
+    bool validate_threw = false;
+    try { cp.validate(); } catch (const hpgl::hpgl_exception &) { validate_threw = true; }
+    CHECK(validate_threw);
+
+    // cov_model_t construction (validate → create_transform) must throw.
+    bool ctor_threw = false;
+    try {
+        hpgl::cov_model_t cov(cp);
+    } catch (const hpgl::hpgl_exception &) { ctor_threw = true; }
+    CHECK(ctor_threw);
+
+    // Control: a sane ratio still constructs and evaluates.
+    hpgl::covariance_param_t cp_ok;
+    cp_ok.m_covariance_type = hpgl::covariance_type_t::COV_EXPONENTIAL;
+    cp_ok.set_ranges(10.0, 5.0, 2.0);
+    cp_ok.set_angles(0.0, 0.0, 0.0);
+    cp_ok.set_sill(1.0);
+    cp_ok.set_nugget(0.0);
+    hpgl::cov_model_t cov_ok(cp_ok);
+    hpgl::sugarbox_location_t p1(0, 0, 0);
+    hpgl::sugarbox_location_t p2(1, 0, 0);
+    CHECK(std::isfinite(cov_ok(p1, p2)));
+}
+
 // ---- Main ----
+
+// F-01: select() validation must throw a catchable hpgl_exception instead of
+// abort() (SIGABRT). Pre-fix the 5 abort() sites were uncatchable — a bug in
+// index generation (path generator / neighbour lookup) killed the whole
+// process. The 3 prior fixes (537e2ae, 6b2d2cd, 9ab4dd0) copy-pasted the
+// abort() block; the fix consolidates validation into
+// detail::select_check_indices() and throws.
+void test_select_throws_on_invalid_index()
+{
+    TEST("F-01: select throws hpgl_exception on negative / out-of-bounds index");
+    std::vector<double> src = {10.0, 20.0, 30.0};
+    std::vector<double> dest;
+
+    // Negative index → throw (pre-fix: abort()).
+    {
+        std::vector<int> indices = {1, -1};
+        bool threw = false;
+        try { hpgl::select(src, indices, dest); }
+        catch (const hpgl::hpgl_exception &) { threw = true; }
+        CHECK(threw);
+    }
+    // Out-of-bounds index → throw (generic overload has the size() check).
+    {
+        std::vector<int> indices = {0, 3};
+        bool threw = false;
+        try { hpgl::select(src, indices, dest); }
+        catch (const hpgl::hpgl_exception &) { threw = true; }
+        CHECK(threw);
+    }
+    // Valid indices still work (guards against over-tightening).
+    {
+        std::vector<int> indices = {2, 0, 1};
+        hpgl::select(src, indices, dest);
+        CHECK(dest.size() == 3);
+        CHECK_CLOSE(dest[0], 30.0, 1e-12);
+        CHECK_CLOSE(dest[1], 10.0, 1e-12);
+        CHECK_CLOSE(dest[2], 20.0, 1e-12);
+    }
+}
+
+// F-37 / II-11 / II-12: kriged indicator probabilities must be NaN-safe.
+// A NaN bypasses the relational clamps (NaN < 0.0 is false), survives
+// correct_order_relations, and makes the sampler / most_probable_category
+// silently return category 0.
+void test_sanitize_probability_nan_safe()
+{
+    TEST("F-37/II-11/II-12: sanitize_probability rejects NaN and clamps to [0,1]");
+    // Non-finite → falls back to the marginal (pre-fix: NaN passed through).
+    CHECK_CLOSE(hpgl::detail::sanitize_probability(NAN, 0.3), 0.3, 1e-12);
+    // NaN fallback that is itself NaN is clamped to 0 (direct-C gap).
+    CHECK_CLOSE(hpgl::detail::sanitize_probability(NAN, NAN), 0.0, 1e-12);
+    // Range clamp.
+    CHECK_CLOSE(hpgl::detail::sanitize_probability(1.5, 0.3), 1.0, 1e-12);
+    CHECK_CLOSE(hpgl::detail::sanitize_probability(-0.5, 0.3), 0.0, 1e-12);
+    // Finite in-range value passes through.
+    CHECK_CLOSE(hpgl::detail::sanitize_probability(0.7, 0.3), 0.7, 1e-12);
+}
+
+// II-12: correct_order_relations must not propagate NaN. Pre-fix a NaN input
+// survived the clip (NaN comparisons are false), both passes, and the average,
+// then made most_probable_category silently return category 0.
+void test_order_relations_nan_safe()
+{
+    TEST("II-12: correct_order_relations treats NaN as 0 (no propagation)");
+    std::vector<hpgl::indicator_probability_t> probs = {NAN, 0.5f, 0.8f};
+    hpgl::detail::correct_order_relations(probs);
+    CHECK(std::isfinite(probs[0]));
+    CHECK(std::isfinite(probs[1]));
+    CHECK(std::isfinite(probs[2]));
+    // Monotone non-decreasing and [0,1]-bounded; normalized CDF ends at 1.
+    CHECK(probs[0] >= 0.0f && probs[0] <= 1.0f);
+    CHECK(probs[1] >= probs[0]);
+    CHECK(probs[2] >= probs[1]);
+    CHECK_CLOSE(probs[2], 1.0f, 1e-6);
+}
+
+// II-13: max_neighbours == 0 is the documented "unconditional simulation"
+// mode — an empty neighbourhood by contract. Pre-fix the pure-nugget fallback
+// fired on count==0 and admitted 1 radius-bounded datum, silently converting
+// unconditional simulation into 1-neighbour conditioned kriging.
+void test_plain_lookup_zero_max_neighbours_empty()
+{
+    TEST("II-13: plain lookup max_neighbours==0 returns empty (unconditional)");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(11, 11, 1);   // indices 0..120
+    double ranges[3] = {3.0, 3.0, 3.0};
+    double angles[3] = {0.0, 0.0, 0.0};
+    hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_SPHERICAL,
+                          ranges, angles, 1.0, 1.0);  // pure nugget
+
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(5, 5, 0);
+    nb.m_max_neighbours = 0;   // legal unconditional-simulation mode
+
+    hpgl::neighbour_lookup_t<hpgl::sugarbox_grid_t, hpgl::cov_model_t> nl(&grid, &cov, nb);
+
+    struct mask_pred {
+        const unsigned char * m;
+        bool operator()(hpgl::node_index_t i) const { return m[i] == 1; }
+    };
+
+    const int target = 5 * 11 + 5;  // (5,5)
+    std::vector<unsigned char> mask(121, 0);
+    // Datum immediately adjacent to the target — the pure-nugget fallback
+    // window would admit it pre-fix.
+    mask[5 * 11 + 6] = 1;  // (6,5)
+    std::vector<hpgl::node_index_t> indices;
+    std::vector<hpgl::sugarbox_location_t> coords;
+    hpgl::sugarbox_location_t node_coord;
+    nl.find(target, mask_pred{&mask[0]}, node_coord, indices, coords);
+    CHECK(indices.empty());  // pre-fix: 1 neighbour admitted
+}
+
+// III-10: a token longer than the caller's buffer must be REJECTED, not
+// truncated-and-continued (which silently split one logical value into two and
+// defeated the I2-56 count check on truncated files). The Python slow-parser
+// fallback reads tokens unbounded, so a clear error here is correct behavior.
+void test_read_inc_file_rejects_overlong_token()
+{
+    TEST("III-10: fast reader rejects tokens longer than the buffer (no split)");
+    std::string dir = make_temp_dir();
+    std::string filename = dir + "/longtoken.inc";
+    // 294-char token "0.000...0005" (value ~5e-292). Pre-fix the 256-byte
+    // caller buffer truncated it to 255 zeros (0.0) and the remainder became a
+    // second token (5.0) → [1,2,3,4,0,5,6,7,8,9] with rc==0 (count check
+    // defeated because the split produced exactly `size` tokens).
+    std::string token = "0." + std::string(291, '0') + "5";
+    std::string content = "long\n1 2 3 4 " + token + " 6 7 8 9";  // truncated: no trailing '\n'
+    write_inc_text_file(filename, content.c_str());
+    float data[10] = {0.0f};
+    unsigned char mask[10] = {0};
+    char * fname = const_cast<char *>(filename.c_str());
+    int rc = hpgl_read_inc_file_float(fname, -99.0f, 10, data, mask);
+    CHECK(rc != 0);  // pre-fix: rc == 0 with silently wrong data
+    std::remove(filename.c_str());
+}
+
+// II-14 contract guard: a failed write must never destroy a pre-existing
+// target file. On POSIX the temp-file pattern already preserved the target;
+// the Windows pre-fix path opened the TARGET with "w+" (truncating it) and the
+// RAII guard removed it on error. No Windows build exists on the host, so this
+// POSIX test pins the shared contract the Windows fix must uphold.
+void test_property_writer_preserves_target_on_failure()
+{
+    TEST("II-14: failed write leaves pre-existing target file intact");
+    std::string dir = make_temp_dir();
+    std::string filename = dir + "/preserve_target.inc";
+    write_inc_text_file(filename, "precious-original-content\n");
+    float data[3] = {1.0f, std::numeric_limits<float>::quiet_NaN(), 3.0f};
+    unsigned char mask[3] = {1, 1, 1};
+    hpgl::cont_property_array_t prop(data, mask, 3);
+    hpgl::property_writer_t writer;
+    writer.init(filename, "preserve");
+    try
+    {
+        writer.write_double(prop, -99.0);
+    }
+    catch (const hpgl::hpgl_exception &)
+    {
+        // expected — non-finite values are rejected
+    }
+    FILE * f = fopen(filename.c_str(), "r");
+    CHECK(f != nullptr);  // pre-fix (Windows): target removed by the guard
+    if (f != nullptr)
+    {
+        char buf[64] = {0};
+        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
+        std::string content(buf, n);
+        CHECK(content.find("precious-original-content") != std::string::npos);
+    }
+    std::remove(filename.c_str());
+}
+
+// R-02: a SHORT token (< 256 chars) straddling the 511-char fgets chunk
+// boundary must be reassembled exactly. The first III-10 fix accumulated
+// only a token LENGTH across refills and memcpy'd from the FINAL chunk — a
+// "99" straddling the boundary loaded as "9" (leading byte lost) with rc==0
+// (silent wrong data, no slow-parser fallback). The token is now rebuilt
+// chunk-by-chunk as each chunk is scanned.
+void test_read_inc_file_reassembles_straddling_token()
+{
+    TEST("R-02: short token straddling the 511-char boundary loads exactly");
+    std::string dir = make_temp_dir();
+    std::string filename = dir + "/straddle.inc";
+    // Line 2 = 510 spaces + "99" + newline + "/" + newline (513 chars). The
+    // first fgets chunk holds 511 chars (510 spaces + the first '9'); the
+    // second '9' + '\n' arrive in the refill chunk — the token "99"
+    // straddles the boundary.
+    std::string content = "prop\n" + std::string(510, ' ') + "99\n/\n";
+    write_inc_text_file(filename, content.c_str());
+    float data[1] = {0.0f};
+    unsigned char mask[1] = {0};
+    char * fname = const_cast<char *>(filename.c_str());
+    int rc = hpgl_read_inc_file_float(fname, -99.0f, 1, data, mask);
+    CHECK(rc == 0);                      // pre-fix: rc==0 but WRONG value
+    CHECK_CLOSE(data[0], 99.0f, 1e-6);   // pre-fix: 9.0 (leading byte lost)
+    CHECK(mask[0] == 1);
+    std::remove(filename.c_str());
+}
+
+// R-02 (byte path): the same tokenizer serves the byte reader — a byte
+// value straddling the 511-char boundary must also survive intact. "12"
+// straddles (first '1' at chunk position 510, '2' + '\n' in the refill
+// chunk); pre-fix the final-chunk memcpy produced "2" (rc==0, silent wrong
+// value). Post-fix the reassembled token reads 12.
+void test_read_inc_file_byte_reassembles_straddling_token()
+{
+    TEST("R-02: byte-path short token straddling the 511-char boundary");
+    std::string dir = make_temp_dir();
+    std::string filename = dir + "/straddle_byte.inc";
+    std::string content = "prop\n" + std::string(510, ' ') + "12\n/\n";
+    write_inc_text_file(filename, content.c_str());
+    unsigned char data[1] = {0};
+    unsigned char mask[1] = {0};
+    // Identity-ish remap for the first 13 byte values: value 12 → index 12.
+    unsigned char values[13] = {0,1,2,3,4,5,6,7,8,9,10,11,12};
+    char * fname = const_cast<char *>(filename.c_str());
+    int rc = hpgl_read_inc_file_byte(fname, 255, 1, data, mask, values, 13);
+    CHECK(rc == 0);
+    CHECK(data[0] == 12);              // pre-fix: 2 (straddle corruption)
+    CHECK(mask[0] == 1);
+    std::remove(filename.c_str());
+}
+
+// F-21 / R-03: the indexed fast path must bound the per-node candidate
+// scan. The clusterizer returns up to 27 × m_limit candidates in CLUSTER-
+// INDEX order (the center's own cluster is visited 14th of 27), so a plain
+// prefix bound would drop the CLOSEST data in dense regions. The fix
+// reorders candidates closest-first and caps the scan at SCAN_LIMIT=4913
+// (the sibling III-38 bound). Regression guard: with a huge candidate set
+// the result must stay capped at max_neighbours AND keep the closest
+// (center-cluster) candidates — the exact data a naive cluster-order
+// SCAN_LIMIT prefix would drop.
+void test_indexed_lookup_scan_bounded() {
+    TEST("R-03: indexed lookup bounds the fast-path candidate scan (F-21)");
+    // Radius 30 → covariance-field offsets 224,525 → clusterizer
+    // m_limit = 898 nodes/cluster. Fill the 8 populated clusters in the
+    // target's 3×3×3 box with 650 nodes each (well under m_limit — no
+    // over-limit fallback) → 5,200 raw candidates > SCAN_LIMIT 4913, so the
+    // cap binds on the fast path. max_neighbours 12 leaves 4 slots after
+    // the 8 octant representatives, so the closest non-rep datum is picked.
+    hpgl::sugarbox_grid_t grid;
+    grid.init(60, 60, 60);
+    double ranges[3] = {30.0, 30.0, 30.0};
+    double angles[3] = {0.0, 0.0, 0.0};
+    hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_EXPONENTIAL,
+                          ranges, angles, 1.0, 0.0);
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(30, 30, 30);
+    nb.m_max_neighbours = 12;
+
+    hpgl::indexed_neighbour_lookup_t<hpgl::sugarbox_grid_t, hpgl::cov_model_t>
+        lookup(&grid, &cov, nb);
+
+    struct all_defined_t { bool operator()(hpgl::node_index_t) const { return true; } };
+    all_defined_t all_defined;
+
+    auto add = [&](int x, int y, int z) {
+        hpgl::sugarbox_location_t loc(x, y, z);
+        hpgl::node_index_t idx = grid.get_index(loc);
+        lookup.add_node(idx);
+        return idx;
+    };
+
+    // Fill every populated cluster of the target's 3×3×3 box ([0,60)³,
+    // cluster cell size = radius 30) with 650 nodes, avoiding the distance-1
+    // cells so the closest-datum assertions below stay deterministic.
+    for (int cbz = 0; cbz < 2; ++cbz)
+        for (int cby = 0; cby < 2; ++cby)
+            for (int cbx = 0; cbx < 2; ++cbx)
+            {
+                const int bx = cbx * 30, by = cby * 30, bz = cbz * 30;
+                for (int i = 0; i < 650; ++i)
+                {
+                    int x = bx + 2 + (i % 26);
+                    int y = by + 2 + ((i / 26) % 26);
+                    int z = bz + 2 + (i / (26 * 26));
+                    add(x, y, z);
+                }
+            }
+    // Closest data in the target's own cluster: the target itself and its
+    // distance-1 neighbour — the highest-covariance candidates that a naive
+    // cluster-order scan bound would drop (the center cluster is 14th of 27).
+    hpgl::node_index_t center_idx = add(30, 30, 30);
+    hpgl::node_index_t close_idx = add(31, 30, 30);
+
+    hpgl::sugarbox_location_t node_coord;
+    std::vector<hpgl::node_index_t> indices;
+    std::vector<hpgl::sugarbox_location_t> coords;
+    lookup.find(center_idx, all_defined, node_coord, indices, coords);
+
+    // (a) Result capped by max_neighbours (cap-behavior contract).
+    CHECK(indices.size() <= 12);
+    // (b) The closest candidates survive the scan bound.
+    bool found_center = false, found_close = false;
+    for (size_t i = 0; i < indices.size(); ++i)
+    {
+        if (indices[i] == center_idx) found_center = true;
+        if (indices[i] == close_idx) found_close = true;
+    }
+    CHECK(found_center);
+    CHECK(found_close);
+}
+
+// F-38 / R-04: on kriging solve failure (all-identical neighbour points →
+// singular covariance matrix, F-206 scenario) the C API must surface a
+// MEANINGFUL kriging-failure message, not libstdc++'s internal
+// "vector::_M_range_check..." text from a raw .at() on an emptied weights
+// vector.
+void test_simple_kriging_weights_solve_failure_clean_message() {
+    TEST("R-04: kriging solve failure surfaces a clean message (F-38)");
+    float center[3] = {0.0f, 0.0f, 0.0f};
+    // All-identical neighbours → singular covariance matrix → solve failure.
+    float nx[5] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+    float ny[5] = {2.0f, 2.0f, 2.0f, 2.0f, 2.0f};
+    float nz[5] = {3.0f, 3.0f, 3.0f, 3.0f, 3.0f};
+    float weights[5] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    hpgl_cov_params_t params;
+    params.m_covariance_type = 0;   // COV_SPHERICAL
+    params.m_ranges[0] = 10; params.m_ranges[1] = 10; params.m_ranges[2] = 10;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+
+    int rc = hpgl_simple_kriging_weights(center, nx, ny, nz, 5, &params, weights);
+    CHECK(rc == -1);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && msg[0] != '\0');
+    if (msg != nullptr)
+    {
+        // Pre-fix: the raw std::vector::at out-of-range text leaks through —
+        // "vector::_M_range_check..." on libstdc++ (Linux), "vector" on
+        // libc++ (macOS). Either way the user saw library internals instead
+        // of a kriging-failure explanation.
+        CHECK(strstr(msg, "_M_range_check") == nullptr);
+        CHECK(strstr(msg, "vector") == nullptr || strstr(msg, "kriging") != nullptr);
+        CHECK(strstr(msg, "kriging solve failed") != nullptr);
+    }
+}
 
 int main() {
     test_gauss_solve_3x3_known_system();
@@ -1934,6 +3055,44 @@ int main() {
     test_cokriging_workspace_preserves_correctness();
     test_property_array_mask_size_bounds();
     test_clusterizer_rejects_memory_unsafe_volume();
+
+    // s8-fix-cpp-api regression tests (C-boundary validation cluster:
+    // F-18, F-19, II-02..II-06, II-49, II-50, III-03, III-34, III-35, III-36).
+    test_sgs_rejects_invalid_cdf_struct();
+    test_sgs_rejects_nonfinite_mean();
+    test_sis_rejects_out_of_range_marginal_prob();
+    test_simple_kriging_rejects_nonfinite_mean();
+    test_lvm_kriging_rejects_nonfinite_means_contents();
+    test_sgs_lvm_rejects_nonfinite_means();
+    test_sis_lvm_rejects_nonfinite_means();
+    test_cokriging_rejects_nonfinite_means();
+    test_simple_kriging_weights_resets_stats_before_validation();
+    test_read_inc_file_byte_preserves_buffer_on_unmapped_throw();
+    test_read_inc_file_byte_rejects_huge_values_count();
+    test_indicator_kriging_rejects_zero_indicator_count();
+    test_cokriging_rejects_per_dim_shape_mismatch();
+
+    // s8-fix-cpp-kriging regression tests (F-20, II-10, II-08, III-09).
+    test_cokriging_direct_cpp_rejects_nonfinite_params();
+    test_cokriging_zero_variance_primary_only();
+    test_correlogram_weights_embed_sigma_backtransform();
+    test_cov_model_rejects_overflowing_range_ratio();
+
+    // s8-fix-cpp-sim regression tests (F-01, F-37, II-11, II-12, II-13,
+    // II-14, III-10).
+    test_select_throws_on_invalid_index();
+    test_sanitize_probability_nan_safe();
+    test_order_relations_nan_safe();
+    test_plain_lookup_zero_max_neighbours_empty();
+    test_read_inc_file_rejects_overlong_token();
+    test_property_writer_preserves_target_on_failure();
+
+    // s9 fix convergence pass 2 (R-02 tokenizer straddle, R-03 F-21 scan
+    // bound, R-04 F-38 kriging-failure message).
+    test_read_inc_file_reassembles_straddling_token();
+    test_read_inc_file_byte_reassembles_straddling_token();
+    test_indexed_lookup_scan_bounded();
+    test_simple_kriging_weights_solve_failure_clean_message();
 
     std::printf("C++ unit tests: %d run, %d failed\n", g_tests_run, g_tests_failed);
     return g_tests_failed > 0 ? 1 : 0;

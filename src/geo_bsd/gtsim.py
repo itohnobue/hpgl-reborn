@@ -3,6 +3,7 @@
 # GTSIM for 2 indicators (facies)
 
 import logging
+import math
 import warnings
 
 import numpy as np
@@ -70,6 +71,27 @@ def _norm_ppf(p):
         # Φ⁻¹(p) is negative for p < 0.5, positive for p > 0.5
         z[~upper] = -z[~upper]
         return z
+
+
+def _norm_cdf(x):
+    """Standard normal cumulative distribution function Φ(x).
+
+    Vectorized over numpy arrays using ``math.erf``:
+    Φ(x) = 0.5 * (1 + erf(x / sqrt(2))).
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        Standard normal quantiles.
+
+    Returns
+    -------
+    numpy.ndarray
+        Cumulative probabilities Φ(x) in (0, 1).
+    """
+    x = np.asarray(x, dtype=np.float64)
+    with np.errstate(over="ignore", invalid="ignore"):
+        return 0.5 * (1.0 + np.vectorize(math.erf)(x / math.sqrt(2.0)))
 
 
 def tk_calculation(pk_prop, mean=0.0, std_dev=1.0):
@@ -301,8 +323,30 @@ def gtsim_2ind(
         raise RuntimeError("gtsim_2ind: NaN or Inf in SGS output (prop1.data)")
     if np.any(~np.isfinite(tk_flat)):
         raise RuntimeError("gtsim_2ind: NaN or Inf in threshold data")
+
+    # F-02 (HIGH): the SGS output prop1 lives in DATA space — the C++
+    # sequential_gaussian_simulation back-transforms the simulated
+    # standard-normal field through the in-scope empirical CDF
+    # (transform_cdf_p(output, gaussian_cdf_t(), ncdf) at
+    # sequential_gaussian_simulation.cpp:165), so prop1 = F⁻¹(Φ(Z)).
+    # The tk thresholds computed by tk_calculation live in NORMAL-SCORE
+    # space. Comparing data-space output against normal-score thresholds
+    # grossly misclassifies categories (pre-fix live repro: pk=0.5 ->
+    # facies-1 proportion 1.000 instead of ~0.5). Map the threshold into
+    # the SAME data space via the same empirical CDF used by the
+    # back-transform: tk_data = F⁻¹(Φ(tk_std)).
+    #
+    # II-39: non-default tk_mean/tk_std_dev silently distort proportions.
+    # tk_calculation returns tk = tk_mean - tk_std_dev·Φ⁻¹(p); the engine
+    # simulates a STANDARD-normal field, so the effective threshold is
+    # (tk - tk_mean)/tk_std_dev = -Φ⁻¹(p). Normalize tk params to
+    # standard-normal space before the CDF mapping — the F-02 "same space"
+    # fix alone (tk_data = F⁻¹(Φ(tk)) with raw tk) does NOT repair the
+    # tk-param distortion.
+    tk_std = (tk_flat - tk_mean) / tk_std_dev
+    tk_data = cdf_data.inverse(_norm_cdf(tk_std))
     # Vectorized thresholding.
-    mask = prop1_flat >= tk_flat
+    mask = prop1_flat >= tk_data
     prop1_flat[mask] = 1
     prop1_flat[~mask] = 0
     logger.info("Done.")

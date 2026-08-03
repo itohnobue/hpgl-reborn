@@ -23,7 +23,9 @@ def w_var(weights, data, w_mean_val):
     weights = norm(weights)
     for i in range(len(data)):
         var = var + weights[i] * (data[i] - w_mean_val) ** 2
-    var = sqrt(var / weights.sum())
+    # F-52: return the weighted variance, not its square root — the
+    # function name and callers ("weighted variance") describe a variance.
+    var = var / weights.sum()
     return var
 
 
@@ -38,12 +40,13 @@ def w_mean(weights, data):
     return z
 
 
-# Calculate standard deviation (sqrt[var])
+# Calculate variance (mean squared deviation from the mean)
 def calc_quadr_var(array, mean_val):
     var = 0.0
     for i in range(len(array)):
         var = var + ((array[i] - mean_val) ** 2) / len(array)
-    var = sqrt(var)
+    # F-52: return the variance, not its square root — the name and the
+    # callers ("variance") describe a variance.
     return var
 
 
@@ -72,7 +75,11 @@ def corr_coef(x, y):
     var = var_x * var_y
     for i in range(len(x)):
         coef = coef + x[i] * y[i]
-    coef = (coef - len(x) * mean_x * mean_y) / ((len(x) - 1) * var)
+    # F-46: Pearson correlation coefficient. calc_quadr_var returns the
+    # (population) variance, so std_x * std_y = sqrt(var); the numerator
+    # is the sum of cross-products. The old denominator (n-1)*var mixed a
+    # population std with a sample covariance, biasing r by n/(n-1).
+    coef = (coef - len(x) * mean_x * mean_y) / (len(x) * np.sqrt(var))
     return coef
 
 

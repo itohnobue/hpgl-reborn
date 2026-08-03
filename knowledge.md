@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-02T22:34:21.066995
+Last updated: 2026-08-03T18:02:29.605413
 
 ## [got-20260616055758-f1d951]
 Category: gotcha
@@ -532,4 +532,158 @@ Tags: numerical, cpp, python, verification
 Changed: 2026-08-02T22:34:21.063029
 
 parallel language implementations of the same algorithm must agree on the underlying METRIC/semantics, not just the API signature - when a Python fallback reimplements a C++ kernel, the binning metric (Euclidean distance vs projection onto anisotropy axis), self-pair handling, and search semantics must match the C++ reference; API parity without metric parity silently produces different results for the same inputs. In hpgl-reborn v2.0.2: 2-M-13 (Python pure-Python variogram scans bin by raw Euclidean distance while BOTH C++ kernels bin by projection onto principal anisotropy axis - same template+data => different variogram curves, empirically lag-3 4.5000 vs 3.6937; tunnel filters identical, divergence isolated to lag-binning metric; product decision: align Python to C++ projection metric), M-21 (GridStyle didn't skip self-pairs while ContStyle did - the two Python scans disagreed on same data; product decision needed on reference kernel). Fix: when a Python path mirrors a C++ kernel, document and match the metric/semantic contract explicitly (projection vs Euclidean, self-pair policy), and add a cross-language equivalence test asserting the same output for the same input. Checklist: (a) identify the metric each kernel uses (grep the binning code), (b) Python fallback must match the C++ reference metric, (c) sibling paths within the same language must agree (self-pair skip, etc.), (d) cross-language equivalence tests guard the parity.
+
+## [got-20260803001248-1d7a62]
+Category: gotcha
+Tags: gslib, sgsim, geostatistics
+Changed: 2026-08-03T00:12:48.411382
+
+GSLIB sgsim reference: ndmin counts ONLY original hard data (nclose from srchsupr); previously-simulated nodes (ncnode) never count. nclose<ndmin => node SKIPPED (written as UNEST=-99.0), NOT N(mean,1) fallback.
+
+## [got-20260803001248-8cfb28]
+Category: gotcha
+Tags: gslib, sgsim, geostatistics
+Changed: 2026-08-03T00:12:48.481536
+
+GSLIB sgsim reference: OK->SK downgrade at (nclose+ncnode).lt.4 (fewer than 4 total data). N(mean,1.0) fallback (cmean=gmean,cstdev=1.0) only when zero data or singular kriging matrix.
+
+## [got-20260803001248-7468e0]
+Category: gotcha
+Tags: gslib, file-format, geostatistics
+Changed: 2026-08-03T00:12:48.553434
+
+GSLIB format: GEO-EAS style ASCII, space-delimited, Fortran list-directed read (NaN/Inf text = read error). Missing = trimming window +/-1.0e21 (user-facing); internal UNEST version-dependent (-99.0 in GSLIB 2.907, 1.0e21 classic). Grid output header: title / 'nvar nx ny nz' / names; x fastest, then y, then z.
+
+## [pat-20260803001248-62e195]
+Category: pattern
+Tags: gslib, sisim, ordrel
+Changed: 2026-08-03T00:12:48.619961
+
+ORDREL order-relation corrections (GSLIB ordrel.for): clamp indicator probs to [0,1]; continuous: upward correction then downward correction then average ccdfo(i)=0.5*(ccdf1(i)+ccdf2(i)) => monotonic non-decreasing; categorical: renormalize to sum 1.
+
+## [ref-20260803001248-026bbf]
+Category: reference
+Tags: gslib, reference
+Changed: 2026-08-03T00:12:48.689707
+
+GSLIB 2.0/2.907 original Fortran sources mirrored at github.com/exepulveda/gslib2.0 (src/original/{sgsim,sisim,gtsim,gslib}/*.for) — authoritative reference for sgsim/sisim/gtsim semantics.
+
+## [got-20260803180147-394516]
+Category: gotcha
+Tags: ffi, memory, python, cpp, validation
+Changed: 2026-08-03T18:01:47.795269
+
+FFI output-buffer contract: contiguity, size, AND writeability must all be enforced before a C call writes into a caller buffer. Three independent facets fail separately in hpgl-reborn: (a) CONTIGUITY - numpy sliced/non-contiguous views passed to C++ flat-indexed loops cause heap OOB writes (F-28 cvariogram.py:618-634, live negative-stride probe); (b) SIZE - caller-provided output buffers are not validated against the C++ write volume, so a too-small buffer silently truncates results (II-40 num_lags=4/buffer 2 -> mismatched tuple; F-24/F-25 data.size==mask.size missing -> heap OOB read), and an FFI constructor can stamp grid dims into a mask buffer defeating downstream per-dim guards (III-14 create_ubyte_array); (c) WRITEABILITY - a writeable=False buffer is silently mutated and a true read-only mmap SIGBUSes uncatchably on CalcVariogramsFromPointSet and CStackLayers (III-39). C++ must also fully initialize result buffers before return (III-40 CStackLayers top-tail cells unwritten -> stale-cell corruption on buffer reuse). Fix: validate contiguity (np.ascontiguousarray), size (every dim, not just volume), and writeability (flags WRITEABLE) before EVERY FFI call, and have C++ initialize outputs. Checklist: (a) for every FFI call receiving an output buffer, verify contiguity, exact size, and writeability, (b) verify C++ writes every element or explicitly initializes, (c) test with sliced views, undersized buffers, and read-only buffers.
+
+## [pat-20260803180149-88787b]
+Category: pattern
+Tags: caps, performance, verification, complexity
+Changed: 2026-08-03T18:01:49.666814
+
+a work cap's CONSTANT must be validated against the real worst-case cost of the loop it bounds - an existing cap can under-estimate the true work by orders of magnitude and is then not a cap at all. In hpgl-reborn v2.0.3: F-03 (Python CubeScan had NO total-work cap - 2.6e12-8.4e13 measured ops, 24GB mgrid at 1000^3), F-27 (GridStyle cap under-estimates n^2 x NumLags cost by factor 5.0e5-7.2e5 - the cap value was derived from the wrong complexity), F-30 (MovingAverage cap bounds MEMORY not WORK - N x V product loops still multi-hour). Extends pat-20260802092606-5ce233 (count caps do not bound work) and pat-20260802223223-084a44 (per-language calibration): even a correctly-shaped work cap fails when its VALUE is wrong. Fix: after adding a work cap, measure or derive the actual worst-case operation count for the exact loop structure and set the cap to bound the target worst-case runtime; verify with a pathological input that the cap fires. Checklist: (a) compute the real loop complexity (product terms), (b) sanity-check the cap constant against a measured worst-case runtime, (c) a cap that passes a multi-hour input is not a cap.
+
+## [got-20260803180153-63845d]
+Category: gotcha
+Tags: python, cpp, ffi, geostatistics, validation
+Changed: 2026-08-03T18:01:53.332378
+
+mask semantics - the meaning of 'informed' (mask != 0 vs mask == 1) must be consistent across Python and C++ implementations: Python variogram routines treat any non-zero mask cell as informed while the C++ kriging kernel requires exactly 1, so mask=2 cells are counted by Python diagnostics but never simulated (III-13, false '2 of 3 cells could not be kriged'); three variogram implementations disagree on what a non-zero mask means (II-41 CalcVPC mask=2 halves; Cubes2PointSet 8+8 trailing zeros; MovingAverage3D every cell undefined) despite a docstring contract permitting non-zero masks. Fix: validate that masks are binary (0/1) at the Python boundary and align the C++ semantic to mask != 0 (or vice versa) with a cross-language test. Checklist: (a) grep every mask consumer for its 'informed' predicate (mask==1 vs mask!=0), (b) Python and C++ must use the same predicate, (c) validate mask values are binary at API boundaries.
+
+## [got-20260803180154-b873f2]
+Category: gotcha
+Tags: numerical, reproducibility, cpp, ffi
+Changed: 2026-08-03T18:01:54.564330
+
+64-bit seeds are silently truncated mod 2^32 when handed to a 32-bit RNG state: static_cast to mt19937::result_type (uint32) makes distinct seeds (e.g. 5 and 2^32+5) produce bit-identical variograms (II-15 variograms.cpp:707, live probe; the prior 'fix' 05bcec5 introduced the defect); the ctypes side wraps mod 2^64 (III-02, 2^63 -> -2^63). Seed handling must preserve the full 64-bit value (split into two 32-bit words for mt19937 seeding) and validate range BEFORE conversion. Checklist: (a) for every RNG seed path, verify the full-width seed survives to the RNG state, (b) test seeds that differ only above 2^32 produce different streams, (c) validate seed range at the API boundary before truncating conversion.
+
+## [got-20260803180158-e9ddad]
+Category: gotcha
+Tags: numerical, geostatistics, python, cpp
+Changed: 2026-08-03T18:01:58.635479
+
+data-space vs normal-score-space mixing in transforms silently corrupts results: when a pipeline mixes CDF/normal-score transforms, every comparison must happen in ONE space. In hpgl-reborn: F-02 (GTSIM truncation compares data-space output against normal-score thresholds - category proportions grossly wrong, 0.50->1.000), II-39 (SGS output is DATA space, not standard-normal - the back-transform exists at :142-146; non-default tk params silently distort proportions and the F-02 fix alone does NOT repair it), III-37 (scalar stationary mean=50 NOT CDF-transformed while the LVM mean IS - sparse cells pinned to CDF max datum). Fix: document each output's space (data vs standard-normal), transform every input to the same space before comparison/truncation, and add a round-trip test. Checklist: (a) for any truncation/back-transform, verify the compared quantities are in the same space, (b) sibling branches (scalar vs LVM mean) must apply the same transform, (c) round-trip tests must cover the max datum.
+
+## [got-20260803180159-7eedaa]
+Category: gotcha
+Tags: build, packaging, python, version
+Changed: 2026-08-03T18:01:59.836276
+
+__version__ derived from the INSTALLED distribution metadata can be stale relative to the source tree: src/geo_bsd/__init__.py reported '1.6.0' because a stale hpgl-1.6.0.dist-info remained installed, while the source and wheel were 2.0.2 (II-28, live-reproduced); the guard test was tautological (checked the installed dist, not the source). Fix: derive __version__ from the source (a version file, or importlib.metadata guarded by a source-vs-installed consistency check) and make the version gate compare source version against installed metadata rather than asserting a constant. Checklist: (a) verify __version__ equals the source package version in a clean venv, (b) a stale dist-info in the environment must not change the reported version, (c) version-gate tests must fail when source and installed versions diverge.
+
+## [got-20260803180203-57a007]
+Category: gotcha
+Tags: python, packaging, compatibility
+Changed: 2026-08-03T18:02:03.988895
+
+PEP 604 union annotations (X | Y) executed at module scope break Python < 3.10 unless 'from __future__ import annotations' is present: geo.py:163 ('dict | None') raised TypeError on import on the declared-supported Python 3.9 (III-24, proven on 3.9.25 with installed wheel; the line was introduced by a production-check commit cbe636c and survived 4 passes because build/tests run on 3.13). Declared version support (requires-python, classifiers, cp39 matrix, py3-none tag) with no old-version CI means nothing catches it. Fix: either add 'from __future__ import annotations' at the top of every module with PEP 604 annotations, or avoid PEP 604 at module scope; add a lowest-supported-version import smoke test (e.g. a 3.9 wheel install + import). Checklist: (a) grep for union annotations and 'from __future__ import annotations', (b) verify every module with PEP 604 syntax at module scope has the future import, (c) run an import smoke test on the oldest declared-supported Python.
+
+## [got-20260803180205-fa2e8c]
+Category: gotcha
+Tags: io, parsing, cpp, ffi
+Changed: 2026-08-03T18:02:05.435084
+
+fixed-buffer tokenizers silently corrupt a token that straddles a buffer boundary: read_inc_file.cpp token_stream_t accumulates across refills but the III-10 fix memcpy'd only the final chunk - a '99' token split at the 511-char boundary became 9.0 with rc=0 and NO fallback (silent wrong data, strictly worse than the pre-fix loud error); the token-count check (I2-56) is defeated because the split token counts as two values. Python-side line.split() materializes tokens before any length check (II-42, 3.4MB line -> 500k strings/28MB RSS). Fix: buffer reassembly that preserves straddling-token leading bytes and excludes delimiter/trailing bytes in BOTH text and byte paths; bound token length before materialization. Checklist: (a) for every fixed-buffer tokenizer, test a token exactly spanning a refill boundary, (b) verify token-count checks survive boundary splits, (c) add a regression test for the straddle path, not just the overlong-token throw path.
+
+## [got-20260803180209-08702a]
+Category: gotcha
+Tags: io, windows, cpp, file-writing
+Changed: 2026-08-03T18:02:09.626210
+
+Windows file-replacement contract: a file with an open handle CANNOT be renamed/replaced (MoveFileExA -> ERROR_SHARING_VIOLATION; CRT opens with _SH_DENYNO, no FILE_SHARE_DELETE) - the R-05 regression broke all 4 property_writer.cpp writers because the II-14 fix renames the temp while the FILE* is still open (pre-fix self-rename was a silent no-op); and the II-14 guard removes the TARGET on write error (guard armed on target, rename no-op) destroying the pre-existing file. Fix: close/flush the handle BEFORE rename/replace in every writer, and arm the guard on the TEMP file, never the target. Checklist: (a) every write path must close the FILE* before rename/MoveFileExA, (b) failure cleanup must remove the temp, not the target, (c) verify the error path preserves the pre-existing target.
+
+## [got-20260803180210-03bda0]
+Category: gotcha
+Tags: concurrency, io, ffi, locale
+Changed: 2026-08-03T18:02:10.793826
+
+non-glibc setlocale race: on macOS (de_DE) concurrent I/O wrappers that call setlocale while another thread parses with sscanf corrupt the parse (fractional parts dropped 1.5->1.0) AND permanently corrupt the process locale; glibc's setlocale is thread-safe but other platforms are not. The C++ locale_keeper mutex only guards the setlocale calls, not the parse window (II-35, live race reproduced). Fix: serialize the full parse window (setlocale + sscanf + restore) under one lock, or avoid setlocale entirely (use a locale-independent parse). Checklist: (a) grep setlocale and sscanf/%f parse sites, (b) verify the lock covers parse AND restore, not just the setlocale call, (c) test under a non-glibc locale (de_DE) with concurrent calls.
+
+## [got-20260803180214-392ca5]
+Category: gotcha
+Tags: numerical, lapack, cpp, validation
+Changed: 2026-08-03T18:02:14.517186
+
+LAPACK INFO=0 does not guarantee numerically meaningful results: a near-singular SPD matrix can pass dpotrf_/dpotrs_ with INFO=0 and return wild weights (1.0e12, -1.0e12) reported as KI_SUCCESS (II-09 solver_entry_point.h:147-172, compiled probe; exactly-singular is caught, near-singular is not). Add weight-magnitude validation on the success path (or a condition-number check) so wild estimates are rejected. Checklist: (a) after every successful LAPACK solve, validate weight magnitude / condition, (b) test near-singular (not just exactly-singular) matrices, (c) treat INFO=0 as 'no factorization error', not 'numerically trustworthy'.
+
+## [got-20260803180215-d64b36]
+Category: gotcha
+Tags: numerical, validation, cpp, python
+Changed: 2026-08-03T18:02:15.831913
+
+zero/empty boundary values silently switch an algorithm to a DIFFERENT branch: max_neighbours=0 (legal 'unconditional simulation') silently becomes 1-neighbour conditioned kriging (II-13, pure-nugget fallback fires on count==0, live probe mean 4.7493 vs unconditional 0); thickness==0.0 routes to the erosion branch and blanks an ENTIRE column (II-57, zero-layer-first -> blank_value, C++ probe; PRIOR_FIX_ATTEMPT 3ad77ee missed the zero boundary). Fix: explicitly handle zero/empty boundary values (raise or implement the documented semantics), never let them fall through to an unrelated branch. Checklist: (a) for every branch selected by a magnitude test (>=0 vs >0), test the exact zero input, (b) document and validate zero-value semantics at the API boundary, (c) regression-test the zero case, not just positive values.
+
+## [got-20260803180219-d413b7]
+Category: gotcha
+Tags: build, cmake, windows, msvc
+Changed: 2026-08-03T18:02:19.562243
+
+multi-config CMake generators (Visual Studio, Xcode) IGNORE CMAKE_BUILD_TYPE - a preset that sets CMAKE_BUILD_TYPE=Release with no configuration member and no --config silently builds Debug (II-22 windows-msvc preset: no /sdl, no /guard:cf in Debug; the prior 'fix' e791f6b REMOVED --config and CAUSED the regression). Fix: pass --config Release explicitly in the build command or add a configuration member to the preset; never rely on CMAKE_BUILD_TYPE with multi-config generators. Checklist: (a) for every multi-config generator build, verify the actual configuration via the build command, (b) a 'fix' that removes --config while using a multi-config generator is a regression, (c) test the built binary's flags (e.g. /guard:cf presence) to confirm the intended config.
+
+## [got-20260803180220-67e8a0]
+Category: gotcha
+Tags: python, numpy, compatibility
+Changed: 2026-08-03T18:02:20.636725
+
+numpy >= 2.4 raises ValueError when a 1-element array is assigned to a scalar slot (previously a deprecation): scripts that do scalar = arr[0:1] (or shape-(1,) arrays into scalar positions) crash on modern numpy - F-09 (2_corr_npv.py crashes first iteration), F-17 (shape-(1,) array -> scalar slot in 8.3/cdf_pdf.py, HIGH->MEDIUM, numpy-version-dependent). Fix: index with arr[0] (scalar) instead of arr[0:1] (array), and run book/sample scripts on the newest supported numpy. Checklist: (a) grep for [0:1] or shape-(1,) slices assigned to scalar slots, (b) test scripts on numpy >= 2.4, (c) prefer explicit scalar extraction.
+
+## [pat-20260803180224-d58501]
+Category: pattern
+Tags: testing, verification, sample-scripts
+Changed: 2026-08-03T18:02:24.800155
+
+sample-script tests must EXECUTE the scripts, not assert on their source strings: TestSampleScriptImports-style tests that only check importability or string contents let scripts with stale file references ship broken - F-06 (test_gtsimk.py loads a filename no script produces - documented workflow always fails), F-53 (mean_calc_hist.py loads a nonexistent file), F-54 (>=9 sample scripts with stale data-path references), R-06 (8 scripts crash post-fix with CriticalValidationError on '..' in TEST_DATA_DIR because the test asserted source strings only). Fix: sample-script verification must run the scripts end-to-end (execute with representative data), asserting exit/expected output, not just import or string presence. Checklist: (a) any sample-script test that doesn't execute the script is incomplete, (b) assert runtime behavior (output values, error-free run), not source content, (c) run scripts with the actual data files they reference.
+
+## [got-20260803180225-9e2f10]
+Category: gotcha
+Tags: numerical, geostatistics, python, cpp
+Changed: 2026-08-03T18:02:25.747985
+
+exact-equality lag binning drops legitimate pairs when coordinates are fractional: PointSetScanGridStyle matches lag distances with exact integer equality, so 0.5-m point spacing yields ZERO pairs while integer spacing works (III-15, live repro; fractional coordinates are legal - no integrality check). Use tolerance-based lag matching for point-set scans. Checklist: (a) for any distance-based binning, verify matching uses a tolerance window, (b) test with fractional coordinate spacing, (c) exact float equality in binning is a latent silent-zero-output bug.
+
+## [got-20260803180229-53975d]
+Category: gotcha
+Tags: python, packaging, api
+Changed: 2026-08-03T18:02:29.600780
+
+documented public API must be smoke-tested at the TOP-LEVEL import: gtsim_2ind (II-29) and SGSConfig/SISConfig/GTSIMConfig (II-30) are documented as public but missing from geo_bsd.__init__ - every top-level access AttributeErrors while tests pass because they import via submodule paths (geo_bsd.gtsim, geo_bsd.config); the sample scripts gtsim.py/gtsimk.py similarly ImportError on private helpers (F-04). Fix: smoke-test the documented public surface at the top level (from geo_bsd import X for every documented name) and re-export everything documented as public. Checklist: (a) for every documented public name, verify a top-level import works, (b) tests must exercise the documented import path, not submodule shortcuts, (c) __init__ re-exports must match the docs.
 

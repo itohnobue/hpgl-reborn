@@ -47,7 +47,10 @@ def mean_var_calculate(p, C, mean_R, var_R, mean_C, var_C, n):
 	for i in range(n):
 		var = var_R * (1 - p**2)
 		mean = mean_R + (p * np.sqrt(var_R) * (C[i] - mean_C)) / (np.sqrt(var_C))
-		R[i] = np.random.normal(mean, np.sqrt(var), 1)
+		# F-09: np.random.normal(mean, std, 1) returns a 1-element array,
+		# which is no longer assignable to the scalar slot R[i] on
+		# numpy >= 2.4 (ValueError). A scalar draw is what the script needs.
+		R[i] = np.random.normal(mean, np.sqrt(var))
 	return R
 
 npv_array = []

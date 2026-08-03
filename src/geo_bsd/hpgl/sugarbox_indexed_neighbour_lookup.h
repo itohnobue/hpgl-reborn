@@ -3,9 +3,11 @@
 
 #include "clusterizer.h"
 #include "sugarbox_neighbour_lookup.h"
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <memory>
+#include <utility>
 
 namespace hpgl
 {
@@ -111,10 +113,66 @@ namespace hpgl
 				//top_only_container_t<entry_t> temp_sort_vector(params.m_max_neighbours);
 
 				double threshold = (*m_cov)(center, center) / 100;
-				
-				for (size_t idx = 0, end_idx = ncandidates.size();	idx != end_idx; ++idx)
+
+				// F-21 / R-03: bound the per-node candidate scan. The
+				// clusterizer returns up to 27 × m_limit candidates in
+				// CLUSTER-INDEX order — the center's own cluster is visited
+				// 14th of 27, and m_limit = covariance-field offsets / 250
+				// grows with radius³ (a legal radius-644 workflow reaches
+				// ~925K candidates/node). A plain prefix bound in that order
+				// would drop the CLOSEST data in dense regions (the center
+				// cluster starts at index ~13·m_limit > 4913 for radius ≥ 23).
+				// Reorder the candidates by ISOTROPIC squared distance
+				// (dx²+dy²+dz²) to the center first (cheap coordinate math —
+				// no covariance evaluations). For ISOTROPIC models this is a
+				// monotone proxy for covariance order, so the SCAN_LIMIT
+				// prefix holds the best candidates. For ANISOTROPIC models
+				// the isotropic distance is NOT monotone with covariance
+				// (probe, ranges 30,3,3: Euclidean 20 along the major axis
+				// has HIGHER covariance 0.135 than Euclidean 3 along the
+				// minor axis, 0.050), so in dense regions (pool > SCAN_LIMIT)
+				// high-covariance candidates beyond the pool may be dropped
+				// and neighbourhood selection can differ from the unbounded
+				// baseline. ACCEPTED TRADEOFF: bounded worst-case per-node
+				// scan (R-03) vs exact anisotropic ordering — the sibling
+				// plain lookup (III-38) sorts by covariance and is
+				// anisotropy-safe; ordering by transformed-norm² here would
+				// require exposing the anisotropy transform through the
+				// generic covariances_t interface (7 call sites).
+				// Then scan with the same (2·8+1)³ = 4913 bound the sibling
+				// plain lookup uses (III-38). The covariance sort and octant
+				// passes below then run on a pool of at most SCAN_LIMIT
+				// entries — constant per-node work regardless of search
+				// radius. (No max_neighbours early-exit on the collection:
+				// unlike the sibling's covariance-sorted offset list,
+				// clusterizer order is not quality order, and the octant
+				// pass needs candidates from every octant.)
+				thread_local std::vector<std::pair<node_index_t, double> > cand_ordered;
+				cand_ordered.clear();
+				cand_ordered.reserve(ncandidates.size());
+				for (size_t idx = 0, end_idx = ncandidates.size(); idx != end_idx; ++idx)
 				{
-					coord_t c = (*m_grid)[ncandidates[idx]];
+					const coord_t c = (*m_grid)[ncandidates[idx]];
+					const double dx = c[0] - center[0];
+					const double dy = c[1] - center[1];
+					const double dz = c[2] - center[2];
+					cand_ordered.push_back(std::make_pair(ncandidates[idx], dx * dx + dy * dy + dz * dz));
+				}
+				const size_t SCAN_LIMIT = 4913;
+				if (cand_ordered.size() > SCAN_LIMIT)
+				{
+					std::nth_element(cand_ordered.begin(), cand_ordered.begin() + SCAN_LIMIT, cand_ordered.end(),
+						[](const std::pair<node_index_t, double> & a, const std::pair<node_index_t, double> & b)
+						{
+							return a.second < b.second;
+						});
+					cand_ordered.resize(SCAN_LIMIT);
+				}
+
+				for (size_t idx = 0, end_idx = cand_ordered.size(); idx != end_idx; ++idx)
+				{
+					const node_index_t candidate = cand_ordered[idx].first;
+					coord_t c = (*m_grid)[candidate];
 					// F-09: the clusterizer fast path collects the whole
 					// 3×3×3 cluster box (~2×radius); only candidates within
 					// the configured search radius may enter the
@@ -132,7 +190,7 @@ namespace hpgl
 					double covar = (*m_cov)(center, c);
 					if (covar > threshold)
 					{
-						detail::entry_t entry = { ncandidates[idx], covar, c };
+						detail::entry_t entry = { candidate, covar, c };
 						temp_sort_vector.push_back(entry);
 						//temp_sort_vector.add(entry);
 					}
@@ -150,12 +208,16 @@ namespace hpgl
 				// otherwise ordinary_kriging with nugget==sill produces an
 				// empty neighbourhood → NaN output (F-46 regression tests:
 				// test_ok_nugget_sweep[1.0], test_ok_with_nugget, test_minimal_radius).
+				// R-03: the fallback scan is likewise bounded by the
+				// reordered SCAN_LIMIT pool (plus its own m_max_neighbours
+				// stop condition).
 				if (temp_sort_vector.empty())
 				{
-					for (size_t idx = 0, end_idx = ncandidates.size();
+					for (size_t idx = 0, end_idx = cand_ordered.size();
 						idx != end_idx && temp_sort_vector.size() < m_max_neighbours; ++idx)
 					{
-						coord_t c = (*m_grid)[ncandidates[idx]];
+						const node_index_t candidate = cand_ordered[idx].first;
+						coord_t c = (*m_grid)[candidate];
 						if (std::abs(c[0] - center[0]) > m_radiuses[0]
 							|| std::abs(c[1] - center[1]) > m_radiuses[1]
 							|| std::abs(c[2] - center[2]) > m_radiuses[2])
@@ -163,7 +225,7 @@ namespace hpgl
 							continue;
 						}
 						double covar = (*m_cov)(center, c);
-						detail::entry_t entry = { ncandidates[idx], covar, c };
+						detail::entry_t entry = { candidate, covar, c };
 						temp_sort_vector.push_back(entry);
 					}
 				}

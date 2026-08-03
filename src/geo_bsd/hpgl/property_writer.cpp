@@ -15,6 +15,8 @@
 #ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
+#else
+#include <windows.h>
 #endif
 
 namespace hpgl
@@ -158,26 +160,78 @@ namespace hpgl
 				"Could not create a unique temporary file.");
 		}
 #else
-		// _WIN32: fopen() has no O_NOFOLLOW/O_EXCL equivalent (F-N20 — Windows
-		// junction following and the deterministic temp name are documented
-		// limitations on this platform; behavior is unchanged).
+		// _WIN32: fopen() has no O_NOFOLLOW/O_EXCL equivalent, so junction
+		// following is a documented limitation (F-N20) — but the temp file must
+		// still be a REAL temp file, never the target (II-14). The pre-fix
+		// branch opened the TARGET with "w+" (truncating any pre-existing file
+		// before a single byte was written), set out_path = filename so the RAII
+		// guard was armed on the TARGET, and the final rename was a self-rename
+		// no-op — a write error therefore DESTROYED the pre-existing target.
+		// Use a unique temp name and exclusive create ("w+x" — the C11 'x'
+		// modifier makes fopen fail if the file exists) so the guard can only
+		// ever remove the temp.
 		file_t open_tmp_file_checked(
 				const std::string & filename,
 				const std::string & mode,
 				std::string & out_path)
 		{
-			FILE * f = fopen(filename.c_str(), mode.c_str());
-			if (f == 0)
-				throw_open_error(filename.c_str());
-			out_path = filename;
-			return file_t(f, [](FILE* fp) {
-				if (fflush(fp) != 0)
-					fprintf(stderr, "HPGL: fflush failed — buffered data may be lost\n");
-				if (fclose(fp) != 0)
-					fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");
-			});
+			static std::atomic<unsigned long> counter{0};
+			const unsigned long pid = static_cast<unsigned long>(GetCurrentProcessId());
+			const int max_attempts = 64;
+			// Callers pass "w+"; append 'x' for exclusive create ("w+x").
+			const std::string xmode = mode + "x";
+			for (int attempt = 0; attempt < max_attempts; ++attempt)
+			{
+				std::ostringstream oss;
+				oss << filename << ".tmp." << pid << "." << counter.fetch_add(1);
+				std::string candidate = oss.str();
+				FILE * f = fopen(candidate.c_str(), xmode.c_str());
+				if (f == 0)
+				{
+					if (errno == EEXIST)
+						continue; // stale temp from a crashed run — try next name
+					throw_open_error(candidate.c_str());
+				}
+				out_path = candidate;
+				return file_t(f, [](FILE* fp) {
+					if (fflush(fp) != 0)
+						fprintf(stderr, "HPGL: fflush failed — buffered data may be lost\n");
+					if (fclose(fp) != 0)
+						fprintf(stderr, "HPGL: fclose failed — data may be incomplete\n");
+				});
+			}
+			throw hpgl_exception("open_tmp_file_checked",
+				"Could not create a unique temporary file.");
 		}
 #endif
+
+		/// Replace `target` with the fully-written `tmp` file (II-14).
+		/// On POSIX std::rename atomically replaces the target. On Windows
+		/// std::rename FAILS when the target already exists, so MoveFileEx with
+		/// MOVEFILE_REPLACE_EXISTING is required to replace an existing file.
+		/// The temp only reaches the target path on this success path; any
+		/// throw before it leaves the tmp_file_guard to remove only the temp.
+		void replace_file(const std::string & tmp, const std::string & target)
+		{
+#ifdef _WIN32
+			if (!MoveFileExA(tmp.c_str(), target.c_str(),
+					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+			{
+				DWORD w32_err = GetLastError();
+				std::ostringstream oss;
+				oss << "Failed to replace file with temp: Windows error " << w32_err;
+				throw hpgl_exception("replace_file", oss.str());
+			}
+#else
+			if (std::rename(tmp.c_str(), target.c_str()) != 0)
+			{
+				int rename_errno = errno;
+				std::ostringstream oss;
+				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
+				throw hpgl_exception("replace_file", oss.str());
+			}
+#endif
+		}
 
 		/// RAII guard that removes the temp file unless the atomic rename
 		/// succeeded. Any throw path (write_value failure, fflush failure,
@@ -238,16 +292,18 @@ namespace hpgl
 					throw hpgl_exception("write_property_cont", oss.str());
 				}
 			}
-			// Atomic rename — data only reaches the target path after the
-			// complete file is written and flushed. rename() is atomic on
-			// macOS/Linux within the same filesystem.
-			if (std::rename(tmp_filename.c_str(), filename) != 0)
-			{
-				int rename_errno = errno;
-				std::ostringstream oss;
-				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
-				throw hpgl_exception("write_property_cont", oss.str());
-			}
+			// Atomic replace — data only reaches the target path after the
+			// complete file is written and flushed (rename() on POSIX;
+			// MoveFileEx REPLACE_EXISTING on Windows, II-14).
+			// R-05: close the temp handle BEFORE the rename. The CRT opens
+			// with default _SH_DENYNO sharing (no FILE_SHARE_DELETE), so
+			// MoveFileExA on a still-open temp fails with
+			// ERROR_SHARING_VIOLATION on EVERY Windows write (pre-fix this
+			// path renamed an open file). f.reset() runs the shared_ptr
+			// deleter (final fflush + fclose); the explicit fflush above has
+			// already propagated write errors to the caller.
+			f.reset();
+			replace_file(tmp_filename, filename);
 			tmp_guard.disarm();
 		}
 
@@ -296,13 +352,11 @@ namespace hpgl
 					throw hpgl_exception("write_property_ind", oss.str());
 				}
 			}
-			if (std::rename(tmp_filename.c_str(), filename) != 0)
-			{
-				int rename_errno = errno;
-				std::ostringstream oss;
-				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
-				throw hpgl_exception("write_property_ind", oss.str());
-			}
+			// R-05: close the temp handle BEFORE the rename (see
+			// write_property_cont). MoveFileExA on a still-open temp fails
+			// with ERROR_SHARING_VIOLATION on Windows.
+			f.reset();
+			replace_file(tmp_filename, filename);
 			tmp_guard.disarm();
 		}
 	}
@@ -350,13 +404,10 @@ namespace hpgl
 					throw hpgl_exception("write_gslib_property_cont_c", oss.str());
 				}
 			}
-			if (std::rename(tmp_filename.c_str(), filename) != 0)
-			{
-				int rename_errno = errno;
-				std::ostringstream oss;
-				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
-				throw hpgl_exception("write_gslib_property_cont_c", oss.str());
-			}
+			// R-05: close the temp handle BEFORE the rename (see
+			// write_property_cont).
+			f.reset();
+			replace_file(tmp_filename, filename);
 			tmp_guard.disarm();
 		}
 
@@ -402,13 +453,10 @@ namespace hpgl
 					throw hpgl_exception("write_gslib_property_ind_c", oss.str());
 				}
 			}
-			if (std::rename(tmp_filename.c_str(), filename) != 0)
-			{
-				int rename_errno = errno;
-				std::ostringstream oss;
-				oss << "Failed to rename temp file to final: " << strerror(rename_errno);
-				throw hpgl_exception("write_gslib_property_ind_c", oss.str());
-			}
+			// R-05: close the temp handle BEFORE the rename (see
+			// write_property_cont).
+			f.reset();
+			replace_file(tmp_filename, filename);
 			tmp_guard.disarm();
 		}
 

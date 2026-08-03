@@ -9,6 +9,10 @@
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+# F-47 pattern: geo_bsd lives in the repo's src/ directory (it is not
+# installed in the environment); without this the `from geo_bsd import *`
+# below fails with ModuleNotFoundError.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 import numpy as np
 from geo_bsd import *
@@ -122,7 +126,10 @@ prop_initial_harmonic = (prop_harmonic, array_defined)
 variogram1 = CovarianceModel(type=covariance.spherical, ranges=(80, 20, 1), sill=1, angles=(315, 0, 0))
 krigged_transformed_data = simple_kriging(prop=prop_transformed, grid=grid, radiuses=(160, 40, 1), max_neighbours=20, cov_model=variogram1)
 
-back_krigged_transformed_data = np.copy(krigged_transformed_data)
+# F-11: np.copy of a ContProperty produces a 0-d object array and
+# back_krigged_transformed_data[0] raises IndexError. Copy the underlying
+# .data/.mask arrays instead and rebuild the property.
+back_krigged_transformed_data = ContProperty(np.copy(krigged_transformed_data[0]), np.copy(krigged_transformed_data[1]))
 # Back transform to original data space
 back_cdf_transform(back_krigged_transformed_data[0], props, values, -99)
 
@@ -138,11 +145,17 @@ krigged_harmonic_data = simple_kriging(prop=prop_initial_harmonic, grid=grid, ra
 
 # Generate a simulated field by performing SGS on initial property (arithmetic and harmonic averaging) with 315 azimuth direction
 variogram2 = CovarianceModel(type=covariance.spherical, ranges=(80, 20, 1), sill=1, angles=(315, 0, 0))
-sgs_params = {"cov_model": variogram2, "radiuses": (160, 40, 1), "max_neighbours": 20}
 
-sgs_arithmetic_data = sgs_simulation(prop_initial_arithmetic, grid, seed=5232463, **sgs_params)
+# F-13: sgs_simulation requires cdf_data. Both properties are RAW (not
+# normal-score transformed), so pass calc_cdf of each so the simulation
+# maps raw values <-> normal scores internally (II-01 makes calc_cdf valid).
+sgs_arithmetic_data = sgs_simulation(prop_initial_arithmetic, grid, seed=5232463,
+                                     cdf_data=calc_cdf(ContProperty(initial_data_arithmetic, array_defined)),
+                                     cov_model=variogram2, radiuses=(160, 40, 1), max_neighbours=20)
 
-sgs_harmonic_data = sgs_simulation(prop_initial_harmonic, grid, seed=5232463, **sgs_params)
+sgs_harmonic_data = sgs_simulation(prop_initial_harmonic, grid, seed=5232463,
+                                   cdf_data=calc_cdf(ContProperty(prop_harmonic, array_defined)),
+                                   cov_model=variogram2, radiuses=(160, 40, 1), max_neighbours=20)
 
 var_sgs_arithmetic_data = np.var(sgs_arithmetic_data[0])
 print("Sgs on arithmetic data variance:", var_sgs_arithmetic_data)

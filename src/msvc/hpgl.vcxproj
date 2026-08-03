@@ -24,9 +24,21 @@
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
-  <!-- MKL is optional; default disabled. Enable with /p:UseMKL=true -->
+  <!-- II-21: BLAS/LAPACK linkage honesty. This file previously claimed "MKL is
+       optional; default disabled" while linking ZERO BLAS/LAPACK in the default
+       config — but the code unconditionally calls LAPACK (dpotrf_/dpotrs_ via
+       gauss_solver/lapack_compat), so opening the project and building with the
+       defaults produced an opaque LNK2019. MKL is optional; a BLAS/LAPACK
+       implementation is NOT. Resolution order:
+         /p:UseMKL=true                               -> Intel MKL
+                                                          (mkl_core;mkl_intel_lp64;mkl_sequential)
+         UseMKL=false + OpenBLASRoot=/p:OpenBLASRoot= -> OpenBLAS (openblas.lib)
+         neither configured                           -> clear HpglCheckBlas error
+                                                          at link time, not LNK2019
+       build.bat passes /p:UseMKL=true (the documented Windows build path). -->
   <PropertyGroup>
     <UseMKL Condition="'$(UseMKL)' == ''">false</UseMKL>
+    <OpenBLASRoot Condition="'$(OpenBLASRoot)' == ''">$(OPENBLAS_ROOT)</OpenBLASRoot>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
@@ -206,6 +218,28 @@
       <AdditionalLibraryDirectories>$(MKL_ROOT)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
+  <!-- II-21: non-MKL default links OpenBLAS when a root is provided
+       (/p:OpenBLASRoot=... or the OPENBLAS_ROOT environment variable).
+       OpenBLAS exports the LAPACK symbols (dpotrf_/dpotrs_) the code calls
+       unconditionally, plus the openblas_set_num_threads API behind
+       HPGL_USE_OPENBLAS (R-10: defined ONLY when OpenBLAS is actually linked). -->
+  <ItemDefinitionGroup Condition="'$(UseMKL)' != 'true' and '$(OpenBLASRoot)' != ''">
+    <ClCompile>
+      <PreprocessorDefinitions>HPGL_USE_OPENBLAS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(OpenBLASRoot)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>openblas.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OpenBLASRoot)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+    </Link>
+  </ItemDefinitionGroup>
+  <!-- II-21: fail with a clear message when NO BLAS/LAPACK implementation is
+       configured, instead of an opaque LNK2019 from the unconditional LAPACK
+       calls. Fires before the Link target, every configuration. -->
+  <Target Name="HpglCheckBlas" BeforeTargets="Link">
+    <Error Condition="'$(UseMKL)' != 'true' and '$(OpenBLASRoot)' == ''"
+           Text="No BLAS/LAPACK implementation configured: HPGL unconditionally calls LAPACK (dpotrf_/dpotrs_), so linking zero BLAS/LAPACK produces LNK2019. Pass /p:UseMKL=true (Intel MKL, requires MKL_ROOT) or /p:OpenBLASRoot=&lt;path-to-openblas&gt; (or set the OPENBLAS_ROOT environment variable) to a directory containing include/openblas.h and lib/openblas.lib." />
+  </Target>
   <ItemGroup>
     <ClCompile Include="..\geo_bsd\hpgl\api.cpp" />
     <ClCompile Include="..\geo_bsd\hpgl\api_helpers.cpp" />

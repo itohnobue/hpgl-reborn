@@ -25,7 +25,10 @@ n = 100
 array_hist = np.zeros((n), order='F', dtype=int)
 
 for i in range(n):
-	index = np.random.randint(0, len(rock_type), 1)
+	# F-17: np.random.randint with a size arg returns a shape-(1,) array
+	# which is no longer assignable to the scalar slot array_hist[i] on
+	# numpy >= 2.4 (ValueError). A scalar draw is what the script needs.
+	index = np.random.randint(0, len(rock_type))
 	array_hist[i] = rock_type[index]
 
 prob = []

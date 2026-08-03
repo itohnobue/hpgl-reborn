@@ -29,7 +29,6 @@ data_dict = load_gslib_file("allwelldata.txt")
 # x, y, z size(m)
 nx = 454
 ny = 454
-nz = 40
 
 # property
 value = "Por"
@@ -38,6 +37,11 @@ value = "Por"
 i_max = 22
 j_max = 22
 k_max = 2
+
+# II-48: choose the Z cell size so the grid covers the full data Z range.
+# The old fixed nz=40 m with k_max=2 covered only 80 m while the data
+# reach ~395 m — 85% of the points were silently outside the grid.
+nz = (max(data_dict['Z']) - min(data_dict['Z'])) / k_max
 
 # Lets define 3D grid
 array_grid = Grid(min(data_dict['X']), min(data_dict['Y']), min(data_dict['Z']), i_max, j_max, k_max, nx, ny, nz)

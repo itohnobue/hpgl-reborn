@@ -3,9 +3,35 @@
 
 #include "typedefs.h"
 #include "property_array.h"
+#include <cmath>
 
 namespace hpgl
 {
+	namespace detail
+	{
+		// NaN-safe [0,1] sanitization for kriged indicator probabilities
+		// (F-37, II-11, II-12). SK weights are unconstrained — poorly
+		// conditioned matrices, sparse neighbours, or extreme anisotropy can
+		// push the combine() result outside [0,1], and NaN bypasses the
+		// relational clamps (NaN < 0.0 and NaN > 1.0 are both false).
+		//
+		// Non-finite input falls back to the caller's (validated) marginal
+		// probability — mirroring the KI-failure fallback used by SIS/IK
+		// ("prob = marginal_probs[idx][node]") — then clamps to [0,1]. The
+		// fallback itself is clamped to [0,1] as well, so a direct-C caller
+		// that smuggles a non-finite marginal cannot re-introduce NaN.
+		inline double sanitize_probability(double prob, double fallback)
+		{
+			if (!std::isfinite(prob))
+				prob = fallback;
+			if (!std::isfinite(prob) || prob < 0.0)
+				prob = 0.0;
+			else if (prob > 1.0)
+				prob = 1.0;
+			return prob;
+		}
+	}
+
 	indicator_index_t 
 	most_probable_category(
 		const std::vector<indicator_probability_t> & probs);

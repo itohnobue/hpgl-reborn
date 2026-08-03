@@ -774,12 +774,21 @@ namespace hpgl
 
 #endif
 
-/*
-		for (int i = 0; i < size; ++i)
-		{
-			weights[i] *= sigmac / sigmas[i];
-		}
-*/
+		// II-08: NO explicit σ back-transform is applied here, and the
+		// previous commented-out `weights[i] *= sigmac / sigmas[i]` block was
+		// removed because it would DOUBLE-transform the solution. The system
+		// built above scales BOTH sides by σ: A_ij = C(h_ij)·σ_i·σ_j and
+		// b_i = C(h_ic)·σ_i·σ_c. Algebraically Σ_j A_ij w_j = b_i simplifies
+		// (divide by σ_i) to Σ_j C_ij·σ_j·w_j = σ_c·C_ic; with λ solving the
+		// plain correlogram system Σ_j C_ij·λ_j = C_ic, the solved weights
+		// are w_j = λ_j·σ_c/σ_j — exactly the back-transform the dead
+		// second_stage (kriging_interpolation.h corellogram_weight_calculator_
+		// t::second_stage) applies to a plain-SK first_stage. Both factorings
+		// produce the same final weights (verified numerically: |w_active −
+		// w_plain+backtransform| = 0.0). The SIS-LVM correlogram path consumes
+		// these weights directly with combine(values, weights, means, m_c),
+		// which applies w_j to raw deviations (x_j − m_j) — correct.
+
 		return system_solved;
 	}
 
@@ -898,6 +907,11 @@ namespace hpgl
 			&ws.A[0], size, &weights[0], &ws.b[0],
 			&ws.A_backup[0], "Corellogram Cholesky (ws)");
 #endif
+
+		// II-08: no explicit σ back-transform here either — the σ_i·σ_j
+		// scaled system embeds it (see corellogramed_weights_3 comment).
+		// The returned weights are w_j = λ_j·σ_c/σ_j, the final weights for
+		// combine(values, weights, means, m_c).
 
 		return system_solved;
 	}

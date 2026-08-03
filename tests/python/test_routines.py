@@ -536,3 +536,222 @@ class TestMovingAverage3D:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# =============================================================================
+# F-29: GSLIB writers must reject finite out-of-window (|v| > 1.0e21) values
+# =============================================================================
+
+
+@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
+class TestGslibWriterSentinelWindow:
+    """F-29: the reader converts |v| > 1.0e21 to NaN (missing sentinel), so
+    the writer must reject such FINITE values at write time — otherwise a
+    value like 2.0e21 round-trips as silent NaN corruption (probe:
+    SaveGSLIBCubes [2.0e21] → LoadGslibFile [NaN])."""
+
+    def test_save_pointset_rejects_out_of_window(self, tmp_path):
+        fpath = str(tmp_path / "out_of_window.inc")
+        point_set = {
+            "X": np.array([0, 1], dtype="int32"),
+            "Y": np.array([0, 0], dtype="int32"),
+            "Z": np.array([0, 0], dtype="int32"),
+            "Property": np.array([1.0, 2.0e21], dtype="float64"),
+        }
+        with pytest.raises(ValueError, match="sentinel window"):
+            SaveGSLIBPointSet(point_set, fpath, "Test", basedir=str(tmp_path))
+
+    def test_save_cubes_rejects_out_of_window(self, tmp_path):
+        fpath = str(tmp_path / "out_of_window.inc")
+        cubes = {"Property": np.array([[[1.0]], [[2.0e21]]], dtype="float64")}
+        with pytest.raises(ValueError, match="sentinel window"):
+            SaveGSLIBCubes(cubes, fpath, "Test", basedir=str(tmp_path))
+
+    def test_in_window_values_still_write(self, tmp_path):
+        """Control: values inside ±1.0e21 write normally and round-trip."""
+        fpath = str(tmp_path / "in_window.inc")
+        cubes = {"Property": np.array([[[1.0e20]], [[-1.0e20]]], dtype="float64")}
+        SaveGSLIBCubes(cubes, fpath, "Test", basedir=str(tmp_path))
+        loaded = LoadGslibFile(fpath, property_size=(1, 1, 2), basedir=str(tmp_path))
+        assert np.all(np.isfinite(loaded["Property"]))
+
+
+# =============================================================================
+# F-30: MovingAverage3D per-cell (ellipse) path needs a work-based cap
+# =============================================================================
+
+
+@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
+class TestMovingAverageWorkCap:
+    """F-30: the volume cap bounds memory only; the per-cell ellipse path is
+    O(N·V). A monkeypatched tiny work cap must reject an over-cap input
+    before the loop runs."""
+
+    def test_ellipse_path_rejects_over_cap(self, monkeypatch):
+        import geo_bsd.routines as r
+
+        monkeypatch.setattr(
+            r.ValidationConstants, "MAX_MOVING_AVERAGE_WORK", 1000
+        )
+        cube, mask = _make_cube_mask(nx=6, ny=6, nz=3)
+        # radius (2,2,2): window volume = 4^3 = 64; grid volume 108 ->
+        # work 6912 > 1000. GetEllipseMask is non-uniform -> per-cell path.
+        with pytest.raises(ValueError, match="per-cell work"):
+            MovingAverage3D((cube, mask), (2, 2, 2), -999.0, GetEllipseMask)
+
+    def test_cubical_path_under_cap_still_works(self, monkeypatch):
+        import geo_bsd.routines as r
+
+        monkeypatch.setattr(
+            r.ValidationConstants, "MAX_MOVING_AVERAGE_WORK", 1000
+        )
+        cube, mask = _make_cube_mask(nx=4, ny=4, nz=2)
+        # cubical path is vectorized and below any reasonable cap.
+        result = MovingAverage3D((cube, mask), (1, 1, 1), -999.0, GetCubicalMask)
+        assert result.shape == cube.shape
+
+
+# =============================================================================
+# II-41: mask semantics — non-zero = informed (non-binary masks)
+# =============================================================================
+
+
+@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
+class TestNonBinaryMaskSemantics:
+    """II-41: a mask with value 2 is a legal "non-zero = informed" mask.
+    CalcVPC must not halve layer means, Cubes2PointSet must not allocate
+    trailing-zero rows, and MovingAverage3D must not mark every cell
+    undefined."""
+
+    def test_calc_vpc_mask2_matches_mask1(self):
+        cube = np.zeros((2, 2, 2), dtype="float32")
+        cube[:, :, 0] = 10.0
+        cube[:, :, 1] = 20.0
+        mask1 = np.ones((2, 2, 2), dtype="uint8")
+        mask2 = np.full((2, 2, 2), 2, dtype="uint8")
+        vpc1 = CalcVPC(cube, mask1, 0.0)
+        vpc2 = CalcVPC(cube, mask2, 0.0)
+        np.testing.assert_array_equal(vpc1, vpc2)
+
+    def test_cubes2pointset_mask2_no_trailing_zeros(self):
+        cube = np.zeros((2, 2, 2), dtype="float32", order="F")
+        cube[:, :, :] = 5.0
+        mask = np.full((2, 2, 2), 2, dtype="uint8", order="F")
+        # mask out one cell: only 7 informed
+        mask[0, 0, 0] = 0
+        result = Cubes2PointSet({"prop": cube}, mask)
+        assert len(result["prop"]) == 7, (
+            "II-41: Cubes2PointSet must allocate exactly (Mask != 0).sum() "
+            f"rows, got {len(result['prop'])}"
+        )
+
+    def test_moving_average_mask2_not_all_undefined(self):
+        cube = np.ones((4, 4, 2), dtype="float32") * 42.0
+        mask = np.full((4, 4, 2), 2, dtype="uint8")
+        result = MovingAverage3D((cube, mask), (1, 1, 1), -999.0, GetCubicalMask)
+        assert np.any(result != -999.0), (
+            "II-41: mask=2 cells are informed; every cell must be averaged, "
+            "not undefined"
+        )
+
+
+# =============================================================================
+# II-42: LoadGslibFile line-length / token-count DoS hardening
+# =============================================================================
+
+
+@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
+class TestLoadGslibLineDoSHardening:
+    """II-42: a crafted over-long line with far more tokens than num_p must
+    be rejected BEFORE line.split() materializes the token list."""
+
+    def test_oversized_line_rejected(self, tmp_path):
+        fpath = tmp_path / "oversized.inc"
+        with open(fpath, "w") as fh:
+            fh.write("caption\n1\nprop\n")
+            # > 1 MB single line so the II-42 line-length check fires
+            # (the R-12 row-count pre-pass sees one line == grid_size 1).
+            fh.write(" ".join(["1.0"] * 300000) + "\n")
+        with pytest.raises(RuntimeError, match="exceeds .* bytes"):
+            LoadGslibFile(str(fpath), property_size=(1, 1, 1), basedir=str(tmp_path))
+
+    def test_too_many_tokens_on_line_rejected(self, tmp_path):
+        fpath = tmp_path / "manytokens.inc"
+        with open(fpath, "w") as fh:
+            fh.write("caption\n1\nprop\n")
+            fh.write("1.0 2.0 3.0\n")  # 3 tokens but num_p=1
+        # grid_size=1 so the row-count pre-pass succeeds and the parse
+        # loop reaches the token-count check.
+        with pytest.raises(RuntimeError, match="expected 1 values per data line"):
+            LoadGslibFile(str(fpath), property_size=(1, 1, 1), basedir=str(tmp_path))
+
+    def test_normal_line_still_parses(self, tmp_path):
+        fpath = tmp_path / "normal.inc"
+        with open(fpath, "w") as fh:
+            fh.write("caption\n1\nprop\n1.0\n2.0\n3.0\n")
+        result = LoadGslibFile(str(fpath), property_size=(3, 1, 1), basedir=str(tmp_path))
+        np.testing.assert_array_equal(
+            result["prop"].ravel(), np.array([1.0, 2.0, 3.0])
+        )
+
+
+# =============================================================================
+# III-17: Cubes2PointSet equal-shape validation
+# =============================================================================
+
+
+@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
+class TestCubes2PointSetShapeValidation:
+    """III-17: mismatched cube shapes must raise instead of silently
+    truncating extra Z-layers (mirror SaveGSLIBCubes)."""
+
+    def test_mismatched_shapes_raise(self):
+        cube_a = np.zeros((2, 2, 2), dtype="float32")
+        cube_b = np.zeros((2, 2, 3), dtype="float32")
+        mask = np.ones((2, 2, 2), dtype="uint8")
+        with pytest.raises(ValueError, match="identical shape"):
+            Cubes2PointSet({"a": cube_a, "b": cube_b}, mask)
+
+    def test_matching_shapes_succeed(self):
+        cube_a = np.zeros((2, 2, 2), dtype="float32")
+        cube_b = np.zeros((2, 2, 2), dtype="float32")
+        mask = np.ones((2, 2, 2), dtype="uint8")
+        result = Cubes2PointSet({"a": cube_a, "b": cube_b}, mask)
+        assert len(result["a"]) == 8
+
+
+# =============================================================================
+# III-18: CalcMean / CalcVPC isfinite gates
+# =============================================================================
+
+
+@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
+class TestRoutinesIsfiniteGates:
+    """III-18: NaN in an informed cell must raise (mirror C++
+    calc_mean.cpp:18-22), not silently propagate."""
+
+    def test_calc_mean_nan_informed_raises(self):
+        cube = np.array([1.0, np.nan, 3.0], dtype="float32").reshape((1, 3, 1))
+        mask = np.array([1, 1, 1], dtype="uint8").reshape((1, 3, 1))
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            CalcMean(cube, mask)
+
+    def test_calc_mean_nan_masked_ok(self):
+        """NaN in a MASKED (zero) cell is excluded by definition and must
+        not raise."""
+        cube = np.array([1.0, np.nan, 3.0], dtype="float32").reshape((1, 3, 1))
+        mask = np.array([1, 0, 1], dtype="uint8").reshape((1, 3, 1))
+        result = CalcMean(cube, mask)
+        assert result == pytest.approx(2.0)
+
+    def test_calc_vpc_nan_informed_raises(self):
+        cube = np.zeros((2, 2, 2), dtype="float32")
+        cube[0, 0, 0] = np.nan
+        mask = np.ones((2, 2, 2), dtype="uint8")
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            CalcVPC(cube, mask, 0.0)
+
+    def test_calc_mean_finite_still_works(self):
+        cube = np.array([1.0, 2.0, 3.0], dtype="float32").reshape((1, 3, 1))
+        mask = np.ones((1, 3, 1), dtype="uint8")
+        assert CalcMean(cube, mask) == pytest.approx(2.0)

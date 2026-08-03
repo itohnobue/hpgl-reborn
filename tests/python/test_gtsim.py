@@ -14,6 +14,76 @@ except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
 
+@pytest.mark.hpgl
+class TestCdfDataInverse:
+    """Unit tests for CdfData.inverse — the F-02 data-space threshold mapper.
+
+    Mirrors the C++ non_parametric_cdf_2_t::inverse semantics
+    (non_parametric_cdf.h:263-292): probabilities below the first cumulative
+    probability map to the smallest value, above the last map to the largest
+    value, and interior probabilities are linearly interpolated between the
+    bracketing (value, prob) pairs (std::lower_bound over the probs array).
+    """
+
+    def _cdf(self):
+        from geo_bsd.cdf import CdfData
+
+        return CdfData(
+            values=np.array([0.0, 10.0, 20.0], dtype="float32"),
+            probs=np.array([0.2, 0.5, 1.0], dtype="float32"),
+        )
+
+    def test_below_first_prob_maps_to_smallest_value(self):
+        c = self._cdf()
+        assert c.inverse(0.1) == 0.0
+        assert c.inverse(0.2) == 0.0  # first prob inclusive (lower_bound)
+
+    def test_above_last_prob_maps_to_largest_value(self):
+        c = self._cdf()
+        assert c.inverse(1.0) == 20.0
+        assert c.inverse(1.5) == 20.0
+
+    def test_interior_linear_interpolation(self):
+        c = self._cdf()
+        # 0.35 between (0.0, 0.2) and (10.0, 0.5): x1 + (x2-x1)/(y2-y1)*(p-y1)
+        # = 0 + 10/0.3 * 0.15 = 5.0
+        assert abs(c.inverse(0.35) - 5.0) < 1e-6
+        # 0.9 between (10.0, 0.5) and (20.0, 1.0): 10 + 10/0.5*0.4 = 18.0
+        assert abs(c.inverse(0.9) - 18.0) < 1e-6
+
+    def test_vectorized(self):
+        c = self._cdf()
+        out = c.inverse(np.array([0.1, 0.35, 0.9, 1.5]))
+        np.testing.assert_allclose(out, [0.0, 5.0, 18.0, 20.0], atol=1e-6)
+
+    def test_scalar_returns_scalar(self):
+        c = self._cdf()
+        assert np.isscalar(c.inverse(0.5))
+
+    def test_empty_cdf_raises(self):
+        from geo_bsd.cdf import CdfData
+
+        c = CdfData(values=np.array([], dtype="float32"),
+                    probs=np.array([], dtype="float32"))
+        with pytest.raises(ValueError, match="empty CDF"):
+            c.inverse(0.5)
+
+    def test_roundtrip_with_calc_cdf(self):
+        """F-02 end-to-end building block: inverse(prob(value)) == value for
+        informed data (CDF built by calc_cdf from a property)."""
+        from geo_bsd.cdf import calc_cdf
+
+        rng = np.random.RandomState(7)
+        values = (rng.rand(200) * 10).astype("float32")
+        prop = ContProperty(values, np.ones(200, dtype="uint8"))
+        c = calc_cdf(prop)
+        # For each unique value the cumulative prob inverts back to ~value.
+        for v in np.unique(values):
+            p = float(np.mean(values <= v))
+            recovered = c.inverse(p)
+            assert abs(recovered - v) < 1.0
+
+
 def _make_cont_prop(size, values=None, mask=None):
     if values is None:
         np.random.seed(42)
@@ -351,3 +421,102 @@ class TestGtsim2Ind:
 
         result = gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=42)
         assert not np.any(np.isnan(result.data))
+
+    # =========================================================================
+    # F-02 (HIGH): truncation must compare in the SAME space as the SGS output
+    # =========================================================================
+
+    def test_gtsim_2ind_pk_05_proportion_roughly_half(self):
+        """F-02: with pk=0.5 everywhere, the facies-1 proportion must be ~0.5.
+
+        The C++ SGS kernel back-transforms the simulated standard-normal
+        field into DATA space through the in-scope empirical CDF
+        (sequential_gaussian_simulation.cpp back_transform →
+        transform_cdf_p(output, gaussian_cdf_t(), ncdf)), so prop1 is a
+        data-space value. Pre-fix the truncation compared that data-space
+        output against the NORMAL-SCORE threshold tk = -Φ⁻¹(0.5) = 0, so
+        every non-negative data-space cell classified as facies 1 →
+        proportion 1.0 (live repro). Post-fix the threshold is mapped to
+        data space via the same CDF (tk_data = F⁻¹(Φ(tk))), restoring
+        monotone equivalence with the Gaussian-space comparison → ~0.5.
+        """
+        grid, prop = self._make_grid_prop(x=10, y=10, z=5)
+        sk_params = self._make_sk_params()
+
+        pk_data = np.full(prop.data.size, 0.5, dtype="float32")
+        pk_prop = ContProperty(pk_data, np.ones(prop.data.size, dtype="uint8"))
+
+        result = gtsim_2ind(grid, prop, sk_params, do_sk=False, pk_prop=pk_prop, seed=42)
+        frac1 = float(np.mean(result.data == 1.0))
+        assert 0.2 < frac1 < 0.8, (
+            f"F-02: pk=0.5 must give ~0.5 facies-1 proportion, got {frac1} "
+            f"(pre-fix data-space vs normal-score comparison gave 1.0)"
+        )
+
+    def test_gtsim_2ind_non_default_tk_params_do_not_distort(self):
+        """II-39: non-default tk_mean/tk_std_dev must not distort proportions.
+
+        tk_calculation returns tk = tk_mean - tk_std_dev·Φ⁻¹(p); the engine
+        simulates a STANDARD-normal field, so the effective threshold is
+        (tk - tk_mean)/tk_std_dev = -Φ⁻¹(p) — the tk params must normalize
+        away. Pre-fix, tk_mean=5.0/tk_std_dev=2.0 with pk=0.5 gave threshold
+        tk=5.0 → every data-space cell < 5 → proportion 0.0. Post-fix the
+        normalized threshold gives ~0.5, identical to the default params.
+        """
+        grid, prop = self._make_grid_prop(x=10, y=10, z=5)
+        sk_params = self._make_sk_params()
+
+        pk_data = np.full(prop.data.size, 0.5, dtype="float32")
+        pk_prop = ContProperty(pk_data, np.ones(prop.data.size, dtype="uint8"))
+
+        result = gtsim_2ind(
+            grid, prop, sk_params, do_sk=False, pk_prop=pk_prop,
+            seed=42, tk_mean=5.0, tk_std_dev=2.0,
+        )
+        frac1 = float(np.mean(result.data == 1.0))
+        assert 0.2 < frac1 < 0.8, (
+            f"II-39: non-default tk params must not distort the ~0.5 "
+            f"proportion, got {frac1} (pre-fix tk_mean=5 gave 0.0)"
+        )
+
+    def test_gtsim_2ind_default_and_non_default_tk_agree(self):
+        """II-39 control: same seed, default vs non-default tk params must
+        produce the same facies field (params normalized away)."""
+        grid, prop1 = self._make_grid_prop(x=8, y=8, z=4)
+        _, prop2 = self._make_grid_prop(x=8, y=8, z=4)
+        sk_params = self._make_sk_params()
+
+        pk_data = np.full(prop1.data.size, 0.5, dtype="float32")
+        pk_prop1 = ContProperty(pk_data, np.ones(prop1.data.size, dtype="uint8"))
+        pk_prop2 = ContProperty(pk_data.copy(), np.ones(prop2.data.size, dtype="uint8"))
+
+        np.random.seed(42)
+        r1 = gtsim_2ind(grid, prop1, sk_params, do_sk=False, pk_prop=pk_prop1, seed=42)
+        np.random.seed(42)
+        r2 = gtsim_2ind(
+            grid, prop2, sk_params, do_sk=False, pk_prop=pk_prop2,
+            seed=42, tk_mean=5.0, tk_std_dev=2.0,
+        )
+        np.testing.assert_array_equal(r1.data, r2.data)
+
+    def test_gtsim_2ind_low_pk_gives_few_facies1(self):
+        """F-02 monotonicity: pk=0.1 everywhere must give far fewer facies-1
+        cells than pk=0.9 everywhere (the data-space threshold mapping is
+        monotone in pk)."""
+        grid, prop1 = self._make_grid_prop(x=8, y=8, z=4)
+        _, prop2 = self._make_grid_prop(x=8, y=8, z=4)
+        sk_params = self._make_sk_params()
+
+        pk_low = ContProperty(np.full(prop1.data.size, 0.1, dtype="float32"),
+                              np.ones(prop1.data.size, dtype="uint8"))
+        pk_high = ContProperty(np.full(prop2.data.size, 0.9, dtype="float32"),
+                               np.ones(prop2.data.size, dtype="uint8"))
+
+        r_low = gtsim_2ind(grid, prop1, sk_params, do_sk=False, pk_prop=pk_low, seed=42)
+        r_high = gtsim_2ind(grid, prop2, sk_params, do_sk=False, pk_prop=pk_high, seed=42)
+        frac_low = float(np.mean(r_low.data == 1.0))
+        frac_high = float(np.mean(r_high.data == 1.0))
+        assert frac_high > frac_low + 0.3, (
+            f"F-02: pk=0.9 must give more facies-1 than pk=0.1, "
+            f"got {frac_low} vs {frac_high}"
+        )

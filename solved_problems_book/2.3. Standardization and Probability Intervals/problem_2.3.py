@@ -67,8 +67,11 @@ quantiles[1] = (1 + p) / 2
 
 # Retrieving probability intervals
 probs = np.zeros((2), dtype=float)
-probs[0] = inverse_normal_score(quantiles[0], mean, var)
-probs[1] = inverse_normal_score(quantiles[1], mean, var)
+# III-23: part (1) asks for the interval of the MEAN of 10 iid samples.
+# The mean has variance var/n (16/10 = 1.6), not the population variance
+# 16 — the old interval was sqrt(10) ~ 3.16x too wide.
+probs[0] = inverse_normal_score(quantiles[0], mean, var / x)
+probs[1] = inverse_normal_score(quantiles[1], mean, var / x)
 
 # Printing result on screen
 print("Probability interval is: [", probs[0], ",", probs[1], "]")
@@ -85,8 +88,10 @@ for i in range(x):
 
 # Retrieving probability intervals of transformed data
 probs_trans = np.zeros((2), dtype=float)
-probs_trans[0] = inverse_normal_score(quantiles[0])
-probs_trans[1] = inverse_normal_score(quantiles[1])
+# III-23: the standardized samples are ~N(0,1); the mean of x=10 of them
+# has variance 1/x, not 1.
+probs_trans[0] = inverse_normal_score(quantiles[0], 0, 1.0 / x)
+probs_trans[1] = inverse_normal_score(quantiles[1], 0, 1.0 / x)
 
 # Printing result on screen
 print("Probability interval for standardized normal data is: [", probs_trans[0], ",", probs_trans[1], "]")
@@ -129,8 +134,11 @@ print("Variance of standardized data in presence of correlation is: ", var_cov)
 
 # Retrieving probability intervals for correlated data
 probs_cov = np.zeros((2), dtype=float)
-probs_cov[0] = inverse_normal_score(quantiles[0], var_cov, var)
-probs_cov[1] = inverse_normal_score(quantiles[1], var_cov, var)
+# F-50: the argument order was inverted — var_cov (the variance of the
+# mean) was passed as `mean` and the population var as `var`. The
+# standardized variable has mean 0 and variance var_cov.
+probs_cov[0] = inverse_normal_score(quantiles[0], 0.0, var_cov)
+probs_cov[1] = inverse_normal_score(quantiles[1], 0.0, var_cov)
 
 print("Probability interval for standardized data in presence of correlation is: [", probs_cov[0], ",", probs_cov[1], "]")
 print("----------------------------------------------------")
@@ -143,7 +151,9 @@ print("Variance of data in presence of correlation is: ", var_cov_orig)
 
 # Retrieving probability intervals for correlated data
 probs_cov = np.zeros((2), dtype=float)
-probs_cov[0] = inverse_normal_score(quantiles[0], var_cov_orig, var)
-probs_cov[1] = inverse_normal_score(quantiles[1], var_cov_orig, var)
+# F-50: same role swap — the original variable has mean 12 and variance
+# var_cov_orig.
+probs_cov[0] = inverse_normal_score(quantiles[0], mean, var_cov_orig)
+probs_cov[1] = inverse_normal_score(quantiles[1], mean, var_cov_orig)
 
 print("Probability interval for data in presence of correlation is: [", probs_cov[0], ",", probs_cov[1], "]")

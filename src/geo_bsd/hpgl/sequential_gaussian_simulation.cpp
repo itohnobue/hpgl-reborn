@@ -45,6 +45,25 @@ namespace hpgl
 			}
 		}
 
+		// III-37: the data were forward-transformed to normal-score space
+		// above, but the user-supplied scalar stationary mean is in DATA space.
+		// Using it raw pins simulated cells to the CDF's max datum (a
+		// data-space mean of 50 maps to a huge normal score). Transform it
+		// through the CDF the same way the LVM path transforms mean_data at
+		// the end of its forward block (:189,
+		// transform_cdf_ptr(mean_data, ..., new_cdf, gaussian_cdf_t())).
+		// The auto-computed mean (calc_mean on the already-transformed data)
+		// is already in normal-score space and must NOT be transformed.
+		auto transform_stationary_mean = [&](double m) -> double
+		{
+			if (cdf == nullptr)
+				return m;
+			non_parametric_cdf_2_t mean_cdf(cdf);
+			if (mean_cdf.is_empty())
+				return m;
+			return transform_cdf_s(m, mean_cdf, gaussian_cdf_t());
+		};
+
 		if (params.m_kriging_kind == KRIG_SIMPLE)
 		{
 			double mean;
@@ -67,7 +86,7 @@ namespace hpgl
 			}
 			}
 			else
-				mean = params.mean();
+				mean = transform_stationary_mean(params.mean());
 
 			if (mask != nullptr)
 			{
@@ -115,7 +134,7 @@ namespace hpgl
 				}
 			}
 			else
-				mean = params.mean();
+				mean = transform_stationary_mean(params.mean());
 
 			if (mask != nullptr)
 			{

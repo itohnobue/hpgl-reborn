@@ -41,8 +41,11 @@ namespace hpgl
 
 		for (int i = 0; i < 3; ++i)
 		{
-			if (ranges[i] == 0)
-				throw hpgl_exception("create_transform", "All covariance ranges should be non-zero");
+			// III-09: harden the zero-check — comparison-only `ranges[i] == 0`
+			// is NaN-bypassable (IEEE-754: NaN == 0 is false), and a NaN/Inf
+			// range would silently produce a NaN/Inf transform.
+			if (!std::isfinite(ranges[i]) || ranges[i] == 0)
+				throw hpgl_exception("create_transform", "All covariance ranges should be non-zero and finite");
 		}
 
 		Matrix<double> scale(3,3,0.0);
@@ -50,9 +53,28 @@ namespace hpgl
 		Matrix<double> rotate_y(3,3,0.0);
 		Matrix<double> rotate_x(3,3,0.0);
 
+		// III-09: anisotropy range ratios are computed BEFORE assignment so a
+		// ratio that overflows to Inf/NaN (e.g. ranges = {1e10, 1e-300, 1})
+		// is rejected here instead of silently poisoning the transform with
+		// Inf. An Inf scale entry flows through transfrom_and_norm → Inf norm
+		// → NaN/0 covariance for every cov_model_t consumer; downstream solver
+		// NaN pre-scans mitigate but any direct cov_model_t consumer gets
+		// silent NaN. Close at the source.
+		const double ratio_y = ranges[0] / ranges[1];
+		const double ratio_z = ranges[0] / ranges[2];
+		if (!std::isfinite(ratio_y) || !std::isfinite(ratio_z))
+		{
+			std::ostringstream oss;
+			oss << "create_transform: anisotropy range ratio overflows to "
+			    << "non-finite (ranges " << ranges[0] << "/" << ranges[1]
+			    << " = " << ratio_y << ", " << ranges[0] << "/" << ranges[2]
+			    << " = " << ratio_z << ")";
+			throw hpgl_exception("create_transform", oss.str());
+		}
+
 		scale(1, 1) = 1.0;
-		scale(2, 2) = ranges[0]/ranges[1];
-		scale(3, 3) = ranges[0]/ranges[2];
+		scale(2, 2) = ratio_y;
+		scale(3, 3) = ratio_z;
 
 		rotate_z(1, 1) = cos(grad_to_rad(angles[0]));
 		rotate_z(2, 2) = cos(grad_to_rad(angles[0]));

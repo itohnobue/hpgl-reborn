@@ -12,6 +12,7 @@
 #include "kriging_stats.h"
 #include "api.h"
 #include "output.h"
+#include "hpgl_exception.h"
 
 namespace hpgl
 {
@@ -33,7 +34,16 @@ namespace hpgl
 
                if(result == false)
                {
-                   weights.resize(0);
+                   // F-38: surface a meaningful kriging-failure error instead
+                   // of silently emptying `weights` — the C API then
+                   // dereferenced the empty vector and leaked the standard
+                   // library's internal out-of-range text ("vector" on
+                   // libc++, "vector::_M_range_check..." on libstdc++) to the
+                   // caller (trigger: all-identical neighbour points → singular
+                   // covariance matrix, F-206). Throwing lets the C API's
+                   // exception handler produce a clean message.
+                   throw hpgl_exception("simple_kriging_weights",
+                       "kriging solve failed (check for identical or degenerate neighbour points)");
                }
 
             }

@@ -9,6 +9,10 @@
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+# F-47 pattern: geo_bsd lives in the repo's src/ directory (it is not
+# installed in the environment); without this the `from geo_bsd import *`
+# below fails with ModuleNotFoundError.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 import numpy as np
 from geo_bsd import *
@@ -68,7 +72,9 @@ for q in range(len(x_coord)):
 	x_val[i] = x_coord[q]
 
 # Generate a kriged field of estimates by performing SK on the Gaussian-transformed dataset in transect.txt
-prop1 = (np.float32(array_val), array_defined)
+# F-14: pass a real ContProperty (not a raw 2-tuple) so it can feed both
+# simple_kriging and calc_cdf below.
+prop1 = ContProperty(np.float32(array_val), array_defined)
 variogram1 = CovarianceModel(type=covariance.exponential, ranges=(5, 1, 1), sill=1)
 
 prop_result1 = simple_kriging(prop=prop1, grid=grid, radiuses=(5, 1, 1), max_neighbours=2, cov_model=variogram1)
@@ -78,15 +84,19 @@ print("SK result:", prop_result1[0])
 prop = (np.float32(prop_val), prop_defined)
 variogram2 = CovarianceModel(type=covariance.exponential, ranges=(5, 1, 1), sill=1)
 
-sgs_params = {"cov_model": variogram2, "cdf_data": prop1}
+# F-14: sgs_simulation's cdf_data must be a CdfData (calc_cdf output), not
+# the raw tuple — the FFI layer asserts the CdfData type.
+sgs_params = {"cov_model": variogram2, "cdf_data": calc_cdf(prop1)}
 sgs_result = sgs_simulation(prop, grid, radiuses=(2, 1, 1), max_neighbours=2, seed=3244759, **sgs_params)
 print("SGS result:", sgs_result[0])
 
 sgsed_harddata = np.array([])
 for i in range(i_max):
 	if (array_defined[i] == 1):
-		array_for_sk[i] = sgs_result[0][i]
-		sgsed_harddata = np.append(sgsed_harddata, sgs_result[0][i])
+		# sgs_result[0] is reshaped to the 3D grid (20, 1, 1) by the
+		# library, so flat indexing is needed for the 1D arrays here.
+		array_for_sk[i] = sgs_result[0].flat[i]
+		sgsed_harddata = np.append(sgsed_harddata, sgs_result[0].flat[i])
 
 # Perform a second simple kriging using these values
 prop2 = (np.float32(array_for_sk), array_defined)

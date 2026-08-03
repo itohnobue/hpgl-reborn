@@ -16,7 +16,12 @@ def sk_calc(x, y, z, prop1):
     grid = SugarboxGrid(x, y, z)
     print("Done.\n")
     print("Loading property... ")
-    prop1 = load_cont_property("CUB.INC", -99, (x, y, z))
+    # F-54: the repo has CUBE.INC (not CUB.INC); the old name resolved to
+    # nothing and the workflow failed with CriticalValidationError. Use the
+    # real file in this script's directory.
+    prop1 = load_cont_property(
+        os.path.join(os.path.dirname(__file__), "CUBE.INC"), -99, (x, y, z)
+    )
     print("Done.\n")
 
     cov = CovarianceModel(

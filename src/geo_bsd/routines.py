@@ -30,6 +30,16 @@ from .validation import (
     validate_property_name,
 )
 
+# II-42: maximum accepted byte length of a single GSLIB data line, checked
+# BEFORE any `line.split()` token materialization. The slow parser in geo.py
+# uses the same 1 MB bound (_MAX_SLOW_PARSER_LINE_BYTES) to defend against
+# crafted newline-free lines; without a bound, a multi-MB line with hundreds
+# of thousands of tokens allocated the full token list (500k CPython strs,
+# ~28 MB RSS on a 3.4 MB line — memory-exhaustion DoS) before the
+# token-count check below could fire. A legal GSLIB line holds exactly
+# num_p (≤ 1024) short tokens, so 1 MB is far above any legitimate line.
+MAX_GSLIB_LINE_BYTES = 1_000_000
+
 
 def CalcMean(Cube, Mask):
     """Calculate the arithmetic mean of unmasked (informed) cells.
@@ -52,6 +62,18 @@ def CalcMean(Cube, Mask):
     Uses ``numpy.ma.masked_array`` to exclude masked cells from the
     mean computation.
     """
+    # III-18: isfinite gate — NaN in an informed cell must raise, not
+    # silently propagate. Mirrors the C++ calc_mean.cpp:18-22 guard
+    # (`if (!std::isfinite(val)) { *success = false; return NAN; }`).
+    # NaN is reachable here via LoadGslibFile's ±1.0e21 sentinel→NaN
+    # conversion; without this gate the caller receives a silent NaN mean
+    # with no signal (live probe: CalcMean with NaN in an informed cell →
+    # nan, zero warnings). Only informed cells matter — masked (zero)
+    # cells are excluded by definition.
+    if not numpy.all(numpy.isfinite(Cube[(Mask != 0)])):
+        raise ValueError(
+            "CalcMean: Cube contains NaN or Inf values in informed (Mask != 0) cells"
+        )
     CubeMasked = ma.masked_array(Cube, Mask == 0)
     return CubeMasked.mean()
 
@@ -85,7 +107,19 @@ def CalcVPC(Cube, Mask, MarginalMean):
         1D array of length ``Cube.shape[2]`` with per-layer means.
     """
     NZ = Cube.shape[2]
-    MaskSum = Mask.sum(0).sum(0)
+    # III-18: isfinite gate — NaN in an informed cell must raise, not
+    # silently propagate (mirror C++ calc_mean.cpp:18-22). Without it a
+    # layer containing a NaN informed cell silently returns NaN (live
+    # probe: CalcVPC with NaN in an informed cell → nan, zero warnings).
+    if not numpy.all(numpy.isfinite(Cube[(Mask != 0)])):
+        raise ValueError(
+            "CalcVPC: Cube contains NaN or Inf values in informed (Mask != 0) cells"
+        )
+    # II-41: standardize mask semantics — "non-zero = informed" (the
+    # documented contract). A raw `Mask.sum()` denominator treats a mask
+    # value of 2 as TWO informed cells, halving the layer mean (live probe:
+    # CalcVPC with mask=2 halves every layer). bool-convert before summing.
+    MaskSum = (Mask != 0).sum(0).sum(0)
     CubeMasked = copy(Cube)
     CubeMasked[Mask == 0] = 0
 
@@ -135,10 +169,33 @@ def Cubes2PointSet(CubesDictionary, Mask):
                 f"coordinate names X/Y/Z. Rename the property."
             )
 
-    NX, NY, NZ = list(CubesDictionary.values())[0].shape
+    # III-17: equal-shape validation across all cubes (mirror
+    # SaveGSLIBCubes' equal-size check). Pre-fix the first cube's shape was
+    # taken as canonical with no validation — a (2,2,2) cube alongside a
+    # (2,2,3) cube silently truncated layer 2 (probe: layer-2 data lost),
+    # and the reverse mismatch raised an opaque IndexError. Every cube must
+    # share the same (NX, NY, NZ).
+    first_key = next(iter(CubesDictionary.keys()))
+    first_shape = CubesDictionary[first_key].shape
+    for Key in CubesDictionary.keys():
+        if CubesDictionary[Key].shape != first_shape:
+            raise ValueError(
+                f"Cubes2PointSet: property '{Key}' has shape "
+                f"{CubesDictionary[Key].shape}, expected {first_shape} "
+                f"(all cubes must have identical shape, mirroring "
+                f"SaveGSLIBCubes). Extra Z-layers would otherwise be "
+                f"silently truncated."
+            )
+
+    NX, NY, NZ = first_shape
     grid_i, grid_j = mgrid[0:NX, 0:NY]
 
-    total = int(Mask.sum())
+    # II-41: non-zero = informed. A raw `Mask.sum()` would allocate
+    # int(Mask.sum()) rows for a mask containing values > 1 (e.g. mask=2 →
+    # 16 rows for 8 informed cells) while the fill loop below writes only
+    # (Mask != 0).sum() rows, leaving silent trailing zeros in every
+    # output array (live probe: 8+8 trailing zeros). bool-convert first.
+    total = int((Mask != 0).sum())
 
     PointSet = {
         "X": zeros(total, dtype=int32),
@@ -167,7 +224,8 @@ def Cube2PointSet(Cube, Mask):
     NX, NY, NZ = Cube.shape
     grid_i, grid_j = mgrid[0:NX, 0:NY]
 
-    total = int(Mask.sum())
+    # II-41: non-zero = informed (see Cubes2PointSet comment).
+    total = int((Mask != 0).sum())
     X = zeros(total, dtype=int32)
     Y = zeros(total, dtype=int32)
     Z = zeros(total, dtype=int32)
@@ -256,14 +314,25 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption, basedir=None):
             "SaveGSLIBPointSet: All properties in GSLIB dictionary must have equal size"
         )
 
-    # F-32: reject non-finite values before writing, matching the C++ writer
-    # contract (property_writer.cpp write_value). GSLIB has no NaN/Inf
+    # F-32/F-29: reject non-finite values before writing, matching the C++
+    # writer contract (property_writer.cpp write_value). GSLIB has no NaN/Inf
     # representation; writing them produces a file the loader refuses to read.
+    # F-29: ALSO reject FINITE values outside the ±1.0e21 sentinel window
+    # (strict inequality per the GSLIB convention "less than -1.0e21 or
+    # greater than 1.0e21"). The reader (LoadGslibFile, read_inc_file.cpp)
+    # converts those to NaN, so accepting them at write time would silently
+    # corrupt the round-trip (probe: SaveGSLIBCubes [2.0e21] → LoadGslibFile
+    # [NaN]). The C++ writer's write_value has the same gap and is fixed in
+    # the same contract (property_writer.cpp).
+    GSLIB_SENTINEL_WINDOW = 1.0e21
     for Key in PointSet.keys():
-        if not numpy.all(numpy.isfinite(PointSet[Key])):
+        arr = PointSet[Key]
+        if not numpy.all(numpy.isfinite(arr)) or numpy.any(numpy.abs(arr) > GSLIB_SENTINEL_WINDOW):
             raise ValueError(
                 f"SaveGSLIBPointSet: property '{Key}' contains non-finite values "
-                f"(NaN or Inf). GSLIB format does not support non-finite values."
+                f"(NaN or Inf) or values outside the GSLIB ±{GSLIB_SENTINEL_WINDOW:g} "
+                f"sentinel window (|v| > {GSLIB_SENTINEL_WINDOW:g}). GSLIB format "
+                f"cannot represent them; the reader would convert them to NaN."
             )
 
     # F-N17: validate the Caption and every property name against the shared
@@ -352,14 +421,22 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g", basedir=None
             "SaveGSLIBCubes: All properties in GSLIB dictionary must have equal size"
         )
 
-    # F-32: reject non-finite values before writing, matching the C++ writer
-    # contract (property_writer.cpp write_value). GSLIB has no NaN/Inf
+    # F-32/F-29: reject non-finite values before writing, matching the C++
+    # writer contract (property_writer.cpp write_value). GSLIB has no NaN/Inf
     # representation; writing them produces a file the loader refuses to read.
+    # F-29: ALSO reject FINITE values outside the ±1.0e21 sentinel window
+    # (strict inequality per the GSLIB convention). The reader
+    # (LoadGslibFile, read_inc_file.cpp) converts those to NaN, so accepting
+    # them at write time would silently corrupt the round-trip.
+    GSLIB_SENTINEL_WINDOW = 1.0e21
     for Key in CubesDictionary.keys():
-        if not numpy.all(numpy.isfinite(CubesDictionary[Key])):
+        arr = CubesDictionary[Key]
+        if not numpy.all(numpy.isfinite(arr)) or numpy.any(numpy.abs(arr) > GSLIB_SENTINEL_WINDOW):
             raise ValueError(
                 f"SaveGSLIBCubes: property '{Key}' contains non-finite values "
-                f"(NaN or Inf). GSLIB format does not support non-finite values."
+                f"(NaN or Inf) or values outside the GSLIB ±{GSLIB_SENTINEL_WINDOW:g} "
+                f"sentinel window (|v| > {GSLIB_SENTINEL_WINDOW:g}). GSLIB format "
+                f"cannot represent them; the reader would convert them to NaN."
             )
 
     # F-N17: validate the Caption and every property name against the shared
@@ -464,33 +541,23 @@ def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):
     j_offset = jmin - j + Radiuses[1]
     k_offset = kmin - k + Radiuses[2]
 
-    if (
-        sum(
-            (Mask[imin:imax, jmin:jmax, kmin:kmax] == 1)
-            & (
-                MeanMask[
-                    i_offset : (i_offset + imax - imin),
-                    j_offset : (j_offset + jmax - jmin),
-                    k_offset : (k_offset + kmax - kmin),
-                ]
-                == 1
-            )
-        )
-        > 0
-    ):
-        return Cube[imin:imax, jmin:jmax, kmin:kmax][
-            nonzero(
-                (Mask[imin:imax, jmin:jmax, kmin:kmax] == 1)
-                & (
-                    MeanMask[
-                        i_offset : (i_offset + imax - imin),
-                        j_offset : (j_offset + jmax - jmin),
-                        k_offset : (k_offset + kmax - kmin),
-                    ]
-                    == 1
-                )
-            )
-        ].mean()
+    # II-41: non-zero = informed. The `Mask == 1` tests treated a legal
+    # mask value > 1 (e.g. mask=2) as UNINFORMED, returning
+    # undefined_value for every cell in a mask=2 grid (live probe:
+    # MovingAverage3D with mask=2 → every cell undefined). The MeanMask
+    # window itself is binary by construction (GetCubicalMask/GetEllipseMask
+    # emit 0/1), so only the data Mask needs the non-zero test.
+    informed_window = (Mask[imin:imax, jmin:jmax, kmin:kmax] != 0) & (
+        MeanMask[
+            i_offset : (i_offset + imax - imin),
+            j_offset : (j_offset + jmax - jmin),
+            k_offset : (k_offset + kmax - kmin),
+        ]
+        == 1
+    )
+
+    if sum(informed_window) > 0:
+        return Cube[imin:imax, jmin:jmax, kmin:kmax][nonzero(informed_window)].mean()
     else:
         return undefined_value
 
@@ -546,6 +613,25 @@ def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
     if bool(numpy.all(MeanMask == 1)):
         return _moving_average_cubical(Cube, Mask, Radiuses, undefined_value)
 
+    # F-30: work-based cap on the per-cell ellipse path. The grid-volume
+    # cap above bounds MEMORY only; this loop is O(N·V) — every one of the
+    # N grid cells runs MeanCalc over a (2rx·2ry·2rz) mean-mask window,
+    # ~10 numpy ops per window cell. With the volume cap at 1e6 and a
+    # radius reaching the full grid, the worst case is ~8e12 numpy ops
+    # (multi-hour hang; probe: r=2 → 12.5 s at cap, r=50 extrapolates to
+    # ~54 h). The C++ kernel has no Python-scale cost problem (compiled);
+    # this pure-Python path needs an explicit work bound. Reject the
+    # product N × window_volume before the loop starts.
+    window_volume = (2 * rx) * (2 * ry) * (2 * rz)
+    moving_average_work = volume * window_volume
+    if moving_average_work > ValidationConstants.MAX_MOVING_AVERAGE_WORK:
+        raise ValueError(
+            f"MovingAverage3D: estimated per-cell work {moving_average_work} "
+            f"(grid volume {volume} × mean-mask volume {window_volume}) exceeds "
+            f"the maximum {ValidationConstants.MAX_MOVING_AVERAGE_WORK} for the "
+            f"per-cell (ellipse-mask) path. Reduce the grid size or Radiuses."
+        )
+
     for i in range(nx):
         for j in range(ny):
             for k in range(nz):
@@ -568,7 +654,11 @@ def _moving_average_cubical(Cube, Mask, Radiuses, undefined_value):
     """
     rx, ry, rz = Radiuses
     nx, ny, nz = Cube.shape
-    informed = (Mask == 1).astype(float64)
+    # II-41: non-zero = informed (the documented mask contract). The old
+    # `Mask == 1` treated mask=2 cells as uninformed, so a legal non-binary
+    # mask produced an undefined_value grid even though every cell was
+    # informed (live probe: MovingAverage3D mask=2 → every cell undefined).
+    informed = (Mask != 0).astype(float64)
     cube_masked = where(informed > 0, Cube, 0.0).astype(float64)
 
     cube_pad = pad(cube_masked, ((rx, rx), (ry, ry), (rz, rz)), mode="constant")
@@ -757,8 +847,37 @@ def LoadGslibFile(filename, property_size, basedir=None):
             # Skip blank lines (whitespace-only)
             if not line.strip():
                 continue
+            # II-42: bound the line length and count tokens BEFORE
+            # `line.split()` materializes the token list. A crafted
+            # newline-free line (probe: 3.4 MB → 500k tokens → 28.3 MB RSS)
+            # previously allocated every token as a CPython str before the
+            # count check could fire. A legal GSLIB line has exactly num_p
+            # (≤ 1024) short tokens, so both bounds are far above legitimate
+            # data while catching the DoS input before any allocation.
+            if len(line) > MAX_GSLIB_LINE_BYTES:
+                raise RuntimeError(
+                    f"LoadGslibFile: data line exceeds {MAX_GSLIB_LINE_BYTES} bytes. "
+                    f"File may be corrupted or malicious."
+                )
+            token_count = 0
+            in_token = False
+            for ch in line:
+                if ch.isspace():
+                    in_token = False
+                elif not in_token:
+                    token_count += 1
+                    if token_count > num_p:
+                        break
+                    in_token = True
+            if token_count != num_p:
+                raise RuntimeError(
+                    f"LoadGslibFile: expected {num_p} values per data line, "
+                    f"got {token_count} tokens in line: {line.strip()!r}"
+                )
             points = line.split()
             # Validate token count matches expected property count per line
+            # (defense in depth — the pre-split count above already checked,
+            # but split() is the authoritative tokenization).
             if len(points) != num_p:
                 raise RuntimeError(
                     f"LoadGslibFile: expected {num_p} values per data line, "

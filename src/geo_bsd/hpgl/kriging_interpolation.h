@@ -324,6 +324,19 @@ namespace hpgl
 						  const mean_t center_mean,
 						  const means_t & means)const
 		{
+			// II-08: this stage applies the explicit σ back-transform
+			// (weights *= σ_c/σ_j) on top of a PLAIN-SK first_stage solution
+			// (corellogram_weight_calculator_t::first_stage →
+			// sk_kriging_weights_3). This protocol is dead code —
+			// neighbour_set_t is never instantiated (grep src/ + tests/ for
+			// `neighbour_set_t<` = 0 hits) — and the ACTIVE SIS-LVM
+			// correlogram path (corellogramed_weights_3/_ws) does not use it:
+			// that path solves the σ_i·σ_j scaled system whose solution
+			// ALREADY equals λ·σ_c/σ_j (verified numerically: both factorings
+			// produce identical weights). This stage is kept because it is the
+			// mathematically correct complement to first_stage's plain solve;
+			// it must NOT be applied to the active path's already-transformed
+			// weights (would double-transform).
 			// Type safety: Use size_t for size variable, validate it fits in int
 			const size_t size = weights.size();
 

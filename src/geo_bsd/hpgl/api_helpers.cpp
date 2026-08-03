@@ -152,6 +152,17 @@ init_sis_params(
 		if (p->m_max_neighbours < 0)
 			throw hpgl_exception("init_sis_params", "m_max_neighbours cannot be negative");
 		ikp->m_neighbour_limits.push_back(p->m_max_neighbours);
+		// F-19: m_marginal_prob is consumed directly as the SK mean and the
+		// failure-fallback probability by the SIS/IK kernels (sibling of the
+		// median_ik 2-M-35 gate at api.cpp:1167-1177). A value outside [0,1]
+		// — including a FINITE out-of-range 5.0 — silently corrupts category
+		// selection; NaN fails the range check too (NaN comparisons are
+		// false). This covers all three entry points that route through
+		// init_sis_params: hpgl_indicator_kriging, hpgl_sis_simulation,
+		// hpgl_sis_simulation_lvm.
+		if (!(p->m_marginal_prob >= 0.0 && p->m_marginal_prob <= 1.0))
+			throw hpgl_exception("init_sis_params",
+				"m_marginal_prob must be in [0, 1]");
 		ikp->m_marginal_probs.push_back(p->m_marginal_prob);
 		covariance_param_t cp;
 		cp.m_covariance_type = (covariance_type_t) p->m_covariance_type;

@@ -255,5 +255,23 @@ if !ERRORLEVEL! EQU 0 (
     endlocal
     exit /b 1
 )
+
+REM III-29: execute the Python test suite in the build pipeline. build.bat
+REM drives MSBuild directly (no CMake configure), so there is no CTestTestfile
+REM to run — the equivalent durable gate is pytest with the default non-slow
+REM marker selection (mirrors run_tests.py and the CTest hpgl_python_tests
+REM target). A compile-clean regression must not ship with a green banner.
+echo Running Python test suite (non-slow)...
+%PYTHON_CMD% -m pytest tests/python -m "not slow" -q
+if !ERRORLEVEL! EQU 0 (
+    echo   Python tests: PASSED
+) else (
+    echo.
+    echo   ERROR: Python test suite FAILED (see failures above).
+    echo   Install test dependencies with: uv sync --extra test
+    if not defined CI pause
+    endlocal
+    exit /b 1
+)
 endlocal
 exit /b 0

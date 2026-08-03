@@ -262,9 +262,12 @@ public:
 		double cov_at_zero = (*cov_model)(coord_t(0,0,0), coord_t(0,0,0));
 		// Guard: d2 must be strictly positive for sqrt().
 		// cov_at_zero must also be positive.
-		if (cov_at_zero <= 0 || d2 <= 0)
+		// F-20: `cov_at_zero <= 0 || d2 <= 0` is NaN-bypassable — NaN fails
+		// both comparisons, so a NaN cov_at_zero or d2 reaches
+		// p12*sqrt(d2)/sqrt(cov_at_zero) → NaN m_coef. isfinite first.
+		if (!std::isfinite(cov_at_zero) || !std::isfinite(d2) || cov_at_zero <= 0 || d2 <= 0)
 		{
-			LOGWARNING("Mark I cross-covariance degraded: cov_at_zero or d2 non-positive, setting coef=0.\n");
+			LOGWARNING("Mark I cross-covariance degraded: cov_at_zero or d2 non-positive/non-finite, setting coef=0.\n");
 			m_coef = 0;
 		}
 		else
@@ -297,9 +300,15 @@ public:
 	{
 		double primary_variance = (*primary_cov_model)(coord_t(0,0,0), coord_t(0,0,0));
 		double secondary_variance = (*secondary_cov_model)(coord_t(0,0,0), coord_t(0,0,0));
-		if (secondary_variance <= 0)
+		// F-20: the guard previously checked secondary_variance only and used
+		// a NaN-bypassable `<= 0` comparison. NaN primary_variance or
+		// secondary_variance passes `<= 0` and reaches
+		// p12*sqrt(pv/sv) → NaN m_coef. Also add the missing primary_variance
+		// guard — sqrt of a negative/NaN primary_variance would be NaN.
+		if (!std::isfinite(primary_variance) || !std::isfinite(secondary_variance)
+			|| primary_variance <= 0 || secondary_variance <= 0)
 		{
-			LOGWARNING("Mark II cross-covariance degraded: secondary_variance non-positive, setting coef=0.\n");
+			LOGWARNING("Mark II cross-covariance degraded: primary/secondary variance non-positive or non-finite, setting coef=0.\n");
 			m_coef = 0;
 		}
 		else
@@ -351,6 +360,18 @@ static void process_node_loop(
 	// OpenMP would need per-thread workspaces and reduction rework, which
 	// is out of scope for this correctness-neutral allocation-churn fix.
 	cokriging_ws_t<typename n_lookup_t::coord_t> ws;
+	// II-10: the secondary equation can only enter the kriging system when
+	// the secondary variance is a strictly-positive finite value. d2=0 is
+	// Python-ACCEPTED (validation.py:962 rejects only < 0) but writes a raw
+	// 0 to the diagonal (build_system line ~117) → singular matrix every
+	// node → KI_SINGULARITY → mean-fill, silent for C-API. A NaN
+	// secondary_variance bypasses the old `<= 0` ctor guard the same way.
+	// When the variance is not usable, DROP the secondary equation entirely
+	// (primary-only kriging — the F-22 convention for a missing secondary).
+	// This single flag propagates through calc_value → calc_weights →
+	// build_system → combine (all consume the same secondary_present flag);
+	// no signature changes.
+	bool secondary_variance_valid = std::isfinite(secondary_variance) && secondary_variance > 0;
 	for (node_index_t i = 0; i < data_size; ++i)
 	{
 		cont_value_t result = -500;
@@ -362,7 +383,10 @@ static void process_node_loop(
 		{
 			// F-22: whether the secondary is actually defined at this node
 			// decides whether the secondary equation enters the system.
-			bool secondary_present = secondary_data.is_informed(i);
+			// II-10: additionally require the secondary variance to be a
+			// strictly-positive finite value, else the secondary equation
+			// is dropped (primary-only kriging, GSLIB convention).
+			bool secondary_present = secondary_data.is_informed(i) && secondary_variance_valid;
 			cont_value_t secondary_value = secondary_present
 				? secondary_data[i] : secondary_mean;
 			ki_result_t ki_result = calc_value(i, input_prop, secondary_value,
@@ -441,9 +465,29 @@ void simple_cokriging_markI(
 
 	// Range validation: correlation_coef must be in [-1, 1].
 	// Python-side validation exists but the C API bypasses it.
-	if (correlation_coef < -1.0 || correlation_coef > 1.0)
+	// F-20: comparison-only guards are NaN-bypassable — IEEE-754 guarantees
+	// every comparison with NaN is false, so a NaN correlation_coef passes
+	// `< -1.0 || > 1.0` unmodified and flows into cross_cov_model_mark_i_t
+	// where it produces a NaN m_coef → NaN covariance matrix → silent
+	// mean-fill. isfinite must be checked FIRST.
+	if (!std::isfinite(correlation_coef) || correlation_coef < -1.0 || correlation_coef > 1.0)
 		throw hpgl_exception("simple_cokriging_markI",
-			"correlation_coef must be in [-1, 1]");
+			"correlation_coef must be finite and in [-1, 1]");
+
+	// F-20/II-06: means and variance are consumed directly by the kernel
+	// (process_node_loop → combine, build_system diagonal). A NaN/Inf value
+	// silently produces NaN output for direct C++ callers (the C API gates
+	// these at api.cpp, but the C++ entry point is the single chokepoint for
+	// direct-C++ + C callers alike). 0.0 variance stays ACCEPTED (Python
+	// validation.py:962 rejects only < 0; test_zero_variance_passes pins 0.0
+	// as valid — the d2=0 case is handled by the II-10 secondary-validity flag
+	// as primary-only kriging, not rejected here).
+	if (!std::isfinite(secondary_variance) || secondary_variance < 0.0)
+		throw hpgl_exception("simple_cokriging_markI",
+			"secondary_variance must be finite and >= 0");
+	if (!std::isfinite(primary_mean) || !std::isfinite(secondary_mean))
+		throw hpgl_exception("simple_cokriging_markI",
+			"primary_mean and secondary_mean must be finite");
 
 	cov_model_t cov(primary_cov_params);	
 
@@ -498,9 +542,21 @@ void simple_cokriging_markII(
 
 	// Range validation: correlation_coef must be in [-1, 1].
 	// Python-side validation exists but the C API bypasses it.
-	if (correlation_coef < -1.0 || correlation_coef > 1.0)
+	// F-20: comparison-only guards are NaN-bypassable — NaN passes
+	// `< -1.0 || > 1.0` unmodified. isfinite must be checked FIRST.
+	if (!std::isfinite(correlation_coef) || correlation_coef < -1.0 || correlation_coef > 1.0)
 		throw hpgl_exception("simple_cokriging_markII",
-			"correlation_coef must be in [-1, 1]");
+			"correlation_coef must be finite and in [-1, 1]");
+
+	// F-20/II-06: means are consumed directly by the kernel. A NaN/Inf mean
+	// silently produces NaN output for direct C++ callers. markII's
+	// secondary_variance is cov-model derived at the call below (sill at
+	// zero lag) and is already validated by covariance_param_t::validate
+	// (sill > 0 finite); the cross_cov ctor guard covers it as
+	// defense-in-depth.
+	if (!std::isfinite(primary_mean) || !std::isfinite(secondary_mean))
+		throw hpgl_exception("simple_cokriging_markII",
+			"primary_mean and secondary_mean must be finite");
 
 	cov_model_t primary_cov(primary_cov_params);	
 	cov_model_t secondary_cov(secondary_cov_params);	

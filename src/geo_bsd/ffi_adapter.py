@@ -405,6 +405,16 @@ def create_cont_masked_array(prop, grid):
         ``_HPGL_CONT_MASKED_ARRAY`` with pinned array references.
     """
     if grid is None:
+        # F-24: validate that data and mask have the same element count.
+        # C++ indexes both arrays with the same stride values, so a
+        # data.size != mask.size mismatch reads/writes past the end of the
+        # shorter array (heap OOB read). The stride comparison below only
+        # catches layout mismatches, not length mismatches.
+        if prop.data.size != prop.mask.size:
+            raise ValueError(
+                f"create_cont_masked_array: data size {prop.data.size} "
+                f"does not match mask size {prop.mask.size}"
+            )
         # Validate that data and mask have compatible element strides.
         # C++ indexes both arrays with the same stride values, so element
         # strides (byte strides / itemsize) must match.  Byte strides
@@ -473,6 +483,15 @@ def create_ind_masked_array(prop, grid):
     """
     if grid is None:
         sh = _create_hpgl_shape(prop.data.shape, __get_strides(prop.data))
+        # F-25: validate that data and mask have the same element count.
+        # C++ indexes both arrays with the same stride values, so a
+        # data.size != mask.size mismatch reads/writes past the end of the
+        # shorter array (heap OOB read for the byte writer).
+        if prop.data.size != prop.mask.size:
+            raise ValueError(
+                f"create_ind_masked_array: data size {prop.data.size} "
+                f"does not match mask size {prop.mask.size}"
+            )
         # Validate that data and mask have compatible element strides.
         # C++ indexes both arrays with the same stride values, so element
         # strides (byte strides / itemsize) must match.
@@ -527,7 +546,19 @@ def create_ubyte_array(array, grid):
     if grid is None:
         sh = _create_hpgl_shape(array.shape, strides=__get_strides(array))
     else:
-        sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
+        # III-14: preserve the caller's actual mask shape when the array is
+        # 3D so the C++ per-dimension shape guard
+        # (validate_simulation_mask_shape_or_throw, api.cpp:197-217) can
+        # fire. Pre-fix the shape was stamped to (grid.x, grid.y, grid.z),
+        # so an equal-volume (2,8,1) mask on a (4,4,1) grid passed the
+        # volume check AND the C++ guard (the stamped shape always matched
+        # the grid), silently permuting the simulated cells. For 1D (flat)
+        # masks the grid dims are used (the flat buffer carries no
+        # per-dimension meaning, matching create_cont_masked_array).
+        if array.ndim == 3:
+            sh = _create_hpgl_shape(array.shape, strides=__get_strides(array))
+        else:
+            sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
         if grid.x * grid.y * grid.z != array.size:
             raise RuntimeError(
                 f"Invalid data size. Size of data = {array.size}. "
@@ -548,6 +579,15 @@ def create_float_array(array, grid):
         sh = _create_hpgl_shape(array.shape, strides=__get_strides(array))
     else:
         sh = _create_hpgl_shape((grid.x, grid.y, grid.z))
+        # F-26: the grid path had no size check — a float array smaller
+        # than the grid volume was passed to C++ with a grid-sized shape
+        # struct, and the kernel read past the end of the buffer (heap OOB
+        # read). Mirror create_ubyte_array's grid-size validation.
+        if grid.x * grid.y * grid.z != array.size:
+            raise RuntimeError(
+                f"Invalid data size. Size of data = {array.size}. "
+                f"Size of grid = {grid.x * grid.y * grid.z}"
+            )
 
     result = _HPGL_FLOAT_ARRAY(
         data=array.ctypes.data_as(C.POINTER(C.c_float)), shape=sh

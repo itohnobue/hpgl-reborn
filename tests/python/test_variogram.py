@@ -8,6 +8,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from geo_bsd.variogram import (
+        CalcVariogramFunction,
+        CubeScan,
+        PointSetScanContStyle,
+        PointSetScanGridStyle,
         TVEllipsoid,
         TVVariogramSearchTemplate,
         _CalcLagDistances,
@@ -863,3 +867,181 @@ class TestCubeScanTuplePointPath:
         # Variogram for different points should accumulate pair count
         count_idx = len(values) + len(values)  # pair count index
         assert result2[count_idx] > 0, "Should have counted at least one pair"
+
+
+# =============================================================================
+# F-03 (HIGH): CubeScan must carry a total-work cap
+# =============================================================================
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestCubeScanTotalWorkCap:
+    """F-03: the pure-Python grid path must reject a legal input whose total
+    work (len(LagIndexes) × grid volume) exceeds MAX_TOTAL_GRID_WORK before
+    running the O(offsets × volume) loop. Pre-fix only MAX_WINDOW_VOLUME
+    bounded the search-window offset list; a large template + large grid ran
+    ~8e12 numpy ops (~2 h) and a 1000^3 grid allocated a 24 GB mgrid."""
+
+    def test_cube_scan_rejects_over_cap(self, monkeypatch):
+        import geo_bsd.variogram as v
+
+        monkeypatch.setattr(v, "MAX_TOTAL_GRID_WORK", 1000.0)
+        ell = _make_ellipsoid(r1=10, r2=5, r3=3)
+        # A template with several lag offsets on a 10x10x5 grid: work
+        # len(LagIndexes)*500 > 1000 for any non-trivial lag area.
+        templ = _make_template(ell, num_lags=3, lag_width=1.0, lag_sep=1.0)
+        mask = np.ones((10, 10, 5), dtype="uint8")
+        with pytest.raises(ValueError, match="total grid work"):
+            CubeScan(templ, mask, lambda *a: np.zeros(3), None)
+
+    def test_cube_scan_below_cap_still_works(self):
+        """Control: a small grid/template below the cap still computes."""
+        ell = _make_ellipsoid(r1=5, r2=3, r3=2)
+        templ = _make_template(ell, num_lags=2, lag_width=1.0, lag_sep=1.0)
+        mask = np.ones((5, 5, 3), dtype="uint8")
+        res, lag_dist = CubeScan(templ, mask, lambda *a: np.zeros(3), None)
+        assert np.all(np.isfinite(res))
+        assert len(lag_dist) == templ.NumLags
+
+    def test_real_cap_defined(self):
+        import geo_bsd.variogram as v
+
+        assert v.MAX_TOTAL_GRID_WORK == 1e8
+
+
+# =============================================================================
+# F-27: GridStyle work cap must bound the real per-pair cost
+# =============================================================================
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestGridStyleWorkCap:
+    """F-27: the old cap formula (n² × NumLags) under-estimated the real
+    per-pair cost of the exact-integer matching by ~1e7×. After the III-15
+    continuous-binning rewrite the per-pair cost is O(NumLags), so
+    n² × NumLags bounds the real work; a monkeypatched tiny cap must fire
+    on a point set whose n² × NumLags product exceeds it."""
+
+    def test_grid_style_cap_fires(self, monkeypatch):
+        import geo_bsd.variogram as v
+
+        monkeypatch.setattr(v, "MAX_TOTAL_PAIR_LAG_WORK", 1000.0)
+        ell = TVEllipsoid(R1=100, R2=100, R3=100)
+        templ = TVVariogramSearchTemplate(
+            LagWidth=2.0, LagSeparation=1.0, TolDistance=1.0,
+            NumLags=3, Ellipsoid=ell, FirstLagDistance=0,
+        )
+        # 100 points, 3 lags -> 100^2 * 3 = 30000 > 1000
+        pts = np.arange(10, dtype="float32")
+        px, py, pz = np.meshgrid(pts, pts, np.array([0.0], dtype="float32"))
+        px = px.ravel().astype("float32")
+        py = py.ravel().astype("float32")
+        pz = pz.ravel().astype("float32")
+        pvals = np.arange(100, dtype="float32")
+        with pytest.raises(ValueError, match="pair-lag work"):
+            PointSetScanGridStyle(
+                templ, (px, py, pz), CalcVariogramFunction,
+                {"HardData": [pvals]},
+            )
+
+
+# =============================================================================
+# III-15: PointSetScanGridStyle must bin fractional-spacing pairs
+# =============================================================================
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestGridStyleFractionalSpacing:
+    """III-15: exact-integer offset matching silently dropped EVERY pair on
+    fractional grid spacing (0.5/0.25 m). Continuous band binning (C++ /
+    ContStyle parity) must count those pairs."""
+
+    def _count_fn(self, p1, p2, result, params):
+        if result is None:
+            return np.zeros(3, dtype=np.float64)
+        result[2] += 1
+        return result
+
+    def test_fractional_spacing_pairs_counted(self):
+        ell = TVEllipsoid(R1=100, R2=100, R3=100)
+        templ = TVVariogramSearchTemplate(
+            LagWidth=2.0, LagSeparation=1.0, TolDistance=1.0,
+            NumLags=5, Ellipsoid=ell, FirstLagDistance=0,
+        )
+        # 6 points at 0, 0.5, 1.0, 1.5, 2.0, 2.5 on the X axis.
+        xs = np.arange(6, dtype="float32") * 0.5
+        ys = np.zeros(6, dtype="float32")
+        zs = np.zeros(6, dtype="float32")
+        res, _ = PointSetScanGridStyle(
+            templ, (xs, ys, zs), self._count_fn, None
+        )
+        # 30 ordered pairs (6×5, self-pairs skipped) must be counted across
+        # lag bands; the exact pre-fix integer matching counted ZERO
+        # (repro: 0 of 30 ordered pairs).
+        total = int(res[:, 2].sum())
+        assert total > 0, "fractional-spacing pairs must be binned (III-15)"
+        assert total == 30, f"expected 30 ordered pairs, got {total}"
+
+    def test_integer_spacing_matches_cont_style(self):
+        """GridStyle continuous binning must agree with ContStyle on
+        integer-spaced data (parity check)."""
+        grid_pts = np.array([0.0, 1.0, 2.0], dtype="float32")
+        px, py, pz = np.meshgrid(grid_pts, grid_pts, np.array([0.0], dtype="float32"))
+        px = px.ravel().astype("float32")
+        py = py.ravel().astype("float32")
+        pz = pz.ravel().astype("float32")
+        pvals = np.arange(9, dtype="float32")
+        templ = TVVariogramSearchTemplate(
+            LagWidth=2.0, LagSeparation=1.0, TolDistance=1.0,
+            NumLags=3, Ellipsoid=TVEllipsoid(R1=100, R2=100, R3=100),
+            FirstLagDistance=0,
+        )
+        cont, _ = PointSetScanContStyle(
+            templ, {"X": px, "Y": py, "Z": pz}, CalcVariogramFunction,
+            {"HardData": [pvals]},
+        )
+        grid_style, _ = PointSetScanGridStyle(
+            templ, (px, py, pz), CalcVariogramFunction, {"HardData": [pvals]},
+        )
+        np.testing.assert_array_equal(grid_style[:, 2], cont[:, 2])
+
+
+# =============================================================================
+# II-34: CalcIndCorrelationFunction must EXCLUDE soft-prob 0/1 pairs
+# =============================================================================
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestCalcIndCorrelationExcludesDegenerate:
+    """II-34: soft-prob variance ≤ 0 (soft prob 0 or 1) must EXCLUDE the
+    pair, not substitute denom=1.0. Substitution let the unnormalized raw
+    covariance dominate, diluting/inflating the correlation outside [-1,1].
+    Exclusion is the standard guard (C++ kernel parity)."""
+
+    def test_soft_prob_01_pairs_excluded_from_count(self):
+        from geo_bsd.variogram import CalcIndCorrelationFunction
+
+        values = [np.array([0.0, 1.0, 0.0, 1.0], dtype="float32")]
+        soft = [np.array([0.0, 0.0, 1.0, 1.0], dtype="float32")]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcIndCorrelationFunction(None, None, None, params)
+        # Pair (0,1): soft 0 and 0 -> product 0 -> excluded. Pair (2,3):
+        # soft 1 and 1 -> product 0 -> excluded. Count slot (index 2) stays 0.
+        result = CalcIndCorrelationFunction(np.array([0]), np.array([1]), result, params)
+        result = CalcIndCorrelationFunction(np.array([2]), np.array([3]), result, params)
+        assert result[2] == 0, (
+            "II-34: degenerate soft-prob pairs must be excluded from the "
+            f"count, got {result[2]} (pre-fix substitution counted them)"
+        )
+        assert np.all(np.isfinite(result))
+
+    def test_valid_pairs_still_counted(self):
+        """Control: soft probs strictly inside (0,1) are counted normally."""
+        from geo_bsd.variogram import CalcIndCorrelationFunction
+
+        values = [np.array([0.0, 1.0], dtype="float32")]
+        soft = [np.array([0.5, 0.5], dtype="float32")]
+        params = {"HardData": values, "SoftData": soft}
+        result = CalcIndCorrelationFunction(None, None, None, params)
+        result = CalcIndCorrelationFunction(np.array([0]), np.array([1]), result, params)
+        assert result[2] == 1, "valid soft-prob pairs must be counted"
