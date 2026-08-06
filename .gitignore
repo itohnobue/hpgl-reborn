@@ -93,3 +93,6 @@ loop-tasks-run.sh
 build_*.log
 test_*.log
 *.dylib
+
+# Local planning artifacts (working documents — not part of the repo)
+plans/
