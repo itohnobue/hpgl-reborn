@@ -129,7 +129,9 @@ namespace hpgl
 		std::vector<double> sigmas;     // size: corellogram sigma values
 		std::vector<double> A_backup;   // size²: backup of A for fallback path
 #ifdef LAPACK_SOLVER
-		std::vector<double> B;          // 2*size: combined OK RHS buffer
+		std::vector<double> B;          // 2*size: combined OK RHS buffer — E-M82:
+		                                // reused by lapack_spd_solve_2rhs via the
+		                                // work parameter (no per-node allocation)
 #endif
 	};
 
@@ -592,7 +594,8 @@ namespace hpgl
 			&ws.sk_weights[0], &ws.b[0],
 			&ws.ones_result[0], &ws.ones[0],
 			&ws.A_backup[0],
-			"OK Cholesky (ws)");
+			"OK Cholesky (ws)",
+			&ws.B);   // E-M82: reuse the workspace's combined-RHS buffer
 #endif
 
 		double mu = 0.0;
@@ -766,11 +769,18 @@ namespace hpgl
 		// NOTE: LAPACK within OpenMP region — avoid BLAS thread oversubscription.
 		// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →
 		// (on success) dpotrs_.  weights[] receives the solution on success.
+		// R4-01: pass the kriging TARGET variance C(0)·σc² (sill-scaled).
+		// This σ-scaled system has A[0][0] = C(0)·σ₀² (first datum's
+		// variance), NOT the target variance — the solver's Schur-
+		// consistency reference must be the target's variance, or valid
+		// estimators with σc > σ0 are spuriously rejected (KI_SINGULARITY
+		// → mean-fill on the SIS-LVM path).  cov(center, center) = C(0).
 		std::vector<double> A_backup(A);
 
 		bool system_solved = detail::lapack_spd_solve_1rhs(
 			&A[0], size, &weights[0], &b[0],
-			&A_backup[0], "Corellogram Cholesky");
+			&A_backup[0], "Corellogram Cholesky",
+			cov(center, center) * sigmac * sigmac);
 
 #endif
 
@@ -900,12 +910,18 @@ namespace hpgl
 #ifdef LAPACK_SOLVER
 		// Unified SPD solver: backup → dpotrf_ → (on fail) gauss_solve →
 		// (on success) dpotrs_.  weights[] receives the solution on success.
+		// R4-01: pass the kriging TARGET variance C(0)·σc² (sill-scaled) —
+		// see corellogramed_weights_3: A[0][0] here is C(0)·σ₀², the
+		// first datum's variance, not the target variance; the solver's
+		// consistency reference must be the target's variance or valid
+		// estimators with σc > σ0 are spuriously rejected.
 		ws.A_backup.resize(matrix_size);
 		std::copy(ws.A.begin(), ws.A.begin() + matrix_size, ws.A_backup.begin());
 
 		system_solved = detail::lapack_spd_solve_1rhs(
 			&ws.A[0], size, &weights[0], &ws.b[0],
-			&ws.A_backup[0], "Corellogram Cholesky (ws)");
+			&ws.A_backup[0], "Corellogram Cholesky (ws)",
+			cov(center, center) * sigmac * sigmac);
 #endif
 
 		// II-08: no explicit σ back-transform here either — the σ_i·σ_j

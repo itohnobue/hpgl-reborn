@@ -10,6 +10,7 @@
 #include "mean_provider.h"
 #include "output.h"
 #include "kriging_stats.h"
+#include "cdf_utils.h"
 #include "api.h"
 #include <exception>
 
@@ -53,6 +54,27 @@ void median_ik_for_two_indicators(
 
 	HPGL_CHECK(input_property.size() == grid.size(),
 		"median_ik_for_two_indicators: property size does not match grid size");
+
+	// E2-126: validate the marginal probabilities at the C++ entry — the
+	// single chokepoint for direct-C++ AND C callers (sibling pattern:
+	// simple_cokriging_markI.cpp:473-490). The [0,1]/sum gate previously
+	// existed only at the C boundary (api.cpp hpgl_median_ik) and the
+	// members were indeterminate without it, so direct-C++ misuse (NaN,
+	// out-of-[0,1]) silently produced all-category-1/all-category-0 output
+	// via choose_indicator (NaN <= 0.5 is false → 1). Mirrors the C API
+	// gate: [0,1] per entry + sum within 0.01 of 1.0.
+	{
+		const double p0 = params.m_marginal_probs[0];
+		const double p1 = params.m_marginal_probs[1];
+		if (!std::isfinite(p0) || p0 < 0.0 || p0 > 1.0 ||
+			!std::isfinite(p1) || p1 < 0.0 || p1 > 1.0)
+			throw hpgl_exception("median_ik_for_two_indicators",
+				"marginal_probs must be finite and in [0, 1]");
+		const double prob_sum = p0 + p1;
+		if (prob_sum < 0.99 || prob_sum > 1.01)
+			throw hpgl_exception("median_ik_for_two_indicators",
+				"marginal_probs must sum to 1.0 (within 0.01)");
+	}
 
 
 	size_t prop_size = input_property.size();
@@ -122,6 +144,14 @@ void median_ik_for_two_indicators(
 	#pragma omp parallel
 	{
 		int local_lap_count = 0;
+		// E-M81: per-thread workspace — eliminates ~9 heap allocations per
+		// node inside the region (5 function-local vectors in the non-ws
+		// kriging_interpolation overload + 4 in the non-ws SK weight
+		// calculator). Every sibling loop consumer (cont_kriging,
+		// indicator_kriging, SGS, SIS) uses the _ws variants; median IK was
+		// the only one left on the allocating path. Vectors are re-filled on
+		// each call — same memory, zero heap churn.
+		kriging_ws_t<indicator_value_t, sugarbox_location_t> ws;
 		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_singularity) reduction(+: nodes_processed) reduction(+: sum_categories)
 		for (size_t idx = 0; idx < prop_size; ++idx)
 		{
@@ -138,13 +168,13 @@ void median_ik_for_two_indicators(
 			double prob;
 			indicator_index_t ind_index;
 
-			ki_result_t ki_result = kriging_interpolation(
+			ki_result_t ki_result = kriging_interpolation_ws(
 				prop_adapter, 
 				is_informed_predicate_t<indicator_property_array_t>(input_property), 
 				idx, 				 
 				cov_field, 
 				single_mean_t(params.m_marginal_probs[1]), 
-				nl, sk_weight_calculator_t(), prob);
+				nl, sk_weight_calculator_t(), prob, ws);
 		
 			if (ki_result != ki_result_t::KI_SUCCESS)
 			{
@@ -156,6 +186,15 @@ void median_ik_for_two_indicators(
 			case ki_result_t::KI_NO_NEIGHBOURS: ++points_without_neighbours; break;
 			case ki_result_t::KI_SINGULARITY: ++points_singularity; break;
 			}
+
+			// E-M55: sanitize the kriged probability (finite + [0,1],
+			// marginal fallback) before choose_indicator — the sibling IK
+			// path sanitizes at indicator_kriging.h:270-271 and median IK
+			// was the only IK-family consumer without it. Defense-in-depth:
+			// NaN weights already fail the solver isfinite check upstream,
+			// but a non-finite probability reaching choose_indicator would
+			// make the NaN <= 0.5 comparison false → silent all-category-1.
+			prob = detail::sanitize_probability(prob, params.m_marginal_probs[1]);
 
 			ind_index = choose_indicator(prob);
 			output_property.set_at(idx, ind_index);

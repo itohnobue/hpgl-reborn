@@ -34,7 +34,47 @@ namespace hpgl
 			{
 				hpgl::covariance_t value1 = m_data[hpgl::vr_to_dec(m_yd, m_xd, vec1[2] + m_zradius, vec1[1] + m_yradius, vec1[0] + m_xradius)];
 				hpgl::covariance_t value2 = m_data[hpgl::vr_to_dec(m_yd, m_xd, vec2[2] + m_zradius, vec2[1] + m_yradius, vec2[0] + m_xradius)];
-				return value1 > value2;			
+				if (value1 != value2)
+					return value1 > value2;
+				// E-M67 (CONFIRMED MEDIUM): deterministic tie-break for
+				// equal covariances — ties are routine on regular grids (48
+				// lattice positions at h²=14). The old covariance-only
+				// comparator left the boundary cut inside a tie group
+				// dependent on the input permutation (z,y,x box loop order),
+				// while the indexed sibling sorts its candidates in a
+				// different permutation (cluster traversal + nth_element
+				// partition), so OK (indexed) and SGS (plain) could pick
+				// different members of the same tie group at the
+				// max_neighbours boundary — different kriging results for
+				// identical input. Secondary key: squared distance (closer
+				// first), then the node-index order of the indexed sibling
+				// (E-M67): index = z·nx·ny + y·nx + x (sugarbox_grid.h), so
+				// index ascending is the (z, y, x) lexicographic coordinate
+				// order. The estimation-node center cancels in the pairwise
+				// comparison of two offsets (index(C+o1) < index(C+o2)
+				// ⇔ (dz1,dy1,dx1) < (dz2,dy2,dx2) lexicographic, z-major),
+				// so this static comparator over plain offsets reproduces
+				// the indexed path's node-index tie-break exactly —
+				// R-16: the former x-major key diverged on ties like
+				// (1,0,0) vs (0,0,1) (x-major admitted (0,0,1) first;
+				// node index admits base+1 < base+nx·ny first). The result
+				// is a strict total order (cov desc, d² asc, z, y, x asc),
+				// so the plain offset list is fully determined regardless of
+				// loop order and matches the indexed sibling.
+				const long long dx1 = vec1[0], dy1 = vec1[1], dz1 = vec1[2];
+				const long long dx2 = vec2[0], dy2 = vec2[1], dz2 = vec2[2];
+				const long long d2_1 = dx1 * dx1 + dy1 * dy1 + dz1 * dz1;
+				const long long d2_2 = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
+				if (d2_1 != d2_2)
+					return d2_1 < d2_2;
+				// R-16: node-index order (z-major) — matches the indexed
+				// sibling's index tie-break; the x-major key it replaces
+				// diverged on (1,0,0) vs (0,0,1).
+				if (vec1[2] != vec2[2])
+					return vec1[2] < vec2[2];
+				if (vec1[1] != vec2[1])
+					return vec1[1] < vec2[1];
+				return vec1[0] < vec2[0];
 			}
 		};
 	}
@@ -73,11 +113,17 @@ namespace hpgl
 	// Shared radius-magnitude guard for the (2r+1)³ covariance box.
 	// calc_cov_field, covariance_field_t::init, and
 	// precalculated_covariances_t::init each build a box of
-	// (2rx+1)*(2ry+1)*(2rz+1) doubles.  Radii around 463 already exceed
-	// INT_MAX volume, and Python permits radii up to 1e6, so an unguarded
-	// box would silently allocate tens of GB or hang before kriging starts
-	// (F-M2/F-M3/F-N7).  Throws hpgl_exception (catchable by Python via
-	// error_guard) — never abort()/exit().
+	// (2rx+1)*(2ry+1)*(2rz+1) doubles. E2-139: the previous INT_MAX bound
+	// (2,147,483,647 cells) admitted radii up to 644, materializing a
+	// 17.1 GB covariance table plus up to 25.7 GB of offset vectors at
+	// construction — a minutes-long hang/OOM on legal configs (the old
+	// "463" comment arithmetic was wrong: (2·463+1)³ = 7.96e8 < INT_MAX,
+	// i.e. radius 463 did NOT trip the guard). The bound is now
+	// memory-sane: 1e8 cells ≈ 0.8 GB of doubles (covariance table) plus
+	// ≤ 1.2 GB of offset vectors ≈ 2 GB worst case (cubic radius ≤ 231) —
+	// far above every in-tree use (largest test radius 30, book radius
+	// 160) while bounding the construction hang. Throws hpgl_exception
+	// (catchable by Python via error_guard) — never abort()/exit().
 	//
 	// Entry points that build the box indirectly (ordinary-kriging default,
 	// median_ik, cokriging markI/markII) call the ellipsoid overload before
@@ -88,6 +134,10 @@ namespace hpgl
 	inline size_t validate_covariance_radiuses_or_throw(
 			int xradius, int yradius, int zradius, const char * context)
 	{
+		// E2-139: memory-sane (2r+1)³ volume cap — ~0.8 GB doubles + ≤1.2 GB
+		// offset vectors worst case. Also keeps the box index (vr_to_dec
+		// returns int) well inside INT_MAX.
+		constexpr size_t COVARIANCE_FIELD_VOLUME_CAP = 100000000ULL;
 		// Overflow-safe size_t arithmetic: no signed-int multiplication
 		// (rx*2+1) happens before the magnitude checks below, so a radius
 		// near INT_MAX cannot wrap UB-first.  Negative radii wrap to huge
@@ -107,10 +157,10 @@ namespace hpgl
 		}
 		// vr_to_dec returns int; the box index must fit in INT_MAX
 		// (same bound as precalculated_covariances_t::init, I2-24).
-		if (volume > static_cast<size_t>(INT_MAX))
+		if (volume > COVARIANCE_FIELD_VOLUME_CAP)
 		{
 			throw hpgl_exception(context,
-				"covariance volume exceeds INT_MAX (search radii too large)");
+				"covariance volume exceeds the memory-safe limit of 100000000 cells (search radii too large)");
 		}
 		return volume;
 	}

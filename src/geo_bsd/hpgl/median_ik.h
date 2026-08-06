@@ -11,7 +11,14 @@ namespace hpgl
 
 	struct median_ik_params : public ok_params_t
 	{			
-		double m_marginal_probs[2];
+		// E2-126: default member initializers — previously m_marginal_probs
+		// was indeterminate (no ctor/member init), so a direct-C++ caller
+		// that forgot to set it got NaN marginals → NaN <= 0.5 is false →
+		// choose_indicator silently returned category 1 for EVERY node.
+		// Equal-probability prior (0.5/0.5); the C API (api.cpp) and the
+		// Python wrapper always overwrite with validated values, and the
+		// C++ entry (median_ik.cpp) now validates at the chokepoint.
+		double m_marginal_probs[2] = {0.5, 0.5};
 	private:
 		//indicator_value_t m_values[2];	
 	};

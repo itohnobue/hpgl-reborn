@@ -32,8 +32,14 @@ from geo_routines import *
 # ----------------------------------------------------
 
 # number of cells
-i_max = 200
-j_max = 200
+# E-M38: the problem statement (line 30) specifies a domain of
+# 15,000 * 15,000 m discretized at 50 * 50 m -> 300 * 300 cells.
+# The previous 200 * 200 grid covered only 10,000 m (2/3 of the
+# stated domain), while the sibling 2_var.py upscaled grid covers
+# the full 15,000 m — the point-scale model was being compared
+# against a larger domain.
+i_max = 300
+j_max = 300
 k_max = 1
 
 # Loading sample data from file
@@ -88,7 +94,7 @@ prop_initial = (initial_data, array_defined)
 
 # Show location map of the data
 plt.figure()
-plt.imshow(prop_transformed[0][:, :, 0], vmin=-3, vmax=3, extent=[0, 50, 0, 50])
+plt.imshow(prop_transformed[0][:, :, 0], vmin=-3, vmax=3, extent=[0, 15000, 0, 15000])
 plt.title("Location map of the data")
 
 # Histogram of sample data from the data set
@@ -98,7 +104,14 @@ plt.title("Histogram of sample data from the data set")
 plt.xlabel("Sampled value")
 
 # Generate a kriged field by performing SK with 315 azimuth direction
-variogram1 = CovarianceModel(type=covariance.exponential, ranges=(80, 20, 11), sill=1, angles=(315, 0, 0))
+# E-M37: the same variogram model must be used for SK and SGS — the
+# problem statement (lines 30, 169) calls for "the supplied variogram
+# model" for both, so the kriged/simulated comparison is meaningful.
+# The previous SK used an exponential model with z-range 11 while the
+# SGS below used spherical (80, 20, 1) — different functional form AND
+# different z-range for the same problem.  Aligned to the spherical
+# (80, 20, 1) model used by the SGS and by the sibling 2_var.py.
+variogram1 = CovarianceModel(type=covariance.spherical, ranges=(80, 20, 1), sill=1, angles=(315, 0, 0))
 
 krigged_transformed_data = simple_kriging(prop=prop_transformed, grid=grid, radiuses=(160, 40, 1), max_neighbours=20, cov_model=variogram1)
 print("SK_transformed_data result:", krigged_transformed_data[0])
@@ -192,12 +205,12 @@ back_cdf_transform(sgs_res[0], props, values, -99)
 
 # Simulated conditional realization in normal-score space
 plt.figure()
-plt.imshow(sgs_transformed_data[0][:, :, 0], vmin=-3, vmax=3, extent=[0, 50, 0, 50])
+plt.imshow(sgs_transformed_data[0][:, :, 0], vmin=-3, vmax=3, extent=[0, 15000, 0, 15000])
 plt.title("Simulated conditional realization in normal-score space")
 
 # Gridded kriged estimates in normal-score transformed space
 plt.figure()
-plt.imshow(krigged_transformed_data[0][:, :, 0], vmin=-3, vmax=3, extent=[0, 50, 0, 50])
+plt.imshow(krigged_transformed_data[0][:, :, 0], vmin=-3, vmax=3, extent=[0, 15000, 0, 15000])
 plt.title("Gridded kriged estimates in normal-score transformed space")
 
 #---------------------------------------------------
@@ -220,7 +233,7 @@ plt.title("Simulated grid of back transformed values")
 
 # Simulated conditional realization in initial
 plt.figure()
-plt.imshow(sgs_initial_data[0][:, :, 0], vmin=sgs_initial_data[0].min(), vmax=sgs_initial_data[0].max(), extent=[0, 50, 0, 50])
+plt.imshow(sgs_initial_data[0][:, :, 0], vmin=sgs_initial_data[0].min(), vmax=sgs_initial_data[0].max(), extent=[0, 15000, 0, 15000])
 plt.title("Simulated conditional realization in initial")
 
 # Simulated grid of initial values

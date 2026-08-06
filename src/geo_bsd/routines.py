@@ -45,6 +45,26 @@ from .validation import (
 MAX_GSLIB_LINE_BYTES = 1_000_000
 
 
+def _read_bounded_line(f, context):
+    """Read one text line with the II-42 cap applied BEFORE any materialization.
+
+    ``f.readline(MAX_GSLIB_LINE_BYTES + 1)`` reads at most cap+1 characters,
+    so an over-long line (or the first chunk of it) is detected by length
+    without ever building a multi-GB Python string. Without this bound the
+    header reads and the R-12 row-count pass ran ``strip()`` on the full
+    line (E-M4) — a crafted newline-free line was materialized in memory
+    before the cap inside the parse loop could fire. A legal GSLIB line
+    holds ≤ 1024 short tokens, far below the cap.
+    """
+    line = f.readline(MAX_GSLIB_LINE_BYTES + 1)
+    if len(line) > MAX_GSLIB_LINE_BYTES:
+        raise RuntimeError(
+            f"LoadGslibFile: {context} exceeds {MAX_GSLIB_LINE_BYTES} bytes. "
+            f"File may be corrupted or malicious."
+        )
+    return line
+
+
 def CalcMean(Cube, Mask):
     """Calculate the arithmetic mean of unmasked (informed) cells.
 
@@ -83,6 +103,18 @@ def CalcMean(Cube, Mask):
 
 
 def CalcMarginalProbsIndicator(Cube, Mask, Indicators):
+    # III-18/E2-27: gate the SOURCE cube, not the derived boolean
+    # comparisons. `Cube == Indicators[i]` is a boolean array, which is
+    # always finite — the gate inside CalcMean (:77) cannot see NaN in
+    # informed cells, so a NaN cell matches no indicator and silently
+    # deflates every marginal (probe: marginals sum to 0.667 instead of
+    # 1.0 for a 3-category cube with one NaN informed cell). Test
+    # finiteness on the source data before comparing.
+    if not numpy.all(numpy.isfinite(Cube[(Mask != 0)])):
+        raise ValueError(
+            "CalcMarginalProbsIndicator: Cube contains NaN or Inf values "
+            "in informed (Mask != 0) cells"
+        )
     Result = zeros(len(Indicators))
     for i in range(len(Indicators)):
         Result.flat[i] = CalcMean(Cube == Indicators[i], Mask)
@@ -136,6 +168,17 @@ def CalcVPC(Cube, Mask, MarginalMean):
 
 
 def CalcVPCsIndicator(Cube, Mask, Indicators, MarginalProbs):
+    # III-18/E2-27: gate the SOURCE cube, not the derived boolean
+    # comparisons (see CalcMarginalProbsIndicator). `Cube == Indicators[i]`
+    # is always finite, so the gate inside CalcVPC (:118) cannot catch NaN
+    # in informed cells and the per-layer indicator proportions would be
+    # silently deflated. Test finiteness on the source data before
+    # comparing.
+    if not numpy.all(numpy.isfinite(Cube[(Mask != 0)])):
+        raise ValueError(
+            "CalcVPCsIndicator: Cube contains NaN or Inf values "
+            "in informed (Mask != 0) cells"
+        )
     Result = []
     for i in range(len(Indicators)):
         VPC = CalcVPC(Cube == Indicators[i], Mask, MarginalProbs[i])
@@ -308,12 +351,30 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption, basedir=None):
     if not PointSet:
         raise ValueError("SaveGSLIBPointSet: PointSet must not be empty")
 
+    # E-M3: validate ndim up front. A 2D property array reaches the
+    # column_stack below and writes a file whose data columns no longer
+    # match the declared property count (unreadable by every GSLIB reader)
+    # or fails with an opaque numpy error. The documented contract is one
+    # 1D column per property.
+    for Key in PointSet.keys():
+        if numpy.ndim(PointSet[Key]) != 1:
+            raise RuntimeError(
+                f"SaveGSLIBPointSet: property '{Key}' must be a 1D array, "
+                f"got {numpy.ndim(PointSet[Key])} dimension(s). Point-set "
+                f"properties are per-point scalar columns."
+            )
+
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
     for Key in PointSet.keys():
         lens = numpy.append(lens, len(PointSet[Key].flat))
 
-    if sum(lens - lens[0]) != 0:
+    # E-M2: the equal-size check must be immune to sign-cancelling
+    # deviations — `sum(lens - lens[0])` is a numpy sum, so [0, 1, -1]
+    # deviations sum to 0.0 and mismatched properties slipped through to an
+    # opaque column_stack ValueError instead of this RuntimeError.
+    # unique()/max-min comparison detects any deviation.
+    if numpy.unique(lens).size != 1:
         raise RuntimeError(
             "SaveGSLIBPointSet: All properties in GSLIB dictionary must have equal size"
         )
@@ -410,12 +471,47 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g", basedir=None
     if not CubesDictionary:
         raise ValueError("SaveGSLIBCubes: CubesDictionary must not be empty")
 
+    # E-M3: validate ndim up front. The flatten below (swapaxes + .flat)
+    # raises an opaque AxisError for 2D arrays (or would silently write a
+    # broken file), so reject non-3D properties with a clear error first.
+    # The documented contract is one (NX, NY, NZ) cube per property.
+    for Key in CubesDictionary.keys():
+        if numpy.ndim(CubesDictionary[Key]) != 3:
+            raise RuntimeError(
+                f"SaveGSLIBCubes: property '{Key}' must be a 3D cube, "
+                f"got {numpy.ndim(CubesDictionary[Key])} dimension(s). Cube "
+                f"properties are (NX, NY, NZ) grids."
+            )
+
+    # E2-18: per-dimension shape equality (mirror Cubes2PointSet's III-17
+    # guard). The flat-length check below cannot catch equal-flat /
+    # different-shape cubes (e.g. (2,2,2) vs (4,2,1), both 8 cells) —
+    # LoadGslibFile reshapes every property to the same property_size, so
+    # such a file silently scrambles layers on load.
+    first_key = next(iter(CubesDictionary.keys()))
+    first_shape = CubesDictionary[first_key].shape
+    for Key in CubesDictionary.keys():
+        if CubesDictionary[Key].shape != first_shape:
+            raise ValueError(
+                f"SaveGSLIBCubes: property '{Key}' has shape "
+                f"{CubesDictionary[Key].shape}, expected {first_shape} "
+                f"(all cubes must have identical shape, mirroring "
+                f"Cubes2PointSet). Unequal shapes scramble the grid on "
+                f"LoadGslibFile reshape."
+            )
+
     # Validate all properties have the same length before writing any data
     lens = numpy.array([])
     for Key in CubesDictionary.keys():
         lens = numpy.append(lens, len(CubesDictionary[Key].flat))
 
-    if sum(lens - lens[0]) != 0:
+    # E-M2: the equal-size check must be immune to sign-cancelling
+    # deviations — `sum(lens - lens[0])` is a numpy sum, so [0, 1, -1]
+    # deviations sum to 0.0 and mismatched properties slipped through to an
+    # opaque column_stack ValueError instead of this RuntimeError. (For 3D
+    # inputs the E2-18 shape check above subsumes flat-length equality;
+    # this remains as the documented equal-size contract backstop.)
+    if numpy.unique(lens).size != 1:
         raise RuntimeError(
             "SaveGSLIBCubes: All properties in GSLIB dictionary must have equal size"
         )
@@ -560,7 +656,20 @@ def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):
 
 def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
     Cube, Mask = cube_mask
-    MACube = copy(Cube)
+
+    # III-18 (E-M5): isfinite gate on the SOURCE data — NaN in an informed
+    # cell must raise, not silently propagate into the averaged output.
+    # LoadGslibFile converts ±1.0e21 sentinels to NaN and returns dicts
+    # without a mask, so NaN is reachable input here (probe: pre-fix
+    # MovingAverage3D with NaN in an informed cell returned NaN means with
+    # zero warnings). Mirrors the CalcMean/CalcVPC gates (:77,:118). Only
+    # informed cells matter — masked cells are excluded by definition. This
+    # single gate covers BOTH the per-cell (ellipse) and vectorized
+    # (cubical) branches below.
+    if not numpy.all(numpy.isfinite(Cube[(Mask != 0)])):
+        raise ValueError(
+            "MovingAverage3D: Cube contains NaN or Inf values in informed (Mask != 0) cells"
+        )
 
     # F-M16: validate radiuses BEFORE any allocation. GetCubicalMask had no
     # validation at all (0/negative radiuses produced empty-dim masks or raw
@@ -628,6 +737,18 @@ def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
             f"per-cell (ellipse-mask) path. Reduce the grid size or Radiuses."
         )
 
+    # E2-26: fractional means must not be silently truncated for integer /
+    # unsigned cubes — assigning the float mean into an int-typed output
+    # array truncates it (probe: 0.63 → 0). Compute in float64 and KEEP the
+    # float result for integral inputs; float inputs keep their own dtype
+    # (parity with the reference per-cell loop). The cubical branch applies
+    # the same rule at its return (see _moving_average_cubical).
+    integral_cube = not numpy.issubdtype(Cube.dtype, numpy.floating)
+    if integral_cube:
+        MACube = numpy.empty(Cube.shape, dtype=float64)
+    else:
+        MACube = copy(Cube)
+
     for i in range(nx):
         for j in range(ny):
             for k in range(nz):
@@ -682,6 +803,11 @@ def _moving_average_cubical(Cube, Mask, Radiuses, undefined_value):
 
     out = numpy.full((nx, ny, nz), undefined_value, dtype=float64)
     out = where(cnt > 0, sm / where(cnt > 0, cnt, 1), undefined_value)
+    # E2-26: for integral input return the float64 result so fractional
+    # means survive (astype(int) truncates, probe: 0.63 → 0); float input
+    # keeps its own dtype, matching the per-cell reference loop.
+    if not numpy.issubdtype(Cube.dtype, numpy.floating):
+        return out
     return out.astype(Cube.dtype, copy=False)
 
 
@@ -754,8 +880,14 @@ def LoadGslibFile(filename, property_size, basedir=None):
     if basedir is None:
         basedir = PathValidator.DEFAULT_BASE_DIR
     with PathValidator.safe_open_read(filename, basedir=basedir) as f:
-        f.readline()  # Skip caption line
-        num_p = int(f.readline())
+        # E-M4: every line read (header and data) goes through
+        # _read_bounded_line so the II-42 cap fires BEFORE any
+        # strip()/split() materialization. Pre-fix the header reads and the
+        # R-12 row-count pass were unbounded — a crafted multi-GB
+        # newline-free line was fully materialized (and stripped) before the
+        # cap inside the parse loop could fire.
+        _read_bounded_line(f, "caption line")  # Skip caption line
+        num_p = int(_read_bounded_line(f, "property count line"))
 
         # Validate num_p against a reasonable upper bound to prevent
         # memory exhaustion from malicious GSLIB file headers.
@@ -774,7 +906,7 @@ def LoadGslibFile(filename, property_size, basedir=None):
         # seen-set check in geo.py _load_prop_ind_slow.
         seen = set()
         for _ in range(num_p):
-            name = str(f.readline().strip())
+            name = str(_read_bounded_line(f, "property name line").strip())
             if name in seen:
                 raise ValueError(
                     f"LoadGslibFile: duplicate property name '{name}' in GSLIB header. "
@@ -820,7 +952,10 @@ def LoadGslibFile(filename, property_size, basedir=None):
         # array exactly as before).
         data_start = f.tell()
         row_count = 0
-        for line in f:
+        while True:
+            line = _read_bounded_line(f, "data line")
+            if line == "":
+                break
             if line.strip():
                 row_count += 1
         if row_count > grid_size:
@@ -839,22 +974,22 @@ def LoadGslibFile(filename, property_size, basedir=None):
 
         data = numpy.empty((grid_size, num_p), dtype=float64)
         row_idx = 0
-        for line in f:
+        while True:
+            line = _read_bounded_line(f, "data line")
+            if line == "":
+                break
             # Skip blank lines (whitespace-only)
             if not line.strip():
                 continue
-            # II-42: bound the line length and count tokens BEFORE
-            # `line.split()` materializes the token list. A crafted
-            # newline-free line (probe: 3.4 MB → 500k tokens → 28.3 MB RSS)
-            # previously allocated every token as a CPython str before the
-            # count check could fire. A legal GSLIB line has exactly num_p
-            # (≤ 1024) short tokens, so both bounds are far above legitimate
-            # data while catching the DoS input before any allocation.
-            if len(line) > MAX_GSLIB_LINE_BYTES:
-                raise RuntimeError(
-                    f"LoadGslibFile: data line exceeds {MAX_GSLIB_LINE_BYTES} bytes. "
-                    f"File may be corrupted or malicious."
-                )
+            # II-42: the length bound is applied by _read_bounded_line BEFORE
+            # any strip()/split() materialization (E-M4). The token count is
+            # then computed before `line.split()` materializes the token
+            # list — a crafted newline-free line (probe: 3.4 MB → 500k
+            # tokens → 28.3 MB RSS) previously allocated every token as a
+            # CPython str before the count check could fire. A legal GSLIB
+            # line has exactly num_p (≤ 1024) short tokens, so both bounds
+            # are far above legitimate data while catching the DoS input
+            # before any allocation.
             token_count = 0
             in_token = False
             for ch in line:

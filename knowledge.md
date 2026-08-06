@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-03T18:02:29.605413
+Last updated: 2026-08-06T18:27:33.080683
 
 ## [got-20260616055758-f1d951]
 Category: gotcha
@@ -686,4 +686,123 @@ Tags: python, packaging, api
 Changed: 2026-08-03T18:02:29.600780
 
 documented public API must be smoke-tested at the TOP-LEVEL import: gtsim_2ind (II-29) and SGSConfig/SISConfig/GTSIMConfig (II-30) are documented as public but missing from geo_bsd.__init__ - every top-level access AttributeErrors while tests pass because they import via submodule paths (geo_bsd.gtsim, geo_bsd.config); the sample scripts gtsim.py/gtsimk.py similarly ImportError on private helpers (F-04). Fix: smoke-test the documented public surface at the top level (from geo_bsd import X for every documented name) and re-export everything documented as public. Checklist: (a) for every documented public name, verify a top-level import works, (b) tests must exercise the documented import path, not submodule shortcuts, (c) __init__ re-exports must match the docs.
+
+## [got-20260806182524-427544]
+Category: gotcha
+Tags: numerical, cpp, lapack, solver
+Changed: 2026-08-06T18:25:24.042395
+
+solver magnitude gates must be scale-invariant and path-aware: a raw solution-magnitude bound on |X| is scale-dependent because X = A^-1*b scales with the data/sill (in hpgl-reborn the gauss/OK gate block regressed 5 times: E-M87 absolute gate -> R-01 AND-form -> R3-01/R3-02 dynamic-range -> R4-01 path-aware target_variance; each variant rejected a legal input class: small-sill OK systems with sill ~1e-4..1e-3 sanctioned by MIN_SILL=1e-6, cokriging sigma ratios >1e3, correlogram sigma_c>sigma_0). Fix: measure scale-invariant quantities (final weight combination w = X0 - mu*X1, or normalize the bound by matrix scale) and pass the true target variance as a parameter instead of inferring A_orig[0]. A gate that fires on API-legal inputs is a regression, not a guard. Refines got-20260803180214-392ca5 (LAPACK INFO=0): weight validation must exist AND be scale-invariant.
+
+## [got-20260806182527-fb458a]
+Category: gotcha
+Tags: caps, numerical, cpp, python, regression
+Changed: 2026-08-06T18:25:27.383126
+
+work-cap and limit changes regress legal input classes: 10 of 18 post-fix CODE-FIX findings were FIX-INTRODUCED from cap/normalization changes (hpgl-reborn Stage-6): SCAN_LIMIT=4913+FALLBACK_WINDOW=8 collapsed effective search radius to ~8-10.6 cells while a distance-12 datum ranks 7,154 (E-H2); max_neighbours in (4913,100000] accepted but never honored (E2-145); E2-139 10x radius rule broke shipped book workflow 7.3/2_var.py (16x legal) and sk_test.py; 100000->10000 cap broke 3 pinned tests (R-07); lag_min clamp made lag 0 unbinable (R-02); hemisphere cut dropped zero-distance distinct-coincident pairs (R-08); fallback full-box scan unbounded 99.25M cells/node (R-13/R-15/R-18). Fix: before landing any cap/limit change, enumerate the real worst-case lattice/count arithmetic, test every legal boundary (radius 10x, zero/edge values, coincident points), and grep shipped workflows that exercise the class. Extends pat-20260803180149-88787b and pat-20260802092553-868986.
+
+## [got-20260806182534-96ff3b]
+Category: gotcha
+Tags: numerical, cpp, simulation
+Changed: 2026-08-06T18:25:34.040812
+
+gate geometry must match the solve's admission predicate: the ndmin gate counted originals with a box+threshold geometry (covariance_field.h) while the solve admits by ellipsoid covariance, diverging in BOTH directions - (a) gate counts a datum the solve excludes -> marginal draw despite ndmin contract, (b) gate excludes a datum the solve's fallback would serve -> node under-admitted (hpgl-reborn R-17, R2-08, R2-06, E-M58, E-M84). Same class: R-13/R-15/R-18 unbounded full-box scans in the gate path and E2-01/R-09 ndim==3-only gates vs equal-volume 2D admission. Fix: a gate that decides admission must use the SAME predicate as the solve it guards (count the solve's own candidate set, or replicate its exact box/threshold/ellipsoid test), and the gate cost must stay bounded to solve cost. Checklist: for any pre-solve gate, verify it admits exactly the nodes the solve would serve - test the far-field fallback case both directions.
+
+## [got-20260806182536-168e5f]
+Category: gotcha
+Tags: io, numerical, python, cpp
+Changed: 2026-08-06T18:25:36.347073
+
+%E-6 (7 significant digits) does NOT round-trip float32 mask sentinels: a fractional undefined_value (e.g. -99.00005) written with %E-6 reloads as a slightly different float, so exact-equality re-masking silently marks 17-30% of masked cells INFORMED (hpgl-reborn E2-06, measured 18.1%/30.7%, adversarial re-probe 17.5%/29.5%; R-06 tolerance mismatch: Python 1e-6-relative masks near-sentinel real data while C++ uses exact float32 ==). Fix: write >=9 significant digits (%.9E) for sentinels and/or use tolerance-aware re-mask, and keep the re-mask window identical across Python slow-path, C++ fast reader, and writer. Extends got-20260802092630-2eec8a (sentinel trimming) with the write-side precision facet.
+
+## [got-20260806182541-e31c23]
+Category: gotcha
+Tags: numerical, gslib, cpp
+Changed: 2026-08-06T18:25:41.838200
+
+ordrel S>1 renormalization: when the per-category PMF sums to more than 1 (S>1, heterogeneous per-category covariances), clamping each probability to [0,1] and then scaling the top to 1.0 is a NO-OP (clamp pins probs.back()==1.0) so excess mass is silently TRUNCATED onto earlier categories instead of GSLIB's divide-by-total (sumcdf) - causing a silent category-selection FLIP (hpgl-reborn E-M56: p=[0.6,0.7,0.5] S=1.8 -> HPGL argmax 0 vs GSLIB argmax 1; reachable with per-category covariance models and >=3 categories). Fix: when sum of corrected PMF > 1, divide every category by the total (GSLIB sumcdf renormalization) rather than clamp+scale-top. Extends pat-20260803001248-62e195 (ORDREL): 'renormalize to sum 1' must be implemented as divide-by-total, and clamp-first defeats it whenever S>1.
+
+## [got-20260806182544-6d7b41]
+Category: gotcha
+Tags: numerical, cpp, lapack
+Changed: 2026-08-06T18:25:44.550404
+
+consistency-check reference must be path-aware, not assumed from the matrix: a Schur-consistency/variance check whose reference is inferred from A_orig[0] is only correct when A[0][0] equals the actual kriging target variance - true for SK/cokriging but FALSE on the sigma-scaled correlogram path where A[i][j]=cov*(sigmas[i]*sigmas[j]) so A[0][0]=sill*sigma0^2 != target sill*sigmac^2, spuriously REJECTING valid SIS-LVM estimators whenever sigmac > sigma0 (hpgl-reborn R4-01: |X|=17688, PSD, kriging variance 0.0223>=0, yet rejected against A[0][0]*(1+2e-8); accepted with correct reference sigma_c^2=0.25). Fix: pass the true target variance (sigma_c^2) as an explicit parameter to the solver/check, or parameterize the check per path; never infer the reference from a matrix diagonal that scaling may have transformed.
+
+## [pat-20260806182549-f8b7ea]
+Category: pattern
+Tags: testing, python, regression
+Changed: 2026-08-06T18:25:49.848723
+
+vacuous-test family: fully-informed fixtures defeat truncation/restore assertions - a test whose fixture mask is all-ones with binary data makes hard_cells == every cell, so output == input and proportion assertions become tautologies (hpgl-reborn R-04: test_gtsim_2ind_low_pk_gives_few_facies1 + 4 sibling tests vacuous; B-02: 7 gtsim_2ind siblings vacuous; B-06: cannot-fail tests; B-07: test_property_cleanup cannot fail by design). Extends pat-20260802223242-44d3e0 (behaviorally-inert fixes): a regression test must FAIL on pre-fix code - use partially-masked fixtures (binary hard + -99 masked cells) so restore pins only informed cells and truncation semantics stay exercised. Checklist: (a) for any proportion/truncation assertion, verify the fixture has masked cells, (b) delete or rewrite tests that cannot fail, (c) a test passing pre- and post-fix is not a regression test.
+
+## [got-20260806182551-a330e5]
+Category: gotcha
+Tags: testing, python, performance
+Changed: 2026-08-06T18:25:51.766531
+
+stale .benchmarks baselines cause deterministic-looking benchmark failures: committed/checked-in performance baselines (June-16) vs post-fix kriging perf triggered a 3x regression check on ok_medium_grid baseline 0.0131s (hpgl-reborn B-04 CONFIRMED) - the failure looks real but is pure calibration staleness. Fix: delete .benchmarks/ before any test run so fresh calibration happens (first run only checks the hard floor), and never treat benchmark-check failures against stale baselines as code regressions. Checklist: (a) before perf test runs, verify .benchmarks/ baselines are fresh, (b) treat benchmark failures as stale-baseline artifacts until baselines are regenerated, (c) consider a hard floor only for first-run calibration.
+
+## [got-20260806182611-e67fb7]
+Category: gotcha
+Tags: cpp, ffi, validation
+Changed: 2026-08-06T18:26:11.799280
+
+direct-C++ entry points must validate what the C API gates: a class of defects recurs where the C API fully validates input (sizes, finiteness, bounds) but the direct C++ public entry (hpgl_core.h) skips it - unchecked secondary/grid sizes -> abort()/SIGABRT or silent degradation (hpgl-reborn E-M61 cokriging, E-M62 calc_mean pointer overload NaN, E2-109 SGS-LVM mean_data OOB read, E2-118 SIS-LVM rows, E-M63/E2-126 default-ctor-trap leaving invariant uninitialized). Fix: validate at the C++ entry point itself, not only in the Python/C wrapper; every public C++ function that accepts raw arrays must check sizes/finiteness exactly like its C API sibling. Checklist: (a) for every C API that validates, check whether the underlying C++ function is separately callable and gated, (b) test the direct-C++ path with the same adversarial inputs as the C API, (c) default constructors must initialize invariants (or the setter order trap repeats).
+
+## [got-20260806182614-31a5fd]
+Category: gotcha
+Tags: ffi, cpp, concurrency
+Changed: 2026-08-06T18:26:14.130429
+
+kriging/FFI C entries must reject input/output buffer aliasing: all 7 kriging C entries in hpgl-reborn lacked in/out buffer-identity guards (grep: 22 m_data comparisons, all nullptr, zero identity checks), so an aliased buffer (same array for input and output) causes progressive overwrite and an OpenMP data race on IK (E2-53 CONFIRMED both-found; Python immune only because it clones). Fix: add buffer-aliasing guards (in != out) to every FFI/numerical entry that reads and writes arrays; document the aliasing prohibition. Checklist: (a) for every C entry with in/out arrays, grep for identity checks between them, (b) test with deliberately aliased buffers (should raise loudly, not corrupt), (c) verify OpenMP builds are race-free under aliasing.
+
+## [got-20260806182619-6ddcd8]
+Category: gotcha
+Tags: ffi, cpp, validation
+Changed: 2026-08-06T18:26:19.932714
+
+validate BEFORE destructive in-place mutation of caller data: SGS-LVM performed the destructive forward-CDF transform in-place on the caller's conditioning data BEFORE the radius-guard throw, so a failed run silently destroyed the direct-C caller's input (hpgl-reborn E2-112; Python protected only because it clones). Same class: E2-53 aliasing, pat-20260802223306-eb50d0 (numpy view mutation). Fix: order operations so all throwing validation/allocation happens BEFORE any in-place write to caller-owned buffers; when a function mutates its input, either document it loudly or operate on a private copy. Checklist: (a) for every function that transforms its input in place, verify every throw path precedes the first write, (b) test the failing-input path and confirm caller data is intact after the error, (c) wrappers that clone inputs mask the hazard for direct-C/C++ consumers.
+
+## [got-20260806182623-e94b73]
+Category: gotcha
+Tags: numerical, python, numpy
+Changed: 2026-08-06T18:26:23.033018
+
+finiteness gates must test the SOURCE data, not a derived boolean: isfinite(derived_boolean) is ALWAYS True because numpy treats bool as a number - a gate that computes a boolean (e.g. np.isfinite(cube)) and then tests finiteness of that boolean (or of an index array) is structurally defeated, letting NaN-informed cells silently through (hpgl-reborn E2-27: the 828443e NaN gate on derived-boolean arg deflated marginals, sum 0.667 vs 1.0). Fix: call the finiteness predicate directly on the source cube (np.isfinite(cube)) and gate on the result, never on a derived boolean/index value; test with NaN present to prove the gate fires. Checklist: (a) grep gates whose argument is a comparison/index expression rather than the source array, (b) verify the gate fails loudly with NaN input, (c) sibling gates must all test the source, not derived values.
+
+## [got-20260806182632-c70ef4]
+Category: gotcha
+Tags: ffi, numerical, python, cpp
+Changed: 2026-08-06T18:26:32.717049
+
+float32-range boundary: numpy.isfinite(float64) is True for values beyond float32 max, but converting to C.c_float / float32 silently produces inf - and inf <= 0.0 is FALSE, so a guard that checks thickness/scalez <= 0 fails to catch it, producing silent all-blank output instead of an error (hpgl-reborn E-M80 boundary-found: scalez=1e39 -> inf -> deposit loop never runs -> blank CStackLayers with no exception; PFA e5d8f73 added isfinite checks but missed the float32-range hole). Fix: when crossing a float32 boundary (ctypes C.c_float, numpy float32 conversion), range-check against float32 max BEFORE the conversion, not just isfinite. Checklist: (a) grep every float64->float32/ctypes c_float conversion for an explicit range check, (b) test values in (3.4e38, inf) - finite in float64, inf in float32, (c) verify the failure is loud, not silent blank output.
+
+## [got-20260806182643-5ae68d]
+Category: gotcha
+Tags: io, cpp, parsing
+Changed: 2026-08-06T18:26:43.916361
+
+sscanf/atof numeric-prefix acceptance silently accepts garbage tokens: sscanf('5/', '%f') and atof('1.5abc') return success with partial parsing (no %n/endptr check), so corrupt tokens load as data instead of raising like the slow parser does (hpgl-reborn E-M73: read_inc_file.cpp:239,288 - fast C++ reader accepted '5/', '1.5abc', '255.0' while the Python slow parser raised; contradicts the documented 'fast reader THROWS on unparseable junk' contract). Fix: use strtod/sscanf with %n or endptr and verify the ENTIRE token was consumed (no trailing non-whitespace), or strict regex validation before parse. Checklist: (a) grep sscanf/atof/strtod sites for %n/endptr full-consumption checks, (b) test tokens with trailing garbage ('1.5abc', '5/', leading '+'), (c) the fast and slow parsers must reject the same token set.
+
+## [got-20260806182646-af8fa9]
+Category: gotcha
+Tags: numerical, python, numpy, cpp
+Changed: 2026-08-06T18:26:46.517097
+
+integer-dtype accumulation truncates fractional means: computing a mean into an int/uint array (numpy) silently truncates fractional results to 0 (hpgl-reborn E2-26: MovingAverage3D int cube mean 0.63 -> 0 on both paths; also the E-M10 float32-before-squaring parity divergence where per-pair variance cast to float32 before squaring vs C++ double accumulation gives ~0.2% data-dependent divergence). Fix: upcast accumulators (float64) before arithmetic and cast only at the output, and match the reference implementation's accumulation precision exactly; check for dtype on every reduction target. Checklist: (a) grep reductions assigned into int/uint arrays, (b) verify float accumulators are float64 (or the same as the reference), (c) test fractional inputs, (d) cross-language parity requires identical accumulation precision, not just identical formulas.
+
+## [got-20260806182659-b8afcc]
+Category: gotcha
+Tags: numerical, cpp, python, verification
+Changed: 2026-08-06T18:26:59.933319
+
+variogram twins diverge on binning conventions, not just metric: beyond the projection-vs-Euclidean metric class (pat-20260802223421-6e2873), Python/C++/shared twins diverge on (a) self-pair handling - grid kernel counted zero-distance self-pairs into lag 0 while point-set skips idx1==idx2 (hpgl-reborn E-M74, nugget diluted on grid path), (b) interval convention - grid closed intervals at lag-band ends double-count exact band-end distances while point-set/Python are half-open (E-M75), (c) rotated-ellipsoid hemisphere cut double-counts central-overlap pairs (E2-30: 6/89 pairs at azimuth=45), (d) accumulation precision float32 vs double (E-M10). Fix: when two implementations compute the same metric, verify they agree on self-pair policy, bin interval convention, hemisphere/overlap handling, and accumulation precision - each is a silent divergence surface. Checklist: (a) compare self-pair filters and interval boundaries across twins, (b) test band-end and zero-offset distances explicitly, (c) add a cross-language equivalence test.
+
+## [got-20260806182713-f5d42e]
+Category: gotcha
+Tags: cpp, numerical
+Changed: 2026-08-06T18:27:13.391053
+
+loop-counter type must cover the count's range: an unsigned char (or other undersized) loop index wraps at 256 and can produce an infinite loop or wrap-around when the iteration count can exceed it - hpgl-reborn E-M54 pretty_printer.cpp:103 loops an indicator_index_t (unsigned char, typedefs.h:122) against size_t m_category_count: count >= 256 makes idx wrap 0-255-0 forever (hang); add_indicator has no cap and the C API gates block >255 but the direct-C++ path reaches print_params before kernel guards. Fix: use the same integer type as the count variable (size_t) for loop counters; validate/cap the count at the API boundary; when a type is deliberately narrow (uint8 indicator_index_t), enforce the cap at EVERY entry point, not only the C API. Checklist: (a) grep loop counters whose declared type is narrower than the compared count, (b) verify caps exist at all entry points reaching the loop, (c) test the boundary count (256, 65536) not just nominal values.
 

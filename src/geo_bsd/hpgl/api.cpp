@@ -17,6 +17,7 @@
 #include "property_writer.h"
 #include "progress_reporter.h"
 #include "hpgl_exception.h"
+#include "covariance_field.h"
 #include "output.h"
 
 
@@ -121,12 +122,17 @@ static void validate_shape_dims_or_throw(hpgl_shape_t * shape, const char * cont
 /// The neighbour lookups reserve O(max_neighbours) per grid node
 /// (sugarbox_neighbour_lookup.h:40-42), so an unbounded value (e.g.
 /// 2e9, which passes the `< 0` check) causes ~32GB of heap reserve.
-/// The bound is aligned with the internal cokriging system-size limit
-/// (simple_cokriging_markI.cpp build_system: ms > 100000). PR-07:
-/// previously 1e7, which admitted the (1e5, 1e7] range that the solver
-/// silently degraded to mean-fill (KI_SINGULARITY); the API must reject
-/// beyond the solver's safe limit with a clear error.
-static const int MAX_NEIGHBOURS_UPPER_BOUND = 100000;
+/// E-M85: the previous bound of 100000 admitted per-node kriging
+/// matrices of 80-240 GB + ~3.3e14 flop solves (OOM/DoS); the bound is
+/// lowered to 10000 — the NEIGHBOUR_WORK_CAP the lookup agents chose as
+/// the effective scan/result cap on both lookup paths
+/// (sugarbox_neighbour_lookup.h, sugarbox_indexed_neighbour_lookup.h),
+/// so no legal config is truncated by the new bound. The bound is also
+/// aligned with the internal cokriging system-size limit
+/// (simple_cokriging_markI.cpp build_system: ms > 10001 = cap + 1 for
+/// the secondary equation). PR-07: values above the solver's safe limit
+/// must be rejected with a clear error, not silently degraded.
+static const int MAX_NEIGHBOURS_UPPER_BOUND = 10000;
 
 /// Hard upper bound on hpgl_non_parametric_cdf_t::m_size accepted by the C
 /// API. The kernel trusts m_size as the length of the m_values/m_probs
@@ -216,6 +222,50 @@ static void validate_simulation_mask_shape_or_throw(
 	}
 }
 
+/// E-M77: content scan of the non-parametric CDF arrays (m_values/m_probs)
+/// at the C boundary. non_parametric_cdf_2_t trusts the raw arrays for
+/// std::lower_bound (non_parametric_cdf.h:233,271) — a NaN value/prob
+/// silently produces NaN simulated values for direct-C callers (the CDF is
+/// the one directly-consumed array class lacking the codebase's II-02..II-06
+/// content scan), and an unsorted array makes lower_bound undefined. The
+/// Python wrapper validates (cdf.py:50-53); the C boundary is the last
+/// line of defense. m_size > 0 and non-null m_values/m_probs must already
+/// be validated by the caller.
+static void validate_cdf_content_or_throw(
+	const hpgl_non_parametric_cdf_t * cdf,
+	const char * context)
+{
+	const long long n = cdf->m_size;
+	for (long long i = 0; i < n; ++i)
+	{
+		if (!std::isfinite(cdf->m_values[i]) || !std::isfinite(cdf->m_probs[i]))
+		{
+			std::ostringstream oss;
+			oss << context << ": cdf values/probs[" << i << "] is not finite";
+			throw hpgl::hpgl_exception("C API", oss.str());
+		}
+		if (i > 0)
+		{
+			if (cdf->m_values[i] < cdf->m_values[i - 1])
+			{
+				std::ostringstream oss;
+				oss << context << ": cdf m_values must be sorted non-decreasing "
+				    << "(values[" << (i - 1) << "]=" << cdf->m_values[i - 1]
+				    << " > values[" << i << "]=" << cdf->m_values[i] << ")";
+				throw hpgl::hpgl_exception("C API", oss.str());
+			}
+			if (cdf->m_probs[i] < cdf->m_probs[i - 1])
+			{
+				std::ostringstream oss;
+				oss << context << ": cdf m_probs must be sorted non-decreasing "
+				    << "(probs[" << (i - 1) << "]=" << cdf->m_probs[i - 1]
+				    << " > probs[" << i << "]=" << cdf->m_probs[i] << ")";
+				throw hpgl::hpgl_exception("C API", oss.str());
+			}
+		}
+	}
+}
+
 // Thread-local storage for kriging statistics — populated by the
 // kriging implementation functions (ordinary_kriging, simple_kriging,
 // lvm_kriging) and retrieved via hpgl_get_kriging_stats().
@@ -271,18 +321,18 @@ static const hpgl_validation_registry_entry_t HPGL_VALIDATION_REGISTRY[] = {
 	{ "hpgl_write_inc_file_byte", "filename/arr/name pointers; shape dims > 0; volume; values_count >= 0; remap table; undefined_value in [0, 255]" },
 	{ "hpgl_write_gslib_cont_property", "data/filename/name pointers; shape dims > 0; volume; data non-null" },
 	{ "hpgl_write_gslib_byte_property", "data/filename/name/values pointers; shape dims > 0; volume; values_count >= 0; remap table; undefined_value in [0, 255]" },
-	{ "hpgl_ordinary_kriging", "input/params/output pointers; shape dims > 0; equal volumes; data non-null; max_neighbours in [1, 100000]; non-zero radius; cov params" },
-	{ "hpgl_simple_kriging", "data/mask/shape/params/output pointers; shape dims > 0; equal volumes; max_neighbours in [1, 100000]; non-zero radius; mean finite; cov params" },
-	{ "hpgl_simple_kriging_weights", "params/weights/center/neighbour pointers; neighbours_count in [0, 100000]; weights2 size match" },
-	{ "hpgl_lvm_kriging", "data/mean/params/output pointers; shape dims > 0; equal volumes; mean volume == input volume; mean finite; max_neighbours in [1, 100000]; non-zero radius" },
-	{ "hpgl_sgs_simulation", "data/params pointers; shape dims > 0; data non-null; max_neighbours in [0, 100000]; kriging_kind valid; cdf size in [0, 1e8] + non-null arrays; mean finite; mask shape match" },
-	{ "hpgl_sgs_lvm_simulation", "data/params/means pointers; shape dims > 0; data/means non-null; means volume == grid volume; means finite; max_neighbours in [0, 100000]; cdf size in [0, 1e8]; mask shape match" },
-	{ "hpgl_indicator_kriging", "in/out/params pointers; shape dims > 0; indicator_count in [1, 255] matches in/out; data non-null; per-category max_neighbours in [1, 100000]; non-zero radius" },
-	{ "hpgl_median_ik", "in/params/out pointers; shape dims > 0; equal volumes; data non-null; indicator_count == 2; max_neighbours in [1, 100000]; non-zero radius; marginal_probs in [0, 1] sum ~1" },
-	{ "hpgl_sis_simulation", "data/params pointers; shape dims > 0; indicator_count in [1, 255] matches data; data non-null; per-category max_neighbours in [0, 100000]; mask shape match" },
-	{ "hpgl_sis_simulation_lvm", "data/params/mean pointers; shape dims > 0; indicator_count in [1, 255] matches data; data non-null; per-category max_neighbours in [0, 100000]; per-mean volume == grid volume; means finite; mask shape match" },
-	{ "hpgl_simple_cokriging_mark1", "input/secondary/output/params pointers; shape dims > 0; equal volumes + per-dim equality; data non-null; max_neighbours in [1, 100000]; non-zero radius; means finite; secondary_variance finite >= 0" },
-	{ "hpgl_simple_cokriging_mark2", "primary/secondary/output/params pointers; shape dims > 0; equal volumes + per-dim equality; data non-null; max_neighbours in [1, 100000]; non-zero radius; means finite" },
+	{ "hpgl_ordinary_kriging", "input/params/output pointers; shape dims > 0; equal volumes; data non-null; max_neighbours in [1, 10000]; non-zero radius; cov params" },
+	{ "hpgl_simple_kriging", "data/mask/shape/params/output pointers; shape dims > 0; equal volumes; max_neighbours in [1, 10000]; non-zero radius; mean finite; cov params" },
+	{ "hpgl_simple_kriging_weights", "params/weights/center/neighbour pointers; neighbours_count in [0, 10000]; weights2 size match" },
+	{ "hpgl_lvm_kriging", "data/mean/params/output pointers; shape dims > 0; equal volumes; mean volume == input volume; mean finite; max_neighbours in [1, 10000]; non-zero radius" },
+	{ "hpgl_sgs_simulation", "data/params pointers; shape dims > 0; data non-null; max_neighbours in [0, 10000]; kriging_kind valid; cdf size in [0, 1e8] + non-null arrays; mean finite; mask shape match" },
+	{ "hpgl_sgs_lvm_simulation", "data/params/means pointers; shape dims > 0; data/means non-null; means volume == grid volume; means finite; max_neighbours in [0, 10000]; cdf size in [0, 1e8]; mask shape match" },
+	{ "hpgl_indicator_kriging", "in/out/params pointers; shape dims > 0; indicator_count in [1, 255] matches in/out; data non-null; per-category max_neighbours in [1, 10000]; non-zero radius" },
+	{ "hpgl_median_ik", "in/params/out pointers; shape dims > 0; equal volumes; data non-null; indicator_count == 2; max_neighbours in [1, 10000]; non-zero radius; marginal_probs in [0, 1] sum ~1" },
+	{ "hpgl_sis_simulation", "data/params pointers; shape dims > 0; indicator_count in [1, 255] matches data; data non-null; per-category max_neighbours in [0, 10000]; mask shape match" },
+	{ "hpgl_sis_simulation_lvm", "data/params/mean pointers; shape dims > 0; indicator_count in [1, 255] matches data; data non-null; per-category max_neighbours in [0, 10000]; per-mean volume == grid volume; means finite; mask shape match" },
+	{ "hpgl_simple_cokriging_mark1", "input/secondary/output/params pointers; shape dims > 0; equal volumes + per-dim equality; data non-null; max_neighbours in [1, 10000]; non-zero radius; means finite; secondary_variance finite >= 0" },
+	{ "hpgl_simple_cokriging_mark2", "primary/secondary/output/params pointers; shape dims > 0; equal volumes + per-dim equality; data non-null; max_neighbours in [1, 10000]; non-zero radius; means finite" },
 };
 
 static const int HPGL_VALIDATION_REGISTRY_COUNT =
@@ -372,6 +422,19 @@ HPGL_API int hpgl_read_inc_file_float(
 	if (size <= 0)
 	{
 		hpgl::set_last_exception_message("read_inc_file_float: size must be positive");
+		return -1;
+	}
+	// E2-55: undefined_value is the exact-equality mask sentinel in the
+	// reader (read_inc_file.cpp: v == undefined_value → masked). A NaN
+	// undefined_value matches NO token (IEEE-754: NaN == NaN is false), so
+	// every cell would read as informed — silently discarding the file's
+	// missing-value convention. The byte sibling rejects out-of-range
+	// sentinels (read_inc_file.cpp:370-380); the float entry needs the
+	// finiteness gate for sibling consistency (a non-finite sentinel is
+	// never a legitimate exact-match marker).
+	if (!std::isfinite(undefined_value))
+	{
+		hpgl::set_last_exception_message("read_inc_file_float: undefined_value must be finite");
 		return -1;
 	}
 	// mask is optional: may be nullptr (all cells active)
@@ -744,6 +807,20 @@ HPGL_API void hpgl_ordinary_kriging(
 	if (output_data->m_data == nullptr)
 		throw hpgl_exception("hpgl_ordinary_kriging", "Null data pointer in output_data");
 
+	// E2-53: reject aliased input/output buffers. The kernel reads input
+	// live while writing output (cont_kriging.h:163-166,169,180) — an
+	// aliased buffer (in == out) produces progressive overwrite plus an
+	// OpenMP data race on the mask. Python always passes fresh clones;
+	// this guard protects direct-C callers. Mask aliasing is rejected
+	// only when both masks are non-null (two null masks are the
+	// all-active convention, not an alias).
+	if (input_data->m_data == output_data->m_data)
+		throw hpgl_exception("hpgl_ordinary_kriging",
+			"input_data and output_data must not be the same buffer (aliased input/output is unsupported)");
+	if (input_data->m_mask != nullptr && input_data->m_mask == output_data->m_mask)
+		throw hpgl_exception("hpgl_ordinary_kriging",
+			"input_data and output_data masks must not be the same buffer (aliased masks are unsupported)");
+
 	cont_property_array_t in_prop(input_data->m_data, input_data->m_mask, in_size);
 	cont_property_array_t out_prop(output_data->m_data, output_data->m_mask, out_size);
 
@@ -825,6 +902,19 @@ HPGL_API void hpgl_simple_kriging(
 
 	if (in_size != out_size)
 		throw hpgl_exception("hpgl_simple_kriging", "input and output shape volume mismatch");
+
+	// E2-53: reject aliased input/output buffers — the kernel reads input
+	// live while writing output (cont_kriging.h:163-166,169,180); an
+	// aliased buffer produces progressive overwrite + an OpenMP data race.
+	// Python always passes fresh clones; this guard protects direct-C
+	// callers. Mask aliasing is rejected only when both masks are
+	// non-null (two null masks are the all-active convention).
+	if (input_data == output_data)
+		throw hpgl_exception("hpgl_simple_kriging",
+			"input_data and output_data must not be the same buffer (aliased input/output is unsupported)");
+	if (input_mask != nullptr && input_mask == output_mask)
+		throw hpgl_exception("hpgl_simple_kriging",
+			"input_mask and output_mask must not be the same buffer (aliased masks are unsupported)");
 
 	cont_property_array_t in_prop(input_data, input_mask, in_size);
 	cont_property_array_t out_prop(output_data, output_mask, out_size);
@@ -1042,6 +1132,18 @@ HPGL_API void hpgl_lvm_kriging(
 	validate_kriging_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_lvm_kriging");
 	ok_p.m_max_neighbours = params->m_max_neighbours;
 
+	// E2-53: reject aliased input/output buffers — the kernel reads input
+	// live while writing output (cont_kriging.h); an aliased buffer
+	// produces progressive overwrite + an OpenMP data race. Python always
+	// passes fresh clones; this guard protects direct-C callers. Mask
+	// aliasing is rejected only when both masks are non-null.
+	if (input_data == output_data)
+		throw hpgl_exception("hpgl_lvm_kriging",
+			"input_data and output_data must not be the same buffer (aliased input/output is unsupported)");
+	if (input_mask != nullptr && input_mask == output_mask)
+		throw hpgl_exception("hpgl_lvm_kriging",
+			"input_mask and output_mask must not be the same buffer (aliased masks are unsupported)");
+
 	cont_property_array_t out_prop(output_data, output_mask, out_size);
 	lvm_kriging(input_prop, mean_data, grid, ok_p, out_prop);
 	}
@@ -1109,6 +1211,19 @@ hpgl_indicator_kriging(
 		throw hpgl_exception("hpgl_indicator_kriging", "Null data pointer in in_data");
 	if (out_data->m_data == nullptr)
 		throw hpgl_exception("hpgl_indicator_kriging", "Null data pointer in out_data");
+
+	// E2-53: reject aliased input/output buffers — the IK kernel reads
+	// input live while writing output (indicator_kriging.h:253,286); an
+	// aliased buffer produces progressive overwrite + an OpenMP data race.
+	// Python always passes fresh clones; this guard protects direct-C
+	// callers. Mask aliasing is rejected only when both masks are
+	// non-null.
+	if (in_data->m_data == out_data->m_data)
+		throw hpgl_exception("hpgl_indicator_kriging",
+			"in_data and out_data must not be the same buffer (aliased input/output is unsupported)");
+	if (in_data->m_mask != nullptr && in_data->m_mask == out_data->m_mask)
+		throw hpgl_exception("hpgl_indicator_kriging",
+			"in_data and out_data masks must not be the same buffer (aliased masks are unsupported)");
 
 	// PR-05 (F-34): reject a zero search radius on the indicator kriging
 	// path. An all-zero ellipsoid yields an empty neighbourhood and every
@@ -1179,12 +1294,57 @@ hpgl_sgs_simulation(
 	validate_shape_volume_or_throw(size, "sgs_simulation");
 	cont_property_array_t prop(data->m_data, data->m_mask, size);
 
+	// E2-113: finite-scan the conditioning DATA contents — NaN/Inf data
+	// silently produces NaN simulated values with kriging_failures==0
+	// (the kernel consumes informed values only; sibling means-scan
+	// pattern in hpgl_sgs_lvm_simulation). Uninformed cells may hold
+	// arbitrary sentinel values (the Python wrapper keeps NaN at masked
+	// cells), so only informed cells are scanned.
+	{
+		const unsigned char * d_mask = data->m_mask;
+		for (int i = 0; i < size; ++i)
+		{
+			if (d_mask == nullptr || d_mask[i] != 0)
+			{
+				if (!std::isfinite(data->m_data[i]))
+				{
+					std::ostringstream oss;
+					oss << "hpgl_sgs_simulation: conditioning data[" << i << "] is not finite";
+					throw hpgl_exception("hpgl_sgs_simulation", oss.str());
+				}
+			}
+		}
+	}
+
 	sugarbox_grid_t grid;
 	init_grid(grid, &(data->m_shape));
 
 	sgs_params_t sgs_p;
 	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_sgs_simulation");
 	init_sgs_params(params, &sgs_p);
+
+	// E2-112: validate the search radiuses at the C boundary BEFORE the
+	// kernel call. The SGS kernel's in-place forward CDF transform
+	// (sequential_gaussian_simulation.cpp:44) destroys the caller's
+	// conditioning buffer BEFORE the kernel's throwing radius guard —
+	// the covariance-box volume guard (precalculated_covariances_t::init →
+	// validate_covariance_radiuses_or_throw) — so a failed run silently
+	// corrupted the direct-C caller's data.
+	// Sibling parity: the 7 kriging entries gate radiuses at the C
+	// boundary; the simulation family had no gate. Zero radius stays
+	// legal (documented unconditional-simulation mode). The check below
+	// mirrors the kernel's throwing check exactly.
+	// R-21 (CONFIRMED MEDIUM): the former "radius > 10x grid extent"
+	// heuristic is NOT part of this gate anymore — it rejected shipped
+	// workflows (book 7.3/2_var.py radiuses (160,40,1) on a 10x10x1 grid;
+	// sample-scripts/sk_test.py radiuses (20,20,20) on a 286x10x1 grid)
+	// and the (2r+1)³ volume cap alone bounds the memory (see the
+	// neighbour_lookup_t ctor in sugarbox_neighbour_lookup.h).
+	{
+		sugarbox_search_ellipsoid_t sgs_radiuses(
+			params->m_radiuses[0], params->m_radiuses[1], params->m_radiuses[2]);
+		validate_covariance_radiuses_or_throw(sgs_radiuses, "hpgl_sgs_simulation");
+	}
 
 	// F-18 / III-34: validate the non-parametric CDF struct at the C
 	// boundary before handing it to the kernel. null m_values/m_probs with
@@ -1210,6 +1370,12 @@ hpgl_sgs_simulation(
 			if (cdf->m_probs == nullptr)
 				throw hpgl_exception("hpgl_sgs_simulation",
 					"cdf m_probs is null (m_size > 0)");
+			// E-M77: content scan — finiteness of values/probs plus
+			// non-decreasing sortedness (std::lower_bound preconditions at
+			// non_parametric_cdf.h:233,271). NaN CDF entries silently
+			// produce NaN simulated values for direct-C callers; unsorted
+			// arrays make lower_bound undefined.
+			validate_cdf_content_or_throw(cdf, "hpgl_sgs_simulation");
 		}
 	}
 
@@ -1269,12 +1435,45 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	validate_shape_volume_or_throw(size, "sgs_lvm_simulation");
 	cont_property_array_t prop(data->m_data, data->m_mask, size);
 
+	// E2-113: finite-scan the conditioning DATA contents (sibling of the
+	// hpgl_sgs_simulation scan) — NaN/Inf informed data silently produces
+	// NaN simulated values with kriging_failures==0.
+	{
+		const unsigned char * d_mask = data->m_mask;
+		for (int i = 0; i < size; ++i)
+		{
+			if (d_mask == nullptr || d_mask[i] != 0)
+			{
+				if (!std::isfinite(data->m_data[i]))
+				{
+					std::ostringstream oss;
+					oss << "hpgl_sgs_lvm_simulation: conditioning data[" << i << "] is not finite";
+					throw hpgl_exception("hpgl_sgs_lvm_simulation", oss.str());
+				}
+			}
+		}
+	}
+
 	sugarbox_grid_t grid;
 	init_grid(grid, &(data->m_shape));
 
 	sgs_params_t sgs_p;
 	validate_max_neighbours_or_throw(params->m_max_neighbours, "hpgl_sgs_lvm_simulation");
 	init_sgs_params(params, &sgs_p);
+
+	// E2-112: search-radius gate at the C boundary BEFORE the kernel call
+	// (sibling of the hpgl_sgs_simulation gate) — the in-place forward CDF
+	// transform destroys the conditioning buffer before the kernel's
+	// throwing radius guard (covariance volume cap) can run. Zero radius
+	// stays legal. The check below mirrors the kernel's throwing check
+	// exactly. R-21: the former "radius > 10x grid extent" heuristic is
+	// removed (see the hpgl_sgs_simulation gate comment) — the (2r+1)³
+	// volume cap alone bounds the memory.
+	{
+		sugarbox_search_ellipsoid_t sgs_radiuses(
+			params->m_radiuses[0], params->m_radiuses[1], params->m_radiuses[2]);
+		validate_covariance_radiuses_or_throw(sgs_radiuses, "hpgl_sgs_lvm_simulation");
+	}
 
 	// F-18 / III-34: validate the non-parametric CDF struct at the C
 	// boundary (sibling of the hpgl_sgs_simulation gate). null
@@ -1297,6 +1496,10 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 			if (cdf->m_probs == nullptr)
 				throw hpgl_exception("hpgl_sgs_lvm_simulation",
 					"cdf m_probs is null (m_size > 0)");
+			// E-M77: content scan (sibling of the hpgl_sgs_simulation
+			// gate) — finiteness + non-decreasing sortedness of the CDF
+			// arrays (lower_bound preconditions).
+			validate_cdf_content_or_throw(cdf, "hpgl_sgs_lvm_simulation");
 		}
 	}
 
@@ -1340,10 +1543,14 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	// out-of-bounds memory access in the simulation kernel.
 	validate_simulation_mask_shape_or_throw(simulation_mask, &data->m_shape, "hpgl_sgs_lvm_simulation");
 
+	// E2-109: pass the validated means volume as the explicit mean_data
+	// length contract (the C++ entry now validates mean_data_size ==
+	// output size before walking the raw pointer).
 	hpgl::sequential_gaussian_simulation_lvm(
 			grid,
 			sgs_p,
 			means->m_data,
+			static_cast<size_t>(mean_vol),
 			prop,
 			cdf,
 			(simulation_mask != 0 && simulation_mask->m_data != 0) ? simulation_mask->m_data : 0);
@@ -1435,6 +1642,18 @@ HPGL_API void hpgl_median_ik(
 		throw hpgl_exception("hpgl_median_ik", "Null data pointer in in_data");
 	if (out_data->m_data == nullptr)
 		throw hpgl_exception("hpgl_median_ik", "Null data pointer in out_data");
+
+	// E2-53: reject aliased input/output buffers — the median-IK kernel
+	// reads input live while writing output; an aliased buffer produces
+	// progressive overwrite + an OpenMP data race. Python always passes
+	// fresh clones; this guard protects direct-C callers. Mask aliasing
+	// is rejected only when both masks are non-null.
+	if (in_data->m_data == out_data->m_data)
+		throw hpgl_exception("hpgl_median_ik",
+			"in_data and out_data must not be the same buffer (aliased input/output is unsupported)");
+	if (in_data->m_mask != nullptr && in_data->m_mask == out_data->m_mask)
+		throw hpgl_exception("hpgl_median_ik",
+			"in_data and out_data masks must not be the same buffer (aliased masks are unsupported)");
 
 	indicator_property_array_t in_prop(
 			in_data->m_data,
@@ -1631,12 +1850,18 @@ hpgl_sis_simulation_lvm(
 	// out-of-bounds memory access in the simulation kernel.
 	validate_simulation_mask_shape_or_throw(simulation_mask, &data->m_shape, "hpgl_sis_simulation_lvm");
 
+	// E2-118: pass the validated mean-array count and row size as the
+	// explicit contract (the C++ entry now validates count ==
+	// indicator_count and row size == grid volume before dereferencing
+	// the raw pointer-to-pointer).
 	sequential_indicator_simulation_lvm(
 			prop,
 			grid,
 			ikp,
 			seed,
 			&means[0],
+			static_cast<size_t>(indicator_count),
+			static_cast<size_t>(size),
 			rep,
 			use_correlograms != 0,
 			(simulation_mask != 0 && simulation_mask->m_data != 0) ? simulation_mask->m_data : 0);
@@ -1714,6 +1939,25 @@ hpgl_simple_cokriging_mark1(
 			throw hpgl_exception("hpgl_simple_cokriging_mark1", "Null data pointer in secondary_data");
 		if (output_data->m_data == nullptr)
 			throw hpgl_exception("hpgl_simple_cokriging_mark1", "Null data pointer in output_data");
+
+		// E2-53: reject aliased input/output buffers — the cokriging kernel
+		// reads primary AND secondary live while writing output
+		// (process_node_loop: input_prop.is_informed(i), secondary_data[i]);
+		// an aliased buffer produces progressive overwrite. Python always
+		// passes fresh clones; this guard protects direct-C callers. Mask
+		// aliasing is rejected only when both masks are non-null.
+		if (input_data->m_data == output_data->m_data)
+			throw hpgl_exception("hpgl_simple_cokriging_mark1",
+				"input_data and output_data must not be the same buffer (aliased input/output is unsupported)");
+		if (secondary_data->m_data == output_data->m_data)
+			throw hpgl_exception("hpgl_simple_cokriging_mark1",
+				"secondary_data and output_data must not be the same buffer (aliased secondary/output is unsupported)");
+		if (input_data->m_mask != nullptr && input_data->m_mask == output_data->m_mask)
+			throw hpgl_exception("hpgl_simple_cokriging_mark1",
+				"input_data and output_data masks must not be the same buffer (aliased masks are unsupported)");
+		if (secondary_data->m_mask != nullptr && secondary_data->m_mask == output_data->m_mask)
+			throw hpgl_exception("hpgl_simple_cokriging_mark1",
+				"secondary_data and output_data masks must not be the same buffer (aliased masks are unsupported)");
 
 		cont_property_array_t primary_prop(
 				input_data->m_data, input_data->m_mask, size);
@@ -1857,6 +2101,25 @@ hpgl_simple_cokriging_mark2(
 			throw hpgl_exception("hpgl_simple_cokriging_mark2", "Null data pointer in secondary_data");
 		if (output_data->m_data == nullptr)
 			throw hpgl_exception("hpgl_simple_cokriging_mark2", "Null data pointer in output_data");
+
+		// E2-53: reject aliased input/output buffers — the cokriging kernel
+		// reads primary AND secondary live while writing output
+		// (process_node_loop: input_prop.is_informed(i), secondary_data[i]);
+		// an aliased buffer produces progressive overwrite. Python always
+		// passes fresh clones; this guard protects direct-C callers. Mask
+		// aliasing is rejected only when both masks are non-null.
+		if (primary_data->m_data == output_data->m_data)
+			throw hpgl_exception("hpgl_simple_cokriging_mark2",
+				"primary_data and output_data must not be the same buffer (aliased input/output is unsupported)");
+		if (secondary_data->m_data == output_data->m_data)
+			throw hpgl_exception("hpgl_simple_cokriging_mark2",
+				"secondary_data and output_data must not be the same buffer (aliased secondary/output is unsupported)");
+		if (primary_data->m_mask != nullptr && primary_data->m_mask == output_data->m_mask)
+			throw hpgl_exception("hpgl_simple_cokriging_mark2",
+				"primary_data and output_data masks must not be the same buffer (aliased masks are unsupported)");
+		if (secondary_data->m_mask != nullptr && secondary_data->m_mask == output_data->m_mask)
+			throw hpgl_exception("hpgl_simple_cokriging_mark2",
+				"secondary_data and output_data masks must not be the same buffer (aliased masks are unsupported)");
 
 		cont_property_array_t primary_prop(
 				primary_data->m_data, primary_data->m_mask, size);

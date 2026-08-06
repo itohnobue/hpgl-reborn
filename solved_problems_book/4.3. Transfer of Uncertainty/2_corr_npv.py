@@ -35,6 +35,10 @@ l = 1000
 # Correlation coefficient
 p = 0.8
 
+# E-M28: fixed seed so the random draws (and therefore the NPV distribution
+# and the P10/P50/P90 values) are reproducible run to run.
+np.random.seed(12345)
+
 # Function to calculate NPV:
 def npv_calculate(R, C, r, n):
 	npv = 0.0

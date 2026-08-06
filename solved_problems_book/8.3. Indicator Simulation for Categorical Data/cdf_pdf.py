@@ -6,52 +6,126 @@
 #	"Indicator Simulation for Categorical Data"
 # ------------------------------------------------
 
+import sys
+import os
+# F-47 pattern: geo_bsd lives in the repo's src/ directory (it is not
+# installed in the environment); without this the `from geo_bsd import *`
+# below fails with ModuleNotFoundError.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
+
 import numpy as np
 import matplotlib.pyplot as plt
+from geo_bsd import *
+from geo_bsd.geo import covariance
 
 #---------------------------------------------------
 #	Problem:
 #
-#	Drawing 100 realizations from the cdf yields 100 realizations of the rock type category. A distribution of uncertainty constructed for these realizations should look similar to the distributions of the conditional pdf.
+#	Hand calculation: indicator kriging for the construction of
+#	a conditional probability distribution of a categorical
+#	variable.  For each rock type category k, the observed
+#	categories are converted into indicator data (1 if the
+#	category is k, 0 otherwise) and kriged with Simple Kriging
+#	using the known global mean (the marginal probability of the
+#	category).  The kriged indicator at an unsampled location is
+#	the conditional probability of that category; normalizing
+#	over all categories gives the conditional probability
+#	distribution of the categorical variable.
 #
 # ----------------------------------------------------
 
-# rock type
-rock_type = np.array([2, 2, 3, 3, 1])
+# E-M33: fixed seed so the random draws (and therefore the whole
+# script) are reproducible.
+np.random.seed(3241347)
 
-# number of realizations
+# Categorical data on a small 5x5 grid (hand-calculable scale).
+# rock type categories: 1, 2, 3
+i_max = 5
+j_max = 5
+k_max = 1
+
+grid = SugarboxGrid(i_max, j_max, k_max)
+
+# Observed categories at 5 of the 25 cells: (i, j, rock type)
+observations = [
+    (0, 0, 2),
+    (0, 4, 2),
+    (4, 0, 3),
+    (4, 4, 3),
+    (2, 0, 1),
+]
+categories = [1, 2, 3]
+
+# Target location: the unsampled centre cell (2, 2)
+target = (2, 2)
+
+# Marginal probabilities from the observed data
+counts = np.array([sum(1 for _, _, c in observations if c == cat) for cat in categories])
+marginal_probs = counts / float(len(observations))
+print("Marginal probabilities:", dict(zip(categories, marginal_probs)))
+
+# Covariance model for the indicator kriging (spherical, range 2 cells,
+# unit sill — the indicator variograms are computed on 0/1 data)
+cov1 = CovarianceModel(type=covariance.spherical, ranges=(2, 2, 1), sill=1)
+
+# Indicator kriging per category: krige the category indicator with the
+# marginal probability as the known mean.  The kriged indicator value at
+# each cell is the conditional probability of that category.
+prob_fields = {}
+for cat, p_k in zip(categories, marginal_probs):
+    # Indicator data: 1.0 where the observed category is `cat`, else 0.0
+    indicator = np.zeros((i_max, j_max, k_max))
+    mask = np.zeros((i_max, j_max, k_max), dtype=np.uint8)
+    for (i, j, c) in observations:
+        indicator[i, j, 0] = 1.0 if c == cat else 0.0
+        mask[i, j, 0] = 1
+    prop = ContProperty(indicator, mask)
+
+    sk = simple_kriging(prop=prop, grid=grid, radiuses=(2, 2, 1),
+                        max_neighbours=8, cov_model=cov1, mean=float(p_k))
+    prob_fields[cat] = sk[0]
+    print(f"Conditional probability of rock type {cat} at target: {sk[0][target[0], target[1], 0]}")
+
+# Conditional probability distribution at the target location
+cond_probs = np.array([prob_fields[cat][target[0], target[1], 0] for cat in categories])
+# Order-relations correction: clamp to [0, 1] and normalize to sum to 1
+cond_probs = np.clip(cond_probs, 0.0, 1.0)
+cond_probs /= cond_probs.sum()
+print("Conditional probability distribution at target:", dict(zip(categories, cond_probs)))
+
+# Draw 100 realizations from the conditional probability distribution
+# (the cdf built by indicator kriging) to show the uncertainty of the
+# rock type category
 n = 100
+array_hist = np.random.choice(categories, size=n, p=cond_probs)
 
-array_hist = np.zeros((n), order='F', dtype=int)
-
-for i in range(n):
-	# F-17: np.random.randint with a size arg returns a shape-(1,) array
-	# which is no longer assignable to the scalar slot array_hist[i] on
-	# numpy >= 2.4 (ValueError). A scalar draw is what the script needs.
-	index = np.random.randint(0, len(rock_type))
-	array_hist[i] = rock_type[index]
-
-prob = []
-value = []
-
-for i in range(min(rock_type), max(rock_type) + 1):
-	val = array_hist.compress((array_hist == i).flat)
-	prob.append((float(len(val)) / (len(array_hist))))
-	value.append(i)
-
-# Histogram of the conditional pdf
+# Conditional pdf at the target location (from indicator kriging)
 plt.figure()
-for i in range(3):
-	plt.bar(value[i], prob[i], width=0.33)
-plt.title("pdf")
+plt.bar(categories, cond_probs, width=0.5)
+plt.title("Conditional pdf of the rock type from indicator kriging")
 plt.xlabel("Rock Type")
 plt.ylabel("f")
+# R-24: persist the reference output images (Result/ convention). The
+# committed Result/pdf.jpg + cdf.jpg are regenerated by running this
+# script (deterministic: fixed seed + kriging output).
+plt.savefig(os.path.join(os.path.dirname(__file__), 'Result', 'pdf.jpg'))
 
-# Histogram of the cdf derived from indicator kriging of the rock type data
+# Conditional cdf at the target location (from indicator kriging)
+cum = np.cumsum(cond_probs)
 plt.figure()
-plt.hist(array_hist, cumulative=True, density=True)
-plt.title("cdf")
+plt.step(categories, cum, where='post')
+plt.xlim(0, 4)
+plt.ylim(0, 1.1)
+plt.title("Conditional cdf of the rock type from indicator kriging")
 plt.xlabel("Rock Type")
 plt.ylabel("F")
+plt.savefig(os.path.join(os.path.dirname(__file__), 'Result', 'cdf.jpg'))
+
+# Uncertainty distribution of the 100 realizations drawn from the cdf
+plt.figure()
+plt.hist(array_hist, bins=np.arange(0.5, 4.5, 1.0))
+plt.title("Distribution of 100 realizations drawn from the conditional cdf")
+plt.xlabel("Rock Type")
+plt.ylabel("Count")
 
 plt.show()

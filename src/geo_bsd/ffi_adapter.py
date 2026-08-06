@@ -417,8 +417,15 @@ def normalize_mask_binary(mask: numpy.ndarray, context: str) -> numpy.ndarray | 
         raise TypeError(
             f"{context}: mask must be a numpy.ndarray, got {type(mask).__name__}"
         )
-    if numpy.all((mask == 0) | (mask == 1)):
-        return mask
+    # E-M7: ALWAYS return a fresh uint8 copy, per the documented contract
+    # ("The returned array is a new uint8 array (values 0/1); the caller's
+    # array is not mutated"). The previous early return handed the caller's
+    # array back unchanged when it was already binary — a non-uint8 binary
+    # array (bool, float64 0/1) then flowed downstream with its original
+    # dtype/layout, violating the uint8 contract the C++ boundary assumes.
+    # astype's default order="K" preserves the caller's memory layout, so
+    # F-order masks (e.g. after geo.py _require_ind_data's numpy.require F
+    # coercion) stay F-order and still pass checkFWA in create_ubyte_array.
     return (mask != 0).astype(numpy.uint8)
 
 

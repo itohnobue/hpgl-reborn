@@ -195,7 +195,18 @@ namespace hpgl
 						char skip_buf[256];
 						size_t total_skipped = m_len;
 						const size_t MAX_COMMENT_LINE = 100ULL * 1024ULL;
-						while (total_skipped > 0 && m_line[total_skipped - 1] != '\n')
+						// E2-150: the newline test must read the FRESHLY READ
+						// chunk, never m_line[total_skipped - 1]. Once the
+						// comment spans >= 3 fgets chunks, total_skipped
+						// exceeds the 512-byte m_line buffer, so indexing
+						// m_line[total_skipped - 1] was an OOB stack read;
+						// an OOB byte equal to '\n' exited the loop early and
+						// the comment remainder was parsed as data. Mirror the
+						// sibling pattern (load_doubles_into_vector,
+						// load_property_from_file.cpp:153-161): test
+						// skip_buf[slen - 1] of the chunk just read.
+						bool line_done = (m_line[m_len - 1] == '\n');
+						while (!line_done)
 						{
 							if (fgets(skip_buf, static_cast<int>(sizeof(skip_buf)), m_file) == nullptr)
 								break;
@@ -204,7 +215,7 @@ namespace hpgl
 							if (total_skipped > MAX_COMMENT_LINE)
 								throw hpgl_exception(func_name, "Comment line exceeds 100KB limit.");
 							if (slen > 0 && skip_buf[slen - 1] == '\n')
-								break;
+								line_done = true;
 						}
 						continue;
 					}
@@ -236,7 +247,17 @@ namespace hpgl
 					continue;
 
 				float value;
-				if (sscanf(buffer, "%f", &value) != 1)
+				int consumed = 0;
+				// E-M73: full-token validation. A bare %f accepts numeric
+				// PREFIXES ("5/" -> 5.0, "1.5abc" -> 1.5) and reports
+				// success, silently loading junk that the Python slow
+				// parser rejects — contradicting the documented "fast
+				// reader THROWS on unparseable junk" contract. %n reports
+				// how many characters were consumed; the whole token must
+				// be consumed (tokens from token_stream_t never contain
+				// whitespace, so trailing-space handling is unnecessary).
+				if (sscanf(buffer, "%f%n", &value, &consumed) != 1
+					|| consumed != static_cast<int>(strlen(buffer)))
 				{
 					std::ostringstream oss;
 					oss << "Error parsing '" << buffer << "' string.";
@@ -285,7 +306,14 @@ namespace hpgl
 					continue;
 
 				int value;
-				if (sscanf(buffer, "%d", &value) != 1)
+				int consumed = 0;
+				// E-M73: full-token validation for the byte path too. A bare
+				// %d accepts numeric prefixes ("255.0" -> 255, "12x" -> 12)
+				// and reports success, silently loading junk the Python
+				// slow parser rejects. %n verifies the ENTIRE token was
+				// consumed; "255.0" leaves ".0" unconsumed and is rejected.
+				if (sscanf(buffer, "%d%n", &value, &consumed) != 1
+					|| consumed != static_cast<int>(strlen(buffer)))
 				{
 					std::ostringstream oss;
 					oss << "Error parsing '" << buffer << "' string.";

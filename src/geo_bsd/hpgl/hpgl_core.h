@@ -116,6 +116,12 @@ namespace hpgl
 		const sugarbox_grid_t& grid,
 		const sgs_params_t& params,
 		const mean_t* mean_data,
+		// E2-109: explicit mean_data length contract. The raw pointer
+		// carries no length metadata; the kernel reads exactly
+		// mean_data_size elements (assign + transform_cdf_ptr). The C API
+		// gate (api.cpp:1311-1319) requires means volume == grid volume;
+		// the C++ entry validates mean_data_size == output.size().
+		size_t mean_data_size,
 		cont_property_array_t& output,
 		const hpgl_non_parametric_cdf_t* cdf,
 		const unsigned char* mask = NULL);
@@ -134,6 +140,15 @@ namespace hpgl
 		const ik_params_t& params,
 		int64_t seed,
 		const mean_t** mean_data,
+		// E2-118: explicit mean-array count/row-length contract. The
+		// pointer-to-pointer carries no row count and the rows no length;
+		// do_sis dereferences mean_data[idx][node] for every category and
+		// node. The C API gate (api.cpp:1601-1609) requires
+		// indicator_count rows of exactly grid-volume size; the C++ entry
+		// validates mean_data_count == params.m_category_count and
+		// mean_row_size == property.size().
+		size_t mean_data_count,
+		size_t mean_row_size,
 		progress_reporter_t& report,
 		bool use_corellogram,
 		const unsigned char* mask = NULL);

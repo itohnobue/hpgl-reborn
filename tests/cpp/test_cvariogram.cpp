@@ -642,6 +642,54 @@ void test_stack_layers_result_fully_initialized()
         CHECK(nan_result.m_data[k] == -99.0f);
 }
 
+// R-02 (Stage-8 TEST-ADD T-23): lag-0 pairs on the C++ GRID kernel. A pair
+// whose projection sits in the LOW half of the first lag band
+// (dist < lag_width/2 → min_q < 0) must bin into lag 0. The Stage-6 fix
+// computed lag_min from the CLAMPED min_q, so floor(clamp(min_q))+1 ≥ 1 and
+// lag 0 could never be binned on the grid path (the low half of the first
+// band was silently dropped). Uses a 2x1x1 grid: the single adjacent x-pair
+// (dist=1, lag_width=3 → min_q = −0.5) bins into lag 0 and lag 1; pre-fix
+// result[0] stayed 0.
+void test_lag0_binning_grid_path()
+{
+    TEST("R-02: lag-0 binning on the C++ grid kernel");
+    cvar_clear_last_error();
+    variogram_search_template_t templ = {};
+    templ.m_lag_width = 3.0;        // band 0 = [−1.5, 1.5) in projection
+    templ.m_lag_separation = 1.0;
+    templ.m_tol_distance = 1.0;
+    templ.m_num_lags = 2;
+    templ.m_first_lag_distance = 0.0;
+    templ.m_ellipsoid.m_R1 = 5.0;
+    templ.m_ellipsoid.m_R2 = 5.0;
+    templ.m_ellipsoid.m_R3 = 5.0;
+    templ.m_ellipsoid.m_direction1.m_data[0] = 1.0;
+    templ.m_ellipsoid.m_direction2.m_data[1] = 1.0;
+    templ.m_ellipsoid.m_direction3.m_data[2] = 1.0;
+
+    // 2x1x1 grid: values [0, 1] — the adjacent x-pair has variance 1.
+    float data_vals[2] = {0.0f, 1.0f};
+    unsigned char mask_vals[2] = {1, 1};
+    hard_data_t data = {};
+    data.m_data = data_vals;
+    data.m_mask = mask_vals;
+    data.m_data_shape[0] = 2; data.m_data_shape[1] = 1; data.m_data_shape[2] = 1;
+    data.m_mask_shape[0] = 2; data.m_mask_shape[1] = 1; data.m_mask_shape[2] = 1;
+    data.m_data_strides[0] = 1; data.m_data_strides[1] = 1; data.m_data_strides[2] = 1;
+    data.m_mask_strides[0] = 1; data.m_mask_strides[1] = 1; data.m_mask_strides[2] = 1;
+
+    float out[2] = {0.0f, 0.0f};
+    calc_variograms(&templ, &data, out, 2, 100);
+    CHECK(std::strlen(cvar_get_last_error()) == 0);
+
+    // The pair is counted twice (offsets (1,0,0) and (−1,0,0)) with
+    // variance 1 each → sum 2, count 2 → value = 2/2/2 = 0.5 in BOTH lag 0
+    // and lag 1. Pre-fix (R-02): lag_min computed from the clamped min_q →
+    // lag 0 never binned → out[0] == 0.
+    CHECK_CLOSE(out[0], 0.5, 1e-6);
+    CHECK_CLOSE(out[1], 0.5, 1e-6);
+}
+
 // ---- Main ----
 
 int main() {
@@ -663,6 +711,7 @@ int main() {
     test_calc_variograms_rejects_bad_tol_distance();
     test_stack_layers_zero_thickness_no_erosion();
     test_stack_layers_result_fully_initialized();
+    test_lag0_binning_grid_path();
 
     std::printf("C++ cvariogram tests: %d run, %d failed\n", g_tests_run, g_tests_failed);
     return g_tests_failed > 0 ? 1 : 0;

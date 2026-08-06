@@ -161,32 +161,21 @@ class TestTVVariogramSearchTemplate:
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
 class TestIsInTunnel:
-    def test_zero_r2_returns_all_false(self):
-        ell = TVEllipsoid(R1=10, R2=0, R3=3)
-        templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
-        )
-        V = np.array([[5, 0, 0], [1, 1, 1]])
-        result = _IsInTunnel(templ, V)
-        assert not np.any(result)
+    def test_zero_r2_raises(self):
+        # E-M8: R <= 0 is rejected at construction (the C++ kernel accepts no
+        # pairs for a non-positive range). The old all-False _IsInTunnel
+        # result is unreachable via the ctor — the single chokepoint every
+        # scan path shares raises loudly instead.
+        with pytest.raises(ValueError, match="ranges must be finite and positive"):
+            TVEllipsoid(R1=10, R2=0, R3=3)
 
-    def test_zero_r3_returns_all_false(self):
-        ell = TVEllipsoid(R1=10, R2=5, R3=0)
-        templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
-        )
-        V = np.array([[5, 0, 0], [1, 1, 1]])
-        result = _IsInTunnel(templ, V)
-        assert not np.any(result)
+    def test_zero_r3_raises(self):
+        with pytest.raises(ValueError, match="ranges must be finite and positive"):
+            TVEllipsoid(R1=10, R2=5, R3=0)
 
-    def test_zero_r2_r3_no_crash(self):
-        ell = TVEllipsoid(R1=10, R2=0, R3=0)
-        templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
-        )
-        V = np.array([[5, 0, 0]])
-        result = _IsInTunnel(templ, V)
-        assert not result[0]
+    def test_zero_r2_r3_raises(self):
+        with pytest.raises(ValueError, match="ranges must be finite and positive"):
+            TVEllipsoid(R1=10, R2=0, R3=0)
 
     def test_along_direction1_2d(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
@@ -239,13 +228,11 @@ class TestCalcSearchTemplateWindow:
         r20 = _CalcSearchTemplateWindow(templ20)
         assert (r20[3] - r20[0]) >= (r5[3] - r5[0])
 
-    def test_zero_r2_r3_no_crash(self):
-        ell = TVEllipsoid(R1=10, R2=0, R3=0)
-        templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
-        )
-        result = _CalcSearchTemplateWindow(templ)
-        assert len(result) == 6
+    def test_zero_r2_r3_raises(self):
+        # E-M8: R <= 0 is rejected at construction (single chokepoint every
+        # scan path shares via the template).
+        with pytest.raises(ValueError, match="ranges must be finite and positive"):
+            TVEllipsoid(R1=10, R2=0, R3=0)
 
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
@@ -378,14 +365,12 @@ class TestCalcLagsAreas:
         assert j_arr.dtype == np.int32 or j_arr.dtype == np.int64
         assert k_arr.dtype == np.int32 or k_arr.dtype == np.int64
 
-    def test_zero_radii_returns_empty_arrays(self):
-        """Zero R2/R3 produces empty lag area arrays."""
+    def test_zero_radii_raises(self):
+        """Zero R2/R3 is rejected at construction (E-M8)."""
         from geo_bsd.variogram import _CalcLagsAreas
 
-        ell = _make_ellipsoid(r1=10, r2=0, r3=0)
-        templ = _make_template(ell, num_lags=3)
-        i_arr, j_arr, k_arr, LagIndexes, _ = _CalcLagsAreas(templ)
-        assert len(i_arr) == 0 and len(j_arr) == 0 and len(k_arr) == 0
+        with pytest.raises(ValueError, match="ranges must be finite and positive"):
+            _make_ellipsoid(r1=10, r2=0, r3=0)
 
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")

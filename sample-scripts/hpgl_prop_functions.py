@@ -38,7 +38,10 @@ def array2prop(array_prop, undefined_value):
     y = np.size(array_prop, 1)
     z = np.size(array_prop, 2)
 
-    if array_prop.dtype != np.dtype('int32'):
+    # E-M19: classifying by `dtype != np.int32` sent platform-default int64
+    # integer arrays down the FLOAT branch (silent ContProperty
+    # misclassification). Test for the integer FAMILY instead.
+    if not np.issubdtype(array_prop.dtype, np.integer):
         print("Array is float, creating continuous property...")
         data = np.zeros(array_prop.size, dtype='float32')
         mask = np.zeros(array_prop.size, dtype='uint8')
@@ -68,8 +71,14 @@ def array2prop(array_prop, undefined_value):
             data[k] = values_for_prop[k]
             mask[k] = 1
 
-    if array_prop.dtype != np.dtype('int32'):
+    # E-M19: same integer-family classification on the return branch (the
+    # old exact int32 comparison misclassified int64 arrays as float).
+    if not np.issubdtype(array_prop.dtype, np.integer):
         return ContProperty(data, mask)
     else:
-        return IndProperty(data.astype('uint8'), mask, len(indicators_t))
+        # E-M20: IndProperty requires every informed value < indicator_count
+        # (geo.py:468-472). The old distinct-category count broke non-
+        # contiguous categories (e.g. {0, 3} → count 2 → RuntimeError).
+        # The correct count is max(category) + 1.
+        return IndProperty(data.astype('uint8'), mask, int(max(indicators_t)) + 1)
     print("Done")

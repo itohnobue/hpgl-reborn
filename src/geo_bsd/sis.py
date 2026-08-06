@@ -194,7 +194,13 @@ def sis_simulation(
         ParameterValidator.validate_radius(ikd["radiuses"], f"ik_data[{i}].radiuses")
 
         # Validate max_neighbours
-        ParameterValidator.validate_max_neighbors(ikd["max_neighbours"])
+        # E-M9: SIS simulation allows max_neighbours=0 — the C++ contract
+        # documents 0 as "unconditional simulation" (api.cpp:144-167,
+        # validate_max_neighbours_or_throw accepts 0; kriging entries use
+        # a separate >=1 gate).
+        ParameterValidator.validate_max_neighbors(
+            ikd["max_neighbours"], min_neighbors=0
+        )
 
         # Validate marginal probability
         if not is_lvm:
@@ -273,6 +279,21 @@ def sis_simulation(
             # volume 8) is misread with no exception. Mirror the lvm_kriging
             # R-13 guard (geo.py:1919-1927). 1D (flat) vectors are covered
             # by the size check and carry no per-dim meaning.
+            # E2-01/R-09: the guard above is 3D-only — an equal-volume 2D
+            # marginal_probs[i] (e.g. (2,2) on a (1,2,2) grid) sails past
+            # the size check and the ndim==3 guard, then the F-order flat
+            # layout of the 2D array is consumed by flat node index with a
+            # silently permuted probability field — exactly the defect class
+            # fixed for lvm_kriging (geo.py:1971-1982). Only 1D flat and
+            # exactly grid-shaped 3D arrays are unambiguous; reject every
+            # other ndim for the same reason.
+            if marginal_probs[i].ndim not in (1, 3):
+                raise ValueError(
+                    f"sis_simulation: LVM marginal_probs[{i}] must be 1D flat "
+                    f"(size {grid.x * grid.y * grid.z}) or 3D with shape "
+                    f"({grid.x}, {grid.y}, {grid.z}), got "
+                    f"{marginal_probs[i].ndim}D shape {marginal_probs[i].shape}"
+                )
             if marginal_probs[i].ndim == 3 and (
                 marginal_probs[i].shape[0] != grid.x
                 or marginal_probs[i].shape[1] != grid.y
@@ -293,18 +314,55 @@ def sis_simulation(
     # Expected number of kriging evaluations the simulation should perform.
     # The C++ SIS counting differs by branch (sequential_indicator_simulation.cpp):
     # the 2-category median-SIS branch does ONE kriging evaluation per node
-    # (:122-155), while the 3+-category branch does one evaluation per
-    # indicator category (:156-179), so points_calculated is incremented
-    # once per category per node there. The expected count must mirror that
-    # per-branch counting: (uninformed, unmasked cells) × evaluations_per_node,
-    # where evaluations_per_node is 1 for 2 categories and len(data) otherwise.
+    # on indicator 0 only (:122-155) — indicator 1's neighbourhood parameters
+    # are never consulted (nblookups[1] is constructed at :56 but unused in
+    # that branch); the 3+-category branch does one evaluation per indicator
+    # category per node (:158-188). points_calculated is a SINGLE shared
+    # counter for the whole run (:76), incremented once per KI_SUCCESS
+    # evaluation (:140/:175). The expected count must mirror that per-branch
+    # counting: (uninformed, unmasked cells) × evaluations_per_node.
     # Computed before the lock (cheap numpy sum) — keeps the lock hold minimal;
     # the C++ SIS counters decide whether the failure warning fires.
+    # E-M9/R-20: an indicator with max_neighbours=0 is in the C++-documented
+    # "unconditional simulation" mode — its neighbourhood is empty for every
+    # node (sugarbox_neighbour_lookup.h:107-108, m_max_neighbours <= 0), every
+    # one of its evaluations takes the KI_NO_NEIGHBOURS marginal-probability-
+    # substitution path (kriging_interpolation.h:581-582) and contributes ZERO
+    # to points_calculated (:141/:176 — KI_NO_NEIGHBOURS goes to
+    # points_without_neighbours, not points_calculated). The exemption is
+    # therefore BRANCH-AWARE: expected=0 suppresses the spurious warning only
+    # for the evaluations that are genuinely unconditional, while the
+    # conditional indicators' expected successes stay visible so their real
+    # under-kriging still warns. (any()/all() over the indicators are both
+    # wrong: any() hides genuine failures in mixed configs; all() spuriously
+    # warns in the 2-category branch, which kriges only indicator 0.)
+    # Genuine singular failures still raise via _finalize_kriging_stats
+    # (points_singularity > 0, independent of expected).
     uninformed = grid.x * grid.y * grid.z - int(numpy.sum(out_prop.mask > 0))
     if mask is not None:
         uninformed = int(numpy.sum((out_prop.mask.ravel() == 0) & (mask.ravel() != 0)))
-    evaluations_per_node = 1 if len(data) == 2 else len(data)
-    expected = uninformed * evaluations_per_node
+    if len(data) == 2:
+        # Median-SIS branch: only indicator 0 is evaluated (one KI eval per
+        # node). Unconditional indicator 0 → every node KI_NO_NEIGHBOURS →
+        # points_calculated stays 0 → expected=0 (no warning; the marginal
+        # draw IS the requested mode). Conditional indicator 0 → one success
+        # per node is genuinely expected; shortfalls still warn. Indicator 1's
+        # max_neighbours is irrelevant in this branch (never consulted).
+        if data[0]["max_neighbours"] == 0:
+            expected = 0
+        else:
+            expected = uninformed
+    else:
+        # 3+-category branch: one KI eval per indicator per node. An
+        # unconditional indicator contributes KI_NO_NEIGHBOURS (zero
+        # successes); conditional indicators contribute their real successes.
+        # Expected = uninformed × (number of conditional indicators).
+        # All-unconditional → expected=0 → no warning (requested mode).
+        # Mixed → the conditional indicators' genuine failures still fire
+        # the warning.
+        expected = uninformed * sum(
+            1 for ikd in data if ikd["max_neighbours"] > 0
+        )
 
     if not is_lvm:
         with _hpgl_call_lock:

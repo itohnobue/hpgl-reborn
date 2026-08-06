@@ -59,7 +59,12 @@ threshold_value = 10.5
 array_grid = Grid(0, 0, 0, i_max, j_max, k_max, nx, ny, nz)
 
 prop_ijk = np.zeros((i_max, j_max, k_max))
-prop_ijk = np.require(prop_ijk, dtype=np.float32, requirements=['F'])
+# E-M35: compute in float64 — the previous float32 storage rounded the
+# cell means, making np.var drift from the float64 result at the
+# 7th-8th digit (3.2328463 vs 3.2328459924).  The kriging/SGS inputs
+# are rounded to float32 at the ContProperty boundary either way, so
+# this only affects the variance prints.
+prop_ijk = np.require(prop_ijk, dtype=np.float64, requirements=['F'])
 
 array_defined = np.zeros((i_max, j_max, k_max))
 array_defined = np.require(array_defined, dtype=np.uint8, requirements=['F'])
@@ -80,7 +85,8 @@ print("Arithmetic variance:", var_arithmetic)
 
 # Get_sum_cell_value with geometric averaging
 prop_geometric = np.zeros((i_max, j_max, k_max))
-prop_geometric = np.require(prop_geometric, dtype=np.float32, requirements=['F'])
+# E-M35: float64 storage (see note above)
+prop_geometric = np.require(prop_geometric, dtype=np.float64, requirements=['F'])
 for i in range(i_max):
 	for j in range(j_max):
 		for k in range(k_max):
@@ -94,7 +100,8 @@ print("Geometric variance:", var_geometric)
 
 # Get_sum_cell_value with harmonic averaging
 prop_harmonic = np.zeros((i_max, j_max, k_max))
-prop_harmonic = np.require(prop_harmonic, dtype=np.float32, requirements=['F'])
+# E-M35: float64 storage (see note above)
+prop_harmonic = np.require(prop_harmonic, dtype=np.float64, requirements=['F'])
 for i in range(i_max):
 	for j in range(j_max):
 		for k in range(k_max):
@@ -185,7 +192,7 @@ plt.title("Kriged field from arithmetic averaging")
 #---------------------------------------------------
 #	Problem:
 #
-#	Plot the cumulative histograms of the point-scale reference data and gridded models and compare the proportions of the data above the threshold value of 12.0. The differences observed here are commensurate with the changes observed in the variance and shape of the histograms in the previous step.
+#	Plot the cumulative histograms of the point-scale reference data and gridded models and compare the proportions of the data above the threshold value of 10.5. The differences observed here are commensurate with the changes observed in the variance and shape of the histograms in the previous step.
 #
 # ----------------------------------------------------
 

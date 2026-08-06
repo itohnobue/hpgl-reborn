@@ -2,6 +2,44 @@
 
 All notable changes to HPGL Reborn.
 
+## [2.0.5] — 2026-08
+
+### Fixed
+- **Production-check pass (3 HIGH + ~100 MEDIUM adversarially-verified findings)** — the second production-check sweep fixed confirmed defects across the C++ core, Python bindings, sample scripts, and the solved-problems book:
+
+### Solver near-singularity guards (class: solver reports success on wild estimates)
+- The 2-rhs path mirrors the 1-rhs II-09 magnitude+residual validation; the gauss fallback gained a solution-magnitude guard (no more small-residual/wild-solution success); the final-weight gate is scale-invariant with a path-aware `target_variance` reference (5-pass convergence closed the regressing solver-gate block)
+
+### Ordrel categorical renormalization (class: S>1 category flip)
+- The indicator-kriging/SIS order-relations correction now divides by the total PMF (GSLIB divide-by-total) instead of truncating excess mass onto earlier categories — multi-category configs with per-category covariance models no longer silently flip the simulated category
+
+### GSLIB sentinel precision (class: fractional-sentinel round-trip corruption)
+- The C++ writer emits `%.9E` (9 significant digits) and loaders re-mask with round-trip-safe precision; out-of-float32-range sentinels load as masked cells instead of crashing both loaders
+
+### Simulation mode + ndmin geometry (class: documented modes unreachable / silent skips)
+- `max_neighbours=0` unconditional simulation mode accepted by the Python API (per C++ contract); ndmin gate counts all originals in radius (GSLIB parity), runs before the solve, and all-ndmin-skipped runs now report instead of silently returning an empty mask; neighbour-count and radius-volume work caps bound OOM-scale configs
+
+### Sugarbox scan-limit / work-cap overhaul (E-H2 family)
+- SCAN_LIMIT/FALLBACK_WINDOW no longer collapse the effective search radius to ~8-10 cells on sparse data — SGS/SIS/cokriging stop silently mean/marginal-filling; pure-nugget fallback admits full-radius data like the indexed sibling, tie ordering is deterministic, and the volume-guard arithmetic is corrected
+
+### Variogram grid-path fixes (class: grid vs point-set divergence)
+- The C++ grid kernel no longer counts zero-distance self-pairs into lag 0 and bins lag-band ends half-open like the point-set path; rotated-ellipsoid pair weighting matches the C++ point-set kernel
+
+### CDF content validation + buffer-aliasing guards
+- CDF `m_values`/`m_probs` finite-scanned at the C boundary; all 7 kriging C entries reject aliased in/out buffers (no progressive overwrite / OpenMP race)
+
+### 2D-array guards
+- `lvm_kriging` rejects equal-volume 2D `mean_data` (no silent F-order permutation); `MovingAverage3D` preserves fractional means on int/uint cubes and gates NaN at the source
+
+### Script dead-code resurrection + book-problem parity
+- Dead sample-script entry points gained `__main__`/callers; gtsim-family scripts seed the RNG, validate hard-data categories and cumulative probabilities, and truncate in empirical-CDF space; shared book helpers aligned with their core twins (directional lag binning, mask semantics, GSLIB sentinel window, no spurious `/2`, half-open band binning); stale `Result/` files regenerated; `CStackLayers` float32-range guard added
+
+### Dependency floors
+- `matplotlib>=3.8.4` and `scipy>=1.13` declared as runtime dependencies (numpy-2-compatible minimums) so fresh installs can run the solved-problems book scripts
+
+### Added
+- Regression tests for the fixed issues across the Python and C++ suites (`test_production_fixes_201/202/203.py` + C++ additions); full suite now **2020 tests passing** (2004 main + 16 slow), 0 failures
+
 ## [2.0.4] — 2026-08
 
 ### Fixed

@@ -62,6 +62,10 @@ print("----------------------------------------------------")
 print("Doing boostrap for poro mean and correlation with seismic data... ")
 print("Number of random realizations: ", l)
 
+# E-M28: fixed seed so the bootstrap draws (and therefore the histograms)
+# are reproducible run to run.
+np.random.seed(12345)
+
 # Doing bootstrap for mean and correlation
 mean_poro = []
 coef_rand = []
@@ -71,8 +75,14 @@ mean_seis = w_mean(w_cell, seismic_values)
 mean_poro_value = w_mean(w_cell, poro_values)
 
 for i in range(l):
-	# Sampling arrays _pairwise_ for correlation bootstrap estimation
-	[poro_rand, seismic_rand] = rand_arrays(poro_values, seismic_values, n)
+	# Sampling arrays _pairwise_ for correlation bootstrap estimation.
+	# E-M26: rand_arrays returns the drawn source indices (return_indices=True),
+	# so the weighted correlation pairs each resampled value with the weight
+	# of the well it was actually drawn from — the old code paired the i-th
+	# resampled value with the i-th ORIGINAL well's weight, a statistical
+	# error on every run.
+	[poro_rand, seismic_rand, indices] = rand_arrays(poro_values, seismic_values, n, return_indices=True)
+	w_cell_rand = w_cell[indices]
 
 	mean_poro_value = poro_rand.mean()
 	mean_poro.append(mean_poro_value)
@@ -80,7 +90,7 @@ for i in range(l):
 	# Correlation
 	coef_rand.append(corr_coef(poro_rand, seismic_rand))
 	# Weighted correlation
-	w_coef_rand.append(w_corr_coef(poro_rand, seismic_rand, w_cell))
+	w_coef_rand.append(w_corr_coef(poro_rand, seismic_rand, w_cell_rand))
 
 print("Bootstrap calculation completed.")
 print("----------------------------------------------------")

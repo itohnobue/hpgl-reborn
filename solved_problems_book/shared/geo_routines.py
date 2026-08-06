@@ -25,13 +25,20 @@ def CalcMarginalProbsIndicator(Cube, Mask, Indicators):
 
 def CalcVPC(Cube, Mask, MarginalMean):
     NZ = Cube.shape[2]
-    MaskSum = Mask.sum(0).sum(0)
+    # II-41: standardize mask semantics — "non-zero = informed" (the
+    # documented contract). A raw `Mask.sum()` denominator treats a mask
+    # value of 2 as TWO informed cells, halving the layer mean (mirrors
+    # the src twin's fix at routines.py:126). bool-convert before summing.
+    MaskSum = (Mask != 0).sum(0).sum(0)
     # III-21: do not alias the caller's Cube — the zero-fill below would
     # mutate the input array in place (mirrors the src twin's copy(Cube)).
     CubeMasked = Cube.copy()
     CubeMasked[Mask == False] = 0
 
-    CubeSum = Cube.sum(0).sum(0)
+    # E-M40: the numerator must use the zero-filled MASKED copy — summing
+    # the unmasked Cube skips the zero-fill entirely (masked cells leak
+    # their values into the layer mean; mirrors routines.py:130).
+    CubeSum = CubeMasked.sum(0).sum(0)
     Result = np.ones(NZ) * MarginalMean
     Filter = MaskSum > 0
     Result[Filter] = np.float32(CubeSum[Filter]) / np.float32(MaskSum[Filter])
@@ -74,7 +81,10 @@ def Cubes2PointSet(CubesDictionary, Mask):
         Slice = Mask[:, :, k]
         PointSet['X'] = np.append(PointSet['X'], I[Slice])
         PointSet['Y'] = np.append(PointSet['Y'], J[Slice])
-        PointSet['Z'] = np.append(PointSet['Z'], k * np.ones(Slice.sum(0).sum(0), dtype=np.int32))
+        # II-41: non-zero = informed — a raw Slice.sum() would count a mask
+        # value of 2 twice, over-allocating Z while X/Y (boolean indexing)
+        # admit only non-zero cells (mirrors routines.py:202,218).
+        PointSet['Z'] = np.append(PointSet['Z'], k * np.ones((Slice != 0).sum(), dtype=np.int32))
         for Key in CubesDictionary.keys():
             DataSlice = CubesDictionary[Key][:, :, k]
             PointSet[Key] = np.append(PointSet[Key], DataSlice[Slice])
@@ -93,7 +103,8 @@ def Cube2PointSet(Cube, Mask):
         Slice = Mask[:, :, k]
         X = np.append(X, I[Slice])
         Y = np.append(Y, J[Slice])
-        Z = np.append(Z, k * np.ones(Slice.sum(0).sum(0), dtype=np.int32))
+        # II-41: non-zero = informed — see Cubes2PointSet above.
+        Z = np.append(Z, k * np.ones((Slice != 0).sum(), dtype=np.int32))
         DataSlice = Cube[:, :, k]
         Property = np.append(Property, DataSlice[Slice])
     return X, Y, Z, Property
@@ -132,7 +143,7 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption):
             print("ERROR! All properties in GSLIB dictionary must have equal size")
 
 
-def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%d"):
+def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g"):
     with open(FileName, "w") as f:
         # 1. Caption
         f.write(Caption + '\n')
@@ -151,7 +162,11 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%d"):
         if np.sum(lens - lens[0]) == 0:
             MegaCube = np.zeros((int(lens[0]), 0))
             for Key in CubesDictionary.keys():
-                MegaCube = np.column_stack((MegaCube, CubesDictionary[Key].copy().swapaxes(0, 2).swapaxes(1, 2).flat))
+                # E-M43: single swapaxes(0, 2) → (NZ, NY, NX) C-order flat =
+                # x-fastest = GSLIB convention (core reader reshapes with
+                # order="F", routines.py:913). The old double swapaxes wrote
+                # y-fastest, silently scrambling every layer when NX != NY.
+                MegaCube = np.column_stack((MegaCube, CubesDictionary[Key].copy().swapaxes(0, 2).flat))
             savetxt(f, MegaCube, Format)
         else:
             print("ERROR! All properties in GSLIB dictionary must have equal size")

@@ -136,6 +136,7 @@ void load_doubles_into_vector(FILE * file, std::vector<T> & data)
 {
 	char buffer[256];
 	float value;
+	int consumed = 0;
 	const size_t MAX_ELEMENTS = 100ULL * 1024ULL * 1024ULL; // 100M elements
 	while (fscanf(file, "%255s", buffer) == 1)
 	{
@@ -173,7 +174,13 @@ void load_doubles_into_vector(FILE * file, std::vector<T> & data)
 
 		// Throw immediately on unparseable tokens — matching
 		// load_floats_into_vector behavior in read_inc_file.cpp.
-		if (sscanf(buffer, "%f", &value) != 1)
+		// E-M73: full-token validation via %n — a bare %f accepts numeric
+		// prefixes ("5/" -> 5.0, "1.5abc" -> 1.5) and reports success,
+		// silently loading junk (same defect class fixed in
+		// read_inc_file.cpp). The %255s token can contain no whitespace,
+		// so the whole buffer must be consumed.
+		if (sscanf(buffer, "%f%n", &value, &consumed) != 1
+			|| consumed != static_cast<int>(len))
 		{
 			std::ostringstream oss;
 			oss << "Error parsing '" << buffer << "' string at token " << data.size();

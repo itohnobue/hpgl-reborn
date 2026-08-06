@@ -67,17 +67,18 @@ def spatial_bootstrap(x_num, y_num, poro_values, l):
 
 	x_min = x_float.min()
 
-	#Calculate p (n by 1 vector of probability values [0,1]) with standard normal distribution
-	to_delete = []
+	# Calculate p (n by 1 vector of probability values [0,1]) with standard
+	# normal distribution. normal_score returns the standard-normal CDF, which
+	# lies in [0, 1] — the old abs() and the old `p[i] > 1.0` guard were dead
+	# code. E-M30: draws with p < x_min (the smallest cumulative frequency,
+	# 1/62 on welldata.txt) were DELETED, which biased the bootstrapped means
+	# upward on every run. Clamp them onto x_min instead: every draw is kept
+	# and the interpolation below stays within [x_float.min(), x_float.max()].
 	p = np.zeros(l, dtype=float)
 	for i in range(l):
-		p[i] = abs(normal_score(y[i]))
-		if(p[i] > 1.0):
-			to_delete.append(i)
-		if(p[i] < x_min):
-			to_delete.append(i)
-
-	p = np.delete(p, to_delete)
+		p[i] = normal_score(y[i])
+		if (p[i] < x_min):
+			p[i] = x_min
 
 	z = np.zeros(len(p), dtype=float)
 
@@ -121,6 +122,10 @@ print("Number of bootstrapped realizations: ", n)
 print("Number of points to bootstrap: ", l)
 print("----------------------------------------------------")
 print("Running bootstrap...")
+
+# E-M28: fixed seed so the random draws (and therefore the bootstrapped
+# distribution) are reproducible run to run.
+np.random.seed(12345)
 
 z_mean = []
 for i in range(n):

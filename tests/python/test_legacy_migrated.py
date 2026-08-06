@@ -76,6 +76,7 @@ def _load_ind(name, indicators):
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
+@pytest.mark.slow  # B-05: 468K-cell kriging — top machine-freeze risk, run last/alone
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
     reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC",
@@ -107,6 +108,7 @@ def test_big_ok_kriging_legacy():
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
+@pytest.mark.slow  # B-05: 468K-cell kriging — top machine-freeze risk, run last/alone
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
     reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC",
@@ -140,6 +142,7 @@ def test_big_sk_kriging_legacy():
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
+@pytest.mark.slow  # B-05: 468K-cell kriging — top machine-freeze risk, run last/alone
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_CON_160_141_20.INC"),
     reason="Test data file not found: BIG_SOFT_DATA_CON_160_141_20.INC",
@@ -180,6 +183,7 @@ def test_big_lvm_kriging_legacy():
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
+@pytest.mark.slow  # B-05: 468K-cell kriging — top machine-freeze risk, run last/alone
 @pytest.mark.skipif(
     not _has_data_file("BIG_SOFT_DATA_160_141_20.INC"),
     reason="Test data file not found: BIG_SOFT_DATA_160_141_20.INC",
@@ -496,6 +500,7 @@ def test_vpc_small_legacy():
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
+@pytest.mark.slow  # B-05: 468K-cell SIS — top machine-freeze risk, run last/alone
 def test_sis_on_empty_data_legacy():
     """
     SIS with sparse/empty data - migrated from test_ik_on_empty.py
@@ -542,6 +547,7 @@ def test_sis_on_empty_data_legacy():
 
 @pytest.mark.hpgl
 @pytest.mark.legacy
+@pytest.mark.slow  # B-05: 468K-cell SGS — top machine-freeze risk, run last/alone
 def test_sgs_on_empty_data_legacy():
     """
     SGS with sparse/empty data - migrated from test_sgs_on_empty.py

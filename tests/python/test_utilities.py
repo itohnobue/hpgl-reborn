@@ -490,9 +490,9 @@ class TestIOContinuousProperty:
             # Should contain the header, property name and values
             assert "HPGL saved GSLIB file" in content
             assert "test_gslib" in content
-            # Check values are present (scientific notation)
-            assert "1.000000E+01" in content  # 10.0
-            assert "2.000000E+01" in content  # 20.0
+            # Check values are present (scientific notation, %.9E writer)
+            assert "1.00000000E+01" in content  # 10.0
+            assert "2.00000000E+01" in content  # 20.0
 
     def test_read_inc_file_float_with_size(self, tmp_path):
         """Test reading INC file with specified size"""
@@ -547,7 +547,7 @@ class TestIOContinuousProperty:
             # Should have property name and some values
             assert "3d_test" in content
             # Should have values (0.0, 1.0, etc. in scientific notation)
-            assert "0.000000E+00" in content  # First value
+            assert "0.00000000E+00" in content  # First value
 
         # Note: Reading back 3D properties with read_inc_file_float is not stable
         # due to C++ implementation issues. The write functionality is verified.

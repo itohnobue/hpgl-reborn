@@ -28,7 +28,6 @@ data_dict = load_gslib_file("allwelldata.txt")
 
 # x, y, z size(m)
 nx = 454
-ny = 454
 
 # property
 value = "Por"
@@ -42,6 +41,14 @@ k_max = 2
 # The old fixed nz=40 m with k_max=2 covered only 80 m while the data
 # reach ~395 m — 85% of the points were silently outside the grid.
 nz = (max(data_dict['Z']) - min(data_dict['Z'])) / k_max
+
+# E-M36: same fix for the Y axis (the II-48 Z fix missed Y). The old
+# fixed ny=454 with j_max=22 covered only 85 + 22*454 = 10073 m while
+# the data reach 10102 m — 55 points (all at Y=10102) were silently
+# dropped from the block averaging, the PointSet and the variogram.
+# ceil() guarantees the grid strictly covers max(Y) so the points at
+# exactly max(Y) are not dropped by the inclusive-boundary round-trip.
+ny = np.ceil((max(data_dict['Y']) - min(data_dict['Y'])) / j_max)
 
 # Lets define 3D grid
 array_grid = Grid(min(data_dict['X']), min(data_dict['Y']), min(data_dict['Z']), i_max, j_max, k_max, nx, ny, nz)
@@ -91,11 +98,45 @@ Variogram_ver = XVariogram[:, 0]
 print("XVariogram:")
 print(Variogram_ver)
 
-#Calculate Gammabar
-gammab = 0
-for i in range(len(Variogram_ver)):
-	gammab = gammab + Variogram_ver[i]
-print("Gammab: ", (gammab / ((nx * ny * nz)**2)))
+# E-H6: GSLIB gammabar — the average semivariogram value over all pairs
+# of points discretizing the block volume V:
+#     gammabar = (1 / N^2) * sum_i sum_j gamma(|u_i - u_j|)
+# where N is the number of discretization points of the block and
+# gamma(h) is the modeled semivariogram.  For the simple case (point
+# support, no nugget) the volume variance of the block is exactly this
+# average:  sigma^2_V = gammabar.
+#
+# The previous formula summed the 5 experimental lag values and divided
+# by (nx*ny*nz)^2 — a volume squared (m^6), not a pair count — which is
+# dimensionally invalid and printed ~1.6e-14 instead of an O(sill)
+# variance (~10 for this porosity data).
+#
+# The modeled variogram below is the reference-faithful 5.3 vertical
+# model from 3d_variogram.py (Result/3d_variogram.txt): exponential,
+# sill 11, range 35 m.
+sill = 11.0
+var_range = 35.0
+
+def exp_variogram(h):
+	return sill * (1.0 - np.exp(-3.0 * h / var_range))
+
+def gammabar_volume(block_nx, block_ny, block_nz, disc=5):
+	"""GSLIB gammabar: average gamma over all pairs of points of the
+	discretized block volume.  disc points per axis -> N = disc^3."""
+	xs = (np.arange(disc) + 0.5) * block_nx / disc
+	ys = (np.arange(disc) + 0.5) * block_ny / disc
+	zs = (np.arange(disc) + 0.5) * block_nz / disc
+	pts = np.array(np.meshgrid(xs, ys, zs)).reshape(3, disc**3).T
+	N = len(pts)
+	gb = 0.0
+	for i in range(N):
+		h = np.sqrt(((pts - pts[i]) ** 2).sum(axis=1))
+		gb += np.sum(exp_variogram(h))
+	return gb / (N * N)
+
+gammab = gammabar_volume(nx, ny, nz)
+print("Gammab (average gamma over block pairs): ", gammab)
+print("Volume variance for this block size (simple case): ", gammab)
 
 #Variogram modeling results for the vertical direction
 plt.figure()

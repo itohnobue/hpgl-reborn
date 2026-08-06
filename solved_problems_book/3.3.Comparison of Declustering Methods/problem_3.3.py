@@ -9,6 +9,11 @@
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+# F-47 pattern: geo_bsd lives in the repo's src/ directory (it is not
+# installed in the environment); decluster.py (imported below) imports
+# geo_bsd at module level, so without this the transitive import fails
+# with ModuleNotFoundError.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 import numpy as np
 from grid_3d import *
@@ -60,11 +65,20 @@ widw = stand_weight(widw, len(PointSet[0]))
 print("Inverse Distance Weighting")
 print(widw)
 
-# NOTE: Kriging weights calculation requires simple_kriging_weights which is not available in geo_bsd
-# wsk = w_kriging(array_grid, PointSet)
-# wsk = stand_weight(wsk, len(PointSet[0]))
-# print("Kriging Weights")
-# print(wsk)
+# E-M27: kriging declustering — simple_kriging_weights IS available in geo_bsd
+# (geo.py:2394, exported from geo_bsd.__init__:150); the old comment claiming
+# it was not available was false.
+wsk = w_kriging(array_grid, PointSet)
+wsk = stand_weight(wsk, len(PointSet[0]))
+print("Kriging Weights")
+print(wsk)
 
-# Drawing bar (requires kriging weights)
-# bar_show(w_cell, wsk, widw, len(PointSet[0]))
+# E-M27: polygonal declustering — Voronoi cells of the data points, weight =
+# cell area (clipped to a finite region around the data).
+wp = w_polygonal(PointSet)
+wp = stand_weight(wp, len(PointSet[0]))
+print("Polygonal declustering")
+print(wp)
+
+# Drawing bar (four methods: polygonal, IDW, cell, kriging)
+bar_show(w_cell, wsk, widw, len(PointSet[0]), wp)

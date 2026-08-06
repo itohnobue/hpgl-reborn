@@ -103,10 +103,10 @@ class TestSGSConfig:
 
     # ---- max_neighbours ----
 
-    def test_zero_max_neighbours_raises(self):
-        """Zero max_neighbours raises ValueError (must be >= 1)."""
-        with pytest.raises(ValueError, match="max_neighbours"):
-            SGSConfig(max_neighbours=0)
+    def test_zero_max_neighbours_accepted(self):
+        """Zero max_neighbours accepted (R-05/E-M9 unconditional mode)."""
+        cfg = SGSConfig(max_neighbours=0)
+        assert cfg.max_neighbours == 0
 
     def test_negative_max_neighbours_raises(self):
         """Negative max_neighbours raises ValueError."""
@@ -212,10 +212,10 @@ class TestSISConfig:
 
     # ---- max_neighbours ----
 
-    def test_zero_max_neighbours_raises(self):
-        """Zero max_neighbours raises ValueError."""
-        with pytest.raises(ValueError, match="max_neighbours"):
-            SISConfig(max_neighbours=0)
+    def test_zero_max_neighbours_accepted(self):
+        """Zero max_neighbours accepted (R-05/E-M9 unconditional mode)."""
+        cfg = SISConfig(max_neighbours=0)
+        assert cfg.max_neighbours == 0
 
     # ---- radiuses NaN/Inf (F-02) ----
 

@@ -279,7 +279,9 @@ void sequential_indicator_simulation_lvm(
 		const sugarbox_grid_t & grid,
 		const ik_params_t & params,
 		int64_t seed,
-		const mean_t ** mean_data,		
+		const mean_t ** mean_data,
+		size_t mean_data_count,
+		size_t mean_row_size,
 		progress_reporter_t & report,
 		bool use_corellogram,
 		const unsigned char * mask)
@@ -299,6 +301,29 @@ void sequential_indicator_simulation_lvm(
 	{
 		throw hpgl_exception("sequential_indicator_simulation_lvm",
 			"Null mean_data pointer-to-pointer");
+	}
+
+	// E2-118: the raw pointer-to-pointer carries no row count and the
+	// rows no length — do_sis dereferences mean_data[idx][node] for every
+	// category (idx < m_category_count) and every node (node <
+	// property.size()), a heap OOB for direct-C++ callers with too few
+	// rows or shorter rows. The count/row-length are now explicit contract
+	// parameters, validated here (mirroring the C API gate
+	// api.cpp:1601-1609 which requires indicator_count rows of exactly
+	// grid-volume size).
+	if (mean_data_count != static_cast<size_t>(params.m_category_count))
+	{
+		std::ostringstream oss;
+		oss << "mean_data row count: " << mean_data_count
+		    << " != category count: " << params.m_category_count;
+		throw hpgl_exception("sequential_indicator_simulation_lvm", oss.str());
+	}
+	if (mean_row_size != static_cast<size_t>(property.size()))
+	{
+		std::ostringstream oss;
+		oss << "mean_data row size: " << mean_row_size
+		    << " != property size: " << property.size();
+		throw hpgl_exception("sequential_indicator_simulation_lvm", oss.str());
 	}
 		
 	if(use_corellogram)

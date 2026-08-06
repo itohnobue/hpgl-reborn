@@ -51,7 +51,14 @@ namespace hpgl
 		{
 			if( property->is_informed(idx) )
 			{
-				sum += property->get_at(idx);
+				// E-M62: reject non-finite input like the reference
+				// overload (:18-22) and the Python mirror (geo.py:1519-
+				// 1521).  Without this gate a NaN sum produced a NaN
+				// mean reported as success=true.
+				double val = property->get_at(idx);
+				if (!std::isfinite(val))
+					return false;
+				sum += val;
 				count_points += 1;
 			}
 		}

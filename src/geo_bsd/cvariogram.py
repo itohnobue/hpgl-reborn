@@ -3,6 +3,7 @@
 import contextlib
 import ctypes as C
 import threading
+import warnings
 
 import numpy
 
@@ -354,6 +355,18 @@ class Ellipsoid:
         for name, val in (("azimuth", azimuth), ("dip", dip), ("rotation", rotation)):
             if not numpy.isfinite(val):
                 raise ValueError(f"Ellipsoid: {name} must be finite, got {val!r}")
+        # E2-11: mirror the TVEllipsoid angle-range validation
+        # (variogram.py TVEllipsoid.__init__): azimuth in [0, 360],
+        # dip/rotation in [-90, 90]. fill_ellipsoid_directions mathematically
+        # wraps any finite angle (trig periodicity), but the pure-Python twin
+        # rejects out-of-range values — the FFI boundary must not be more
+        # lenient than the documented Python contract.
+        if not 0 <= azimuth <= 360:
+            raise ValueError(f"Ellipsoid: azimuth must be in [0, 360], got {azimuth!r}")
+        if not -90 <= dip <= 90:
+            raise ValueError(f"Ellipsoid: dip must be in [-90, 90], got {dip!r}")
+        if not -90 <= rotation <= 90:
+            raise ValueError(f"Ellipsoid: rotation must be in [-90, 90], got {rotation!r}")
         # F-38: magnitude caps — huge radii inflate the C++ search window
         # and can hang the variogram scan.
         for name, val in (("R1", R1), ("R2", R2), ("R3", R3)):
@@ -665,22 +678,38 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
             "CalcVariogramsFromPointSet: point_set['Property'] contains "
             "NaN or Inf values"
         )
+    # E-M76: validate coordinate finiteness BEFORE the call (mirror
+    # validation.py:548 validate_coordinate_arrays). The C++ point-set scan
+    # silently skips NaN-coordinate pairs, and the resulting post-call error
+    # misattributes the failure to the TEMPLATE ("direction vectors or
+    # ranges contain NaN") — misleading diagnostics for a data defect.
+    for key in ("X", "Y", "Z"):
+        if not numpy.all(numpy.isfinite(point_set[key])):
+            raise ValueError(
+                f"CalcVariogramsFromPointSet: point_set['{key}'] contains "
+                f"NaN or Inf values"
+            )
     point_set = {key: numpy.ascontiguousarray(arr) for key, arr in point_set.items()}
     if variogram is None:
         variogram = numpy.array([0] * templ.num_lags, dtype="float32")
-    else:
-        # II-40: caller-provided output buffer size must match num_lags. The
-        # C++ kernel silently computes min(num_lags, result_length)
-        # (variograms.cpp:821-823), so an undersized buffer truncates the
-        # variogram (lags_borders has num_lags entries, variogram has fewer)
-        # with no error. Reject before the call.
-        # III-39: the C++ kernel writes into the caller's variogram buffer via
-        # a raw float pointer. A read-only buffer is silently mutated (or
-        # SIGBUS on a true read-only mmap).
-        # Contract: contiguity + size + writeability (got-20260802015741).
-        require_output_buffer(
-            variogram, templ.num_lags, "CalcVariogramsFromPointSet", numpy.dtype("float32")
-        )
+    # E-M11: the internally-created buffer must satisfy the same FFI
+    # output-buffer contract as a caller-supplied one (contiguity + exact
+    # size + writeability, got-20260802015741). Route BOTH paths through
+    # require_output_buffer so no contract facet can be skipped by this
+    # call site (the internal array satisfies the facets by construction,
+    # so this is contract-consistency, not a behavior change).
+    #
+    # II-40: caller-provided output buffer size must match num_lags. The
+    # C++ kernel silently computes min(num_lags, result_length)
+    # (variograms.cpp:821-823), so an undersized buffer truncates the
+    # variogram (lags_borders has num_lags entries, variogram has fewer)
+    # with no error. Reject before the call.
+    # III-39: the C++ kernel writes into the caller's variogram buffer via
+    # a raw float pointer. A read-only buffer is silently mutated (or
+    # SIGBUS on a true read-only mmap).
+    require_output_buffer(
+        variogram, templ.num_lags, "CalcVariogramsFromPointSet", numpy.dtype("float32")
+    )
 
     ps = checked_create(
         cont_point_set_t,
@@ -732,6 +761,20 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
         raise ValueError(f"CStackLayers: scalez must be finite, got {scalez}")
     if scalez <= 0:
         raise ValueError(f"CStackLayers: scalez must be positive, got {scalez}")
+    # E-M80: the ctypes boundary converts scalez to C.c_float — a finite
+    # float64 beyond the float32 max (e.g. 1e39) silently becomes inf, and
+    # inf passes the `scalez <= 0` check (inf <= 0 is False), reaching the
+    # C++ kernel where thickness/scalez = 0 silently produces an all-blank
+    # result with no exception. Range-check against the float32 max BEFORE
+    # the ctypes conversion. (Same class: geo.py:965 undefined_value
+    # c_float — separate agent scope.) The max is widened to a Python float
+    # so the comparison does not downcast the user value to float32 (which
+    # would itself emit an overflow RuntimeWarning for values > float32 max).
+    if scalez > float(numpy.finfo(numpy.float32).max):
+        raise ValueError(
+            f"CStackLayers: scalez ({scalez!r}) exceeds the float32 maximum "
+            f"({numpy.finfo(numpy.float32).max}) representable by the C++ kernel"
+        )
     if not numpy.isfinite(blank_value):
         raise ValueError(f"CStackLayers: blank_value must be finite, got {blank_value}")
     # Validate all layers have matching 2D shapes
@@ -780,7 +823,41 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
     # map_index values beyond the C++ cumulative_k buffer (OOB write,
     # stack_layers.h:33,38-39). Copy layers to contiguous float32; a
     # sliced view is copied, so the C++ sees a safe contiguous buffer.
-    layers = [numpy.ascontiguousarray(layer) for layer in layers]
+    # E-M79: 2D layers pass the shape[:2] validation but previously
+    # hard-failed in __strides with the misleading internal error
+    # "unsupported ndim=2". The C++ kernel treats each layer as a 2D
+    # thickness field (it reads only data_shape[0]/[1] and strides
+    # [0]/[1], stack_layers.h:62-63,122), so reshaping a 2D layer to
+    # (nx, ny, 1) is the faithful representation — data_shape[2] = 1 is
+    # never consulted for layers, and validate_layer_contiguous
+    # (stack_layers.h:12-19) passes (C-contiguous, strides[1]==1,
+    # strides[0]==ny).
+    layers = [
+        numpy.ascontiguousarray(layer).reshape(layer.shape[0], layer.shape[1], 1)
+        if layer.ndim == 2
+        else numpy.ascontiguousarray(layer)
+        for layer in layers
+    ]
+    # E2-16: the C++ kernel silently clips deposits at the grid boundary —
+    # k_next = min(ceil(new_k), nz) (stack_layers.h:159-163). Warn when any
+    # column's cumulative thickness (Σ thickness/scalez, accumulated in
+    # float64 exactly like the C++ double accumulation, stack_layers.h:141)
+    # exceeds nz so the truncation is not silent. The clip is designed
+    # III-40 semantics (tests pin it), so a warning — not an error — keeps
+    # the behavior while making the truncation observable. Only the first
+    # z-slice of each layer participates (the C++ map_index has no z
+    # component, stack_layers.h:122) — mirror that here.
+    cumulative = numpy.zeros((ref_shape[0], ref_shape[1]), dtype=numpy.float64)
+    for layer in layers:
+        cumulative = cumulative + layer[:, :, 0].astype(numpy.float64) / scalez
+        if numpy.any(cumulative > nz):
+            warnings.warn(
+                f"CStackLayers: cumulative layer thickness exceeds nz={nz} "
+                f"(scalez={scalez!r}) — deposits are clipped at the grid "
+                f"z-boundary (top of the stack is truncated)",
+                stacklevel=2,
+            )
+            break
     # The result is the OUTPUT buffer — the full FFI output-buffer contract
     # (got-20260802015741): contiguity + exact size + writeability. The C++
     # kernel writes result cells at [0, nx) x [0, ny) per layer

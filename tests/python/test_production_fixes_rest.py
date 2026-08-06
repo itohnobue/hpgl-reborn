@@ -143,7 +143,7 @@ class TestVersionMetadata:
         else:
             # No source tree: the metadata lookup must run; a
             # PackageNotFoundError falls back to the documented literal.
-            expected = "2.0.4"
+            expected = "2.0.5"
 
             def _raise_not_found(name):
                 raise importlib.metadata.PackageNotFoundError(name)
@@ -289,12 +289,14 @@ class TestMaxNeighboursHardCap:
         with pytest.raises(CriticalValidationError, match="maximum allowed"):
             ParameterValidator.validate_max_neighbors(100001)
 
-    def test_validation_accepts_up_to_100000(self):
+    def test_validation_accepts_up_to_10000(self):
         from geo_bsd.validation import ParameterValidator
 
         # Boundary value accepted (may warn — that is the documented
-        # performance guidance).
-        ParameterValidator.validate_max_neighbors(100000)
+        # performance guidance). R-07: the hard limit is NEIGHBOUR_WORK_CAP
+        # = 10000 (aligned with the C++ engine), so 10000 is the accepted
+        # boundary; 100000 is now rejected.
+        ParameterValidator.validate_max_neighbors(10000)
 
     def test_validation_still_warns_above_1000(self):
         """M-20: the 1000 threshold remains a performance-guidance warning."""
@@ -317,11 +319,12 @@ class TestMaxNeighboursHardCap:
         with pytest.raises(ValueError, match="maximum allowed"):
             SISConfig(max_neighbours=100001)
 
-    def test_config_boundary_100000_accepted(self):
+    def test_config_boundary_10000_accepted(self):
         from geo_bsd.config import SGSConfig
 
-        cfg = SGSConfig(max_neighbours=100000)
-        assert cfg.max_neighbours == 100000
+        # R-07: 10000 is the C++ NEIGHBOUR_WORK_CAP boundary — accepted.
+        cfg = SGSConfig(max_neighbours=10000)
+        assert cfg.max_neighbours == 10000
 
 
 # =============================================================================

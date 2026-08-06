@@ -7,7 +7,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "hpgl"
-version = "2.0.4"
+version = "2.0.5"
 description = "High Performance Geostatistics Library - Modern C++ with Python bindings"
 readme = "readme.md"
 requires-python = ">=3.9"
@@ -54,6 +54,15 @@ classifiers = [
 
 dependencies = [
     "numpy>=2.0,<3.0",
+    # E-M29: the shipped solved_problems_book scripts import matplotlib
+    # (17 files) and scipy (3 files); numpy-only runtime deps made fresh
+    # installs unable to run the book examples.
+    # R-25: floors are set at the numpy-2.0 compatibility minimums
+    # (matplotlib 3.8.4, scipy 1.13.0 — the first releases declaring
+    # numpy-2 support), so the declared metadata is internally consistent
+    # with the numpy>=2.0,<3.0 pin above.
+    "matplotlib>=3.8.4",
+    "scipy>=1.13",
 ]
 
 [project.optional-dependencies]

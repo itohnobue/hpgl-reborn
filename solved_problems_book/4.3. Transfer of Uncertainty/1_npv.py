@@ -32,6 +32,10 @@ n = 5
 # Number of realizations.
 l = 1000
 
+# E-M28: fixed seed so the random draws (and therefore the NPV distribution
+# and the P10/P50/P90 values) are reproducible run to run.
+np.random.seed(12345)
+
 # Function for calculating NPV:
 def npv_calculate(R, C, r, n):
 	npv = 0.0

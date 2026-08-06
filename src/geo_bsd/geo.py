@@ -109,6 +109,48 @@ _MAX_SLOW_PARSER_LINE_BYTES = 1_000_000
 # Compiled token pattern for the slow parsers' streaming tokenizer (2-M-16).
 _SLOW_TOKEN_RE = re.compile(r"\S+")
 
+# E2-06/R-06: undefined_value re-masking on the Python slow paths must
+# agree with the C++ fast reader, which masks with EXACT float32 equality
+# (read_inc_file.cpp:379: `v == undefined_value` on float32 values). The
+# INC writer emits %.9E (property_writer.cpp:121) — 10 significant
+# digits, >= FLT_DECIMAL_DIG=9 — so any float32 value round-trips the
+# writer exactly and exact equality after a float32 conversion is both
+# sufficient and required. The earlier tolerance band (1e-6 relative) was
+# calibrated to the OLD %E-6 writer (7 significant digits), which could
+# not round-trip fractional undefined_values with >7 significant digits;
+# with the fixed writer that band over-masks near-sentinel real data —
+# e.g. -99.00005 next to sentinel -99.0 is 9.9e-5 inside the old band
+# (relative 5.05e-7 < 1e-6) yet the C++ reader leaves it informed
+# (float32(-99.00005) != float32(-99.0)). Comparing in float32 — the same
+# conversion the C++ reader applies before its == — reproduces the C++
+# mask on every value.
+
+
+def _is_undefined_value(val, undefined_value):
+    """Exact float32 undefined_value match (E2-06/R-06).
+
+    Returns True when ``val`` is indistinguishable from ``undefined_value``
+    after an HPGL INC writer round-trip: converting both to float32 — the
+    storage type of ContProperty data and the parse type of the C++ fast
+    reader (read_inc_file.cpp:379) — and comparing for equality. The
+    writer's %.9E output round-trips float32 exactly, so any value the
+    writer emitted as the sentinel re-masks and any real value near (but
+    not equal to) the sentinel stays informed, exactly like the C++ side.
+    NaN handling stays exact (NaN == NaN is False; a NaN sentinel only
+    matches a NaN undefined_value). Values outside the float32 range
+    cannot equal undefined_value after the round-trip and are handled by
+    the GSLIB ±1.0e21 window check at the call sites; the finiteness/range
+    guard avoids a numpy overflow-cast warning for them.
+    """
+    if math.isnan(undefined_value):
+        return math.isnan(val)
+    # float32 max as a Python float: comparing a Python float directly
+    # against the numpy float32 scalar would itself overflow-cast.
+    _f32_max = float(numpy.finfo(numpy.float32).max)
+    if not math.isfinite(val) or abs(val) > _f32_max:
+        return False
+    return numpy.float32(val) == numpy.float32(undefined_value)
+
 
 def _iter_slow_tokens(line, func_name):
     """Yield whitespace-separated tokens from ``line`` one at a time (2-M-16).
@@ -698,9 +740,12 @@ def _load_prop_cont_slow(filename, undefined_value, basedir=None):
                     # is only masked when undefined_value is itself NaN
                     # (consistent with the C++ reader, which leaves NaN cells
                     # informed otherwise).
+                    # E2-06/R-06: the undefined_value match is exact after
+                    # a float32 conversion (see _is_undefined_value),
+                    # mirroring the C++ fast reader's float32 == so both
+                    # parsers mask the same cells on the same file.
                     if (
-                        (math.isnan(undefined_value) and math.isnan(val))
-                        or val == undefined_value
+                        _is_undefined_value(val, undefined_value)
                         or val < -GSLIB_SENTINEL_WINDOW
                         or val > GSLIB_SENTINEL_WINDOW
                     ):
@@ -722,7 +767,25 @@ def _load_prop_cont_slow(filename, undefined_value, basedir=None):
             "_load_prop_cont_slow: skipped %d non-numeric tokens in %s", skipped_count, filename
         )
 
-    return ContProperty(numpy.array(values, dtype="float32"), numpy.array(mask, dtype="uint8"))
+    data64 = numpy.array(values)
+    mask_arr = numpy.array(mask, dtype="uint8")
+    # E-M1: GSLIB sentinels outside the float32 range (|v| > ~3.4e38, e.g.
+    # -1e39) are masked by the window check above but overflow to ±inf in
+    # the float32 downcast, crashing the ContProperty ctor (whose isfinite
+    # check runs on the STORED float32 array, III-11). NaN cells masked by
+    # a NaN undefined_value hit the same crash. Masked cells are
+    # uninformed — the C++ writer emits undefined_value for them
+    # (property_writer.cpp write_property_cont) — so their stored value is
+    # not part of the round-trip contract; clamp only the cells that
+    # cannot survive the downcast. Informed non-finite cells still fail
+    # loudly in the ctor.
+    unsupported = (mask_arr == 0) & (
+        ~numpy.isfinite(data64)
+        | (numpy.abs(data64) > numpy.finfo(numpy.float32).max)
+    )
+    if numpy.any(unsupported):
+        data64[unsupported] = 0.0
+    return ContProperty(data64.astype("float32"), mask_arr)
 
 
 def _load_prop_ind_slow(filename, undefined_value, ind_values, basedir=None):
@@ -1920,6 +1983,18 @@ def lvm_kriging(prop, grid, mean_data, radiuses, max_neighbours, cov_model):
     # (2,2,2) mean_data with a (1,2,4) grid — both volume 8 — permutes the
     # mean field with no exception. 1D (flat) mean vectors are covered by the
     # size check above and carry no per-dimension meaning.
+    # E2-01: the R-13 gate was 3D-only — an equal-volume 2D mean_data
+    # (e.g. (2,2) on a (1,2,2) grid) sailed past the size check and the
+    # ndim==3 guard, then the F-order flat layout of the 2D array was
+    # consumed by flat node index with a silently permuted mean field.
+    # Only 1D flat and exactly grid-shaped 3D arrays are unambiguous;
+    # reject every other ndim for the same reason.
+    if mean_data.ndim not in (1, 3):
+        raise ValueError(
+            f"lvm_kriging: mean_data must be 1D flat (size {expected_size}) or 3D "
+            f"with shape ({grid.x}, {grid.y}, {grid.z}), got {mean_data.ndim}D "
+            f"shape {mean_data.shape}"
+        )
     if mean_data.ndim == 3 and (
         mean_data.shape[0] != grid.x
         or mean_data.shape[1] != grid.y
@@ -2519,7 +2594,16 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
     if numpy.isnan(undefined_value):
         uninformed = numpy.isnan(prop) | out_of_window
     else:
-        uninformed = (prop == undefined_value) | out_of_window
+        # E2-06/R-06: exact float32 re-mask, mirroring the C++ fast reader
+        # (read_inc_file.cpp:379 float32 ==). The %.9E writer
+        # (property_writer.cpp:121) round-trips float32 exactly, so a
+        # sentinel cell written by HPGL always re-masks and near-sentinel
+        # real data (e.g. -99.00005 vs -99.0) stays informed — the earlier
+        # 1e-6 relative band over-masked the latter class (calibrated to
+        # the pre-fix %E-6 writer) and diverged from the C++ side. prop is
+        # already float32; the explicit conversion of undefined_value keeps
+        # the comparison in float32 arithmetic.
+        uninformed = (prop == numpy.float32(undefined_value)) | out_of_window
     informed_array = numpy.where(uninformed, 0, 1).astype(numpy.uint8)
     return (prop_dict[prop_name], informed_array)
 

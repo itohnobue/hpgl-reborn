@@ -171,6 +171,7 @@ namespace hpgl
 		const sugarbox_grid_t& grid,
 		const sgs_params_t& params,
 		const mean_t* mean_data,
+		size_t mean_data_size,
 		cont_property_array_t& output,
 		const hpgl_non_parametric_cdf_t* cdf,
 		const unsigned char* mask
@@ -192,8 +193,22 @@ namespace hpgl
 				"Null mean_data pointer");
 		}
 
+		// E2-109: the raw mean_data pointer carries no length metadata —
+		// the pre-fix code read output.size() elements from it
+		// (mean_data_vec.assign + transform_cdf_ptr), a heap OOB read for
+		// direct-C++ callers with a shorter buffer. The size is now an
+		// explicit contract parameter, validated here (mirroring the C API
+		// gate api.cpp:1311-1319 which requires means volume == grid
+		// volume == output size).
+		if (mean_data_size != static_cast<size_t>(output.size()))
+		{
+			std::ostringstream oss;
+			oss << "mean_data size: " << mean_data_size << ". Output size: " << output.size() << ". Must be equal.";
+			throw hpgl_exception("sequential_gaussian_simulation_lvm", oss.str());
+		}
+
 		std::vector<mean_t> mean_data_vec;
-		mean_data_vec.assign(mean_data, mean_data + output.size());
+		mean_data_vec.assign(mean_data, mean_data + mean_data_size);
 
 		if (cdf != nullptr)
 		{

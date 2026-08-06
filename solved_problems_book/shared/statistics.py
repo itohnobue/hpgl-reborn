@@ -84,13 +84,28 @@ def corr_coef(x, y):
 
 
 # Make random array from existing with same values
-def rand_arrays(array1, array2, n):
+def rand_arrays(array1, array2, n, seed=None, return_indices=False):
+    # E-M52: optional seed control — the global RNG is otherwise unseeded,
+    # so bootstrap outputs differ run to run. When seed is given it seeds
+    # the global RNG (the module's legacy RNG convention). Callers looping
+    # over bootstrap draws should seed ONCE before the loop (e.g. pass the
+    # seed on the first call only) — re-passing the same seed per iteration
+    # would produce identical draws every iteration.
+    if seed is not None:
+        np.random.seed(seed)
     array1_rand = np.zeros(n, dtype=float)
     array2_rand = np.zeros(n, dtype=float)
+    # E-M26 (coordination): when return_indices=True, also return the drawn
+    # source indices so callers can pair weights (or any per-well metadata)
+    # with the resampled values — resampling (value, weight) pairs together.
+    indices = np.zeros(n, dtype=int)
     for i in range(n):
         value = np.random.randint(len(array1))
+        indices[i] = value
         array1_rand[i] = array1[value]
         array2_rand[i] = array2[value]
+    if return_indices:
+        return [array1_rand, array2_rand, indices]
     return [array1_rand, array2_rand]
 
 
@@ -122,7 +137,10 @@ def calc_distance_3d(x1, y1, z1, x2, y2, z2):
     return h
 
 
-def bootstrap_correlation(x, y):
+def bootstrap_correlation(x, y, seed=None):
+    # E-M52: optional seed control — see rand_arrays.
+    if seed is not None:
+        np.random.seed(seed)
     idx = randint(len(x), size=(1000, len(x)))
     bx = x[idx]
     by = y[idx]
@@ -130,9 +148,14 @@ def bootstrap_correlation(x, y):
     my = mean(by, 1)
     sx = std(bx, 1)
     sy = std(by, 1)
+    # E-M51: std defaults to ddof=0 (population std), so the denominator
+    # must be n, not n-1 — the old (n-1) denominator mixed a population
+    # std with a sample covariance, biasing r by n/(n-1) (can exceed 1.0
+    # → arctanh NaN). Matches corr_coef's F-46 population convention
+    # (statistics.py corr_coef: n * sqrt(var_x * var_y)).
     r = sort(sum((bx - mx.repeat(len(x), 0).reshape(bx.shape)) *
                  (by - my.repeat(len(y), 0).reshape(by.shape)), 1)
-             / ((len(x) - 1) * sx * sy))
+             / (len(x) * sx * sy))
     # bootstrap confidence interval (NB! biased)
     conf_interval = (r[25], r[975])
     # bootstrap standard error using Fisher's z-transform (NB! biased)

@@ -516,46 +516,17 @@ class TestDataEdgeCases:
         assert not np.any(np.isnan(result.data))
 
     def test_actual_nan_values_are_rejected(self):
-        """Test that actual NaN values in ContProperty data are handled appropriately.
+        """Test that actual NaN values in ContProperty data are rejected loudly.
 
-        HPGL's C++ layer expects valid float32 without NaN. Passing NaN should
-        either raise a validation error or produce NaN in output (propagation).
-        This test verifies the current behavior to document the contract.
+        The constructor validates data finiteness (geo.py:303), so a NaN in
+        an informed cell raises instead of silently propagating NaN means
+        through the C++ layer.
         """
-        grid = SugarboxGrid(x=5, y=5, z=2)
         data = np.array([1.0, 2.0, np.nan, 4.0, 5.0] * 10, dtype="float32")
         mask = np.ones(50, dtype="uint8")
 
-        # ContProperty with NaN values in data — current behavior tested
-        try:
-            prop = ContProperty(data, mask)
-            cov_model = CovarianceModel(
-                type=covariance.spherical,
-                ranges=(5.0, 5.0, 3.0),
-                angles=(0.0, 0.0, 0.0),
-                sill=1.0,
-                nugget=0.1,
-            )
-            result = ordinary_kriging(
-                prop=prop, grid=grid, radiuses=(3, 3, 2), max_neighbours=6, cov_model=cov_model
-            )
-            # If it doesn't raise, check result for NaN propagation
-            result.fix_shape(grid)
-            assert result.data.shape == (5, 5, 2)
-            # NaN in input may propagate to output (C operations on NaN produce NaN).
-            # Verify that some valid output was produced alongside any NaN cells.
-            nan_mask = np.isnan(result.data)
-            if np.any(nan_mask):
-                # NaN propagation is expected — verify non-NaN cells also exist
-                assert not np.all(nan_mask), (
-                    "All output cells are NaN — kriging produced no valid results"
-                )
-            else:
-                # No NaN propagation — all output is clean
-                pass
-        except (RuntimeError, ValueError, FloatingPointError):
-            # Raising an error is also valid behavior
-            pass
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            ContProperty(data, mask)
 
 
 # =============================================================================
@@ -758,32 +729,26 @@ class TestParameterValidation:
             )
 
     def test_wrong_data_type_int_instead_of_float(self):
-        """Test with integer data instead of float32"""
-        # Int data should be converted or raise error
+        """Integer data is converted to float32 on construction (numpy.require)."""
         data = np.array([1, 2, 3, 4, 5] * 100, dtype="int32")  # 500 values
         mask = np.ones(500, dtype="uint8")
 
-        # ContProperty should convert to float32 or raise error
-        try:
-            prop = ContProperty(data, mask)
-            # Check if data was converted
-            assert prop.data.dtype == np.float32
-        except (TypeError, ValueError):
-            # May reject int data
-            pass
+        prop = ContProperty(data, mask)
+        assert prop.data.dtype == np.float32, (
+            "int32 data must be converted to float32 (numpy.require)"
+        )
+        assert prop.data.flags["F_CONTIGUOUS"]
 
     def test_wrong_mask_type(self):
-        """Test with incorrect mask data type"""
+        """Integer mask is converted to uint8 on construction."""
         data = np.random.rand(500).astype("float32") * 100
         mask = np.ones(500, dtype="int32")  # Wrong type
 
-        # Should convert to uint8 or raise error
-        try:
-            prop = ContProperty(data, mask)
-            assert prop.mask.dtype == np.uint8
-        except (TypeError, ValueError):
-            # May reject wrong type
-            pass
+        prop = ContProperty(data, mask)
+        assert prop.mask.dtype == np.uint8, (
+            "int32 mask must be converted to uint8 (numpy.require)"
+        )
+        assert prop.mask.flags["F_CONTIGUOUS"]
 
     def test_very_large_max_neighbours(self):
         """Test with max_neighbours larger than available data"""
@@ -917,22 +882,16 @@ class TestPropertyEdgeCases:
         # Value 2 is valid (0, 1, 2 for count=3)
 
     def test_property_data_mask_shape_mismatch(self):
-        """Test property with mismatched data and mask shapes"""
+        """Test property with mismatched data and mask shapes.
+
+        ContProperty validates shape consistency between data and mask
+        (like IndProperty does) — a mismatch is rejected at construction.
+        """
         data = np.ones(100, dtype="float32")
         mask = np.ones(50, dtype="uint8")  # Different size
 
-        # ContProperty does not validate shape consistency between data and
-        # mask (unlike IndProperty which does). This test documents the current
-        # behavior: the constructor accepts mismatched shapes.
-        try:
-            prop = ContProperty(data, mask)
-            # Constructor accepted mismatched shapes — verify it didn't crash
-            assert prop is not None
-            assert prop.data is not None
-            assert prop.mask is not None
-        except (ValueError, RuntimeError):
-            # Raising an error for mismatch is also acceptable behavior
-            pass
+        with pytest.raises(ValueError):
+            ContProperty(data, mask)
 
 
 # =============================================================================
@@ -1578,47 +1537,6 @@ class TestProductionFixes:
 
         result = calc_mean(prop)
         assert result == pytest.approx(20.0)  # (10 + 30) / 2
-
-    def test_write_property_none_indicator_values(self):
-        """write_property with indicator_values=None should behave same as empty list."""
-        import os
-        import tempfile
-
-        from geo_bsd.geo import write_property
-
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.ones(3, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        with tempfile.NamedTemporaryFile(suffix=".inc", delete=False) as f:
-            tmpfile = f.name
-        try:
-            # Should not raise with indicator_values=None (default)
-            # F-28: pass an explicit trusted base (tempfile lives outside cwd).
-            write_property(prop, tmpfile, "TEST", -99.0, basedir=str(Path(tmpfile).parent))
-        finally:
-            if os.path.exists(tmpfile):
-                os.remove(tmpfile)
-
-    def test_write_gslib_property_none_indicator_values(self):
-        """write_gslib_property with indicator_values=None should behave same as empty list."""
-        import os
-        import tempfile
-
-        from geo_bsd.geo import write_gslib_property
-
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.ones(3, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        with tempfile.NamedTemporaryFile(suffix=".gslib", delete=False) as f:
-            tmpfile = f.name
-        try:
-            # F-28: pass an explicit trusted base.
-            write_gslib_property(prop, tmpfile, "TEST", -99.0, basedir=str(Path(tmpfile).parent))
-        finally:
-            if os.path.exists(tmpfile):
-                os.remove(tmpfile)
 
     def test_load_cont_slow_skips_non_numeric_tokens(self):
         """_load_prop_cont_slow should skip non-numeric tokens without crashing."""

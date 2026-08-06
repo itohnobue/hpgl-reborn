@@ -41,6 +41,9 @@ class SGSConfig:
         Default: ``0``.
     max_neighbours : int
         Maximum number of neighbour points to use for kriging.
+        ``0`` selects the C++-documented "unconditional simulation"
+        mode (every node simulated from the marginal distribution
+        alone — api.cpp ``validate_max_neighbours_or_throw``).
         Default: ``12``.
     radiuses : tuple
         Search radiuses in (X, Y, Z) directions.  Each value must be
@@ -98,9 +101,15 @@ class SGSConfig:
                 f"SGSConfig: max_neighbours must be an int, "
                 f"got {type(self.max_neighbours).__name__}"
             )
-        if self.max_neighbours < 1:
+        # R-05/E-M9: max_neighbours=0 is the C++-documented "unconditional
+        # simulation" mode (api.cpp validate_max_neighbours_or_throw accepts
+        # 0; kriging entries use a separate >=1 gate). The direct-kwarg path
+        # (sgs.py:230-232, validate_kriging_params min_neighbors=0) already
+        # accepts it, so the config API must too — only negative values are
+        # invalid (the C++ side rejects < 0 as well).
+        if self.max_neighbours < 0:
             raise ValueError(
-                f"SGSConfig: max_neighbours must be positive, "
+                f"SGSConfig: max_neighbours must be non-negative, "
                 f"got {self.max_neighbours}"
             )
         # M-20: hard-reject above the C++ engine's upper bound (api.cpp
@@ -173,6 +182,9 @@ class SISConfig:
         Default: ``0``.
     max_neighbours : int
         Maximum number of neighbour points to use for kriging.
+        ``0`` selects the C++-documented "unconditional simulation"
+        mode (every node simulated from the marginal distribution
+        alone — api.cpp ``validate_max_neighbours_or_throw``).
         Default: ``12``.
     radiuses : tuple
         Search radiuses in (X, Y, Z) directions.  Each value must be
@@ -214,9 +226,15 @@ class SISConfig:
                 f"SISConfig: max_neighbours must be an int, "
                 f"got {type(self.max_neighbours).__name__}"
             )
-        if self.max_neighbours < 1:
+        # R-05/E-M9: max_neighbours=0 is the C++-documented "unconditional
+        # simulation" mode (api.cpp validate_max_neighbours_or_throw accepts
+        # 0; kriging entries use a separate >=1 gate). The direct-kwarg path
+        # (sis.py:201-203, validate_max_neighbors min_neighbors=0) already
+        # accepts it, so the config API must too — only negative values are
+        # invalid (the C++ side rejects < 0 as well).
+        if self.max_neighbours < 0:
             raise ValueError(
-                f"SISConfig: max_neighbours must be positive, "
+                f"SISConfig: max_neighbours must be non-negative, "
                 f"got {self.max_neighbours}"
             )
         # M-20: hard-reject above the C++ engine's upper bound (api.cpp

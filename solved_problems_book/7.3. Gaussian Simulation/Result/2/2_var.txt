@@ -1,6 +1,6 @@
-Arithmetic variance: 3.23284634677
-Geometric variance: 3.26164002852
-Harmonic variance: 3.29291846535
+Arithmetic variance: 3.23284599240
+Geometric variance: 3.26164018456
+Harmonic variance: 3.29291754385
 Point scale variance: 3.61991197546
 var_back_krigged_transformed_data: 3.82252807617
 The diff_variance between point scale and kriged values: -0.202616100712

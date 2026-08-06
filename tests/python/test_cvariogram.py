@@ -275,6 +275,9 @@ class TestCalcVariograms:
         )
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data, percent=100)
+        # C-03: percent=100 must produce real lag data (boundary admission,
+        # not an empty/no-op result).
+        assert len(lags) == len(variogram) >= 1
 
     def test_percent_zero_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)

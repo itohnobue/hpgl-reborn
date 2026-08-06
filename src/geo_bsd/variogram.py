@@ -104,9 +104,18 @@ class TVEllipsoid:
     R3 = 1
 
     def __init__(self, R1, R2, R3, Azimut=0, Dip=0, Rotation=0):
-        if not math.isfinite(R1) or R1 < 0 or not math.isfinite(R2) or R2 < 0 or not math.isfinite(R3) or R3 < 0:
+        # E-M8: reject R <= 0, not just R < 0, to match the C++ kernel which
+        # rejects non-positive ranges (variograms.cpp is_in_tunnel accepts no
+        # pairs for a zero range). The previous four Python paths diverged on
+        # R=0: accept here / ContStyle warn + silent all-zero / GridStyle +
+        # CubeScan raise — one consistent loud rejection at construction
+        # (the single chokepoint every scan path shares via the template)
+        # replaces the divergent behaviors. (The _IsInTunnel zero-range guard
+        # remains as defense for direct attribute mutation, which bypasses
+        # this constructor.)
+        if not math.isfinite(R1) or R1 <= 0 or not math.isfinite(R2) or R2 <= 0 or not math.isfinite(R3) or R3 <= 0:
             raise ValueError(
-                f"TVEllipsoid: ranges must be finite and non-negative, "
+                f"TVEllipsoid: ranges must be finite and positive, "
                 f"got R1={R1!r}, R2={R2!r}, R3={R3!r}"
             )
         if not math.isfinite(Azimut) or not math.isfinite(Dip) or not math.isfinite(Rotation):
@@ -505,6 +514,10 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     # distance, which can exceed the projection and would wrongly discard
     # pairs that belong to a lag band under the projection metric.
     D1 = VariogramSearchTemplate.Ellipsoid.Direction1
+    # E2-30: the D2/D3 axes are needed for the hemisphere tie-break below
+    # (perpendicular-pair canonical cut); fetched once per scan.
+    D2 = VariogramSearchTemplate.Ellipsoid.Direction2
+    D3 = VariogramSearchTemplate.Ellipsoid.Direction3
     MinDistance = max(0, LagStart.min())
     MaxDistance = LagEnd.max()
 
@@ -555,6 +568,42 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         FDX, FDY, FDZ = FDX[SelfPairFilter], FDY[SelfPairFilter], FDZ[SelfPairFilter]
         FIndex = FIndex[SelfPairFilter]
         FDistance = FDistance[SelfPairFilter]
+
+        # E2-30: hemisphere-restrict the window in the rotated frame. The
+        # axis-aligned search window (the AABB of the rotated +Direction1
+        # corners) admits BOTH +v and -v offsets for pairs whose offset is
+        # (near-)perpendicular to Direction1 — both endpoints' offsets fall
+        # in the box's central overlap region — so those pairs were counted
+        # twice (once from each endpoint) while every other pair counted
+        # once: non-uniform pair weighting under rotated ellipsoids (6/89
+        # pairs double-counted at azimuth=45°; uniform at 0°). The C++
+        # point-set scan has no window and counts every ordered pair
+        # uniformly (variograms.cpp:886-915), so uniform weighting is the
+        # parity target. The hemisphere cut admits only the +Direction1
+        # endpoint — each unordered pair is counted exactly once — with a
+        # canonical (dot2, dot3) tie-break for the exact dot == 0 boundary
+        # so perpendicular pairs remain counted (once, not dropped).
+        # R-08: a zero-distance pair between DISTINCT coincident points
+        # (identical coordinates) has Signed==Signed2==Signed3==0, so the
+        # tie-break admits NEITHER endpoint and the pair is dropped
+        # entirely (counted 0x), while the C++ kernel counts it
+        # (variograms.cpp:913 skips only idx1==idx2). The SelfPairFilter
+        # above already removed the true self-pair, so every remaining zero
+        # offset is a distinct coincident point; admit it from exactly one
+        # endpoint (canonical index tie-break FIndex > i) so the pair
+        # counts once, preserving the once-per-unordered-pair invariant.
+        # When FirstLagDistance > 0 the MinDistance band filter above has
+        # already excluded zero offsets, so this admission is inert there.
+        Signed = FDX * D1[0] + FDY * D1[1] + FDZ * D1[2]
+        Signed2 = FDX * D2[0] + FDY * D2[1] + FDZ * D2[2]
+        Signed3 = FDX * D3[0] + FDY * D3[1] + FDZ * D3[2]
+        ZeroOffset = (FDX == 0) & (FDY == 0) & (FDZ == 0)
+        Hemisphere = (ZeroOffset & (FIndex > i)) | (Signed > 0) | (
+            (Signed == 0) & ((Signed2 > 0) | ((Signed2 == 0) & (Signed3 > 0)))
+        )
+        FDX, FDY, FDZ = FDX[Hemisphere], FDY[Hemisphere], FDZ[Hemisphere]
+        FIndex = FIndex[Hemisphere]
+        FDistance = FDistance[Hemisphere]
 
         Filter = _IsInTunnel(VariogramSearchTemplate, column_stack((FDX, FDY, FDZ)))
 
@@ -627,6 +676,10 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
     # matching below was replaced by continuous band binning so fractional
     # grid spacing (0.5/0.25 m) is binned like integer spacing.
     D1 = VariogramSearchTemplate.Ellipsoid.Direction1
+    # E2-30: the D2/D3 axes are needed for the hemisphere tie-break below
+    # (perpendicular-pair canonical cut); fetched once per scan.
+    D2 = VariogramSearchTemplate.Ellipsoid.Direction2
+    D3 = VariogramSearchTemplate.Ellipsoid.Direction3
     _, LagDistance, LagStart, LagEnd = _CalcLagDistances(VariogramSearchTemplate)
 
     # Validate coordinate arrays for NaN/Inf (F-046)
@@ -682,6 +735,34 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
 
         FDI, FDJ, FDK = DI[Filter], DJ[Filter], DK[Filter]
         FIndex = Index[Filter]
+
+        # E2-30: hemisphere-restrict the window in the rotated frame — same
+        # defect and fix as PointSetScanContStyle: under rotation the
+        # axis-aligned window box admits BOTH +v and -v offsets for
+        # (near-)perpendicular pairs, double-counting them, while the C++
+        # point-set scan (no window) counts every ordered pair uniformly
+        # (variograms.cpp:886-915). Admitting only the +Direction1 endpoint
+        # (canonical (dot2, dot3) tie-break at the exact dot == 0 boundary)
+        # makes every unordered pair count exactly once.
+        # R-08: zero-distance pairs between DISTINCT coincident points
+        # (identical coordinates) have all-zero dots, so the tie-break
+        # admits neither endpoint and the pair is dropped (counted 0x),
+        # while the C++ kernel counts it (variograms.cpp:913 skips only
+        # idx1==idx2). The (0,0,0) offset is in the lag-area window when
+        # the first lag band includes distance 0, so admit zero offsets
+        # from exactly one endpoint (canonical index tie-break FIndex > i):
+        # the true self-pair (FIndex == i) stays excluded and each distinct
+        # coincident pair counts once. Inert when the lag bands exclude
+        # distance 0.
+        Signed = FDI * D1[0] + FDJ * D1[1] + FDK * D1[2]
+        Signed2 = FDI * D2[0] + FDJ * D2[1] + FDK * D2[2]
+        Signed3 = FDI * D3[0] + FDJ * D3[1] + FDK * D3[2]
+        ZeroOffset = (FDI == 0) & (FDJ == 0) & (FDK == 0)
+        Hemisphere = (ZeroOffset & (FIndex > i)) | (Signed > 0) | (
+            (Signed == 0) & ((Signed2 > 0) | ((Signed2 == 0) & (Signed3 > 0)))
+        )
+        FDI, FDJ, FDK = FDI[Hemisphere], FDJ[Hemisphere], FDK[Hemisphere]
+        FIndex = FIndex[Hemisphere]
 
         # III-15: continuous (tolerance-based) lag binning by the
         # directional projection onto the principal anisotropy axis,
@@ -926,7 +1007,13 @@ def CalcVariogramFunction(Point1, Point2, Result, Params):
         for i in range(NumValues):
             Values1[i] = numpy.take(Values[i], P1)
             Values2[i] = numpy.take(Values[i], P2)
-        Variances = float32(Values1 - Values2) ** 2
+        # E-M10: accumulate in float64, matching the C++ kernel which sums in
+        # double (variograms.cpp:706-708). The previous float32 cast of the
+        # per-pair differences BEFORE squaring/summing silently diverged on
+        # cross-magnitude data (e.g. permeability spans 6-8 orders). Result
+        # slots are float64, so no downcast is needed — the sum lands in the
+        # accumulator at full precision.
+        Variances = (Values1 - Values2) ** 2
         Result[NumValues + 0 : NumValues + NumValues] = Result[
             NumValues + 0 : NumValues + NumValues
         ] + Variances.sum(axis=1)
@@ -994,7 +1081,10 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
             Values2[i] = numpy.take(Values[i], P2)
             SoftValues1[i] = numpy.take(SoftData[i], P1)
             SoftValues2[i] = numpy.take(SoftData[i], P2)
-        Covariances = float32((Values1 - SoftValues1) * (Values2 - SoftValues2))
+        # E-M10: accumulate in float64 (the C++ kernel sums in double,
+        # variograms.cpp:706-708). The float32 cast before the product+sum
+        # silently diverged on cross-magnitude data.
+        Covariances = (Values1 - SoftValues1) * (Values2 - SoftValues2)
         Result[NumValues + 0 : NumValues + NumValues] = (
             Result[NumValues + 0 : NumValues + NumValues] + Covariances.sum(axis=1)
         )
@@ -1088,7 +1178,10 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
         # so masking after division would still warn on invalid entries).
         with numpy.errstate(divide="ignore", invalid="ignore"):
             raw = (Values1 - SoftValues1) * (Values2 - SoftValues2) / denom
-        Covariances = numpy.where(valid, raw, 0.0).astype(float32)
+        # E-M10: keep the float64 accumulation (the C++ kernel sums in
+        # double, variograms.cpp:706-708). The .astype(float32) downcast
+        # before the sum silently diverged on cross-magnitude indicator data.
+        Covariances = numpy.where(valid, raw, 0.0)
         Result[NumValues + 0 : NumValues + NumValues] = (
             Result[NumValues + 0 : NumValues + NumValues] + Covariances.sum(axis=1)
         )

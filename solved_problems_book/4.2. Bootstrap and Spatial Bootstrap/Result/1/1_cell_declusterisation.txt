@@ -1,5 +1,5 @@
 ----------------------------------------------------
-Porosity mean = 8.40197517019
-Porosity mean with cell declustering = 8.20568171395
-Porosity variance with cell declustering = 1.85087882609
-Difference between means =  0.196293456243
+Porosity mean = 8.401975170193548
+Porosity mean with cell declustering = 8.205681713950625
+Porosity variance with cell declustering = 3.4257524288842007
+Difference between means =  0.19629345624292327

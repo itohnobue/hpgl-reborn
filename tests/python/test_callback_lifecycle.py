@@ -174,7 +174,9 @@ class TestCallbackException:
             )
         except (ValueError, RuntimeError):
             pass
-        # System survived the exception
+        # The fact that we got here without segfault is the main assertion
+        # Verify the progress handler was called (mirror :108-147).
+        assert call_count[0] >= 1
 
 
 @pytest.mark.hpgl

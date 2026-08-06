@@ -1,10 +1,20 @@
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+# F-47 pattern: geo_bsd lives in the repo's src/ directory (it is not
+# installed in the environment); without this the
+# `from geo_bsd import simple_kriging_weights` below fails with
+# ModuleNotFoundError.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 import numpy as np
 import matplotlib.pyplot as plt
 from grid_3d import *
+
+# E-M27: simple_kriging_weights IS available in geo_bsd (geo.py:2394,
+# exported from geo_bsd.__init__:150) — the old comment claiming it is
+# "not available in the new geo_bsd API" was false.
+from geo_bsd import simple_kriging_weights
 
 # Inverse distance weighting calculation
 def w_idw(Grid, PointSet, c, nx, ny, nz):
@@ -18,9 +28,18 @@ def w_idw(Grid, PointSet, c, nx, ny, nz):
 					widw[q] = widw[q] + ww_idw[q]
 	return widw
 
-# Kriging weights calculation (requires simple_kriging_weights - not available in geo_bsd)
-# def w_kriging(Grid, PointSet):
-# 	...
+# Kriging declustering: for every grid-cell centre, compute the simple kriging
+# weights of all data points at that centre (geo_bsd.simple_kriging_weights) and
+# accumulate them. Weights are standardized by the caller (stand_weight).
+def w_kriging(Grid, PointSet, ranges=(300, 300, 300)):
+	wsk = np.zeros(len(PointSet[0]), dtype=float)
+	for i in range(Grid.i_max):
+		for j in range(Grid.j_max):
+			for k in range(Grid.k_max):
+				x_center, y_center, z_center = get_center_points(i, j, k, Grid.nx, Grid.ny, Grid.nz, min(PointSet[0]), min(PointSet[1]), min(PointSet[2]))
+				ww = simple_kriging_weights((x_center, y_center, z_center), PointSet[0], PointSet[1], PointSet[2], ranges=ranges)
+				wsk = wsk + ww
+	return wsk
 
 #Drawing bar
 def bar_show(w_cell, wsk, widw, x):

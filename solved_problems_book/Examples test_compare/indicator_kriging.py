@@ -44,6 +44,10 @@ plt.imshow(ik_result[0][:, :, 0], vmin=0, vmax=2)
 plt.savefig("IK_result")
 
 plt.figure()
-plt.hist(ik_result[0].compress((ik_result[0] != -99).flat), bins=20)
+# E-M31: the `!= -99` filter was a no-op on this uint8 property (the
+# sentinel is 255, and -99 does not fit uint8, so numpy's promotion made
+# the comparison true for every cell).  Use the mask-based filter
+# (ik_result[1] != 0), matching the correct sibling pattern above.
+plt.hist(ik_result[0].compress((ik_result[1] != 0).flat), bins=20)
 plt.title("Histogram of Indicator Kriging Result")
 plt.show()

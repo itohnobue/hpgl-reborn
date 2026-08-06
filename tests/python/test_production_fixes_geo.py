@@ -998,7 +998,7 @@ class TestR06SampleScriptDataPaths:
         "test_gtsimk1.py": ("cont", "BIG_SOFT_DATA_160_141_20.INC", (166, 141, 20), -99),
         "test_prop2array.py": ("ind", "NEW_TEST_PROP_01.INC", (286, 10, 1), -99),
         "ntg_calc_hist.py": ("ind", "NEW_TEST_PROP_01.INC", (286, 10, 1), -99),
-        "mean_calc_hist.py": ("cont", "NEW_TEST_PROP_01.INC", (286, 10, 1), -99),
+        "mean_calc_hist.py": ("cont", "BIG_SOFT_DATA_CON_160_141_20.INC", (166, 141, 20), -99),
     }
 
     @staticmethod

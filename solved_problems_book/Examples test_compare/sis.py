@@ -36,7 +36,12 @@ plt.imshow(data[0][:, :, 0], vmin=0, vmax=2)
 plt.savefig("hard_data")
 
 plt.figure()
-plt.hist(data[0].compress((data[0] != -99).flat), bins=20)
+# E-M31: the `!= -99` filter was a no-op on this uint8 property (the
+# sentinel is 255, and -99 does not fit uint8, so numpy's promotion made
+# the comparison true for every cell — the "Histogram of Harddata" was a
+# spike at 255).  Use the mask-based filter (data[1] != 0), matching the
+# correct sibling pattern in indicator_kriging.py.
+plt.hist(data[0].compress((data[1] != 0).flat), bins=20)
 plt.title("Histogram of Harddata")
 
 plt.figure()
@@ -44,6 +49,6 @@ plt.imshow(sis_result[0][:, :, 0], vmin=0, vmax=2)
 plt.savefig("SIS_result")
 
 plt.figure()
-plt.hist(sis_result[0].compress((sis_result[0] != -99).flat), bins=20)
+plt.hist(sis_result[0].compress((sis_result[1] != 0).flat), bins=20)
 plt.title("Histogram of SIS Result")
 plt.show()

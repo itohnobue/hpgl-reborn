@@ -59,11 +59,15 @@ class ValidationConstants:
     MIN_NEIGHBORS = 1
     MAX_NEIGHBORS = 1000
     # Hard upper bound aligned with the C++ API (api.cpp
-    # MAX_NEIGHBOURS_UPPER_BOUND = 100000, simple_cokriging_markI.cpp
-    # build_system: ms > 100000). Values above this are hard-rejected here
-    # so the Python surface fails fast with a clear error instead of a late
-    # RuntimeError from the C++ engine (M-20).
-    MAX_NEIGHBORS_HARD_LIMIT = 100000
+    # MAX_NEIGHBOURS_UPPER_BOUND = 10000 — the NEIGHBOUR_WORK_CAP the
+    # lookup paths honor as the effective scan/result cap; E2-145/E-M85:
+    # the previous 100000 admitted per-node matrices of 80-240 GB +
+    # ~3.3e14 flop solves while the lookup silently capped the count at
+    # 4913, and simple_cokriging_markI.cpp build_system guards at
+    # 10001 = cap + 1 for the secondary equation). Values above this are
+    # hard-rejected here so the Python surface fails fast with a clear
+    # error instead of a late RuntimeError from the C++ engine (M-20).
+    MAX_NEIGHBORS_HARD_LIMIT = 10000
     DEFAULT_MAX_NEIGHBORS = 12
 
     # Radius limits
@@ -681,12 +685,22 @@ class ParameterValidator:
         return (int(vals[0]), int(vals[1]), int(vals[2]))
 
     @staticmethod
-    def validate_max_neighbors(max_neighbors: int) -> None:
+    def validate_max_neighbors(
+        max_neighbors: int, min_neighbors: int | None = None
+    ) -> None:
         """
         Validates maximum number of neighbors.
 
         Args:
             max_neighbors: Maximum number of neighbors
+            min_neighbors: Optional lower-bound override. Defaults to
+                ``ValidationConstants.MIN_NEIGHBORS`` (1). Kriging entry
+                points keep the default (a zero-neighbour kriging search
+                is an empty system), while the simulation entry points
+                (SGS/SIS) pass ``0`` to admit the C++-documented
+                "unconditional simulation" mode (api.cpp:144-167,
+                validate_max_neighbours_or_throw allows 0; kriging entries
+                use a separate >=1 gate).
 
         Raises:
             TypeError: If max_neighbors is not an int (bool excluded).
@@ -698,19 +712,22 @@ class ParameterValidator:
                 f"max_neighbors must be an int, got {type(max_neighbors).__name__}"
             )
 
-        if max_neighbors < ValidationConstants.MIN_NEIGHBORS:
+        if min_neighbors is None:
+            min_neighbors = ValidationConstants.MIN_NEIGHBORS
+        if max_neighbors < min_neighbors:
             raise CriticalValidationError(
-                f"Max neighbors {max_neighbors} is less than minimum {ValidationConstants.MIN_NEIGHBORS}",
+                f"Max neighbors {max_neighbors} is less than minimum {min_neighbors}",
                 "max_neighbors",
             )
 
         # M-20: hard-reject above the C++ engine's upper bound. The C++ API
-        # rejects m_max_neighbours > 100000 at every kriging/simulation entry
-        # point (api.cpp MAX_NEIGHBOURS_UPPER_BOUND), so accepting such values
-        # in Python only defers the failure to a late, harder-to-read
-        # RuntimeError from deep inside the C++ call. Reject here with the
-        # same bound and a clear message. MAX_NEIGHBORS (1000) remains a
-        # performance-guidance warning threshold.
+        # rejects m_max_neighbours > 10000 at every kriging/simulation entry
+        # point (api.cpp MAX_NEIGHBOURS_UPPER_BOUND — the lookup's
+        # NEIGHBOUR_WORK_CAP), so accepting such values in Python only defers
+        # the failure to a late, harder-to-read RuntimeError from deep inside
+        # the C++ call. Reject here with the same bound and a clear message.
+        # MAX_NEIGHBORS (1000) remains a performance-guidance warning
+        # threshold.
         if max_neighbors > ValidationConstants.MAX_NEIGHBORS_HARD_LIMIT:
             raise CriticalValidationError(
                 f"Max neighbors {max_neighbors} exceeds the maximum allowed "
@@ -1075,6 +1092,13 @@ def validate_kriging_params(*args, **kwargs):
     ``ValidationConstants.MIN_KRIGING_RADIUS`` so zero-radius kriging
     (which silently mean-fills) is rejected while SGS zero-radius
     CDF-draw keeps working.
+
+    An optional ``min_neighbors`` keyword is forwarded to
+    ``ParameterValidator.validate_max_neighbors``. Defaults to
+    ``ValidationConstants.MIN_NEIGHBORS`` (1) — the kriging entries keep
+    the default; the SGS simulation entry passes ``0`` so the
+    C++-documented "unconditional simulation" mode (api.cpp:144-167) is
+    reachable (E-M9).
     """
     if len(args) == 1 and callable(args[0]) and not kwargs:
         # --- decorator mode ---
@@ -1090,7 +1114,9 @@ def validate_kriging_params(*args, **kwargs):
             if "max_neighbours" in kw or "max_neighbors" in kw:
                 n = kw.get("max_neighbours", kw.get("max_neighbors"))
                 if n is not None:
-                    ParameterValidator.validate_max_neighbors(n)
+                    ParameterValidator.validate_max_neighbors(
+                        n, min_neighbors=kw.get("min_neighbors")
+                    )
             if "cov_model" in kw:
                 cm = kw["cov_model"]
                 ParameterValidator.validate_covariance_parameters(
@@ -1106,6 +1132,7 @@ def validate_kriging_params(*args, **kwargs):
     max_neighbours = kwargs.get("max_neighbours", args[2] if len(args) > 2 else None)
     cov_model = kwargs.get("cov_model", args[3] if len(args) > 3 else None)
     min_radius = kwargs.get("min_radius", None)
+    min_neighbors = kwargs.get("min_neighbors", None)
 
     if grid is not None:
         validate_grid_params(grid)
@@ -1115,7 +1142,9 @@ def validate_kriging_params(*args, **kwargs):
             radiuses, "radiuses", min_radius=min_radius
         )
     if max_neighbours is not None:
-        ParameterValidator.validate_max_neighbors(max_neighbours)
+        ParameterValidator.validate_max_neighbors(
+            max_neighbours, min_neighbors=min_neighbors
+        )
     if cov_model is not None:
         ParameterValidator.validate_covariance_parameters(
             cov_model.sill, cov_model.nugget, cov_model.ranges, cov_model.angles
@@ -1203,7 +1232,12 @@ def validate_property_name(name: str, func_name: str = "validate_property_name")
       - no leading or trailing whitespace (readers skip whitespace-leading
         lines, silently shifting the data off-by-one);
       - does not start with ``"--"`` (comment marker skipped by readers) or
-        ``"/"`` (INC end-of-data marker).
+        ``"/"`` (INC end-of-data marker);
+      - at most 1024 UTF-8 bytes (MAX_PROP_NAME_LENGTH in the C++ fast
+        reader, ``read_prop_name`` / load_property_from_file.cpp) — the
+        reader throws on longer names, so the writer must not produce
+        files the reader rejects (E-M72). Byte length (not code points)
+        matches the C++ ``name.size()`` cap and the FFI UTF-8 encoding.
     Internal spaces and non-ASCII UTF-8 are allowed.
 
     Args:
@@ -1218,6 +1252,16 @@ def validate_property_name(name: str, func_name: str = "validate_property_name")
     """
     if not isinstance(name, str) or not name:
         raise ValueError(f"{func_name}: property name must be a non-empty string")
+
+    # E-M72: length cap consistent with the C++ fast reader's
+    # MAX_PROP_NAME_LENGTH (1024 bytes, load_property_from_file.cpp
+    # read_prop_name). The FFI encodes the name as UTF-8, so the cap is
+    # measured in bytes to match the C++ name.size() check exactly.
+    if len(name.encode("utf-8")) > 1024:
+        raise ValueError(
+            f"{func_name}: property name {name!r} exceeds maximum length "
+            f"(1024 bytes)"
+        )
 
     if name.startswith("--"):
         raise ValueError(

@@ -29,7 +29,12 @@ sk_params = {
     "radiuses": (20, 20, 20),
     "max_neighbours": 12,
     "cov_model": cov,
-    "mean": 1.6,
+    # E-M14: the SK mean must be a valid probability for 0/1 indicator
+    # data (BIG_SOFT_DATA_160_141_20.INC holds only {-99, 0, 1}). The old
+    # mean=1.6 made no-neighbour cells get pk=1.6 and Σw<1 cells pk>1 →
+    # inverse_normal_score clamps at 10 → sparse regions collapsed to
+    # facies 0. 0.5 is the data's marginal probability.
+    "mean": 0.5,
 }
 
 indicator = 3

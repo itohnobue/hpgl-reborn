@@ -30,8 +30,14 @@ def mean_calc_hist(x, y, z, n, prop):
     # repo (deleted 6e6ae94, restored verbatim 761f9d5) and the workflow
     # failed with CriticalValidationError. The real data file is
     # NEW_TEST_PROP_01.INC under tests/python/test_data/.
+    # E2-50: NEW_TEST_PROP_01.INC has only two informed unique values (0/1),
+    # so calc_cdf produces a 2-point CDF and the normal-score transform
+    # standardizes to variance ≈7.3 against the model sill 1.0 — realization
+    # means came out high-biased (E[value]≈0.96 vs data mean 0.55). Use the
+    # repo's continuous sample property (many unique values → a proper
+    # multi-point empirical CDF, the library transform's intended input).
     prop = load_cont_property(
-        os.path.join(TEST_DATA_DIR, "NEW_TEST_PROP_01.INC"), -99, (x, y, z)
+        os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_CON_160_141_20.INC"), -99, (x, y, z)
     )
     print("Done.\n")
 
@@ -68,3 +74,12 @@ def mean_calc_hist(x, y, z, n, prop):
         del sgs_result_prop
     plt.hist(ntg1, histtype='bar', orientation='vertical')
     plt.show()
+
+
+if __name__ == "__main__":
+    # E2-46: mean_calc_hist() was never invoked — running the script was a
+    # silent no-op. Run the documented workflow: 10 SGS realizations of the
+    # continuous sample property (166×141×20 = 468,120 cells) and histogram
+    # the realization means. The E2-50 fix (continuous data → multi-point
+    # CDF) makes this resurrected workflow statistically sound.
+    mean_calc_hist(166, 141, 20, 10, None)

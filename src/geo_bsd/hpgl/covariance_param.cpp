@@ -8,7 +8,14 @@ namespace hpgl
 {
 	covariance_param_t::covariance_param_t()
 	{
-		m_sill = 0;
+		// E-M63: the default sill must be a valid positive value (the
+		// set_sill invariant), not 0.  With sill=0 the natural call order
+		// `covariance_param_t p; p.set_nugget(0.5);` deterministically
+		// threw "nugget must be <= sill" although the eventual state
+		// (sill 1.0, nugget 0.5) would have been valid.  The default is
+		// overwritten by callers that configure explicitly; a bare
+		// default-constructed object is now valid (validate() passes).
+		m_sill = 1.0;
 		m_nugget = 0;
 		m_covariance_type = covariance_type_t::COV_SPHERICAL;
 		// Default to unit range (1,1,1) — range=0 is rejected by
@@ -52,6 +59,14 @@ namespace hpgl
 	{
 		if (!std::isfinite(sill) || sill <= 0.0)
 			throw hpgl_exception("covariance_param_t::set_sill", "sill must be > 0 and finite");
+		// E-M63: enforce the nugget <= sill cross-invariant here as well,
+		// so `set_sill` after `set_nugget` cannot silently leave an
+		// invalid state (nugget > sill).  With both setters enforcing the
+		// invariant against the current state, every setter sequence is
+		// order-independent: it either produces a valid state or throws
+		// loudly at the offending call.
+		if (m_nugget > sill)
+			throw hpgl_exception("covariance_param_t::set_sill", "sill must be >= nugget");
 		m_sill = sill;
 	}
 

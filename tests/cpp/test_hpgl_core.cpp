@@ -1426,14 +1426,14 @@ void test_sgs_ok_downgraded_estimate_has_no_mean_term() {
 // R-6: the plain-lookup pure-nugget fallback (2-M-32) must be BOUNDED. The
 // covariance-threshold offset list for a pure-nugget model is empty, so the
 // fallback fires per find(); pre-fix it iterated the FULL (2r+1)³ box per
-// node — an effectively-infinite loop for large radii on sparse grids (the
-// round-1 fix comment conflated the construction-time calc_cov_field scan
-// with this find-time scan). The fix caps the per-direction window at 8
-// cells: neighbours beyond the window are NOT admitted (bounded work),
-// neighbours inside it still are (the 2-M-32 kriging behavior is preserved
-// for realistic radii).
+// node — an effectively-infinite loop for large radii on sparse grids. The
+// fix (E-M66/R2-07) scans in covariance order with a work cap: the nearest
+// offsets are admitted (full-radius admission — the old per-direction
+// 8-cell window that silently dropped the (−9,−9) datum is gone), bounded by
+// m_fallback_d2_cap (the nearest NEIGHBOUR_SCAN_WORK_CAP offsets, see the
+// T-24 test below for the bounded leg).
 void test_plain_lookup_fallback_window_bounded() {
-    TEST("R-6: plain-lookup pure-nugget fallback is bounded to a small window");
+    TEST("R-6: plain-lookup pure-nugget fallback admits by distance cap");
     hpgl::sugarbox_grid_t grid;
     grid.init(21, 21, 1);   // indices 0..440
     double ranges[3] = {3.0, 3.0, 3.0};
@@ -1456,15 +1456,17 @@ void test_plain_lookup_fallback_window_bounded() {
     const int target = 10 * 21 + 10;
     std::vector<unsigned char> mask(441, 0);
 
-    // 1) Out-of-window datum → NOT admitted (bounded). The pre-fix full-box
-    // scan would have admitted it (radius 50 covers the whole 21×21 grid).
+    // 1) Out-of-window datum → ADMITTED (E-M66 full-radius admission). The
+    // pre-fix per-direction 8-cell window excluded it; the distance cap
+    // admits the single nearest datum regardless of its offset.
     {
         mask[1 * 21 + 1] = 1;
         std::vector<hpgl::node_index_t> indices;
         std::vector<hpgl::sugarbox_location_t> coords;
         hpgl::sugarbox_location_t node_coord;
         nl.find(target, mask_pred{&mask[0]}, node_coord, indices, coords);
-        CHECK(indices.empty());
+        CHECK(indices.size() == 1);
+        CHECK(indices[0] == 1 * 21 + 1);
         mask[1 * 21 + 1] = 0;
     }
     // 2) In-window datum (offset (0,3)) → still admitted (fallback works).
@@ -1829,7 +1831,7 @@ void test_simple_kriging_weights_rejects_huge_count() {
     int rc = hpgl_simple_kriging_weights(center, nx, ny, nz, 100001, &params, weights);
     CHECK(rc == -1);
     const char * msg = hpgl_get_last_exception_message();
-    CHECK(msg != nullptr && strstr(msg, "100000") != nullptr);
+    CHECK(msg != nullptr && strstr(msg, "10000") != nullptr);
 
     // A valid small count still produces weights.
     rc = hpgl_simple_kriging_weights(center, nx, ny, nz, 2, &params, weights);
@@ -2993,21 +2995,23 @@ void test_read_inc_file_byte_reassembles_straddling_token()
 // scan. The clusterizer returns up to 27 × m_limit candidates in CLUSTER-
 // INDEX order (the center's own cluster is visited 14th of 27), so a plain
 // prefix bound would drop the CLOSEST data in dense regions. The fix
-// reorders candidates closest-first and caps the scan at SCAN_LIMIT=4913
-// (the sibling III-38 bound). Regression guard: with a huge candidate set
-// the result must stay capped at max_neighbours AND keep the closest
-// (center-cluster) candidates — the exact data a naive cluster-order
-// SCAN_LIMIT prefix would drop.
+// reorders candidates closest-first and caps the scan at
+// NEIGHBOUR_WORK_CAP=10000 (the sibling III-38 bound; formerly SCAN_LIMIT
+// 4913). Regression guard: with a huge candidate set the result must stay
+// capped at max_neighbours AND keep the closest (center-cluster) candidates
+// — the exact data a naive cluster-order SCAN_LIMIT prefix would drop.
 void test_indexed_lookup_scan_bounded() {
     TEST("R-03: indexed lookup bounds the fast-path candidate scan (F-21)");
     // Radius 30 → covariance-field offsets 224,525 → clusterizer
-    // m_limit = 898 nodes/cluster. Fill the 8 populated clusters in the
-    // target's 3×3×3 box with 650 nodes each (well under m_limit — no
-    // over-limit fallback) → 5,200 raw candidates > SCAN_LIMIT 4913, so the
-    // cap binds on the fast path. max_neighbours 12 leaves 4 slots after
-    // the 8 octant representatives, so the closest non-rep datum is picked.
+    // m_limit = 729,000/250 = 2,916 nodes/cluster (90³ grid). Fill the 27
+    // populated clusters of the target's 3×3×3 box (bases {0,30,60}) with
+    // 650 nodes each (well under m_limit — no over-limit fallback) →
+    // 17,550 raw candidates > NEIGHBOUR_WORK_CAP 10000, so the pool
+    // truncation binds on the fast path. max_neighbours 12 leaves 4 slots
+    // after the 8 octant representatives, so the closest non-rep datum is
+    // picked.
     hpgl::sugarbox_grid_t grid;
-    grid.init(60, 60, 60);
+    grid.init(90, 90, 90);
     double ranges[3] = {30.0, 30.0, 30.0};
     double angles[3] = {0.0, 0.0, 0.0};
     hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_EXPONENTIAL,
@@ -3029,12 +3033,12 @@ void test_indexed_lookup_scan_bounded() {
         return idx;
     };
 
-    // Fill every populated cluster of the target's 3×3×3 box ([0,60)³,
+    // Fill every populated cluster of the target's 3×3×3 box ([0,90)³,
     // cluster cell size = radius 30) with 650 nodes, avoiding the distance-1
     // cells so the closest-datum assertions below stay deterministic.
-    for (int cbz = 0; cbz < 2; ++cbz)
-        for (int cby = 0; cby < 2; ++cby)
-            for (int cbx = 0; cbx < 2; ++cbx)
+    for (int cbz = 0; cbz < 3; ++cbz)
+        for (int cby = 0; cby < 3; ++cby)
+            for (int cbx = 0; cbx < 3; ++cbx)
             {
                 const int bx = cbx * 30, by = cby * 30, bz = cbz * 30;
                 for (int i = 0; i < 650; ++i)
@@ -3048,8 +3052,8 @@ void test_indexed_lookup_scan_bounded() {
     // Closest data in the target's own cluster: the target itself and its
     // distance-1 neighbour — the highest-covariance candidates that a naive
     // cluster-order scan bound would drop (the center cluster is 14th of 27).
-    hpgl::node_index_t center_idx = add(30, 30, 30);
-    hpgl::node_index_t close_idx = add(31, 30, 30);
+    hpgl::node_index_t center_idx = add(45, 45, 45);
+    hpgl::node_index_t close_idx = add(46, 45, 45);
 
     hpgl::sugarbox_location_t node_coord;
     std::vector<hpgl::node_index_t> indices;
@@ -3104,6 +3108,390 @@ void test_simple_kriging_weights_solve_failure_clean_message() {
         CHECK(strstr(msg, "vector") == nullptr || strstr(msg, "kriging") != nullptr);
         CHECK(strstr(msg, "kriging solve failed") != nullptr);
     }
+}
+
+// ---- Stage-8 TEST-ADD regression tests (T-11..T-25) ----
+
+// E-M60 (Stage-8 TEST-ADD T-11): the cokriging no-neighbour/singularity
+// fallback must scale the secondary influence by the BLUP weight
+// ρ·σp/σs (cross_cov(0)/secondary_variance), not the old implicit 1.0.
+// Pre-fix a no-neighbour node with ρ=0.5, σp=2, σs=4 produced
+// m1 + (z2−m2); post-fix it produces m1 + 0.25·(z2−m2).
+void test_cokriging_fallback_scales_secondary() {
+    TEST("E-M60: cokriging no-neighbour fallback scales secondary (BLUP weight)");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(4, 4, 1);
+    const int n = 16;
+    std::vector<float> primary_data(n, 0.0f);
+    std::vector<unsigned char> primary_mask(n, 0);
+    primary_data[0] = 50.0f; primary_mask[0] = 1;  // far corner (0,0)
+    // Secondary informed everywhere; at node 15 (3,3) its value is 10.
+    std::vector<float> secondary_data(n, 0.0f);
+    std::vector<unsigned char> secondary_mask(n, 1);
+    secondary_data[15] = 10.0f;
+    std::vector<float> output_data(n, 0.0f);
+    std::vector<unsigned char> output_mask(n, 0);
+
+    hpgl::cont_property_array_t primary(primary_data.data(), primary_mask.data(), n);
+    hpgl::cont_property_array_t secondary(secondary_data.data(), secondary_mask.data(), n);
+    hpgl::cont_property_array_t output(output_data.data(), output_mask.data(), n);
+
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(1, 1, 0);   // node 15 has NO primary neighbour (cell 0 is far)
+    nb.m_max_neighbours = 4;
+
+    hpgl::covariance_param_t cp;
+    cp.m_covariance_type = hpgl::covariance_type_t::COV_SPHERICAL;
+    cp.set_ranges(3.0, 3.0, 3.0);
+    cp.set_angles(0.0, 0.0, 0.0);
+    cp.set_sill(4.0);   // σp = sqrt(C(0)) = 2
+    cp.set_nugget(0.0);
+
+    // primary_mean=100, secondary_mean=5, secondary_variance=16 (σs=4),
+    // correlation_coef=0.5 → BLUP secondary weight = ρ·σp/σs = 0.25.
+    hpgl::simple_cokriging_markI(grid, primary, secondary,
+        100.0f, 5.0f, 16.0, 0.5, nb, cp, output);
+
+    hpgl_kriging_stats_t stats = hpgl_get_kriging_stats();
+    // The fallback must have fired for node 15 (no primary neighbours).
+    CHECK(stats.m_points_without_neighbours > 0);
+    // Post-fix: m1 + ρ·(σp/σs)·(z2 − m2) = 100 + 0.25·(10−5) = 101.25.
+    // Pre-fix: implicit weight 1.0 → 100 + (10−5) = 105.
+    CHECK_CLOSE(output_data[15], 101.25, 1e-3);
+}
+
+// E2-53 (Stage-8 TEST-ADD T-12): every kriging C entry must reject aliased
+// input/output buffers with a loud error instead of silently corrupting the
+// caller's data (the kernel reads input live while writing output). Python
+// always passes fresh clones; this guard protects direct-C callers.
+void test_kriging_rejects_aliased_buffers() {
+    TEST("E2-53: simple_kriging rejects aliased input/output buffers");
+    float data[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    unsigned char mask[4] = {1, 1, 1, 1};
+    hpgl_shape_t shape;
+    init_shape(shape, 2, 2, 1);
+
+    hpgl_sk_params_t params;
+    params.m_covariance_type = 0;
+    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+    params.m_sill = 1.0;
+    params.m_nugget = 0.0;
+    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+    params.m_max_neighbours = 4;
+    params.m_automatic_mean = 1;
+    params.m_mean = 0.0;
+
+    // (a) Data aliasing: the SAME buffer for input_data and output_data.
+    {
+        hpgl_simple_kriging(data, mask, &shape, &params, data, mask, &shape);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "must not be the same buffer") != nullptr);
+    }
+    // (b) Mask aliasing: same non-null mask for both input and output.
+    {
+        float out_data[4] = {0, 0, 0, 0};
+        hpgl_simple_kriging(data, mask, &shape, &params, out_data, mask, &shape);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "must not be the same buffer") != nullptr);
+    }
+    // (c) Control: distinct buffers work (all-informed → finite output). The
+    // C ABI keeps the last error message indefinitely — there is no
+    // clear-error function (documented limitation III-06) — so after a
+    // SUCCESSFUL call the stale "must not be the same buffer" message from
+    // cases (a)/(b) is still observable. The success contract is "no NEW
+    // error stored for THIS call": snapshot the message before and assert it
+    // is unchanged after (same pattern as the SIS control at :2167-2170). A
+    // regression would overwrite it with a fresh error message.
+    {
+        float out_data[4] = {0, 0, 0, 0};
+        unsigned char out_mask[4] = {0, 0, 0, 0};
+        const std::string before = hpgl_get_last_exception_message();
+        hpgl_simple_kriging(data, mask, &shape, &params, out_data, out_mask, &shape);
+        const std::string after = hpgl_get_last_exception_message();
+        CHECK(before == after);
+        for (int i = 0; i < 4; ++i)
+            CHECK(std::isfinite(out_data[i]));
+    }
+}
+
+// E2-112 (Stage-8 TEST-ADD T-13): the SGS C entry must gate the search
+// radius BEFORE the kernel call. The kernel's in-place forward CDF transform
+// destroys the caller's conditioning buffer before the kernel's throwing
+// radius guard, so pre-fix a failed run silently corrupted direct-C data.
+// Post-fix the C-entry gate (api.cpp:1344) throws first.
+void test_sgs_radius_gate_before_destructive_transform() {
+    TEST("E2-112: SGS radius gate throws BEFORE the destructive transform");
+    float data[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    unsigned char mask[4] = {1, 1, 1, 1};
+    hpgl_cont_masked_array_t in;
+    in.m_data = data;
+    in.m_mask = mask;
+    init_shape(in.m_shape, 2, 2, 1);
+
+    hpgl_sgs_params_t params = make_sgs_params();
+    params.m_radiuses[0] = 300; params.m_radiuses[1] = 300; params.m_radiuses[2] = 300;
+
+    double mean = 0.0;
+    hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
+    const char * msg = hpgl_get_last_exception_message();
+    CHECK(msg != nullptr && strstr(msg, "memory-safe") != nullptr);
+    // The caller's conditioning buffer must be INTACT — the destructive
+    // in-place CDF transform must not have run.
+    CHECK(data[0] == 1.0f && data[1] == 2.0f && data[2] == 3.0f && data[3] == 4.0f);
+}
+
+// E-M56 (Stage-8 TEST-ADD T-14): the categorical order-relations correction
+// must renormalize per-category masses that sum to S > 1 by dividing by the
+// total (GSLIB ordrel `ccdfo(i) = ccdf1(i)/sumcdf`). Pre-fix the "scale top
+// to 1.0" step was a no-op after the [0,1] clip and TRUNCATED the excess mass
+// onto earlier categories — a silent category-selection flip. The input here
+// is the monotone cumulative CDF of masses [0.6, 0.7, 0.5] (S = 1.8); the
+// correct renormalized cumulative is [1/3, 13/18, 1.0].
+void test_ordrel_s_gt_1_renormalizes() {
+    TEST("E-M56: ordrel categorical S>1 renormalizes by the total (GSLIB)");
+    std::vector<hpgl::indicator_probability_t> probs = {0.6f, 1.3f, 1.8f};
+    hpgl::detail::correct_order_relations(probs);
+    // masses = [0.6, 0.7, 0.5], sumcdf = 1.8 → [0.333, 0.722, 1.0].
+    CHECK_CLOSE(probs[0], 1.0f / 3.0f, 1e-6);
+    CHECK_CLOSE(probs[1], 13.0f / 18.0f, 1e-6);
+    CHECK_CLOSE(probs[2], 1.0f, 1e-6);
+}
+
+// E-H2 (Stage-8 TEST-ADD T-18): the plain lookup must admit far data with
+// non-negligible covariance. Pre-fix SCAN_LIMIT=4913 silently collapsed the
+// effective search radius to ~10.6 cells (a distance-12 datum ranks ~7,154
+// in the covariance order) → SGS/SIS/cokriging mean-filled on sparse data +
+// radius ≥ 10. Post-fix the full covariance-ordered list is scanned.
+void test_far_data_admitted_full_radius() {
+    TEST("E-H2: plain lookup admits a distance-12 datum at radius ≥ 12");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(30, 30, 30);
+    double ranges[3] = {20.0, 20.0, 20.0};
+    double angles[3] = {0.0, 0.0, 0.0};
+    hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_EXPONENTIAL,
+                          ranges, angles, 1.0, 0.0);
+
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(12, 12, 12);
+    nb.m_max_neighbours = 8;
+
+    hpgl::neighbour_lookup_t<hpgl::sugarbox_grid_t, hpgl::cov_model_t> nl(&grid, &cov, nb);
+
+    struct mask_pred {
+        const unsigned char * m;
+        bool operator()(hpgl::node_index_t i) const { return m[i] == 1; }
+    };
+
+    // Target at the grid center; datum 12 cells away along +x.
+    const int target = grid.get_index(hpgl::sugarbox_location_t(15, 15, 15));
+    std::vector<unsigned char> mask(30 * 30 * 30, 0);
+    const int datum = grid.get_index(hpgl::sugarbox_location_t(27, 15, 15));
+    mask[datum] = 1;
+
+    std::vector<hpgl::node_index_t> indices;
+    std::vector<hpgl::sugarbox_location_t> coords;
+    hpgl::sugarbox_location_t node_coord;
+    nl.find(target, mask_pred{&mask[0]}, node_coord, indices, coords);
+
+    // Post-fix: the far datum (distance 12, cov ≈ 0.165·sill = 16× the
+    // C(0)/100 threshold) is admitted. Pre-fix (SCAN_LIMIT=4913): the
+    // distance-12 offset ranks beyond the cap → empty neighbourhood.
+    CHECK(indices.size() == 1);
+    CHECK(indices[0] == datum);
+}
+
+// E2-145 (Stage-8 TEST-ADD T-20): max_neighbours ∈ (4913, 10000] must be
+// HONORED (no silent truncation at the old SCAN_LIMIT=4913). On a dense grid
+// the plain lookup returns up to the configured count within the work cap.
+void test_max_neighbours_above_old_limit_honored() {
+    TEST("E2-145: max_neighbours=6000 honored (no 4913 truncation)");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(30, 30, 30);   // 27,000 cells
+    double ranges[3] = {50.0, 50.0, 50.0};
+    double angles[3] = {0.0, 0.0, 0.0};
+    hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_EXPONENTIAL,
+                          ranges, angles, 1.0, 0.0);
+
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(15, 15, 15);   // box 31³ = 29,791 offsets (all cov > threshold)
+    nb.m_max_neighbours = 6000;
+
+    hpgl::neighbour_lookup_t<hpgl::sugarbox_grid_t, hpgl::cov_model_t> nl(&grid, &cov, nb);
+
+    struct all_defined_t { bool operator()(hpgl::node_index_t) const { return true; } };
+    all_defined_t all_defined;
+
+    const int target = grid.get_index(hpgl::sugarbox_location_t(15, 15, 15));
+    std::vector<hpgl::node_index_t> indices;
+    std::vector<hpgl::sugarbox_location_t> coords;
+    hpgl::sugarbox_location_t node_coord;
+    nl.find(target, all_defined, node_coord, indices, coords);
+
+    // Post-fix: the effective bound = min(6000, NEIGHBOUR_WORK_CAP=10000) =
+    // 6000 → the dense grid yields exactly 6000 neighbours. Pre-fix the
+    // SCAN_LIMIT=4913 index cap truncated the scan at 4913.
+    CHECK(indices.size() == 6000);
+}
+
+// E2-139/R-14 (Stage-8 TEST-ADD T-21): the clusterizer must reject a
+// radius-1 dense grid whose cluster-grid volume exceeds the memory-safe
+// limit with a loud hpgl_exception — not silent OOM. With the current
+// MIN_CLUSTER_LIMIT=8 the per-cell cost is 88 B → max cluster-grid
+// 12,210,746 cells; a 250³ radius-1 grid has 252³ = 16,003,008 > cap.
+void test_clusterizer_memory_safe_limit_boundary() {
+    TEST("E2-139/R-14: clusterizer rejects memory-unsafe cluster-grid volume (radius-1 dense)");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(250, 250, 250);
+    hpgl::sugarbox_search_ellipsoid_t ell(1, 1, 1);
+
+    bool threw = false;
+    try {
+        hpgl::clusterizer_t c(&grid, ell, 8);   // MIN_CLUSTER_LIMIT
+    } catch (const hpgl::hpgl_exception & ex) {
+        threw = true;
+        CHECK(strstr(ex.what(), "memory-safe") != nullptr);
+    }
+    CHECK(threw);
+
+    // Control: a legal config (100³ radius 1 → 102³ = 1,061,208 cells << cap)
+    // constructs without throwing.
+    {
+        hpgl::sugarbox_grid_t small;
+        small.init(100, 100, 100);
+        bool ok = true;
+        try {
+            hpgl::clusterizer_t c(&small, ell, 8);
+        } catch (const hpgl::hpgl_exception &) {
+            ok = false;
+        }
+        CHECK(ok);
+    }
+}
+
+// R2-07 (Stage-8 TEST-ADD T-24): the pure-nugget box fallback in the plain
+// lookup is bounded by a distance cap (m_fallback_d2_cap) when the box
+// exceeds the eval budget — NEAR offsets are still admitted (E-M66 full
+// radius preserved inside the cap), FAR offsets beyond the cap are skipped.
+// Pre-fix the full (2r+1)³ box was scanned per find() (hang class).
+void test_plain_lookup_fallback_bounded_by_distance_cap() {
+    TEST("R2-07: pure-nugget fallback bounded by the distance cap");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(70, 70, 70);
+    double ranges[3] = {3.0, 3.0, 3.0};
+    double angles[3] = {0.0, 0.0, 0.0};
+    hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_SPHERICAL,
+                          ranges, angles, 1.0, 1.0);  // pure nugget
+
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(30, 30, 30);   // box 61³ = 226,981 > 100,000 → cap binds
+    nb.m_max_neighbours = 8;
+
+    hpgl::neighbour_lookup_t<hpgl::sugarbox_grid_t, hpgl::cov_model_t> nl(&grid, &cov, nb);
+
+    struct mask_pred {
+        const unsigned char * m;
+        bool operator()(hpgl::node_index_t i) const { return m[i] == 1; }
+    };
+
+    const int target = grid.get_index(hpgl::sugarbox_location_t(35, 35, 35));
+    std::vector<unsigned char> mask(70 * 70 * 70, 0);
+
+    // (a) A NEAR datum (distance 10) is inside the distance cap → admitted.
+    {
+        const int near_datum = grid.get_index(hpgl::sugarbox_location_t(35, 45, 35));
+        mask[near_datum] = 1;
+        std::vector<hpgl::node_index_t> indices;
+        std::vector<hpgl::sugarbox_location_t> coords;
+        hpgl::sugarbox_location_t node_coord;
+        nl.find(target, mask_pred{&mask[0]}, node_coord, indices, coords);
+        CHECK(indices.size() == 1);
+        CHECK(indices[0] == near_datum);
+        mask[near_datum] = 0;
+    }
+    // (b) A FAR datum (corner offset (30,30,0), d² = 1800) is beyond the
+    // distance cap (~d² 829 at radius 30) → NOT admitted (bounded work).
+    {
+        const int far_datum = grid.get_index(hpgl::sugarbox_location_t(65, 65, 35));
+        mask[far_datum] = 1;
+        std::vector<hpgl::node_index_t> indices;
+        std::vector<hpgl::sugarbox_location_t> coords;
+        hpgl::sugarbox_location_t node_coord;
+        nl.find(target, mask_pred{&mask[0]}, node_coord, indices, coords);
+        CHECK(indices.empty());
+        mask[far_datum] = 0;
+    }
+}
+
+// R-12 (Stage-8 TEST-ADD T-25): the indexed fast path's SCAN_LIMIT pool
+// truncation must be REACHABLE (candidate pool > NEIGHBOUR_WORK_CAP=10000)
+// and must select in COVARIANCE order — the closest candidates survive.
+// Pre-fix the clusterizer copy cap equaled SCAN_LIMIT, so the pool never
+// exceeded it and the nth_element was dead code; with 16,000 candidates the
+// center-cluster data (visited 14th) would be dropped in cluster order.
+void test_scan_limit_prefix_truncation() {
+    TEST("R-12: indexed lookup pool truncation fires with >10000 candidates");
+    hpgl::sugarbox_grid_t grid;
+    grid.init(120, 120, 120);
+    double ranges[3] = {60.0, 60.0, 60.0};
+    double angles[3] = {0.0, 0.0, 0.0};
+    hpgl::cov_model_t cov(hpgl::covariance_type_t::COV_EXPONENTIAL,
+                          ranges, angles, 1.0, 0.0);
+    hpgl::neighbourhood_param_t nb;
+    nb.set_radiuses(60, 60, 60);
+    nb.m_max_neighbours = 12;
+
+    hpgl::indexed_neighbour_lookup_t<hpgl::sugarbox_grid_t, hpgl::cov_model_t>
+        lookup(&grid, &cov, nb);
+
+    struct all_defined_t { bool operator()(hpgl::node_index_t) const { return true; } };
+    all_defined_t all_defined;
+
+    auto add = [&](int x, int y, int z) {
+        hpgl::sugarbox_location_t loc(x, y, z);
+        hpgl::node_index_t idx = grid.get_index(loc);
+        lookup.add_node(idx);
+        return idx;
+    };
+
+    // Fill the 8 populated clusters of the target's 3×3×3 box (bases
+    // {0,60}) with 2000 nodes each → 16,000 candidates, all within the
+    // radius-60 filter → pool > SCAN_LIMIT (10000) → truncation binds.
+    for (int cbz = 0; cbz < 2; ++cbz)
+        for (int cby = 0; cby < 2; ++cby)
+            for (int cbx = 0; cbx < 2; ++cbx)
+            {
+                const int bx = cbx * 60, by = cby * 60, bz = cbz * 60;
+                for (int i = 0; i < 2000; ++i)
+                {
+                    int x = bx + 2 + (i % 26);
+                    int y = by + 2 + ((i / 26) % 26);
+                    int z = bz + 2 + (i / (26 * 26));
+                    add(x, y, z);
+                }
+            }
+    // Closest data in the target's own cluster: the target itself and its
+    // distance-1 neighbour — the highest-covariance candidates a naive
+    // cluster-order SCAN_LIMIT prefix would drop (center cluster visited 14th).
+    hpgl::node_index_t center_idx = add(60, 60, 60);
+    hpgl::node_index_t close_idx = add(61, 60, 60);
+
+    hpgl::sugarbox_location_t node_coord;
+    std::vector<hpgl::node_index_t> indices;
+    std::vector<hpgl::sugarbox_location_t> coords;
+    lookup.find(center_idx, all_defined, node_coord, indices, coords);
+
+    // (a) Result capped by max_neighbours (cap-behavior contract).
+    CHECK(indices.size() <= 12);
+    // (b) The closest candidates survive the covariance-order truncation.
+    bool found_center = false, found_close = false;
+    for (size_t i = 0; i < indices.size(); ++i)
+    {
+        if (indices[i] == center_idx) found_center = true;
+        if (indices[i] == close_idx) found_close = true;
+    }
+    CHECK(found_center);
+    CHECK(found_close);
 }
 
 int main() {
@@ -3208,6 +3596,17 @@ int main() {
     test_read_inc_file_byte_reassembles_straddling_token();
     test_indexed_lookup_scan_bounded();
     test_simple_kriging_weights_solve_failure_clean_message();
+
+    // Stage-8 TEST-ADD regression tests (T-11..T-25).
+    test_cokriging_fallback_scales_secondary();
+    test_kriging_rejects_aliased_buffers();
+    test_sgs_radius_gate_before_destructive_transform();
+    test_ordrel_s_gt_1_renormalizes();
+    test_far_data_admitted_full_radius();
+    test_max_neighbours_above_old_limit_honored();
+    test_clusterizer_memory_safe_limit_boundary();
+    test_plain_lookup_fallback_bounded_by_distance_cap();
+    test_scan_limit_prefix_truncation();
 
     std::printf("C++ unit tests: %d run, %d failed\n", g_tests_run, g_tests_failed);
     return g_tests_failed > 0 ? 1 : 0;

@@ -100,9 +100,15 @@ class TestNormalizeMaskBinary:
             ffi_adapter.normalize_mask_binary([1, 0, 1], "ctx")
 
     def test_binary_mask_unchanged(self):
+        # E-M7: normalize_mask_binary ALWAYS returns a fresh uint8 copy —
+        # the caller's array is never handed back unchanged (a non-uint8
+        # binary array would flow downstream with its original dtype/layout,
+        # violating the uint8 contract the C++ boundary assumes).
         mask = np.array([0, 1, 0, 1], dtype="uint8")
         result = ffi_adapter.normalize_mask_binary(mask, "ctx")
-        assert result is mask  # no copy for an already-binary mask
+        assert result is not mask  # fresh copy (E-M7)
+        assert result.dtype == np.uint8
+        np.testing.assert_array_equal(result, mask)
 
     def test_non_binary_mask_normalized_to_01(self):
         mask = np.array([0, 2, 3, 0], dtype="uint8")

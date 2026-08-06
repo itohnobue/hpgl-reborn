@@ -27,6 +27,10 @@ n = 10
 # Number of S realizations
 S_num = 100
 
+# E-M28: fixed seed so the random draws (and therefore the printed
+# mean/var values and the histograms) are reproducible run to run.
+np.random.seed(12345)
+
 # Generate one realization of random variables and check mean/var
 random_variables = get_random_uniform_values(n)
 

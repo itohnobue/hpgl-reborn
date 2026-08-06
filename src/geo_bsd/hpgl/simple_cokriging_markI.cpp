@@ -15,6 +15,7 @@
 #include "my_kriging_weights.h"
 #include "kriging_interpolation.h"
 #include "kriging_stats.h"
+#include "precalculated_covariance.h"
 #include "api.h"
 
 namespace hpgl
@@ -77,14 +78,18 @@ bool build_system(
 	// PR-07: previously returned false → calc_value mapped it to
 	// KI_SINGULARITY → process_node_loop silently mean-filled. Now a clear
 	// error so the caller observes the failure instead of silent wrong output.
-	// The C-API bound (validate_max_neighbours_or_throw, api.cpp) is aligned
-	// at the same limit; this guard is defense in depth for direct C++ callers
-	// and the secondary-equation +1 edge (ms = neighbour_count + 1).
-	if (ms > 100000)
+	// E-M85: the bound is aligned with the lowered C-API cap
+	// (MAX_NEIGHBOURS_UPPER_BOUND = 10000, api.cpp) plus the secondary-
+	// equation +1 edge (ms = neighbour_count + 1) — the neighbour lookup
+	// caps the effective count at min(max_neighbours, NEIGHBOUR_WORK_CAP)
+	// = 10000, so ms <= 10001 on every reachable path; this guard rejects
+	// direct-C++ configs beyond that (previously the bound admitted
+	// 100000-neighbour systems → 80-240 GB per-node matrices).
+	if (ms > 10001)
 	{
 		std::ostringstream oss;
 		oss << "cokriging system size " << ms
-		    << " exceeds upper bound (100000) in build_system";
+		    << " exceeds upper bound (10000) in build_system";
 		throw hpgl_exception("simple_cokriging_markI", oss.str());
 	}
 	// 2-M-9: reuse workspace buffers instead of allocating per node.
@@ -372,6 +377,28 @@ static void process_node_loop(
 	// build_system → combine (all consume the same secondary_present flag);
 	// no signature changes.
 	bool secondary_variance_valid = std::isfinite(secondary_variance) && secondary_variance > 0;
+
+	// E-M60: the no-neighbour/singularity fallback previously used an
+	// implicit secondary weight of 1.0 (primary_mean + secondary_value -
+	// secondary_mean), which overstates secondary influence for rho < 1 at
+	// exactly the failure nodes the fallback is meant to rescue. The BLUP
+	// secondary-only weight is Csp(0)/Css(0) = rho*sig_p/sig_s — the same
+	// value the code's own m_coef machinery derives (cross_cov_model_mark_i_t
+	// m_coef = rho*sig_s/sig_p at :275; markII same). Compute it once
+	// (stationary models): cross_cov at zero lag is the cross-covariance
+	// Csp(0); dividing by the secondary variance Css(0) yields the BLUP
+	// weight. When the secondary variance is not usable (II-10 above),
+	// secondary_present is forced false and secondary_value ==
+	// secondary_mean, so the term is zero regardless — guard the division.
+	double secondary_weight = 0.0;
+	if (secondary_variance_valid)
+	{
+		typedef typename n_lookup_t::coord_t coord_t;
+		const double cross_cov_zero = cross_cov(coord_t(0,0,0), coord_t(0,0,0));
+		if (std::isfinite(cross_cov_zero))
+			secondary_weight = cross_cov_zero / secondary_variance;
+	}
+
 	for (node_index_t i = 0; i < data_size; ++i)
 	{
 		cont_value_t result = -500;
@@ -401,13 +428,18 @@ static void process_node_loop(
 				break;
 			case ki_result_t::KI_NO_NEIGHBOURS:
 				++points_without_neighbours;
-				result = primary_mean + secondary_value - secondary_mean;
+				// E-M60: BLUP secondary-only weight (see above) — the
+				// previous implicit weight 1.0 overstated the secondary
+				// influence for rho < 1.
+				result = primary_mean + secondary_weight * (secondary_value - secondary_mean);
 				++points_processed;
 				sum += result;
 				break;
 			case ki_result_t::KI_SINGULARITY:
 				++points_singularity;
-				result = primary_mean + secondary_value - secondary_mean;
+				// E-M60: same BLUP secondary-only weight as the
+				// no-neighbours branch.
+				result = primary_mean + secondary_weight * (secondary_value - secondary_mean);
 				++points_processed;
 				sum += result;
 				break;
@@ -455,6 +487,26 @@ void simple_cokriging_markI(
 		throw hpgl_exception("simple_cokriging", oss.str());
 	}
 
+	// E-M61: the C++ entries previously validated only input==output size.
+	// A shorter secondary_data silently degraded (bounds-guarded
+	// is_informed → primary-only kriging with no error) and a smaller grid
+	// produced unchecked sugarbox_grid arithmetic (wrong neighbourhoods /
+	// mean-fill). Validate the full size contract at the C++ chokepoint —
+	// the C API gates these at api.cpp:1675-1706/1818-1849, but direct-C++
+	// callers bypass them.
+	if (secondary_data.size() != input_prop.size())
+	{
+		std::ostringstream oss;
+		oss << "Secondary data size: " << secondary_data.size() << ". Input data size: " << input_prop.size() << ". Must be equal.";
+		throw hpgl_exception("simple_cokriging", oss.str());
+	}
+	if (grid.size() != input_prop.size())
+	{
+		std::ostringstream oss;
+		oss << "Grid size: " << grid.size() << ". Input data size: " << input_prop.size() << ". Must be equal.";
+		throw hpgl_exception("simple_cokriging", oss.str());
+	}
+
 	print_algo_name("Simple Colocated Cokriging Markov Model I");
 	print_params(neighbourhood_params);
 	print_params(primary_cov_params);
@@ -489,13 +541,23 @@ void simple_cokriging_markI(
 		throw hpgl_exception("simple_cokriging_markI",
 			"primary_mean and secondary_mean must be finite");
 
-	cov_model_t cov(primary_cov_params);	
+	// E-M86: precalculate the covariances (mirror of the
+	// precalculated_covariances_t pattern used by SK/LVM/SGS/IK) —
+	// build_system previously evaluated the cov model from scratch per
+	// matrix element (primary block O(n^2) evals plus a second full eval
+	// of the same symmetric value on the RHS; cross block 2x per element
+	// via the raw model). The precalculated table turns per-element evals
+	// into table lookups inside the search box with exact-model fallback
+	// beyond it (F-21 semantics preserved); the markI cross model scales
+	// the same table by its coefficient.
+	cov_model_t cov_model(primary_cov_params);
+	precalculated_covariances_t cov(cov_model, neighbourhood_params.m_radiuses);
 
-	cross_cov_model_mark_i_t<cov_model_t> cross_cov(correlation_coef, secondary_variance, &cov);
+	cross_cov_model_mark_i_t<precalculated_covariances_t> cross_cov(correlation_coef, secondary_variance, &cov);
 
 	int data_size = input_prop.size();
 	
-	neighbour_lookup_t<sugarbox_grid_t, cov_model_t> n_lookup(&grid, &cov, neighbourhood_params);
+	neighbour_lookup_t<sugarbox_grid_t, precalculated_covariances_t> n_lookup(&grid, &cov, neighbourhood_params);
 
 	progress_reporter_t report(data_size);
 
@@ -530,6 +592,22 @@ void simple_cokriging_markII(
 		throw hpgl_exception("simple_cokriging", oss.str());
 	}
 
+	// E-M61: full size contract at the C++ chokepoint (sibling of the
+	// markI gate above) — a shorter secondary_data or smaller grid
+	// silently degraded for direct-C++ callers.
+	if (secondary_data.size() != input_prop.size())
+	{
+		std::ostringstream oss;
+		oss << "Secondary data size: " << secondary_data.size() << ". Input data size: " << input_prop.size() << ". Must be equal.";
+		throw hpgl_exception("simple_cokriging", oss.str());
+	}
+	if (grid.size() != input_prop.size())
+	{
+		std::ostringstream oss;
+		oss << "Grid size: " << grid.size() << ". Input data size: " << input_prop.size() << ". Must be equal.";
+		throw hpgl_exception("simple_cokriging", oss.str());
+	}
+
 	print_algo_name("Simple Colocated Cokriging Markov Model II");
 	print_params(neighbourhood_params);
 	write("Primary covariation model:\n");
@@ -558,15 +636,24 @@ void simple_cokriging_markII(
 		throw hpgl_exception("simple_cokriging_markII",
 			"primary_mean and secondary_mean must be finite");
 
-	cov_model_t primary_cov(primary_cov_params);	
-	cov_model_t secondary_cov(secondary_cov_params);	
+	// E-M86: precalculate both covariance fields (mirror of the
+	// precalculated_covariances_t pattern used by SK/LVM/SGS/IK) — the
+	// per-element model evals in build_system become table lookups; the
+	// markII cross model scales the secondary table by its coefficient.
+	// The zero-lag evals below (secondary variance, ctor variances) hit
+	// the in-box table entries and return the same sill values as the
+	// raw models.
+	cov_model_t primary_cov_model(primary_cov_params);
+	cov_model_t secondary_cov_model(secondary_cov_params);
+	precalculated_covariances_t primary_cov(primary_cov_model, neighbourhood_params.m_radiuses);
+	precalculated_covariances_t secondary_cov(secondary_cov_model, neighbourhood_params.m_radiuses);
 	double secondary_variance = secondary_cov(sugarbox_grid_t::coord_t(0,0,0), sugarbox_grid_t::coord_t(0,0,0));
 
-	cross_cov_model_mark_ii_t<cov_model_t, cov_model_t> cross_cov(correlation_coef, &primary_cov, &secondary_cov);
+	cross_cov_model_mark_ii_t<precalculated_covariances_t, precalculated_covariances_t> cross_cov(correlation_coef, &primary_cov, &secondary_cov);
 
 	int data_size = input_prop.size();
 	
-	neighbour_lookup_t<sugarbox_grid_t, cov_model_t> n_lookup(&grid, &primary_cov, neighbourhood_params);
+	neighbour_lookup_t<sugarbox_grid_t, precalculated_covariances_t> n_lookup(&grid, &primary_cov, neighbourhood_params);
 
 	progress_reporter_t report(data_size);
 

@@ -24,13 +24,22 @@ from variogram_routines import *
 
 nugget = 0
 
-sill_hor1 = 15
+# E-M39: the problem statement (lines 19-23) requires "the same
+# structures and variance contributions for each structure, but each
+# structure may have different range parameters".  The previous
+# per-direction sills (15/20/11) violated that constraint.  Use one
+# common sill for all directions (the reference-faithful vertical sill
+# 11 — Result/3d_variogram.txt gamma values follow 11*(1-exp(-3h/35)))
+# and vary only the ranges per direction.
+sill = 11
+
+sill_hor1 = sill
 var_range_hor1 = 4000
 
-sill_hor2 = 20
+sill_hor2 = sill
 var_range_hor2 = 5000
 
-sill_ver = 11
+sill_ver = sill
 var_range_ver = 35
 
 def exp_var(sill, nugget, var_range, h_vect):

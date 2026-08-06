@@ -32,12 +32,22 @@ namespace hpgl
 		///   - no leading or trailing whitespace — readers skip
 		///     whitespace-leading lines, silently shifting the data off-by-one;
 		///   - must not start with "--" (comment marker skipped by readers) or
-		///     "/" (end-of-data marker in the INC fast reader).
+		///     "/" (end-of-data marker in the INC fast reader);
+		///   - at most 1024 bytes (MAX_PROP_NAME_LENGTH in read_prop_name,
+		///     load_property_from_file.cpp) — the fast reader throws on
+		///     longer names, so the writer must not produce files the
+		///     reader rejects (E-M72; previously >1024-char names were
+		///     written but could not be re-read via the fast reader).
 		/// The Python layer applies the same rule at its call sites.
 		void validate_property_name(const std::string & name)
 		{
 			if (name.empty())
 				throw hpgl_exception("validate_property_name", "Property name must not be empty.");
+			// E-M72: length cap, consistent with the reader's
+			// MAX_PROP_NAME_LENGTH (1024 bytes, load_property_from_file.cpp).
+			if (name.size() > 1024)
+				throw hpgl_exception("validate_property_name",
+					"Property name exceeds maximum length (1024 bytes).");
 			const char first = name[0];
 			if (name.size() >= 2 && first == '-' && name[1] == '-')
 				throw hpgl_exception("validate_property_name", "Property name must not start with \"--\".");
@@ -95,7 +105,20 @@ namespace hpgl
 			oss << "Cannot write non-finite value (" << value << ") to file.";
 			throw hpgl_exception("write_value", oss.str());
 		}
-		if (fprintf(f, "%E\n", value) < 0)
+		// E2-06: write with 9 significant digits (%.9E), not the %E default
+		// of 7. FLT_DECIMAL_DIG == 9 guarantees a float32 value round-trips
+		// exactly through its decimal representation, and every value
+		// written here is a cont_value_t (float) promoted to double — so a
+		// 9-digit representation parses back to the identical float32 via
+		// the loaders' sscanf("%f") / float() parsing. With the old %E-6
+		// format, a FRACTIONAL undefined_value with >7 significant digits
+		// (e.g. 0.12345679) was written as 1.234568E-01, parsed back to a
+		// DIFFERENT float32, and the readers' exact-equality re-mask
+		// (read_inc_file.cpp mask stage) silently left 17-30% of masked
+		// cells informed. The writer's own sentinel now always re-masks
+		// exactly (belt-and-braces tolerance-aware re-mask on the Python
+		// side handled in s6-fix-py-core-a / geo.py _is_undefined_value).
+		if (fprintf(f, "%.9E\n", value) < 0)
 			throw hpgl_exception("write_value", "Error writing to file.");
 	}
 

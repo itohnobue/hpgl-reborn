@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+import logging
 import numpy
+
+logger = logging.getLogger(__name__)
 
 # Import validation framework
 from . import geo as _geo_module
@@ -55,6 +58,38 @@ def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
     if mask is not None:
         mask = _require_ind_data(mask)
     return out_prop, mean, mask
+
+
+def _warn_all_ndmin_skipped(min_neighbours, expected_uninformed):
+    """E-M57: signal an all-ndmin-skipped run programmatically.
+
+    With min_neighbours > 0 the wrapper passes expected=0 to
+    ``_finalize_kriging_stats`` (partial ndmin skips must not fire the
+    spurious "could not be kriged" warning — test-pinned F11), which means
+    an ALL-skipped run — every cell the run should have simulated left
+    unsimulated by the ndmin gate — was previously completely silent: all
+    C++ counters stay zero (points_calculated == points_without_neighbours
+    == points_singularity == 0), indistinguishable from a successful no-op.
+    That zero-attempt signature IS the all-skipped signal when the run had
+    cells it should have simulated (expected_uninformed > 0); warn loudly
+    so the no-output condition is observable programmatically (caplog /
+    log capture), not just via the C++ stderr counter.
+    """
+    stats = getattr(_geo_module, "_last_kriging_stats", None)
+    if min_neighbours <= 0 or expected_uninformed <= 0 or stats is None:
+        return
+    calculated = int(stats.get("points_calculated", 0))
+    no_neighbours = int(stats.get("points_without_neighbours", 0))
+    singular = int(stats.get("points_singularity", 0))
+    if calculated == 0 and no_neighbours == 0 and singular == 0:
+        logger.warning(
+            "sgs_simulation: no nodes were simulated — all %d expected "
+            "uninformed cells were left unsimulated by the ndmin gate "
+            "(fewer than min_neighbours=%d ORIGINAL conditioning data in "
+            "the search radius). Output remains at its initial (masked) "
+            "state. stats=%s",
+            expected_uninformed, min_neighbours, stats,
+        )
 
 
 def _create_hpgl_nonparam_cdf(cdf_data):
@@ -187,8 +222,13 @@ def sgs_simulation(
         use_harddata = config.use_harddata
 
     # Validate grid dimensions, radiuses, max_neighbours, covariance
+    # E-M9: simulation allows max_neighbours=0 — the C++ contract documents
+    # 0 as "unconditional simulation" (api.cpp:144-167,
+    # validate_max_neighbours_or_throw accepts 0; kriging entries use a
+    # separate >=1 gate). The default min_neighbors=1 in
+    # validate_kriging_params applies to kriging entries only.
     valid_radiuses = validate_kriging_params(
-        grid, radiuses, max_neighbours, cov_model
+        grid, radiuses, max_neighbours, cov_model, min_neighbors=0
     )
     # Ensure radiuses are integers for ctypes (c_int * 3)
     valid_radiuses = tuple(int(r) for r in valid_radiuses)
@@ -255,25 +295,41 @@ def sgs_simulation(
     # cells (out_prop.mask == 0) that are not masked out by the simulation
     # mask. Computed before the lock (cheap numpy sum) — keeps the lock hold
     # minimal; the C++ SGS counters decide whether the failure warning fires.
-    expected = grid.x * grid.y * grid.z - int(numpy.sum(out_prop.mask > 0))
+    expected_uninformed = grid.x * grid.y * grid.z - int(numpy.sum(out_prop.mask > 0))
     if mask is not None:
-        expected = int(numpy.sum((out_prop.mask.ravel() == 0) & (mask.ravel() != 0)))
+        expected_uninformed = int(numpy.sum((out_prop.mask.ravel() == 0) & (mask.ravel() != 0)))
 
-    # GSLIB ndmin semantics (sequential_simulation.h:104-114): when
+    # GSLIB ndmin semantics (sequential_simulation.h): when
     # min_neighbours > 0, C++ deliberately leaves nodes with fewer than
     # min_neighbours conditioning data unsimulated, and those nodes are
     # excluded from ALL stats counters (points_calculated /
     # points_without_neighbours / points_singularity). The ndmin skip count
-    # is reported to stderr only (sequential_simulation.h:155-160), never
-    # exposed in the stats dict, so Python cannot compute a matching expected
-    # count a priori — an expected based on uninformed cells would spuriously
-    # fire the "could not be kriged" warning on every sparse-data run with
-    # min_neighbours > 0. Pass expected=0 in that configuration to suppress
-    # the misleading warning; genuine numerical failures still raise via
-    # _finalize_kriging_stats (points_singularity > 0) and C++ reports the
-    # ndmin skip count itself.
-    if min_neighbours > 0:
+    # is carried in the C++ kriging_stats_t (m_points_ndmin_skipped) but is
+    # not copied into the Python-visible C-API stats dict (api.cpp
+    # hpgl_get_kriging_stats copies fields by name), so Python cannot
+    # compute a matching expected count a priori — an expected based on
+    # uninformed cells would spuriously fire the "could not be kriged"
+    # warning on every sparse-data run with min_neighbours > 0. Pass
+    # expected=0 in that configuration to suppress the misleading warning;
+    # genuine numerical failures still raise via _finalize_kriging_stats
+    # (points_singularity > 0) and C++ reports the ndmin skip count itself.
+    # E-M57: the ALL-skipped case (no node kriged at all) must still
+    # produce a programmatic signal — _warn_all_ndmin_skipped below detects
+    # the zero-attempt signature in the returned stats and warns.
+    # E-M9/R-20: max_neighbours=0 is the C++-documented "unconditional
+    # simulation" mode (api.cpp:144-167) — find() returns an empty
+    # neighbourhood for every node (sugarbox_neighbour_lookup.h:94-96),
+    # every node takes the KI_NO_NEIGHBOURS marginal-draw path, and
+    # points_calculated stays 0. Passing expected=0 (the same suppression
+    # mechanism as the min_neighbours > 0 case above) exempts the run from
+    # the spurious "N of N cells could not be kriged" warning — the
+    # marginal draw IS the requested mode, not a failure. Genuine singular
+    # failures still raise via _finalize_kriging_stats
+    # (points_singularity > 0, independent of expected).
+    if min_neighbours > 0 or max_neighbours == 0:
         expected = 0
+    else:
+        expected = expected_uninformed
 
     if mean is None or numpy.isscalar(mean):
         if mean is not None:
@@ -283,6 +339,7 @@ def sgs_simulation(
             _geo_module._reset_kriging_stats()
             call_sgs_simulation(_cont_marr, sgsp, _cdf_struct, mean, _mask_struct)
             _geo_module._finalize_kriging_stats(expected, "sgs_simulation")
+            _warn_all_ndmin_skipped(min_neighbours, expected_uninformed)
 
     else:
         _cont_marr = _create_hpgl_cont_masked_array(out_prop, grid)
@@ -293,6 +350,20 @@ def sgs_simulation(
         # grid (both volume 8) is misread with no exception. Mirror the
         # lvm_kriging R-13 guard (geo.py:1919-1927). 1D (flat) mean vectors
         # are covered by the size check and carry no per-dim meaning.
+        # E2-01/R-09: the guard above is 3D-only — an equal-volume 2D mean
+        # (e.g. (2,2) on a (1,2,2) grid) sails past the size check and the
+        # ndim==3 guard, then the F-order flat layout of the 2D array is
+        # consumed by flat node index with a silently permuted mean field —
+        # exactly the defect class fixed for lvm_kriging (geo.py:1971-1982).
+        # Only 1D flat and exactly grid-shaped 3D arrays are unambiguous;
+        # reject every other ndim for the same reason.
+        if mean.ndim not in (1, 3):
+            raise ValueError(
+                f"sgs_simulation: LVM mean must be 1D flat (size "
+                f"{grid.x * grid.y * grid.z}) or 3D with shape "
+                f"({grid.x}, {grid.y}, {grid.z}), got {mean.ndim}D "
+                f"shape {mean.shape}"
+            )
         if mean.ndim == 3 and (
             mean.shape[0] != grid.x
             or mean.shape[1] != grid.y
@@ -311,6 +382,7 @@ def sgs_simulation(
             _geo_module._reset_kriging_stats()
             call_sgs_lvm_simulation(_cont_marr, sgsp, _cdf_struct, _float_arr, _mask_struct)
             _geo_module._finalize_kriging_stats(expected, "sgs_simulation")
+            _warn_all_ndmin_skipped(min_neighbours, expected_uninformed)
 
     # geo._last_kriging_stats was populated from the C++ SGS stats inside
     # the lock above (see module comment) — the sentinel now carries the

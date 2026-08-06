@@ -49,18 +49,103 @@ namespace hpgl
 		// Correct indicator kriging probabilities for order relations.
 		// Ensures: 1) Monotonicity P(k) <= P(k+1), 2) Bounds [0,1].
 		//
-		// Algorithm: GSLIB 2nd ed. (1998) two-pass envelope (ORDREL.FOR):
-		// clip all CDF estimates to [0,1], upward fill-forward pass,
-		// downward fill-backward pass, then average the two corrected
-		// sequences. This replaces the earlier iterative pairwise averaging
-		// (Deutsch & Journel, 1992, 1st ed.), which diverges from GSLIB on
-		// inputs with multiple cascading violations.
+		// Algorithm: GSLIB 2nd ed. (1998) ORDREL.FOR applies DIFFERENT
+		// corrections for continuous (ivtype=1) and categorical (ivtype=0)
+		// variables:
+		//   - continuous: clip all CDF estimates to [0,1], upward
+		//     fill-forward pass, downward fill-backward pass, then average
+		//     the two corrected sequences (this replaces the earlier
+		//     iterative pairwise averaging — Deutsch & Journel, 1992,
+		//     1st ed. — which diverges from GSLIB on inputs with multiple
+		//     cascading violations).
+		//   - categorical: clip each per-category probability to [0,1] and
+		//     RENORMALIZE by the total: `sumcdf = sum(ccdf1);
+		//     if(sumcdf.le.0.0) sumcdf=1.0; ccdfo(i) = ccdf1(i)/sumcdf`.
+		//     No up/down/average passes.
+		//
+		// E-M56 (categorical S>1 truncation FLIP): the old "scale top to
+		// 1.0" Step-5 diverged when the per-category PMF summed to S > 1
+		// (reachable with per-category covariance models — the standard
+		// multi-category IK/SIS configuration): the [0,1] clip pinned the
+		// cumulative top at 1.0, making the scale a no-op and TRUNCATING the
+		// excess mass onto the earlier categories (executed proof:
+		// p=[0.6,0.7,0.5] → old HPGL masses [0.6,0.4,0.0] argmax 0 vs GSLIB
+		// [0.333,0.389,0.278] argmax 1 — a silent category-selection FLIP).
+		//
+		// The two branches are selected by input shape: the production
+		// callers (IK indicator_kriging.h, SIS sequential_indicator_
+		// simulation.cpp) always pass the CUMULATIVE CDF of already-sanitized
+		// per-category probabilities — non-decreasing by construction — while
+		// the continuous envelope exists precisely to repair NON-monotone CDF
+		// estimates. Monotonicity dispatch (NaN-safe: NaN comparisons are
+		// false, so NaN never marks a sequence decreasing) therefore routes
+		// every production call into the categorical renormalization and any
+		// raw CDF-estimate sequence into the continuous envelope.
 		inline void correct_order_relations(std::vector<indicator_probability_t> & probs)
 		{
 			if (probs.empty())
 				return;
 
 			const size_t n = probs.size();
+
+			bool monotone = true;
+			for (size_t i = 1; i < n && monotone; ++i)
+			{
+				if (probs[i] < probs[i - 1])
+					monotone = false;
+			}
+
+			if (monotone)
+			{
+				// GSLIB categorical (ivtype=0) renormalization. The input is
+				// the cumulative CDF of per-category probabilities; recover
+				// the per-category masses by backward difference, clip them
+				// to [0,1] (GSLIB's per-probability clip), sum, and rebuild
+				// the cumulative of the renormalized distribution — identical
+				// to GSLIB for S <= 1 (mass/sum == cdf/top) and GSLIB-correct
+				// for S > 1.
+				std::vector<indicator_probability_t> masses(n);
+				indicator_probability_t prev = 0.0f;
+				double sumcdf = 0.0;
+				for (size_t i = 0; i < n; ++i)
+				{
+					// NaN-safe (II-12): a NaN cumulative entry would poison
+					// the backward difference; hold the previous level. The
+					// callers sanitize per-category probabilities to [0,1]
+					// BEFORE accumulating, so NaN cannot occur on the real
+					// paths — this is defense-in-depth for direct misuse.
+					indicator_probability_t v = probs[i];
+					if (!std::isfinite(v))
+						v = prev;
+					// Defensive monotonicity (sanitized input is already
+					// non-decreasing); guarantees non-negative masses.
+					if (v < prev)
+						v = prev;
+					indicator_probability_t mass = v - prev;
+					// GSLIB [0,1] clip applied per per-category probability.
+					if (mass < 0.0f)
+						mass = 0.0f;
+					else if (mass > 1.0f)
+						mass = 1.0f;
+					masses[i] = mass;
+					sumcdf += mass;
+					prev = v;
+				}
+				// GSLIB sumcdf <= 0 guard: divisor forced to 1.0 (all-zero
+				// input stays all-zero; most_probable_category/sample then
+				// fall back to category 0 — matching GSLIB's degenerate
+				// outcome).
+				if (sumcdf <= 0.0)
+					sumcdf = 1.0;
+				indicator_probability_t cum = 0.0f;
+				for (size_t i = 0; i < n; ++i)
+				{
+					cum += static_cast<indicator_probability_t>(masses[i] / sumcdf);
+					probs[i] = cum;
+				}
+				return;
+			}
+
 			std::vector<indicator_probability_t> ccdf1(n);
 			std::vector<indicator_probability_t> ccdf2(n);
 
@@ -99,21 +184,13 @@ namespace hpgl
 			}
 
 			// Step 4: Average the two monotone corrections.
+			// GSLIB continuous (ivtype=1) branch ends here — NO top-scaling:
+			// the [0,1] clamp + monotone envelope is the complete correction
+			// for continuous variables (E-M56; the old Step-5 "scale top to
+			// 1.0" belonged to the categorical normalization, which now has
+			// its own branch above).
 			for (size_t i = 0; i < n; ++i)
 				probs[i] = static_cast<indicator_probability_t>(0.5 * (ccdf1[i] + ccdf2[i]));
-
-			// Step 5: Normalize the resulting CDF so it ends at 1.0.
-			// GSLIB's categorical branch normalizes the PDF to sum 1.0;
-			// expressed on the CDF this means the top value equals 1.0
-			// (the recovered PDF — backward differences — then sums to 1).
-			// Scale-invariant consumers (most_probable_category, sample)
-			// make this a value correction, not a crash guard.
-			if (probs.back() > 0.0)
-			{
-				indicator_probability_t scale = 1.0f / probs.back();
-				for (size_t i = 0; i < n; ++i)
-					probs[i] = static_cast<indicator_probability_t>(probs[i] * scale);
-			}
 		}
 
 		template<typename cov_t>
@@ -151,6 +228,14 @@ namespace hpgl
 		indicator_property_array_t & output_property)
 	{
 		using namespace hpgl::detail;
+
+		// E2-167: size-consistency validation at the kernel entry (sibling
+		// pattern cont_kriging.h:72, median_ik.cpp:51-55). The kernel had
+		// zero HPGL_CHECK — direct-C++ misuse (output smaller than input →
+		// set_at OOB; grid smaller than input → add_defined_cells / lookup
+		// indices beyond the grid) silently corrupted instead of failing.
+		HPGL_CHECK(input_property.size() == output_property.size() && grid.size() == input_property.size(),
+			"do_indicator_kriging: size mismatch between grid, input, and output");
 
 		print_algo_name("Indicator Kriging");
 		print_params(params);

@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 def pseudo_gaussian_transform(prop, pk_prop, rng=None):
     # NOTE: modifies prop.data in-place. Returns the same prop object.
     if rng is None:
-        rng = np.random.RandomState()
+        # E-M6: the default RandomState was unseeded — every direct call
+        # produced a different transform, defeating reproducibility. Seed
+        # the default so standalone calls are deterministic; callers can
+        # still pass their own rng (gtsim_2ind passes RandomState(seed)).
+        rng = np.random.RandomState(0)
     # Use ravel(order='K') for safe flat indexing of Fortran-ordered arrays.
     prop_flat = prop.data.ravel(order="K")
     pk_flat = pk_prop.data.ravel(order="K")
@@ -349,5 +353,20 @@ def gtsim_2ind(
     mask = prop1_flat >= tk_data
     prop1_flat[mask] = 1
     prop1_flat[~mask] = 0
+
+    # E2-32: preserve hard-data facies through the truncation. The
+    # per-cell threshold F⁻¹(1−p) separates classes only when the SGS
+    # output at the cell follows the empirical distribution with
+    # probability p — at hard-data cells the output is the degenerate
+    # back-transformed conditioning value, so heterogeneous p silently
+    # flips the original facies (Monte Carlo reproduction: 96% flip rate).
+    # Restore the original 0/1 facies at informed cells after thresholding
+    # (sibling sample-script P-02 documents this exact fix class).
+    prop_orig_flat = prop.data.ravel(order="K")
+    prop_mask_flat = prop.mask.ravel(order="K")
+    hard_cells = (prop_mask_flat != 0) & (
+        (prop_orig_flat == 0) | (prop_orig_flat == 1)
+    )
+    prop1_flat[hard_cells] = prop_orig_flat[hard_cells]
     logger.info("Done.")
     return prop1

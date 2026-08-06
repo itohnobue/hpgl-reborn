@@ -532,16 +532,39 @@ update_lags(
 		return;
 	if (max_q < 0.0)
 		return;
-	// Clamp into the representable lag range before casting so the
-	// conversions are always defined; the existing bounds checks below
-	// handle the clamped edge values.
-	if (min_q < 0.0)
-		min_q = 0.0;
-	if (max_q >= static_cast<double>(lag_count))
-		max_q = static_cast<double>(lag_count);
-	int lag_min = static_cast<int>(std::ceil(min_q));
+	// E-M75: half-open band matching the point-set kernel
+	// (calc_variograms_from_point_set) and the Python reference, which bin
+	// with `lags[lag_idx].m_start <= dist && dist < lags[lag_idx].m_end`:
+	//   dist >= m_start  <=>  max_q >= lag_idx  <=>  lag_idx <= floor(max_q)
+	//   dist <  m_end    <=>  min_q <  lag_idx  <=>  lag_idx >= floor(min_q) + 1
+	// The previous CLOSED lower bound (ceil(min_q)) included the exact
+	// band-end distance in BOTH adjacent lags (e.g. sep=1,width=2: every
+	// integer distance was counted twice), while point-set + Python count
+	// it only in the higher lag. The commented-out original check below
+	// was half-open — F-31's closed interval reintroduced the divergence.
+	// R-02: lag_min must come from the RAW (pre-clamp) min_q.  The Stage-6
+	// fix computed it AFTER the `min_q < 0 → 0.0` clamp, so
+	// floor(min_q)+1 ≥ 1 always and lag 0 could never be binned on the
+	// grid path — the low half of the first lag band was silently dropped
+	// (broke the pinned F-31 test) and the `lag_min < 0` guard below was
+	// dead code.  A raw negative min_q floors to lag_min ≤ 0, and that
+	// guard maps it to 0 — restoring the half-open convention parity with
+	// the point-set kernel (:929-930) and Python (variogram.py:381).
+	// Cast safety (F-31): min_q is finite and < lag_count here; a raw
+	// min_q ≤ −1 is never cast (lag_min = 0 directly, avoiding the
+	// out-of-range FP->int UB for hugely negative quotients), and only
+	// min_q in (−1, lag_count) reaches the cast, where
+	// floor(min_q)+1 ∈ [0, lag_count] is int-representable.
+	int lag_min = 0;
+	if (min_q > -1.0)
+		lag_min = static_cast<int>(std::floor(min_q)) + 1;
 	if (lag_min >= lag_count)
 		return;
+	// Clamp max_q into the representable lag range before its cast; min_q
+	// needs no clamp (its cast is guarded above and lag_min is already
+	// non-negative).
+	if (max_q >= static_cast<double>(lag_count))
+		max_q = static_cast<double>(lag_count);
 	int lag_max = static_cast<int>(std::floor(max_q));
 	if (lag_max < 0)
 		return;
@@ -665,6 +688,19 @@ static void calc_variograms_impl(
 				vec.m_data[0] = i2;
 				vec.m_data[1] = j2;
 				vec.m_data[2] = k2;
+
+				// E-M74: skip the zero offset. The (0,0,0) window vector
+				// pairs every informed cell with ITSELF (x==x1, y==y1,
+				// z==z1 below): var = 0, dist = 0 bins a zero-distance
+				// self-pair into lag 0, diluting the nugget estimate
+				// exactly as if the data had more short-distance pairs.
+				// is_in_tunnel((0,0,0)) is TRUE, so the self-pair was
+				// counted on the grid path while the point-set kernel
+				// explicitly skips it (idx1 == idx2,
+				// calc_variograms_from_point_set) — the grid kernel must
+				// mirror that skip so both paths agree on identical data.
+				if (i2 == 0 && j2 == 0 && k2 == 0)
+					continue;
 
 				int64_t doffset = get_offset(&vec, data->m_data_strides);
 				int64_t moffset = get_offset(&vec, data->m_mask_strides);

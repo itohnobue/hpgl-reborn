@@ -357,7 +357,7 @@ void test_2rhs_nan_in_a_rejected() {
 // but the solution is garbage-huge (probe: [1.0e12, -1.0e12]) and would be
 // reported as KI_SUCCESS by SK/correlogram/cokriging without the
 // solution-quality guard. Pre-fix: ok == true. Post-fix: the magnitude
-// guard (|X|_inf > 1e10) rejects the wild solution.
+// guard (|X|_inf > 1e3 · dynamic_range) rejects the wild solution.
 void test_1rhs_near_singular_spd_rejected() {
     TEST("lapack_spd_solve_1rhs near-singular SPD rejected (II-09)");
     int size = 2;
@@ -394,6 +394,153 @@ void test_1rhs_near_singular_spd_rejected() {
     CHECK(std::max(std::abs(X[0]), std::abs(X[1])) > 1e10 || !std::isfinite(X[0]) || !std::isfinite(X[1]));
 }
 
+// E-H1 (Stage-8 TEST-ADD T-10): the 2rhs dpotrs_ success path must reject
+// near-singular-but-SPD systems. The OK path solves A·[X0|X1] = [B0|B1]; the
+// II-09 quality guard was added to the 1rhs sibling only (fix 828443e), so
+// the 2rhs path reported INFO=0 → KI_SUCCESS with wild weights (~1e12) for
+// direct-C callers. Mirror of the 1rhs near-singular test with TWO RHS both
+// aligned with the near-null direction [1,-1]: the OK combination is
+// undefined (|SumX1| ~ 0) → must be rejected.
+void test_2rhs_near_singular_spd_rejected() {
+    TEST("lapack_spd_solve_2rhs near-singular SPD rejected (E-H1)");
+    int size = 2;
+    const double eps = 1e-12;
+    std::vector<double> A = {
+        1.0, 1.0 - eps,
+        1.0 - eps, 1.0
+    };
+    std::vector<double> B0 = { 1.0, -1.0 };
+    std::vector<double> B1 = { 1.0, -1.0 };
+    std::vector<double> X0(size, 0.0);
+    std::vector<double> X1(size, 0.0);
+    std::vector<double> A_backup(A);
+
+    // Confirm the matrix genuinely IS SPD — dpotrf_ must succeed, otherwise
+    // this test would be exercising the gauss fallback, not the guard on the
+    // dpotrs_ success path.
+    {
+        char uplo = 'U';
+        integer n = size;
+        integer info = 0;
+        std::vector<double> probe(A);
+        dpotrf_(&uplo, &n, probe.data(), &n, &info);
+        CHECK(info == 0);   // SPD — dpotrs_ success path is reached
+    }
+
+    bool ok = hpgl::detail::lapack_spd_solve_2rhs(
+        A.data(), size,
+        X0.data(), B0.data(),
+        X1.data(), B1.data(),
+        A_backup.data(), "test 2rhs near-singular SPD");
+
+    // Pre-fix (E-H1): no quality guard on the 2rhs path → ok == true with
+    // |X| ~ 1e12 garbage weights. Post-fix: the OK weight combination is
+    // undefined (X1 = A⁻¹·[1,-1] = 1e12·[1,-1] → SumOnes ~ 0) → rejected.
+    CHECK(!ok);
+}
+
+// R-01 (Stage-8 TEST-ADD T-22): the OK dual-RHS solve must ACCEPT legal
+// small-sill models. X1 = A⁻¹·1 ∝ 1/sill is legitimately large for sill ≲
+// 3e-4, but the FINAL weights w = X0 − mu·X1 are scale-invariant. Pre-fix the
+// absolute bound max(|X0|,|X1|) > 1e3 rejected these systems at every node
+// (bit-identical to the accepted ones, max|Δw| = 3.2e-16). Post-fix the gate
+// measures the scale-invariant final combination.
+void test_2rhs_small_sill_ok_accepted() {
+    TEST("lapack_spd_solve_2rhs small-sill OK accepted (R-01)");
+    int size = 2;
+    // A = sill·M with sill = 1e-4, M = [[2,0.5],[0.5,2]] — well-conditioned.
+    // X1 = A⁻¹·[1,1] = [4000, 4000] (∝ 1/sill) — huge intermediate, small
+    // final weights.
+    const double sill = 1e-4;
+    std::vector<double> A = {
+        2.0 * sill, 0.5 * sill,
+        0.5 * sill, 2.0 * sill
+    };
+    // B0 = A·[0.25, 0.25] so the first RHS has a modest exact solution.
+    std::vector<double> B0 = { 0.625 * sill, 0.625 * sill };
+    std::vector<double> B1 = { 1.0, 1.0 };
+    std::vector<double> X0(size, 0.0);
+    std::vector<double> X1(size, 0.0);
+    std::vector<double> A_backup(A);
+
+    bool ok = hpgl::detail::lapack_spd_solve_2rhs(
+        A.data(), size,
+        X0.data(), B0.data(),
+        X1.data(), B1.data(),
+        A_backup.data(), "test small-sill OK");
+
+    // Post-fix: the final combination w = X0 − mu·X1 is small (≈ [0.5, 0.5])
+    // → accepted. Pre-fix (R-01): |X1|_inf = 4000 > 1e3 → rejected.
+    CHECK(ok);
+    // X0 = A⁻¹B0 = [0.25, 0.25] — the first RHS solve is exact.
+    CHECK_CLOSE(X0[0], 0.25, 1e-9);
+    CHECK_CLOSE(X0[1], 0.25, 1e-9);
+    // The final OK weights stay within the stability bound (w ≈ [0.5, 0.5]).
+    double mu = (X0[0] + X0[1] - 1.0) / (X1[0] + X1[1]);
+    double w0 = X0[0] - mu * X1[0];
+    double w1 = X0[1] - mu * X1[1];
+    CHECK(std::max(std::abs(w0), std::abs(w1)) <= 1e3);
+    // Residual: A·X0 == B0 (the solved system is exact; A_backup holds the
+    // original matrix — the in-place dpotrf_ modified A).
+    CHECK_CLOSE(A_backup[0] * X0[0] + A_backup[1] * X0[1], B0[0], 1e-9);
+    CHECK_CLOSE(A_backup[2] * X0[0] + A_backup[3] * X0[1], B0[1], 1e-9);
+}
+
+// R4-01 (Stage-8 TEST-ADD T-17): the Schur-consistency reference on the
+// σ-scaled correlogram (SIS-LVM) path must be the kriging TARGET variance
+// C(0)·σc², not A[0][0] = C(0)·σ0² (the first datum's variance). With
+// heterogeneous means σc > σ0 the old reference spuriously rejected VALID
+// estimators (kriging variance ≥ 0) whenever the pre-filter fired. Uses the
+// adversarial worked example: A = σ0²·[[1, 1−3e-5],[1−3e-5, 1]] with
+// σ0 = sqrt(CORRELOGRAM_DELTA·(1−CORRELOGRAM_DELTA)) ≈ 3.162e-3 (means clamped
+// to 1e-5), σc = 0.5, b scaled by σ0·σc.
+void test_correlogram_sigma_c_gt_sigma_0_accepted() {
+    TEST("lapack_spd_solve_1rhs correlogram σc > σ0 near-dup accepted (R4-01)");
+    int size = 2;
+    const double sigma0_sq = 1e-5;          // σ0² for means clamped to 1e-5
+    const double sigma_c_sq = 0.25;         // σc² for center mean 0.5
+    // A = σ0²·[[1, 1−3e-5],[1−3e-5, 1]] — near-dup conditioning data.
+    std::vector<double> A = {
+        sigma0_sq, sigma0_sq * (1.0 - 3e-5),
+        sigma0_sq * (1.0 - 3e-5), sigma0_sq
+    };
+    // b = C(h_ic)·σ0·σc — cov-to-center ≈ 0.40/0.407 (asymmetric, so the
+    // near-null direction [1,-1] is excited and the pre-filter fires).
+    std::vector<double> B = { 6.3249e-4, 6.4309e-4 };
+    std::vector<double> X(size, 0.0);
+    std::vector<double> A_backup(A);
+
+    // Post-fix behavior (target_variance = C(0)·σc² = 0.25): the estimator is
+    // VALID (kriging variance σc² − B'X ≥ 0) and must be ACCEPTED.
+    bool ok_target = hpgl::detail::lapack_spd_solve_1rhs(
+        A.data(), size, X.data(), B.data(),
+        A_backup.data(), "test correlogram σc>σ0", sigma_c_sq);
+    CHECK(ok_target);
+
+    // The solved system is exact: A·X == B.
+    CHECK_CLOSE(A_backup[0] * X[0] + A_backup[1] * X[1], B[0], 1e-9);
+    CHECK_CLOSE(A_backup[2] * X[0] + A_backup[3] * X[1], B[1], 1e-9);
+
+    // Mechanism proof: B'X lies between the two references — above σ0²
+    // (the pre-fix reference, which made the estimator look "wild") and
+    // below σc² (the true target variance — the estimator is valid).
+    double bx = B[0] * X[0] + B[1] * X[1];
+    CHECK(bx > sigma0_sq);
+    CHECK(bx <= sigma_c_sq);
+    // Kriging variance non-negative: σc² − B'X ≥ 0.
+    CHECK(sigma_c_sq - bx >= -1e-6);
+
+    // Pre-fix behavior (target_variance = 0 → reference A_orig[0] = σ0²):
+    // B'X ≫ σ0²·(1+tol) → spuriously rejected as "wild".
+    std::vector<double> A2 = A_backup;      // fresh original (A was Cholesky-factored)
+    std::vector<double> A2_backup(A_backup);
+    std::vector<double> X2(size, 0.0);
+    bool ok_default = hpgl::detail::lapack_spd_solve_1rhs(
+        A2.data(), size, X2.data(), B.data(),
+        A2_backup.data(), "test correlogram σc>σ0 default", 0.0);
+    CHECK(!ok_default);
+}
+
 // ---- Main ----
 
 int main() {
@@ -413,6 +560,12 @@ int main() {
 
     // II-09: near-singular SPD rejection on the dpotrs_ success path.
     test_1rhs_near_singular_spd_rejected();
+
+    // Stage-8 TEST-ADD (E-H1 2rhs gate, R-01 small-sill OK acceptance,
+    // R4-01 correlogram σc > σ0 acceptance).
+    test_2rhs_near_singular_spd_rejected();
+    test_2rhs_small_sill_ok_accepted();
+    test_correlogram_sigma_c_gt_sigma_0_accepted();
 
     std::printf("C++ solver entry point tests: %d run, %d failed\n",
                 g_tests_run, g_tests_failed);

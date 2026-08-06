@@ -45,6 +45,10 @@ def sk_calc(x, y, z, prop1):
         values_result = load_property_python(x, y, z, "RESULT_SK" + str(i) + ".INC", True)
         save_property_python(values_result, x, y, z, "RES" + str(i) + ".INC")
         n = n - 1
+    # E-M16: the old metric accumulated the SIGNED difference and applied a
+    # single abs() afterwards — abs(Σdiff) ≠ Σ|diff|, so cancellation made
+    # the "sensitivity vs max_neighbours" curve meaningless. Accumulate the
+    # per-cell absolute difference instead (Σ|diff|).
     razn = np.zeros(i)
     max_n = load_property_python(x, y, z, "RES0.INC", True)
     for j in range(i):
@@ -52,8 +56,7 @@ def sk_calc(x, y, z, prop1):
         for a in range(x):
             for b in range(y):
                 for c in range(z):
-                    razn[j] = max_n[a, b, c] - min_n[a, b, c] + razn[j]
-        razn[j] = abs(razn[j])
+                    razn[j] = razn[j] + abs(max_n[a, b, c] - min_n[a, b, c])
     print(razn)
     mas = np.zeros(i)
     for f in range(i):
@@ -63,3 +66,10 @@ def sk_calc(x, y, z, prop1):
     plt.ylabel("D")
     plt.xlabel("max neighbours")
     plt.show()
+
+
+if __name__ == "__main__":
+    # E-H3: sk_calc() was never invoked — running the script was a silent
+    # no-op. Run the documented workflow: CUBE.INC in this script's
+    # directory is the sample cube (286×10×1 = 2860 cells).
+    sk_calc(286, 10, 1, None)

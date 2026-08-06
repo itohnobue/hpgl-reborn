@@ -1,6 +1,7 @@
 # GTSIM for 2 indicators (facies)
 import sys
 import os
+import math
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -16,6 +17,25 @@ from geo_bsd.geo import _clone_prop
 from geo_bsd.sgs import sgs_simulation
 from geo_bsd.cdf import calc_cdf
 from gaussian_cdf import inverse_normal_score
+
+# E-M13: the pseudo-Gaussian transform below draws from the numpy global RNG
+# (np.random.uniform). sgs_simulation receives a fixed seed, but without
+# seeding the transform draws the runs vary run-to-run (grep: 0 seed calls
+# across sample-scripts/src before this fix). Seed once at script start with
+# the SGS seed so the whole pipeline is reproducible.
+np.random.seed(3439275)
+
+
+def _norm_cdf(x):
+    """Standard normal CDF Φ(x), vectorized.
+
+    E2-41: maps the normal-score truncation thresholds into probability
+    space before the empirical-CDF inversion (mirrors the library
+    gtsim_2ind F-02 fix — truncation must compare in the SAME space as
+    the SGS output).
+    """
+    x = np.asarray(x, dtype=np.float64)
+    return 0.5 * (1.0 + np.vectorize(math.erf)(x / math.sqrt(2.0)))
 
 
 def pseudo_gaussian_transform(prop, tk_prop):
@@ -73,7 +93,13 @@ def gtsim_2ind(grid, prop, sk_params=None, sgs_params=None, pk_prop=None):
     # 3. pseudo gaussian transform of initial property (prop) with pk_prop
     print("Pseudo gaussian transform of initial property (hard data)...")
     prop_pg = pseudo_gaussian_transform(prop, tk_prop)
-    write_property(prop, "results/GTSIM_TRANSFORMED_PROP.INC", "TRANSPROP", -99)
+    # E-M12: pseudo_gaussian_transform deep-copies prop via _clone_prop and
+    # mutates only the clone — the caller's `prop` object is never modified.
+    # The previous write_property(prop, ...) wrote the UNTRANSFORMED hard
+    # data into GTSIM_TRANSFORMED_PROP.INC on every run (the sibling
+    # gtsimk_const_prob.py writes the transformed property). Write the
+    # transformed clone instead.
+    write_property(prop_pg, "results/GTSIM_TRANSFORMED_PROP.INC", "TRANSPROP", -99)
     del pk_prop
     print("Done.")
 
@@ -99,6 +125,17 @@ def gtsim_2ind(grid, prop, sk_params=None, sgs_params=None, pk_prop=None):
 
     # 5. Truncation
     print("Truncating SGS result...")
+    # E2-41: the SGS output prop_sgs lives in DATA space — the C++
+    # sequential_gaussian_simulation back-transforms the simulated
+    # standard-normal field through the in-scope empirical CDF
+    # (transform_cdf_p at sequential_gaussian_simulation.cpp:165), while
+    # tk_prop holds NORMAL-SCORE thresholds Φ⁻¹(pk). Comparing across
+    # spaces misclassifies every cell (realized facies proportions
+    # compressed toward the marginal, 0.77 vs 0.50 — E2-41 trace). Map
+    # each threshold through the SAME empirical CDF used by the
+    # back-transform: tk_data = F⁻¹(Φ(tk)) (port of the library
+    # gtsim_2ind F-02 fix).
+    tk_data = cdf.inverse(_norm_cdf(tk_prop.data.flat[:]))
     # II-43: two independent `if`s re-compared the OVERWRITTEN value. When
     # tk <= 0 (common: any pk <= 0.5 gives tk = -Φ⁻¹(pk) <= 0), a cell set
     # to 0 by the first if was immediately re-set to 1 by the second
@@ -120,7 +157,7 @@ def gtsim_2ind(grid, prop, sk_params=None, sgs_params=None, pk_prop=None):
         orig = prop.data.flat[i]
         if orig == 0 or orig == 1:
             prop_sgs.data.flat[i] = orig
-        elif prop_sgs.data.flat[i] < tk_prop.data.flat[i]:
+        elif prop_sgs.data.flat[i] < tk_data[i]:
             prop_sgs.data.flat[i] = 0
         else:
             prop_sgs.data.flat[i] = 1

@@ -200,39 +200,72 @@ namespace hpgl
 		int cy = loc[1] / m_ellipsoid[1];
 		int cz = loc[2] / m_ellipsoid[2];
 
-		// Pre-compute total capacity to avoid chain reallocations.
-		// At most 27 clusters (3×3×3 neighbour box), each capped at m_limit.
-		// M-13: cap the reserve. 27*m_limit scales with the search-box volume
-		// (m_limit = offsets/250; a legal radius-644 workflow reaches
-		// ~8.57M → ~925 MB/thread reserve inside the OpenMP kriging loop),
-		// and the caller only ever consumes up to its configured
-		// max_neighbours (bounded by MAX_NEIGHBOURS_UPPER_BOUND = 100000).
-		// std::vector grows on demand past the reserve, so capping only
-		// sacrifices a reallocation in pathological cases — never
-		// correctness.
-		const size_t MAX_NEIGHBOUR_RESERVE = 100000;
-		size_t reserve_cap = m_state->m_limit > MAX_NEIGHBOUR_RESERVE / 27
-			? MAX_NEIGHBOUR_RESERVE : 27 * m_state->m_limit;
+		// E-M65 (CONFIRMED MEDIUM): bound the per-node candidate COPY, not
+		// just the caller's post-collection truncation. Pre-fix this routine
+		// copied ALL nodes of the 27 neighbour clusters (27 × m_limit — a
+		// legal radius-644 workflow reached ~925K candidates/node) and the
+		// caller then ran its distance pass + nth_element over the full pool
+		// inside the OpenMP kriging loop. The copy cap below stops the copy
+		// as soon as the cap is reached — bounding the real work before any
+		// distance math.
+		// R-12 (CONFIRMED MEDIUM): the cap is 2 × NEIGHBOUR_WORK_CAP, NOT
+		// equal to it. The indexed caller (sugarbox_indexed_neighbour_lookup.h)
+		// keeps its pool RANKING bound at NEIGHBOUR_WORK_CAP (SCAN_LIMIT —
+		// the E2-145 count cap shared with the plain lookup); if the copy
+		// cap equaled that bound, the caller's covariance-order pool
+		// selection (E-M69) could never fire: the pool was always the first
+		// 10000 candidates in cluster-visit order and high-covariance
+		// anisotropic candidates beyond the cap were silently dropped. The
+		// 2× headroom (still 46× below the pre-E-M65 ~925K worst case)
+		// makes the selection reachable on dense configs while keeping the
+		// per-node copy bounded. The plain lookup path never uses the
+		// clusterizer, so this cap affects only the indexed path.
+		// Because the old cluster-visit order (z-major) visited the center
+		// cluster 14th of 27, a plain prefix cap would drop the CLOSEST data
+		// in dense regions (F-21/R-03). Clusters are therefore visited
+		// center-first (by |cluster offset|²) so the cap keeps the closest
+		// clusters' data.
+		static const size_t WORK_CAP = 20000;  // 2 × NEIGHBOUR_WORK_CAP (sugarbox_neighbour_lookup.h) — see R-12 note above
+		// The 27 cluster offsets of the 3×3×3 box, ordered by |offset|²
+		// (center cluster first: 1 center, 6 face, 12 edge, 8 corner).
+		static const int visit_offsets[27][3] = {
+			{ 0,  0,  0},
+			{ 1,  0,  0}, {-1,  0,  0}, { 0,  1,  0}, { 0, -1,  0}, { 0,  0,  1}, { 0,  0, -1},
+			{ 1,  1,  0}, { 1, -1,  0}, {-1,  1,  0}, {-1, -1,  0},
+			{ 1,  0,  1}, { 1,  0, -1}, {-1,  0,  1}, {-1,  0, -1},
+			{ 0,  1,  1}, { 0,  1, -1}, { 0, -1,  1}, { 0, -1, -1},
+			{ 1,  1,  1}, { 1,  1, -1}, { 1, -1,  1}, { 1, -1, -1},
+			{-1,  1,  1}, {-1,  1, -1}, {-1, -1,  1}, {-1, -1, -1}
+		};
 		neighbours.clear();
+		size_t reserve_cap = 27 * m_state->m_limit;
+		if (reserve_cap > WORK_CAP)
+			reserve_cap = WORK_CAP;
 		neighbours.reserve(reserve_cap);
 
-		for (int k = cz - 1; k <= cz + 1; ++k)
-			for (int j = cy - 1; j	<= cy + 1; ++j)
-				for (int i = cx - 1; i <= cx + 1; ++i)
+		for (size_t o = 0; o < 27; ++o)
+		{
+			int i = cx + visit_offsets[o][0];
+			int j = cy + visit_offsets[o][1];
+			int k = cz + visit_offsets[o][2];
+			int cluster_idx = get_index(i, j, k);
+			if (cluster_idx >= 0)
+			{
+				// F-N11: lazily-created clusters may be null — skip
+				// cells that never received a node.
+				if (!m_state->m_clusters[cluster_idx])
+					continue;
+				if (m_state->m_clusters[cluster_idx]->limit_exceeded())
+					{ fprintf(stderr, "HPGL FATAL: clusterizer_t: cluster limit exceeded\n"); abort(); }
+				const std::vector<node_index_t> & nodes = m_state->m_clusters[cluster_idx]->nodes();
+				for (size_t n = 0, end_n = nodes.size(); n != end_n; ++n)
 				{
-				int cluster_idx = get_index(i, j, k);
-				if (cluster_idx >= 0)
-				{
-					// F-N11: lazily-created clusters may be null — skip
-					// cells that never received a node.
-					if (!m_state->m_clusters[cluster_idx])
-						continue;
-					if (m_state->m_clusters[cluster_idx]->limit_exceeded())
-						{ fprintf(stderr, "HPGL FATAL: clusterizer_t: cluster limit exceeded\n"); abort(); }
-					const std::vector<node_index_t> & nodes = m_state->m_clusters[cluster_idx]->nodes();
-					std::copy(nodes.begin(), nodes.end(), std::back_inserter(neighbours));					
+					if (neighbours.size() >= WORK_CAP)
+						return true;
+					neighbours.push_back(nodes[n]);
 				}
-				}
+			}
+		}
 		return true;
 	}
 	

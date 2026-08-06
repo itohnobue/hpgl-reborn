@@ -1,13 +1,17 @@
+import os
 import numpy as np
-from python_property import save_property_python
+from python_property import load_property_python, save_property_python
 
 
 def getconcube(cube):
     [x, y, z] = cube.shape
-    conncube = np.zeros((x, y, z), dtype=np.int16)
-    qI = np.zeros((x * y * z), dtype=np.int16)
-    qJ = np.zeros((x * y * z), dtype=np.int16)
-    qK = np.zeros((x * y * z), dtype=np.int16)
+    # E-M21: int16 wrapped on >32767-cell cubes (negative labels/indices →
+    # wrong connectivity). int32 covers any cube whose size fits the queue
+    # arrays (coordinates and labels < x*y*z).
+    conncube = np.zeros((x, y, z), dtype=np.int32)
+    qI = np.zeros((x * y * z), dtype=np.int32)
+    qJ = np.zeros((x * y * z), dtype=np.int32)
+    qK = np.zeros((x * y * z), dtype=np.int32)
     compnum = 0
     for i in range(x):
         for j in range(y):
@@ -68,3 +72,15 @@ def getconcube(cube):
                                 qK[iqe] = nk + 1
                                 conncube[ni, nj, nk + 1] = compnum
     save_property_python(conncube, x, y, z, "SAVE_CUB.INC")
+    return compnum
+
+
+if __name__ == "__main__":
+    # E2-45: getconcube() was never invoked — running the script was a
+    # silent no-op. Run the documented workflow (README: "Concurrency
+    # benchmark / stress test") on the shipped binary cube SAVE.INC
+    # (286×10×1, 0/1 values) and report the component count.
+    cube = load_property_python(
+        286, 10, 1, os.path.join(os.path.dirname(__file__), "SAVE.INC"), True
+    )
+    print("Connected components:", getconcube(cube))

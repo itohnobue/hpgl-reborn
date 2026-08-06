@@ -100,7 +100,11 @@ namespace hpgl
 		std::string maxneighbours  ("MaxNeighb :\t");
 		std::string probs          ("MargProb  :\t");
 
-		for (indicator_index_t idx = 0; idx < p.m_category_count; ++idx)
+		// E-M54: loop with size_t, not indicator_index_t (unsigned char):
+		// m_category_count is size_t and a category count >= 256 made idx
+		// wrap 0->255->0 -> infinite loop (hang). The same wrap pattern
+		// existed in print_params(const indicator_params_t*, ...) below.
+		for (size_t idx = 0; idx < p.m_category_count; ++idx)
 		{
 			values += std::to_string(idx) + "\t";
 			cov_type += std::to_string(p.m_covariances[idx]) + "\t";
@@ -137,10 +141,13 @@ namespace hpgl
 
 	void print_params(const indicator_params_t * p, int param_count, const mean_t * marginal_probs)
 	{
-#ifndef NDEBUG
+		// E-M54: the guard is unconditional (was debug-only). With a size_t
+		// loop index below, a non-positive param_count would otherwise
+		// promote to a huge size_t and loop out of bounds; a null p would
+		// be dereferenced. Debug builds already returned here; release
+		// builds now get the same safe behavior instead of UB.
 		if (p == nullptr || param_count <= 0)
 			return;
-#endif
 		std::string values         ("Indicators:\t");
 		std::string cov_type       ("Covariance:\t");
 		std::string ranges         ("Ranges    :\t");
@@ -151,7 +158,10 @@ namespace hpgl
 		std::string maxneighbours  ("MaxNeighb :\t");
 		std::string probs          ("MargProb  :\t");
 
-		for (indicator_index_t idx = 0; idx < param_count; ++idx)
+		// E-M54: size_t loop index — same unsigned-char wrap hazard as the
+		// ik_params_t overload above (param_count > 255 wrapped to 0 ->
+		// infinite loop). The guard above ensures param_count > 0.
+		for (size_t idx = 0; idx < static_cast<size_t>(param_count); ++idx)
 		{
 			values += std::to_string(idx) + "\t";
 			cov_type += std::to_string(p[idx].cov_type) + "\t";

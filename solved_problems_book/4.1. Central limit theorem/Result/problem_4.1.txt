@@ -1,7 +1,7 @@
 ---------------------------------------------------
-One random realization mean is:  0.5501317718
-One random realization var is:  0.121800789196
+One random realization mean is:  0.5817908594682846
+One random realization var is:  0.06770730751818729
 ---------------------------------------------------
-Summary mean is:  5.03416472703
-Summary variance is: 0.0790254982388
+Summary mean is:  5.059005724292112
+Summary variance is: 0.7808499897403411
 ---------------------------------------------------

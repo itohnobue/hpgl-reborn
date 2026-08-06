@@ -1,6 +1,7 @@
 # GTSIM for K indicators with constant probabilities
 import sys
 import os
+import math
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -15,6 +16,25 @@ from geo_bsd.geo import _clone_prop
 from geo_bsd.sgs import sgs_simulation
 from geo_bsd.cdf import calc_cdf
 from gaussian_cdf import inverse_normal_score
+
+# E-M13: the pseudo-Gaussian transform below draws from the numpy global RNG
+# (np.random.uniform). sgs_simulation receives a fixed seed, but without
+# seeding the transform draws the runs vary run-to-run (grep: 0 seed calls
+# across sample-scripts/src before this fix). Seed once at script start with
+# the SGS seed so the whole pipeline is reproducible.
+np.random.seed(3439275)
+
+
+def _norm_cdf(x):
+    """Standard normal CDF Φ(x), vectorized.
+
+    E2-41: maps the normal-score truncation thresholds into probability
+    space before the empirical-CDF inversion (mirrors the library
+    gtsim_2ind F-02 fix — truncation must compare in the SAME space as
+    the SGS output).
+    """
+    x = np.asarray(x, dtype=np.float64)
+    return 0.5 * (1.0 + np.vectorize(math.erf)(x / math.sqrt(2.0)))
 
 
 def mean_ind(prop_init, indicator):
@@ -80,6 +100,28 @@ def gtsim_Kind_const_prop(grid, prop, indicator, sk_params=None, pk_prop=None, s
 
     print("Starting GTSIM for K Indicator variables...")
 
+    # E2-38: validate the hard-data categories up front. An out-of-range
+    # category (val >= indicator) previously crashed with a bare IndexError
+    # deep inside the transform (tk_prop[val]); val = -1 wrapped silently
+    # through negative indexing to the last threshold, conditioning the
+    # cell in the WRONG Gaussian interval. Fail loudly at the entry point.
+    # indicator < 2 leaves no thresholds at all (indicator-1 == 0) and
+    # crashes on the empty threshold list — reject it too.
+    if indicator < 2:
+        raise ValueError(
+            "gtsim_Kind_const_prop: indicator must be >= 2 (at least two "
+            f"categories), got {indicator}."
+        )
+    for i in range(prop.data.size):
+        if prop.mask.flat[i] > 0:
+            val = int(prop.data.flat[i])
+            if val < 0 or val >= indicator:
+                raise ValueError(
+                    "gtsim_Kind_const_prop: hard-data category out of range "
+                    f"— cell {i} has value {val}, expected an integer in "
+                    f"[0, {indicator - 1}]."
+                )
+
     # 1. calculate pk_prop
     print("Extracting probability information...")
 
@@ -115,6 +157,16 @@ def gtsim_Kind_const_prop(grid, prop, indicator, sk_params=None, pk_prop=None, s
     # 2. Calculate tk_prop
     print("Calculating Pk...")
     p = calc_ver(pk_prop, indicator)
+    # E2-40: enforce monotone cumulative probabilities in [0, 1] before the
+    # inverse-CDF thresholds. A user-supplied Σ pk > 1 pushes the cumulative
+    # above 1 and negative marginals (Σw > 1 kriging overshoot) produce
+    # DECREASING cumulatives — non-monotone cumulatives INVERT the
+    # thresholds and the middle category is NEVER simulated
+    # (arithmetic-verified; E-M14 sibling: pk>1 → inverse_normal_score
+    # clamps at 10 → sparse regions collapse to facies 0). Clamp each
+    # cumulative to [0, 1] and enforce non-decreasing order (GSLIB gtsim
+    # clamps probabilities before the inverse-CDF threshold calculation).
+    p = np.maximum.accumulate(np.clip(p, 0.0, 1.0))
     print(p)
     print("Done.")
     print("Calculating threshold curves (tk)...")
@@ -157,9 +209,20 @@ def gtsim_Kind_const_prop(grid, prop, indicator, sk_params=None, pk_prop=None, s
     # 5. Truncation
     print("Truncating SGS result...")
 
+    # E2-41: the SGS output prop1 lives in DATA space — the C++
+    # sequential_gaussian_simulation back-transforms the simulated
+    # standard-normal field through the in-scope empirical CDF
+    # (transform_cdf_p at sequential_gaussian_simulation.cpp:165), while
+    # tk_prop holds NORMAL-SCORE thresholds Φ⁻¹(pk). Comparing across
+    # spaces misclassifies every cell (realized facies compressed toward
+    # the marginal — E2-41 trace). Map each constant threshold through the
+    # SAME empirical CDF used by the back-transform: tk_data = F⁻¹(Φ(tk))
+    # (port of the library gtsim_2ind F-02 fix).
+    tk_data = cdf.inverse(_norm_cdf(tk_prop))
+
     for i in range(prop1.data.size):
         for k in range(indicator - 1):
-            if prop1.data.flat[i] < tk_prop[k]:
+            if prop1.data.flat[i] < tk_data[k]:
                 prop1.data.flat[i] = k
                 break
             else:
