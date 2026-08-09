@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
+import logging
+
 import numpy
 
 # Import validation framework
@@ -37,6 +39,8 @@ from .validation import (
     ValidationConstants,
 )
 
+logger = logging.getLogger(__name__)
+
 # Simulation failure statistics ARE now populated by the C++ SIS path
 # (F-M6: sequential_indicator_simulation.cpp calls set_kriging_stats with
 # the kriging outcome counters). The Python wrapper consumes them via
@@ -57,6 +61,40 @@ def __prepare_sis(prop, data, marginal_probs, mask, use_harddata):
         mask = _require_ind_data(mask)
 
     return out_prop, is_lvm, marginal_probs, mask
+
+
+def _warn_all_skipped(expected_uninformed):
+    """P-02: signal an all-skipped SIS run programmatically.
+
+    Analog of ``sgs._warn_all_ndmin_skipped`` (sgs.py:63-91): SIS has no
+    ndmin gate, but the same zero-attempt signature — every cell the run
+    should have simulated left unsimulated — was previously completely
+    silent: all C++ counters stay zero (points_calculated ==
+    points_without_neighbours == points_singularity == 0),
+    indistinguishable from a successful no-op. That zero-attempt signature
+    IS the all-skipped signal when the run had cells it should have
+    simulated (expected_uninformed > 0); warn loudly so the no-output
+    condition is observable programmatically (caplog / log capture), not
+    just via the C++ stderr counter. Unconditional (max_neighbours=0)
+    runs take the marginal-substitution path and populate
+    points_without_neighbours, so they do not trip the signature — the
+    marginal draw IS the requested mode.
+    """
+    stats = getattr(_geo_module, "_last_kriging_stats", None)
+    if expected_uninformed <= 0 or stats is None:
+        return
+    calculated = int(stats.get("points_calculated", 0))
+    no_neighbours = int(stats.get("points_without_neighbours", 0))
+    singular = int(stats.get("points_singularity", 0))
+    if calculated == 0 and no_neighbours == 0 and singular == 0:
+        logger.warning(
+            "sis_simulation: no nodes were simulated — all %d expected "
+            "uninformed cells were left unsimulated (zero kriging "
+            "evaluations succeeded, zero marginal substitutions, zero "
+            "singular failures). Output remains at its initial (masked) "
+            "state. stats=%s",
+            expected_uninformed, stats,
+        )
 
 
 def __create_hpgl_ik_params(data, indicator_count, is_lvm, marginal_probs):
@@ -375,6 +413,7 @@ def sis_simulation(
                 _create_hpgl_ubyte_array(mask, grid) if mask is not None else None,
             )
             _geo_module._finalize_kriging_stats(expected, "sis_simulation")
+            _warn_all_skipped(uninformed)
     else:
         with _hpgl_call_lock:
             _geo_module._reset_kriging_stats()
@@ -388,6 +427,7 @@ def sis_simulation(
                 use_correlogram,
             )
             _geo_module._finalize_kriging_stats(expected, "sis_simulation")
+            _warn_all_skipped(uninformed)
 
     # geo._last_kriging_stats was populated from the C++ SIS stats inside
     # the lock above (see module comment) — the sentinel now carries the

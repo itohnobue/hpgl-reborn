@@ -115,11 +115,17 @@ def _source_version():
 
 _source_version_value = _source_version()
 
+# N2-L19: single source of truth for the version fallback literal, so a
+# version bump touches one place instead of the three hardcoded copies
+# below (previously "2.0.5" appeared in the ImportError fallback, the
+# warning text, and the PackageNotFoundError fallback independently).
+_VERSION_FALLBACK = "2.0.6"
+
 try:
     from importlib.metadata import PackageNotFoundError  # noqa: E402
     from importlib.metadata import version as _get_version
 except ImportError:  # pragma: no cover - pre-3.8 fallback
-    __version__ = _source_version_value or "2.0.5"
+    __version__ = _source_version_value or _VERSION_FALLBACK
 else:
     if _source_version_value is not None:
         # II-28: the source tree is authoritative when present — a stale
@@ -134,9 +140,10 @@ else:
             __version__ = _get_version("hpgl")
         except PackageNotFoundError:
             logging.warning(
-                "hpgl package not found via importlib.metadata; falling back to default version 2.0.5"
+                "hpgl package not found via importlib.metadata; falling back to default version %s",
+                _VERSION_FALLBACK,
             )
-            __version__ = "2.0.5"
+            __version__ = _VERSION_FALLBACK
 
 __all__ = [
     # Kriging algorithms

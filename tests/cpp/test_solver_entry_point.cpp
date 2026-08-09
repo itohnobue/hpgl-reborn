@@ -5,15 +5,25 @@
  * Tests cover:
  *   - lapack_spd_solve_1rhs: known SPD matrix (success path)
  *   - lapack_spd_solve_1rhs: non-SPD matrix (fallback to gauss_solve)
- *   - lapack_spd_solve_1rhs: NaN in A matrix (early rejection)
+ *   - lapack_spd_solve_1rhs: NaN / Inf in A matrix (early rejection)
+ *   - lapack_spd_solve_1rhs: near-singular SPD rejection (II-09 magnitude
+ *     gate on the dpotrs_ success path)
+ *   - lapack_spd_solve_1rhs: σ-scaled correlogram σc > σ0 acceptance (R4-01)
+ *   - lapack_spd_solve_1rhs: cross-scale cokriging acceptance (R2-01)
  *   - lapack_spd_solve_2rhs: known SPD matrix with dual RHS (success path)
  *   - lapack_spd_solve_2rhs: non-SPD matrix (fallback to gauss_solve)
- *   - lapack_spd_solve_2rhs: NaN in A matrix (early rejection)
+ *   - lapack_spd_solve_2rhs: NaN / Inf in A matrix (early rejection)
+ *   - lapack_spd_solve_2rhs: near-singular SPD rejection (E-H1)
+ *   - lapack_spd_solve_2rhs: small-sill OK acceptance (R-01)
+ *   - lapack_spd_solve_2rhs: E-M82 caller-provided workspace buffer
+ *   - 1rhs-vs-2rhs path equivalence on the same SPD system (RC-5)
  */
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 
 // TNT matrix library (required by HPGL covariance headers)
@@ -57,46 +67,10 @@ static const char *g_current_test = "";
 
 // ---- Tests ----
 
-/// Solve a known 3x3 SPD system with lapack_spd_solve_1rhs.
-/// A = [[4, 2, 2],
-///      [2, 5, 1],
-///      [2, 1, 6]]
-/// Solution for B = [1, 1, 1]^T → X ≈ [0.125, 0.125, 0.125]
-void test_1rhs_known_spd_success() {
-    TEST("lapack_spd_solve_1rhs 3x3 SPD success");
-    int size = 3;
-    // Positive-definite matrix from test_hpgl_core.cpp cholesky tests
-    std::vector<double> A = {
-        4.0, 2.0, 2.0,
-        2.0, 5.0, 1.0,
-        2.0, 1.0, 6.0
-    };
-    std::vector<double> B = { 1.0, 1.0, 1.0 };
-    std::vector<double> X(size, 0.0);
-    std::vector<double> A_backup(A);
-
-    bool ok = hpgl::detail::lapack_spd_solve_1rhs(
-        A.data(), size, X.data(), B.data(),
-        A_backup.data(), "test 1rhs SPD");
-
-    CHECK(ok);
-    // Verify against known solution computed offline:
-    // A * x = [1, 1, 1] => x ≈ [0.139535, 0.069767, 0.081395]
-    // (Let's use a simpler B that gives integer solution)
-    // Actually, just verify ||Ax - B|| is small
-    // This is a residual check — A*X should ≈ B
-    double Ax_minus_B[3] = {
-        (4.0 * X[0] + 2.0 * X[1] + 2.0 * X[2]) - 1.0,
-        (2.0 * X[0] + 5.0 * X[1] + 1.0 * X[2]) - 1.0,
-        (2.0 * X[0] + 1.0 * X[1] + 6.0 * X[2]) - 1.0
-    };
-    for (int i = 0; i < 3; ++i) {
-        CHECK_CLOSE(Ax_minus_B[i], 0.0, 1e-12);
-    }
-}
-
 /// Same known 3x3 SPD, but with B = A * [1, 1, 1]^T = [8, 8, 9].
-/// Expected solution: X = [1, 1, 1].
+/// Expected solution: X = [1, 1, 1].  Strictly stronger than the deleted
+/// residual-based `test_1rhs_known_spd_success` (same matrix, same dpotrs_
+/// path; per-element CHECK_CLOSE pins the exact solution).
 void test_1rhs_known_spd_integer_solution() {
     TEST("lapack_spd_solve_1rhs 3x3 SPD integer solution");
     int size = 3;
@@ -145,6 +119,19 @@ void test_1rhs_non_spd_fallback() {
     bool ok = hpgl::detail::lapack_spd_solve_1rhs(
         A.data(), size, X.data(), B.data(),
         A_backup.data(), "test 1rhs non-SPD");
+
+    // L-30: dpotrf_ probe — prove the fallback genuinely triggers. For the
+    // effective column-major upper triangle [[1,2],[2,4]] (det 0), dpotrf_
+    // must fail (info > 0); otherwise this test would exercise the dpotrs_
+    // success path, not the fallback it names.
+    {
+        char uplo = 'U';
+        integer n = size;
+        integer info = 0;
+        std::vector<double> probe(A);
+        dpotrf_(&uplo, &n, probe.data(), &n, &info);
+        CHECK(info > 0);   // genuinely non-SPD → fallback required
+    }
 
     // gauss_solve should detect singularity and return false
     CHECK(!ok);
@@ -293,6 +280,18 @@ void test_2rhs_non_spd_fallback() {
         X1.data(), B1.data(),
         A_backup.data(), "test 2rhs non-SPD");
 
+    // L-30: dpotrf_ probe — for storage [2,1,4,3] the effective column-major
+    // upper triangle is [[2,4],[4,3]] (det = 2*3 - 4*4 = -10 < 0) → dpotrf_
+    // must fail (info > 0), proving the fallback path is genuinely exercised.
+    {
+        char uplo = 'U';
+        integer n = size;
+        integer info = 0;
+        std::vector<double> probe(A);
+        dpotrf_(&uplo, &n, probe.data(), &n, &info);
+        CHECK(info > 0);   // genuinely non-SPD → fallback required
+    }
+
     CHECK(ok);
     CHECK_CLOSE(X0[0], 1.0, 1e-12);
     CHECK_CLOSE(X0[1], 0.0, 1e-12);
@@ -325,17 +324,36 @@ void test_2rhs_singular_returns_false() {
         X1.data(), B1.data(),
         A_backup.data(), "test 2rhs singular");
 
+    // N2-L34: dpotrf_ probe — for storage [1,2,2,4] the effective column-major
+    // upper triangle is [[1,2],[2,4]] (det = 0) → dpotrf_ must fail (info > 0),
+    // completing the PR-04 probe discipline across all four non-SPD tests.
+    {
+        char uplo = 'U';
+        integer n = size;
+        integer info = 0;
+        std::vector<double> probe(A);
+        dpotrf_(&uplo, &n, probe.data(), &n, &info);
+        CHECK(info > 0);   // genuinely non-SPD → fallback required
+    }
+
     // Singular matrix — gauss_solve should fail too
     CHECK(!ok);
 }
 
 /// NaN in A matrix: early rejection before dpotrf_.
+/// N2-21: the NaN sits at storage index 1 = lower-triangle (1,0), a position
+/// dpotrf_ (uplo='U') does NOT read. Without the 2rhs A-scan the NaN would
+/// never reach the Cholesky factor, the solve would succeed, and ok would be
+/// true — so this test discriminates the scan. (The previous fixture put NaN
+/// at storage index 2 = upper-triangle (0,1), which dpotrf_ reads → NaN
+/// propagated regardless of the scan → the test passed even with the scan
+/// deleted, silently masking a 2rhs A-scan regression.)
 void test_2rhs_nan_in_a_rejected() {
     TEST("lapack_spd_solve_2rhs NaN in A (early rejection)");
     int size = 2;
     std::vector<double> A = {
-        4.0, 2.0,
-        std::numeric_limits<double>::quiet_NaN(), 5.0
+        4.0, std::numeric_limits<double>::quiet_NaN(),
+        2.0, 5.0
     };
     std::vector<double> B0 = { 6.0, 8.0 };
     std::vector<double> B1 = { 4.0, 3.0 };
@@ -541,11 +559,195 @@ void test_correlogram_sigma_c_gt_sigma_0_accepted() {
     CHECK(!ok_default);
 }
 
+// A-04 (ADD-1, RC-5 sibling-drift enforcement): the same SPD system solved
+// through lapack_spd_solve_1rhs and lapack_spd_solve_2rhs must produce
+// bit-identical X0 (both run dpotrs_ on the same dpotrf_ factor; LAPACK
+// triangular solves are column-independent for nrhs=1 vs 2), and both must
+// agree with a direct gauss_solve within an explicit 1e-10 relative tolerance
+// (different algorithms — not ulp-level). The E-H1 saga proved sibling drift
+// recurs; this test pins cross-path agreement on a well-posed system.
+void test_1rhs_2rhs_path_equivalence() {
+    TEST("A-04: 1rhs == 2rhs == gauss on same SPD system");
+    int size = 3;
+    std::vector<double> A = {
+        4.0, 2.0, 2.0,
+        2.0, 5.0, 1.0,
+        2.0, 1.0, 6.0
+    };
+    std::vector<double> B = { 8.0, 8.0, 9.0 };  // = A·[1,1,1]
+
+    // 1rhs solve.
+    std::vector<double> A1 = A;
+    std::vector<double> A1_orig(A);
+    std::vector<double> X1(size, 0.0);
+    std::vector<double> B1 = B;
+    bool ok1 = hpgl::detail::lapack_spd_solve_1rhs(
+        A1.data(), size, X1.data(), B1.data(), A1_orig.data(), "equiv 1rhs");
+    CHECK(ok1);
+
+    // 2rhs solve with B0 = B1 = B (X0 == X1 == [1,1,1] — well-posed OK
+    // combination: |SumX1| = 3 > 1e-12, |mu| = 2/3 ≤ 1e10 → final-weight
+    // gate accepts).
+    std::vector<double> A2 = A;
+    std::vector<double> A2_orig(A);
+    std::vector<double> X0(size, 0.0);
+    std::vector<double> X1_2(size, 0.0);
+    std::vector<double> B0 = B;
+    std::vector<double> B1_2 = B;
+    bool ok2 = hpgl::detail::lapack_spd_solve_2rhs(
+        A2.data(), size, X0.data(), B0.data(), X1_2.data(), B1_2.data(),
+        A2_orig.data(), "equiv 2rhs");
+    CHECK(ok2);
+
+    // 1rhs X vs 2rhs X0 — bit-or-ulp equivalence (same factor, independent
+    // RHS columns).
+    for (int i = 0; i < size; ++i)
+        CHECK_CLOSE(X1[i], X0[i], 1e-15);
+
+    // Direct gauss_solve — explicit 1e-10 relative tolerance.
+    std::vector<double> Ag = A;
+    std::vector<double> Bg = B;
+    std::vector<double> Xg(size, 0.0);
+    bool okg = hpgl::gauss_solve(Ag.data(), Bg.data(), Xg.data(), size);
+    CHECK(okg);
+    for (int i = 0; i < size; ++i)
+        CHECK_CLOSE(Xg[i], X1[i], 1e-10);
+}
+
+// A-04 (ADD-2, E-M82): the production OK path passes a caller-provided
+// workspace (ok_kriging_weights_3_ws → &ws.B, my_kriging_weights.h:598) —
+// the `work != nullptr` branch of lapack_spd_solve_2rhs has zero direct
+// coverage (all other 2rhs tests use nullptr). A sizing/aliasing regression
+// (wrong 2·size layout, capacity-reuse bug) silently corrupts OK weights.
+void test_2rhs_workspace_path() {
+    TEST("A-04: 2rhs caller-provided workspace (E-M82)");
+    int size = 3;
+    std::vector<double> A = {
+        4.0, 2.0, 2.0,
+        2.0, 5.0, 1.0,
+        2.0, 1.0, 6.0
+    };
+    std::vector<double> B0 = { 4.0, 2.0, 2.0 };  // = A·e0
+    std::vector<double> B1 = { 2.0, 5.0, 1.0 };  // = A·e1
+    std::vector<double> X0(size, 0.0);
+    std::vector<double> X1(size, 0.0);
+    std::vector<double> A_orig(A);
+
+    // Pre-allocated workspace with extra capacity (reuse path).
+    std::vector<double> work(32, 12345.0);
+    bool ok = hpgl::detail::lapack_spd_solve_2rhs(
+        A.data(), size, X0.data(), B0.data(), X1.data(), B1.data(),
+        A_orig.data(), "workspace test", &work);
+    CHECK(ok);
+    CHECK(work.size() == static_cast<size_t>(size) * 2);
+    CHECK_CLOSE(X0[0], 1.0, 1e-12);
+    CHECK_CLOSE(X0[1], 0.0, 1e-12);
+    CHECK_CLOSE(X0[2], 0.0, 1e-12);
+    CHECK_CLOSE(X1[0], 0.0, 1e-12);
+    CHECK_CLOSE(X1[1], 1.0, 1e-12);
+    CHECK_CLOSE(X1[2], 0.0, 1e-12);
+
+    // Reuse the same workspace for a second solve (capacity-reuse path) —
+    // results must be identical. NOTE: A was Cholesky-factored in place by
+    // the first solve, so the second solve needs a fresh copy of the
+    // ORIGINAL matrix (A_orig holds it).
+    std::vector<double> X0b(size, 0.0);
+    std::vector<double> X1b(size, 0.0);
+    std::vector<double> A2 = A_orig;
+    std::vector<double> A2_orig(A_orig);
+    bool ok2 = hpgl::detail::lapack_spd_solve_2rhs(
+        A2.data(), size, X0b.data(), B0.data(), X1b.data(), B1.data(),
+        A2_orig.data(), "workspace reuse", &work);
+    CHECK(ok2);
+    for (int i = 0; i < size; ++i)
+    {
+        CHECK_CLOSE(X0b[i], X0[i], 1e-15);
+        CHECK_CLOSE(X1b[i], X1[i], 1e-15);
+    }
+
+    // Zero-capacity workspace → resize path.
+    std::vector<double> work0;
+    std::vector<double> A3 = A_orig;
+    std::vector<double> A3_orig(A_orig);
+    std::vector<double> X0c(size, 0.0);
+    std::vector<double> X1c(size, 0.0);
+    bool ok3 = hpgl::detail::lapack_spd_solve_2rhs(
+        A3.data(), size, X0c.data(), B0.data(), X1c.data(), B1.data(),
+        A3_orig.data(), "workspace zero-cap", &work0);
+    CHECK(ok3);
+    CHECK(work0.size() == static_cast<size_t>(size) * 2);
+    for (int i = 0; i < size; ++i)
+    {
+        CHECK_CLOSE(X0c[i], X0[i], 1e-15);
+        CHECK_CLOSE(X1c[i], X1[i], 1e-15);
+    }
+}
+
+// A-04 (ADD-3, R2-01 gate acceptance-matrix completion): the legal
+// cross-scale cokriging class must be ACCEPTED. The 5-pass gate saga
+// regressed this exact class in pass 2 (the AND-form rejected
+// A=[[1e4,0.5],[0.5,1e-4]], B=[1,1] → X=[−0.667, 13333] as wild). The
+// current dynamic-range-scaled bound 1e3·dr with dr=1e4 → bound 1e7 accepts
+// 13333; the pass-2 normalization made the bound tighter (wrong direction).
+void test_1rhs_cross_scale_cokriging_accepted() {
+    TEST("A-04: cross-scale cokriging accepted (R2-01)");
+    int size = 2;
+    std::vector<double> A = {
+        1e4, 0.5,
+        0.5, 1e-4
+    };
+    std::vector<double> B = { 1.0, 1.0 };  // raw [1,1], NOT A·[1,1]
+    std::vector<double> X(size, 0.0);
+    std::vector<double> A_orig(A);
+
+    bool ok = hpgl::detail::lapack_spd_solve_1rhs(
+        A.data(), size, X.data(), B.data(),
+        A_orig.data(), "cross-scale cokriging");
+
+    // A = [[1e4,0.5],[0.5,1e-4]]: det = 1e4·1e-4 − 0.25 = 0.75,
+    // A⁻¹ = (1/0.75)·[[1e-4, −0.5],[−0.5, 1e4]] → X = A⁻¹·[1,1]
+    //     = (1/0.75)·[1e-4−0.5, 1e4−0.5] = [−0.6665333, 13332.6667].
+    CHECK(ok);
+    CHECK_CLOSE(X[0], (1e-4 - 0.5) / 0.75, 1e-6);
+    CHECK_CLOSE(X[1], (1e4 - 0.5) / 0.75, 1e-6);
+    // Exact residual: A·X == B.
+    CHECK_CLOSE(A_orig[0] * X[0] + A_orig[1] * X[1], 1.0, 1e-9);
+    CHECK_CLOSE(A_orig[2] * X[0] + A_orig[3] * X[1], 1.0, 1e-9);
+}
+
+// A-04 (ADD-4, 2rhs Inf-in-A twin): the 2rhs A-scan (solver_entry_point.h:
+// 463-473) is a SEPARATE sibling loop from the 1rhs scan — the E-H1 lesson.
+// The 2rhs NaN test alone cannot catch an isnan-instead-of-isfinite slip in
+// it (Inf would pass). Mirrors T6 (test_1rhs_inf_in_a_rejected): with Inf at
+// the dpotrf_-read (1,1) position, removing the scan lets dpotrf_ succeed
+// with an Inf factor → finite garbage X → residual tol inflates to Inf →
+// ok=true → CHECK(!ok) fails loudly.
+void test_2rhs_inf_in_a_rejected() {
+    TEST("lapack_spd_solve_2rhs Inf in A (early rejection)");
+    int size = 2;
+    std::vector<double> A = {
+        4.0, 2.0,
+        2.0, std::numeric_limits<double>::infinity()
+    };
+    std::vector<double> B0 = { 6.0, 8.0 };
+    std::vector<double> B1 = { 4.0, 3.0 };
+    std::vector<double> X0(size, 0.0);
+    std::vector<double> X1(size, 0.0);
+    std::vector<double> A_backup(A);
+
+    bool ok = hpgl::detail::lapack_spd_solve_2rhs(
+        A.data(), size,
+        X0.data(), B0.data(),
+        X1.data(), B1.data(),
+        A_backup.data(), "test 2rhs Inf");
+
+    CHECK(!ok);
+}
+
 // ---- Main ----
 
 int main() {
     // 1rhs tests
-    test_1rhs_known_spd_success();
     test_1rhs_known_spd_integer_solution();
     test_1rhs_non_spd_fallback();
     test_1rhs_non_spd_solvable();
@@ -557,6 +759,7 @@ int main() {
     test_2rhs_non_spd_fallback();
     test_2rhs_singular_returns_false();
     test_2rhs_nan_in_a_rejected();
+    test_2rhs_inf_in_a_rejected();
 
     // II-09: near-singular SPD rejection on the dpotrs_ success path.
     test_1rhs_near_singular_spd_rejected();
@@ -566,6 +769,14 @@ int main() {
     test_2rhs_near_singular_spd_rejected();
     test_2rhs_small_sill_ok_accepted();
     test_correlogram_sigma_c_gt_sigma_0_accepted();
+
+    // A-04 (corrected +4): path equivalence, E-M82 workspace, R2-01
+    // cross-scale accept, 2rhs-Inf twin. (RHS-NaN scans REJECTED as
+    // bool-invariant — N2-22; gauss-fallback wild REJECTED as permanently
+    // RED — N2-23.)
+    test_1rhs_2rhs_path_equivalence();
+    test_2rhs_workspace_path();
+    test_1rhs_cross_scale_cokriging_accepted();
 
     std::printf("C++ solver entry point tests: %d run, %d failed\n",
                 g_tests_run, g_tests_failed);

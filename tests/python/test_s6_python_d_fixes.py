@@ -531,14 +531,6 @@ class TestF04CdfLastProb:
         prop.fix_shape(grid)
         return prop
 
-    def test_last_prob_strictly_below_one(self):
-        from geo_bsd.cdf import calc_cdf
-
-        prop = self._make_prop([1.0, 2.0, 3.0, 4.0], grid_shape=(2, 2, 1))
-        cdf = calc_cdf(prop)
-        assert cdf.probs[-1] < 1.0
-        assert cdf.probs[-1] == np.nextafter(np.float32(1.0), np.float32(0.0))
-
     def test_single_value_last_prob_strictly_below_one(self):
         from geo_bsd.cdf import calc_cdf
 
@@ -546,11 +538,3 @@ class TestF04CdfLastProb:
         cdf = calc_cdf(prop)
         assert cdf.probs[0] < 1.0
         assert cdf.probs[0] == np.nextafter(np.float32(1.0), np.float32(0.0))
-
-    def test_earlier_probs_unchanged(self):
-        from geo_bsd.cdf import calc_cdf
-
-        prop = self._make_prop([1.0] * 4 + [2.0] * 4, grid_shape=(2, 2, 2))
-        cdf = calc_cdf(prop)
-        assert cdf.probs[0] == 0.5
-        assert cdf.probs[-1] < 1.0

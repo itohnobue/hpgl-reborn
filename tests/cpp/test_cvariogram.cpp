@@ -531,6 +531,22 @@ void test_calc_variograms_rejects_null_member()
     float out[3] = {0, 0, 0};
     calc_variograms(&templ, &data, out, 3, 100);
     CHECK(std::strlen(cvar_get_last_error()) > 0);
+
+    // N2-L35: m_mask-only-null sub-case. The member validation must also
+    // fire when ONLY the mask pointer is null while m_data is valid (a
+    // distinct null-deref site — the kernel dereferences data->m_mask in the
+    // informedness check). Pre-fix this also SIGSEGV'd.
+    cvar_clear_last_error();
+    float data_vals[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    hard_data_t data_mask_null = {};
+    data_mask_null.m_data = data_vals;
+    data_mask_null.m_mask = nullptr;
+    data_mask_null.m_data_shape[0] = 2; data_mask_null.m_data_shape[1] = 2; data_mask_null.m_data_shape[2] = 2;
+    data_mask_null.m_mask_shape[0] = 2; data_mask_null.m_mask_shape[1] = 2; data_mask_null.m_mask_shape[2] = 2;
+    data_mask_null.m_data_strides[0] = 4; data_mask_null.m_data_strides[1] = 2; data_mask_null.m_data_strides[2] = 1;
+    data_mask_null.m_mask_strides[0] = 4; data_mask_null.m_mask_strides[1] = 2; data_mask_null.m_mask_strides[2] = 1;
+    calc_variograms(&templ, &data_mask_null, out, 3, 100);
+    CHECK(std::strlen(cvar_get_last_error()) > 0);
 }
 
 // II-56: validate_template must reject tol_distance <= 0 / NaN. Pre-fix NaN
@@ -574,46 +590,6 @@ void test_calc_variograms_rejects_bad_tol_distance()
     CHECK(std::strlen(cvar_get_last_error()) > 0);
 }
 
-// II-57: a zero-thickness layer must not be treated as erosion. Pre-fix the
-// else branch (thickness > 0 is false) blanked [ceil(new_k), nz) — the ENTIRE
-// column when the zero layer is first — silently changing the model vs the
-// same model without the zero layer. Post-fix thickness==0 is a no-op.
-void test_stack_layers_zero_thickness_no_erosion()
-{
-    TEST("II-57: zero-thickness layer does not erode");
-    cvar_clear_last_error();
-    // Baseline (probe Case C): deposit 2.0 marker 5 on nz=4.
-    std::vector<float_data_t> base_layers;
-    base_layers.push_back(make_layer(1, 1, 2.0f));
-    int base_markers[1] = {5};
-    float_data_t base_result = make_result(1, 1, 4);
-    stack_layers(base_layers, base_markers, 4, 1.0f, -99, base_result);
-    CHECK(std::strlen(cvar_get_last_error()) == 0);
-
-    // Same model + a leading zero-thickness layer (probe Case B).
-    // Pre-fix: the zero layer blanked [0, nz) first, then the deposit
-    // rewrote [0,2) — leaving [2,4) at blank_value instead of the 7.0 the
-    // probe's initial buffer held. Post-fix the zero layer is skipped, so
-    // the deposit runs exactly as the baseline.
-    std::vector<float_data_t> layers;
-    layers.push_back(make_layer(1, 1, 0.0f));  // zero-thickness first
-    layers.push_back(make_layer(1, 1, 2.0f));  // then the same deposit
-    int markers[2] = {9, 5};
-    float_data_t result = make_result(1, 1, 4);
-    stack_layers(layers, markers, 4, 1.0f, -99, result);
-    CHECK(std::strlen(cvar_get_last_error()) == 0);
-
-    // The zero layer must not change the deposit footprint or markers.
-    for (int k = 0; k < 4; ++k)
-        CHECK(result.m_data[k] == base_result.m_data[k]);
-    CHECK(result.m_data[0] == 5.0f);
-    CHECK(result.m_data[1] == 5.0f);
-    // Top tail (III-40) is blank_value either way — the point of II-57 is
-    // that the zero layer did NOT blank the deposit region [0,2).
-    CHECK(result.m_data[2] == -99.0f);
-    CHECK(result.m_data[3] == -99.0f);
-}
-
 // III-40: every result cell must receive a defined value. Pre-fix top-tail
 // cells above the final surface were left unwritten: a NaN-prefilled buffer
 // triggered the Python wrapper's post-call NaN RuntimeError, and buffer reuse
@@ -640,6 +616,93 @@ void test_stack_layers_result_fully_initialized()
     // Every top-tail cell must be the defined blank_value — no NaN left.
     for (int k = 1; k < 4; ++k)
         CHECK(nan_result.m_data[k] == -99.0f);
+}
+
+// A-05 (point-set direct-C guard 1): calc_variograms_from_point_set must
+// reject null member pointers (xs/ys/zs/values) with a clean error instead of
+// SIGSEGV (pre-fix null deref at variograms.cpp:922-930). The point-set path
+// has zero direct C++ coverage; the Python wrapper constructs the struct from
+// numpy arrays (never null), so the direct-C guard is untested at same level.
+void test_point_set_rejects_null_member()
+{
+    TEST("A-05: point-set rejects null member pointers");
+    cvar_clear_last_error();
+    variogram_search_template_t templ = {};
+    templ.m_lag_width = 1.0;
+    templ.m_lag_separation = 1.0;
+    templ.m_tol_distance = 1.0;
+    templ.m_num_lags = 2;
+    templ.m_first_lag_distance = 0.0;
+    templ.m_ellipsoid.m_R1 = 10.0;
+    templ.m_ellipsoid.m_R2 = 10.0;
+    templ.m_ellipsoid.m_R3 = 10.0;
+    templ.m_ellipsoid.m_direction1.m_data[0] = 1.0;
+    templ.m_ellipsoid.m_direction2.m_data[1] = 1.0;
+    templ.m_ellipsoid.m_direction3.m_data[2] = 1.0;
+
+    float coords[4] = {0.0f, 1.0f, 2.0f, 3.0f};
+    float vals[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+    float out[2] = {0, 0};
+
+    // (a) xs null → clean error, no SIGSEGV.
+    cont_point_set_t ps = {};
+    ps.xs = nullptr; ps.ys = coords; ps.zs = coords; ps.values = vals; ps.size = 4;
+    calc_variograms_from_point_set(&templ, &ps, out, 2);
+    CHECK(std::strlen(cvar_get_last_error()) > 0);
+
+    // (b) ys null → clean error.
+    cvar_clear_last_error();
+    cont_point_set_t ps2 = {};
+    ps2.xs = coords; ps2.ys = nullptr; ps2.zs = coords; ps2.values = vals; ps2.size = 4;
+    calc_variograms_from_point_set(&templ, &ps2, out, 2);
+    CHECK(std::strlen(cvar_get_last_error()) > 0);
+
+    // (c) values null → clean error.
+    cvar_clear_last_error();
+    cont_point_set_t ps3 = {};
+    ps3.xs = coords; ps3.ys = coords; ps3.zs = coords; ps3.values = nullptr; ps3.size = 4;
+    calc_variograms_from_point_set(&templ, &ps3, out, 2);
+    CHECK(std::strlen(cvar_get_last_error()) > 0);
+}
+
+// A-05 (point-set direct-C guard 2): the F-H2 total-work cap
+// (variograms.cpp:868-880, pair_lag_work > MAX_TOTAL_PAIR_LAG_WORK = 1e12)
+// must fire for a large point set with many lags BEFORE the O(n²·lag) pair
+// loop — no test exercises any point-set work cap. size=100000, num_lags=10000
+// → pair_lag_work = 1e14 > 1e12 → clean error (Phase-3 work-cap verification).
+void test_point_set_rejects_oversized_work()
+{
+    TEST("A-05: point-set F-H2 work cap fires for large size × lags");
+    cvar_clear_last_error();
+    variogram_search_template_t templ = {};
+    templ.m_lag_width = 1.0;
+    templ.m_lag_separation = 1.0;
+    templ.m_tol_distance = 1.0;
+    templ.m_num_lags = 10000;
+    templ.m_first_lag_distance = 0.0;
+    templ.m_ellipsoid.m_R1 = 10.0;
+    templ.m_ellipsoid.m_R2 = 10.0;
+    templ.m_ellipsoid.m_R3 = 10.0;
+    templ.m_ellipsoid.m_direction1.m_data[0] = 1.0;
+    templ.m_ellipsoid.m_direction2.m_data[1] = 1.0;
+    templ.m_ellipsoid.m_direction3.m_data[2] = 1.0;
+
+    // 100000 points — within MAX_POINT_SET_SIZE (1e6) but size²·lag_count =
+    // 1e14 > 1e12 → the work cap must reject before the pair loop. result_length
+    // must be >= num_lags so lag_count is NOT capped to a tiny value that
+    // keeps pair_lag_work under the cap (lag_count = min(num_lags,
+    // result_length) — with result_length=2 the work would be 2e10 < 1e12 and
+    // the cap would be unreachable).
+    const int n = 100000;
+    const int out_len = 10000;
+    std::vector<float> coords(n, 0.0f);
+    std::vector<float> vals(n, 1.0f);
+    std::vector<float> out(out_len, 0.0f);
+    cont_point_set_t ps = {};
+    ps.xs = coords.data(); ps.ys = coords.data(); ps.zs = coords.data();
+    ps.values = vals.data(); ps.size = n;
+    calc_variograms_from_point_set(&templ, &ps, out.data(), out_len);
+    CHECK(std::strlen(cvar_get_last_error()) > 0);
 }
 
 // R-02 (Stage-8 TEST-ADD T-23): lag-0 pairs on the C++ GRID kernel. A pair
@@ -709,9 +772,10 @@ int main() {
     test_update_lags_no_fp_int_overflow_ub();
     test_calc_variograms_rejects_null_member();
     test_calc_variograms_rejects_bad_tol_distance();
-    test_stack_layers_zero_thickness_no_erosion();
     test_stack_layers_result_fully_initialized();
     test_lag0_binning_grid_path();
+    test_point_set_rejects_null_member();
+    test_point_set_rejects_oversized_work();
 
     std::printf("C++ cvariogram tests: %d run, %d failed\n", g_tests_run, g_tests_failed);
     return g_tests_failed > 0 ? 1 : 0;

@@ -353,6 +353,48 @@ class TestSlowParserSentinelWindow:
         np.testing.assert_array_equal(slow.mask, fast.mask)
         np.testing.assert_array_equal(slow.mask, np.array([1, 0, 1, 1], dtype="uint8"))
 
+    def test_float32_sentinel_edge_both_stacks_post_p01(self, tmp_path):
+        """A-01: float32 1.0e21f (token 1.000000020E+21) is SENTINEL on BOTH stacks.
+
+        P-01 (read_inc_file.cpp:395-401) moved the C++ fast reader's sentinel
+        window comparison to float64. Pre-fix, the writer's own %.9E output
+        "1.000000020E+21" for float32 1.0e21f was classified DATA by the C++
+        reader (float32 window = 1.0000000200408773e21) but SENTINEL by every
+        Python float64 reader. This pin asserts the POST-P-01 parity: the
+        exact float32 edge masks on both stacks, and the in-window 9.99e20
+        stays DATA on both. Reverting P-01 makes fast.mask[1] return 1
+        (DATA) while slow.mask[1] stays 0 — the parity assert fails.
+        """
+        # float32(1.0e21) = 1.0000000200408773e21; the C++ %.9E writer emits
+        # "1.000000020E+21" for it — the exact token that exposed P-01.
+        data = np.array([10.0, 1.0e21, 9.99e20, 40.0], dtype="float32")
+        mask = np.ones(4, dtype="uint8")
+        prop_data = ContProperty(data, mask)
+
+        filename = str(tmp_path / "sentinel_edge.inc")
+        write_property(prop_data, filename, "edge", -99.0, basedir=str(tmp_path))
+
+        # The C++ %.9E writer must emit the exact-edge token for float32
+        # 1.0e21f (a %E-6 writer change would emit "1.000000E+21" and
+        # silently re-mask the divergence — this pins the writer precision).
+        contents = Path(filename).read_text(encoding="utf-8")
+        assert "1.000000020E+21" in contents
+
+        slow = load_cont_property(filename, -99.0, basedir=str(tmp_path))
+        fast = read_inc_file_float(filename, -99.0, 4, basedir=str(tmp_path))
+
+        np.testing.assert_array_equal(slow.mask, fast.mask)
+        # float32 1.0e21f must classify SENTINEL (mask 0) on BOTH stacks.
+        assert slow.mask[1] == 0, (
+            f"slow parser should mask float32 1.0e21f, got {slow.mask}"
+        )
+        assert fast.mask[1] == 0, (
+            f"fast parser should mask float32 1.0e21f, got {fast.mask}"
+        )
+        # In-window edge 9.99e20 stays DATA (mask 1) on both.
+        assert slow.mask[2] == 1, f"slow parser should keep 9.99e20 DATA, got {slow.mask}"
+        assert fast.mask[2] == 1, f"fast parser should keep 9.99e20 DATA, got {fast.mask}"
+
 
 # =============================================================================
 # M-19: simple_kriging_weights post-FFI isfinite validation
@@ -556,6 +598,7 @@ class TestGetGslibPropertyTypeCheck:
 # =============================================================================
 
 
+@pytest.mark.hpgl
 class TestPy39ImportGuard:
     """III-24: geo.py must stay importable on Python 3.9 (declared-supported,
     requires-python >=3.9).
@@ -911,6 +954,84 @@ class TestIoWrappersHoldHpglCallLock:
             "write_gslib_property (cont) FFI call must hold _hpgl_call_lock (II-35)"
         )
 
+    def test_write_property_float_path_holds_lock(self, monkeypatch, tmp_path):
+        """G-4: write_property's FLOAT path (ContProperty →
+        call_write_inc_file_float, lock at geo.py:1079) must hold the lock —
+        the II-35 pin family previously covered only the byte path."""
+        import geo_bsd.geo as geo_mod
+
+        prop = ContProperty(
+            np.arange(4, dtype="float32"), np.ones(4, dtype="uint8")
+        )
+        seen = {}
+
+        def spy(*args, **kwargs):
+            seen["held"] = self._lock_blocked_from_other_thread(geo_mod)
+            return 0
+
+        monkeypatch.setattr(geo_mod, "call_write_inc_file_float", spy)
+        geo_mod.write_property(
+            prop,
+            str(tmp_path / "lock4.inc"),
+            "col",
+            -99.0,
+            basedir=str(tmp_path),
+        )
+        assert seen.get("held") is True, (
+            "write_property (float) FFI call must hold _hpgl_call_lock (II-35)"
+        )
+
+    def test_write_gslib_byte_path_holds_lock(self, monkeypatch, tmp_path):
+        """G-4: write_gslib_property's BYTE path (IndProperty →
+        call_write_gslib_byte_property, lock at geo.py:1175) must hold the
+        lock — previously only the cont path was pinned."""
+        import geo_bsd.geo as geo_mod
+
+        prop = IndProperty(
+            np.array([0, 1, 0, 2], dtype="uint8"),
+            np.ones(4, dtype="uint8"),
+            3,
+        )
+        seen = {}
+
+        def spy(*args, **kwargs):
+            seen["held"] = self._lock_blocked_from_other_thread(geo_mod)
+            return 0
+
+        monkeypatch.setattr(geo_mod, "call_write_gslib_byte_property", spy)
+        geo_mod.write_gslib_property(
+            prop,
+            str(tmp_path / "lock5.gslib"),
+            "col",
+            99,
+            indicator_values=[10, 20, 30],
+            basedir=str(tmp_path),
+        )
+        assert seen.get("held") is True, (
+            "write_gslib_property (byte) FFI call must hold _hpgl_call_lock (II-35)"
+        )
+
+    def test_read_inc_file_byte_holds_lock(self, monkeypatch, tmp_path):
+        """G-4: read_inc_file_byte (lock at geo.py:1443) must hold the lock —
+        previously only the float reader was pinned."""
+        import geo_bsd.geo as geo_mod
+
+        fpath = tmp_path / "lockbyte.inc"
+        fpath.write_text("col\n0 1 0 2\n/\n")
+        seen = {}
+
+        def spy(*args, **kwargs):
+            seen["held"] = self._lock_blocked_from_other_thread(geo_mod)
+            return 0
+
+        monkeypatch.setattr(geo_mod, "call_read_inc_file_byte", spy)
+        geo_mod.read_inc_file_byte(
+            str(fpath), 99, 4, [10, 20, 30], basedir=str(tmp_path)
+        )
+        assert seen.get("held") is True, (
+            "read_inc_file_byte FFI call must hold _hpgl_call_lock (II-35)"
+        )
+
 
 # =============================================================================
 # III-12 — indicator_kriging 2-cat redirect honors the "data[1] ignored" contract
@@ -1035,6 +1156,7 @@ class TestR06SampleScriptDataPaths:
         )
 
     @pytest.mark.parametrize("script", SCRIPTS)
+    @pytest.mark.slow  # H-02: 6 of 8 cases load the 468,120-cell big fixtures
     def test_script_data_file_exists_and_loads(self, script):
         kind, fname, dims, undef = self.LOADERS[script]
         test_data_dir = self._script_test_data_dir(script)

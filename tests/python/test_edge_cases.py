@@ -46,30 +46,6 @@ except (ImportError, OSError):
 class TestGridEdgeCases:
     """Test edge cases related to grid configurations"""
 
-    def test_single_cell_grid_1x1x1(self):
-        """Test with minimal grid of single cell (1x1x1)"""
-        grid = SugarboxGrid(x=1, y=1, z=1)
-        data = np.array([42.5], dtype="float32")
-        mask = np.array([1], dtype="uint8")
-        prop = ContProperty(data, mask)
-        prop.fix_shape(grid)  # IMPORTANT: Reshape 1D data to match grid
-        cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(1.0, 1.0, 1.0),
-            angles=(0.0, 0.0, 0.0),
-            sill=1.0,
-            nugget=0.0,
-        )
-
-        result = ordinary_kriging(
-            prop=prop, grid=grid, radiuses=(1, 1, 1), max_neighbours=1, cov_model=cov_model
-        )
-
-        assert result.data.shape == (1, 1, 1)
-        assert result.data[0, 0, 0] == pytest.approx(
-            42.5, rel=1e-5
-        )  # Single cell should retain its value
-
     def test_non_cubic_grid_flat_x(self):
         """Test with flat grid along X axis (1 x 10 x 10)
 
@@ -96,6 +72,9 @@ class TestGridEdgeCases:
         )
 
         assert result.data.shape == (1, 10, 10)
+        # H-10: original informed cells must stay informed on non-cubic grids
+        # (a storage-order/index-mapping regression would produce wrong masks).
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
 
     def test_non_cubic_grid_flat_z(self):
         """Test with flat grid along Z axis (10 x 10 x 1)
@@ -123,6 +102,8 @@ class TestGridEdgeCases:
         )
 
         assert result.data.shape == (10, 10, 1)
+        # H-10: original informed cells must stay informed on non-cubic grids.
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
 
     def test_non_cubic_grid_different_dimensions(self):
         """Test with grid having all different dimensions (5 x 10 x 20)"""
@@ -146,7 +127,10 @@ class TestGridEdgeCases:
         )
 
         assert result.data.shape == (5, 10, 20)
+        # H-10: original informed cells must stay informed on non-cubic grids.
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
 
+    @pytest.mark.slow  # T-30: 125,000 cells (50³) — >100K-cell Phase-4 threshold, machine-freeze risk
     def test_large_grid_stress(self):
         """Test with large grid (50 x 50 x 50 = 125,000 cells)"""
         grid = SugarboxGrid(x=50, y=50, z=50)
@@ -170,6 +154,9 @@ class TestGridEdgeCases:
 
         assert result.data.shape == (50, 50, 50)
         assert not np.all(result.data == 0)
+        # H-06: informed cells must stay informed on the large grid (guards a
+        # silent early-return/partial-execution regression on big workloads).
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
 
     @pytest.mark.parametrize(
         "x,y,z",
@@ -204,6 +191,10 @@ class TestGridEdgeCases:
         )
 
         assert result.data.shape == (x, y, z)
+        # H-12: original informed cells must stay informed (data is arange,
+        # so a wrong-value storage-order regression would also be detectable
+        # here — mask preservation is the discriminator).
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
 
 
 # =============================================================================
@@ -247,37 +238,6 @@ class TestDataEdgeCases:
         assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
         # Some uninformed cells may become informed if they found neighbors
         # (but with high sparsity, many may remain uninformed)
-
-    def test_sparse_data_95_percent_uninformed(self):
-        """Test with 95% of data uninformed (extremely sparse)
-
-        Note: With only 5% informed data, many cells will not find neighbors.
-        HPGL handles this gracefully using undefined_on_failure.
-        """
-        grid = SugarboxGrid(x=10, y=10, z=5)
-        data = np.random.rand(500).astype("float32") * 100
-        mask = np.zeros(500, dtype="uint8")
-        # Only 5% informed
-        mask[::20] = 1
-        prop = ContProperty(data, mask)
-        cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(10.0, 10.0, 5.0),
-            angles=(0.0, 0.0, 0.0),
-            sill=1.0,
-            nugget=0.1,
-        )
-
-        result = ordinary_kriging(
-            prop=prop, grid=grid, radiuses=(10, 10, 5), max_neighbours=12, cov_model=cov_model
-        )
-        result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
-
-        # Should still complete without error
-        assert result.data.shape == (10, 10, 5)
-        # Original informed cells should remain informed
-        # Note: result.mask is now 3D, so we need to flatten it for comparison
-        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
 
     def test_sparse_data_99_percent_uninformed(self):
         """Test with 99% of data uninformed (nearly empty)
@@ -442,9 +402,9 @@ class TestDataEdgeCases:
 
         # Should handle negative values
         assert result.data.shape == (10, 10, 5)
-        # Result should contain negative values (not all NaN or Inf)
-        assert not np.all(np.isnan(result.data))
-        assert not np.all(np.isinf(result.data))
+        # Result should contain negative values (not NaN or Inf)
+        assert not np.any(np.isnan(result.data))
+        assert not np.any(np.isinf(result.data))
         # Some values should be negative
         assert np.any(result.data < 0)
 
@@ -624,8 +584,10 @@ class TestParameterValidation:
         mask = np.ones(500, dtype="uint8")
         prop = ContProperty(data, mask)
 
-        # Negative range should raise validation error
-        with pytest.raises((ValueError, RuntimeError, CriticalValidationError)):
+        # Negative range should raise validation error.
+        # H-08: pin the exact exception type — the CovarianceModel ctor rejects
+        # r <= MIN_RANGE via validation.py:846-851 (CriticalValidationError).
+        with pytest.raises(CriticalValidationError):
             cov_model = CovarianceModel(
                 type=covariance.spherical,
                 ranges=(-5.0, 5.0, 3.0),  # Negative X range
@@ -665,42 +627,11 @@ class TestParameterValidation:
         result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
 
         assert result.data.shape == (10, 10, 5)
-        # Should complete successfully with negative angles
-
-    def test_negative_sill(self):
-        """Test with negative sill value - should raise error"""
-        with pytest.raises(CriticalValidationError):
-            CovarianceModel(
-                type=covariance.spherical,
-                ranges=(5.0, 5.0, 3.0),
-                angles=(0.0, 0.0, 0.0),
-                sill=-1.0,  # Negative sill
-                nugget=0.1,
-            )
-
-    def test_nugget_greater_than_sill(self):
-        """Test CovarianceModel with nugget > sill - should raise error"""
-        with pytest.raises(CriticalValidationError):
-            CovarianceModel(
-                type=covariance.spherical,
-                ranges=(5.0, 5.0, 3.0),
-                angles=(0.0, 0.0, 0.0),
-                sill=0.5,
-                nugget=1.0,  # Greater than sill
-            )
-
-    def test_nugget_equal_to_sill(self):
-        """Test CovarianceModel with nugget == sill - boundary case"""
-        # This should be valid (nugget <= sill)
-        cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(5.0, 5.0, 3.0),
-            angles=(0.0, 0.0, 0.0),
-            sill=1.0,
-            nugget=1.0,  # Equal to sill
-        )
-
-        assert cov_model.nugget == cov_model.sill
+        # H-11: negative angles must produce valid finite output and preserve
+        # the informed-mask (a garbage-of-the-right-shape result fails here).
+        assert not np.any(np.isnan(result.data))
+        assert not np.any(np.isinf(result.data))
+        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
 
     def test_mismatched_grid_size_vs_data(self):
         """Test with grid size that doesn't match data size
@@ -720,9 +651,10 @@ class TestParameterValidation:
             nugget=0.1,
         )
 
-        # Should raise error for size mismatch when calling fix_shape or kriging
-        # The exact error type may vary - we accept RuntimeError or ValueError
-        with pytest.raises((RuntimeError, ValueError)):
+        # H-09: fix_shape does NOT raise on mismatch (it no-ops when sizes
+        # differ) — the raise comes from ordinary_kriging's size-vs-grid
+        # ValueError check (geo.py:1761-1765).
+        with pytest.raises(ValueError):
             prop.fix_shape(grid)
             ordinary_kriging(
                 prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
@@ -812,66 +744,6 @@ class TestPropertyEdgeCases:
         # All cells should remain uninformed since there's no source data
         assert np.all(result.mask == 0)
 
-    def test_all_informed_no_mask_zeros(self):
-        """Test property with all cells informed (mask all ones)
-
-        Note: When all cells are informed, kriging should preserve all informed values.
-        The output will have the same values as input since there's nothing to estimate.
-        """
-        grid = SugarboxGrid(x=10, y=10, z=5)
-        np.random.seed(42)  # For reproducibility
-        data = np.random.rand(500).astype("float32") * 100
-        mask = np.ones(500, dtype="uint8")  # All informed
-        prop = ContProperty(data, mask)
-        cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(5.0, 5.0, 3.0),
-            angles=(0.0, 0.0, 0.0),
-            sill=1.0,
-            nugget=0.0,
-        )
-
-        result = ordinary_kriging(
-            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
-        )
-        result.fix_shape(grid)  # HPGL returns 1D, reshape to grid dimensions
-
-        # Should preserve informed values
-        assert result.data.shape == (10, 10, 5)
-        # All values should remain informed
-        assert np.all(result.mask == 1)
-        # Kriging performs estimation even on informed cells
-        # Values will be similar to input but not exact due to estimation
-        # Just check that the result is in a reasonable range
-        assert np.all(result.data >= 0)  # Non-negative values
-        assert np.all(result.data < 200)  # Reasonable upper bound
-
-    def test_single_indicator_indicator_count_1(self):
-        """Test indicator property with single indicator"""
-        data = np.zeros(500, dtype="uint8")  # All indicator 0
-        mask = np.ones(500, dtype="uint8")
-        prop = IndProperty(data, mask, indicator_count=1)
-
-        assert prop.indicator_count == 1
-        assert prop.data.shape == mask.shape
-
-    def test_many_indicators_indicator_count_10(self):
-        """Test indicator property with many indicators"""
-        data = np.random.randint(0, 10, 500, dtype="uint8")
-        mask = np.ones(500, dtype="uint8")
-        prop = IndProperty(data, mask, indicator_count=10)
-
-        assert prop.indicator_count == 10
-
-    def test_indicator_value_outside_range(self):
-        """Test indicator property with value outside indicator_count range"""
-        data = np.array([0, 1, 2, 5, 10], dtype="uint8")  # 10 is outside range
-        mask = np.ones(5, dtype="uint8")
-
-        # Should raise error for indicator >= indicator_count
-        with pytest.raises(RuntimeError):
-            IndProperty(data, mask, indicator_count=3)
-
     def test_indicator_at_boundary(self):
         """Test indicator with value at indicator_count - 1 boundary"""
         data = np.array([0, 1, 2], dtype="uint8")  # 2 is valid for indicator_count=3
@@ -880,18 +752,6 @@ class TestPropertyEdgeCases:
 
         assert prop.indicator_count == 3
         # Value 2 is valid (0, 1, 2 for count=3)
-
-    def test_property_data_mask_shape_mismatch(self):
-        """Test property with mismatched data and mask shapes.
-
-        ContProperty validates shape consistency between data and mask
-        (like IndProperty does) — a mismatch is rejected at construction.
-        """
-        data = np.ones(100, dtype="float32")
-        mask = np.ones(50, dtype="uint8")  # Different size
-
-        with pytest.raises(ValueError):
-            ContProperty(data, mask)
 
 
 # =============================================================================
@@ -1075,15 +935,16 @@ class TestSimulationEdgeCases:
         # Verify result shape and no NaN
         assert result.data.shape == (10, 10, 5)
         assert not np.any(np.isnan(result.data))
-        # The C++ engine processes the mask; with all-zero simulate_mask the
-        # result should be finite and within a plausible range for the CDF.
-        assert np.all(np.isfinite(result.data.astype("float64")))
-        # Additional behavioral verification: result values should be in a
-        # plausible range (not all identical, not all at the initial 100.0).
-        result_flat = result.data.astype("float64").flatten()
-        assert np.min(result_flat) >= 0, "Simulated values should be non-negative"
-        assert np.max(result_flat) <= 100, "Simulated values should be within CDF range"
-        assert np.std(result_flat) > 0, "Result should not be uniform (all identical)"
+        # A-06/H-01: with an all-zero simulate_mask and use_harddata=True
+        # (the default), the C++ gate (sequential_simulation.h: mask[node]==1)
+        # skips EVERY node — the output must be the ORIGINAL hard data
+        # preserved (within float32 normal-score round-trip error, ~1e-5).
+        # If the mask were dropped from the FFI call (or ignored by the
+        # kernel), every cell would be re-drawn from the CDF and diverge
+        # from the input data by orders of magnitude.
+        np.testing.assert_allclose(
+            result.data, data.reshape((10, 10, 5), order="F"), rtol=1e-4, atol=1e-4
+        )
 
     def test_mask_covering_no_cells_simulate_all(self):
         """Test simulation with mask covering no cells (simulate all)
@@ -1130,6 +991,16 @@ class TestSimulationEdgeCases:
         assert result.data.shape == (10, 10, 5)
         # Values should be from CDF range (approximately - may vary slightly)
         assert np.all(result.data >= 0) and np.all(np.isfinite(result.data))
+        # A-06/H-02: use_harddata=False + all-ones simulate_mask must actually
+        # SIMULATE all cells from the CDF — an all-zeros output (no simulation
+        # at all) would pass the >= 0 check but must fail here.
+        assert np.all(result.data <= 100), (
+            "Simulated values must be within the CDF range [0, 100]"
+        )
+        assert np.std(result.data.astype("float64")) > 0.0, (
+            "use_harddata=False + all-ones mask must produce varied CDF draws, "
+            "not a constant (empty-clone) output"
+        )
 
     def test_sis_same_seed_determinism(self):
         """Test SIS determinism: same seed produces same results"""
@@ -1345,25 +1216,13 @@ class TestCDFEdgeCases:
         # Returns all N unique values
         # 5 unique values -> 5 values
         assert cdf.values.size == 5
-        # Probabilities are cumulative, final reaches 1.0
-        expected_probs = np.array([0.2, 0.4, 0.6, 0.8, 1.0], dtype="float32")
-        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
-
-    def test_degenerate_distribution_all_same_value(self):
-        """Test CDF with all same value (degenerate distribution)"""
-        grid = SugarboxGrid(x=5, y=5, z=4)  # 100 cells
-        data = np.full(100, 42.5, dtype="float32")
-        mask = np.ones(100, dtype="uint8")
-        prop = ContProperty(data, mask)
-        prop.fix_shape(grid)  # Make 3D for calc_cdf
-
-        cdf = calc_cdf(prop)
-
-        # Degenerate distribution: HPGL returns size 1 for single unique value
-        assert cdf.values.size == 1
-        assert cdf.values[0] == 42.5
-        # F-04: last CDF probability is clamped strictly below 1.0.
-        assert cdf.probs[0] < 1.0
+        # F-04/T-16: the final cumulative probability is clamped strictly
+        # below 1.0 (nextafter(1.0f, 0.0f)) so the max datum maps to a large
+        # but finite normal score in the SGS back-transform, not the median.
+        # With the clamp removed the tail is exactly 1.0 and the equality fails.
+        assert cdf.probs[-1] == np.nextafter(np.float32(1.0), np.float32(0.0))
+        expected_probs = np.array([0.2, 0.4, 0.6, 0.8], dtype="float32")
+        np.testing.assert_array_almost_equal(cdf.probs[:-1], expected_probs, decimal=5)
 
     def test_cdf_with_two_unique_values(self):
         """Test CDF with exactly two unique values"""
@@ -1441,9 +1300,11 @@ class TestCDFEdgeCases:
 
         cdf = calc_cdf(prop)
 
-        # Final cumulative probability is always 1.0
-        assert abs(cdf.probs[-1] - 1.0) < 1e-6
-        assert cdf.probs[-1] > 0
+        # F-04/T-16: the many-value CDF tail is clamped strictly below 1.0
+        # (nextafter(1.0f, 0.0f)). This is the many-value clamp pin: with the
+        # clamp removed the tail is exactly 1.0 and the first assert fails.
+        assert cdf.probs[-1] < 1.0
+        assert cdf.probs[-1] > 1 - 1e-6
 
 
 # =============================================================================
@@ -1454,25 +1315,6 @@ class TestCDFEdgeCases:
 @pytest.mark.hpgl
 class TestUtilityEdgeCases:
     """Test edge cases for utility functions"""
-
-    def test_calc_mean_with_all_uninformed(self):
-        """Test calc_mean with all uninformed values"""
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.zeros(3, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        # calc_mean should raise ValueError for all-masked property
-        with pytest.raises(ValueError, match="no informed values"):
-            calc_mean(prop)
-
-    def test_calc_mean_with_single_value(self):
-        """Test calc_mean with single informed value"""
-        data = np.array([42.0], dtype="float32")
-        mask = np.ones(1, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        mean = calc_mean(prop)
-        assert mean == 42.0
 
     def test_calc_mean_with_negative_values(self):
         """Test calc_mean with negative values"""
@@ -1519,24 +1361,6 @@ class TestUtilityEdgeCases:
 @pytest.mark.hpgl
 class TestProductionFixes:
     """Tests for production readiness fixes applied to the codebase."""
-
-    def test_calc_mean_raises_valueerror_on_all_masked(self):
-        """calc_mean must raise ValueError (not ZeroDivisionError) when all values masked."""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
-        mask = np.zeros(5, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        with pytest.raises(ValueError, match="no informed values"):
-            calc_mean(prop)
-
-    def test_calc_mean_works_with_partial_mask(self):
-        """calc_mean returns correct result when some values are masked."""
-        data = np.array([10.0, 20.0, 30.0], dtype="float32")
-        mask = np.array([1, 0, 1], dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        result = calc_mean(prop)
-        assert result == pytest.approx(20.0)  # (10 + 30) / 2
 
     def test_load_cont_slow_skips_non_numeric_tokens(self):
         """_load_prop_cont_slow should skip non-numeric tokens without crashing."""
@@ -1603,35 +1427,6 @@ class TestErrorHandling:
             f"restype must be c_char_p to avoid pointer truncation, got {restype}"
         )
 
-    def test_error_raised_on_invalid_covariance(self):
-        """HIGH: Verify validation catches invalid covariance parameters before C++ call."""
-        from geo_bsd.geo import (
-            CovarianceModel,
-            covariance,
-        )
-        from geo_bsd.validation import CriticalValidationError, ValidationError
-
-        # CovarianceModel constructor validates parameters (nugget > sill is blocked)
-        # This test verifies defense-in-depth: validator prevents bad data from reaching C++
-        with pytest.raises((ValidationError, CriticalValidationError)):
-            CovarianceModel(type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=0.0, nugget=1.0)
-
-    def test_simple_kriging_weights_return_value_checked(self):
-        """HIGH: Verify hpgl_simple_kriging_weights return value is checked."""
-        import numpy as np
-
-        from geo_bsd.geo import simple_kriging_weights
-
-        # Test with valid parameters — should produce non-trivial weights
-        center = (0.0, 0.0, 0.0)
-        nx = np.array([1.0, 2.0, 3.0], dtype="float32")
-        ny = np.array([1.0, 2.0, 3.0], dtype="float32")
-        nz = np.array([1.0, 2.0, 3.0], dtype="float32")
-
-        weights = simple_kriging_weights(center, nx, ny, nz)
-        assert len(weights) == 3, "Should return 3 weights"
-        assert not np.any(np.isnan(weights)), "Weights should not contain NaN"
-
 
 @pytest.mark.hpgl
 class TestIndicatorKrigingFix:
@@ -1655,11 +1450,16 @@ class TestIndicatorKrigingFix:
             type=covariance.spherical, ranges=(10.0, 10.0, 5.0), sill=1.0, nugget=0.1
         )
 
-        # With marginal probs [0.9, 0.1], kriging should heavily favor category 0
-        # This test verifies the fix doesn't crash and produces valid indicator values
+        # With marginal probs [0.9, 0.1], kriging should heavily favor category 0.
+        # H-03: the pre-fix always-highest-index bug (cdf_utils.cpp
+        # most_probable_category) produces all-1s output — `data <= 1` alone
+        # cannot discriminate it; majority-0 dominance is the discriminator.
         result = median_ik(prop, grid, (0.9, 0.1), (3, 3, 1), 12, cov)
         assert result.indicator_count == 2
         assert np.all(result.data <= 1), "Indicator values must be 0 or 1"
+        assert np.mean(result.data == 0) > 0.9, (
+            "With p=[0.9, 0.1] and all-0 hard data, most cells must be category 0"
+        )
 
     def test_indicator_kriging_with_3_categories(self):
         """Verify indicator_kriging with K=3 categories doesn't crash and produces

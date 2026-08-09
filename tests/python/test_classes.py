@@ -25,6 +25,7 @@ try:
         checkFWA,
         covariance,
     )
+    from geo_bsd.validation import CriticalValidationError
 except (ImportError, OSError):
     # Dummy covariance for module-level parametrize decorators
     # Tests are skipped by @pytest.mark.hpgl when HPGL is unavailable
@@ -104,12 +105,6 @@ class TestSugarboxGrid:
         assert grid.y == 20.7
         assert grid.z == 5.3
 
-    def test_grid_size_property(self):
-        """Test calculating total grid size"""
-        grid = SugarboxGrid(x=10, y=20, z=5)
-        total_size = grid.x * grid.y * grid.z
-        assert total_size == 1000
-
 
 @pytest.mark.hpgl
 class TestCovarianceModel:
@@ -175,7 +170,7 @@ class TestCovarianceModel:
 
     def test_nugget_greater_than_sill_raises_exception(self):
         """Test that nugget > sill raises Exception"""
-        with pytest.raises(Exception, match="Nugget .* exceeds sill"):
+        with pytest.raises(CriticalValidationError, match="Nugget .* exceeds sill"):
             CovarianceModel(
                 sill=1.0,
                 nugget=1.5,  # Greater than sill - should raise
@@ -294,24 +289,6 @@ class TestContProperty:
         # Should remain 1D since size doesn't match
         assert prop.data.ndim == 1
 
-    def test_getitem_data(self):
-        """Test deprecated __getitem__ for data access (index 0)"""
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.array([1, 1, 1], dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        result = prop[0]
-        assert np.array_equal(result, data)
-
-    def test_getitem_mask(self):
-        """Test deprecated __getitem__ for mask access (index 1)"""
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.array([1, 0, 1], dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        result = prop[1]
-        assert np.array_equal(result, mask)
-
     def test_getitem_invalid_index(self):
         """Test deprecated __getitem__ raises error for invalid index"""
         data = np.array([1.0, 2.0, 3.0], dtype="float32")
@@ -348,16 +325,6 @@ class TestContProperty:
 
         assert prop.data[0] == 42.0
         assert prop.mask[0] == 1
-
-    def test_large_array(self):
-        """Test with large array"""
-        size = 1000000
-        data = np.random.rand(size).astype("float32")
-        mask = np.ones(size, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        assert prop.data.size == size
-        assert prop.mask.size == size
 
 
 @pytest.mark.hpgl
@@ -396,8 +363,8 @@ class TestIndProperty:
         data = np.asfortranarray(np.ones(10, dtype="uint8"))
         mask = np.asfortranarray(np.ones(5, dtype="uint8"))
 
-        # The constructor has an assertion that checks shape match
-        with pytest.raises((ValueError, AssertionError)):
+        # The constructor raises ValueError on shape mismatch
+        with pytest.raises(ValueError):
             IndProperty(data, mask, 2)
 
     def test_indicator_value_out_of_range_raises_error(self):
@@ -416,33 +383,6 @@ class TestIndProperty:
         # Should not raise because the out-of-range value is masked
         prop = IndProperty(data, mask, 3)
         assert prop.indicator_count == 3
-
-    def test_getitem_data(self):
-        """Test deprecated __getitem__ for data access (index 0)"""
-        data = np.array([0, 1, 2], dtype="uint8")
-        mask = np.array([1, 1, 1], dtype="uint8")
-        prop = IndProperty(data, mask, 3)
-
-        result = prop[0]
-        assert np.array_equal(result, data)
-
-    def test_getitem_mask(self):
-        """Test deprecated __getitem__ for mask access (index 1)"""
-        data = np.array([0, 1, 2], dtype="uint8")
-        mask = np.array([1, 0, 1], dtype="uint8")
-        prop = IndProperty(data, mask, 3)
-
-        result = prop[1]
-        assert np.array_equal(result, mask)
-
-    def test_getitem_indicator_count(self):
-        """Test deprecated __getitem__ for indicator_count (index 2)"""
-        data = np.array([0, 1, 2], dtype="uint8")
-        mask = np.array([1, 1, 1], dtype="uint8")
-        prop = IndProperty(data, mask, 5)
-
-        result = prop[2]
-        assert result == 5
 
     def test_getitem_invalid_index(self):
         """Test deprecated __getitem__ raises error for invalid index"""
@@ -523,14 +463,6 @@ class TestCdfData:
         assert cdf.values.dtype == np.float32
         assert cdf.probs.dtype == np.float32
 
-    def test_values_and_probs_same_size(self):
-        """Test that values and probs arrays have same size"""
-        values = [1.0, 2.0, 3.0]
-        probs = [0.33, 0.66, 1.0]
-        cdf = CdfData(values, probs)
-
-        assert cdf.values.size == cdf.probs.size
-
     def test_single_value_cdf(self):
         """Test CDF with single value"""
         cdf = CdfData([5.0], [1.0])
@@ -562,32 +494,10 @@ class TestCdfData:
 
         assert abs(cdf.probs[-1] - 1.0) < 1e-6
 
-    def test_large_cdf(self):
-        """Test with large CDF array"""
-        size = 10000
-        values = np.linspace(0, 100, size).astype("float32")
-        probs = np.linspace(0, 1, size).astype("float32")
-        cdf = CdfData(values, probs)
-
-        assert cdf.values.size == size
-        assert cdf.probs.size == size
-
 
 @pytest.mark.hpgl
 class TestCovarianceClass:
     """Test covariance class for type constants"""
-
-    def test_spherical_constant(self):
-        """Test spherical covariance type constant"""
-        assert covariance.spherical == 0
-
-    def test_exponential_constant(self):
-        """Test exponential covariance type constant"""
-        assert covariance.exponential == 1
-
-    def test_gaussian_constant(self):
-        """Test Gaussian covariance type constant"""
-        assert covariance.gaussian == 2
 
     def test_constants_are_unique(self):
         """Test that all covariance type constants are unique"""

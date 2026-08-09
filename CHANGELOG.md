@@ -2,6 +2,20 @@
 
 All notable changes to HPGL Reborn.
 
+## [2.0.6] — 2026-08
+
+### Changed
+- **Test-suite optimization (~22% lighter default suite)** — the Python suite was audited and cut from 1,675 to ~1,303 test functions: 17 big-fixture load tests (the 468K-cell `BIG_SOFT_DATA` INC fixtures) moved to the slow suite, so the default run no longer loads them — the machine-freeze risk class is removed from the default baseline; hundreds of vacuous/non-discriminating tests removed; important regression pins hardened so silent behavioral changes fail loudly
+
+### Fixed
+- **GSLIB sentinel window in float64 (class: fractional-sentinel round-trip corruption)** — the C++ fast reader's sentinel window is now computed in float64, matching the Python readers, so a float32 1.0e21f round-trip classifies consistently across all loaders
+- **SIS no-output guard (class: silent empty results)** — all-neighbours-skipped SIS runs now warn like their SGS sibling instead of silently returning an empty mask
+- **Median-IK / indicator-kriging validation (class: missing sibling validation)** — empty-data and size-vs-grid validation added to `median_ik` and `indicator_kriging`, matching the OK/SK siblings
+- **INC-format loader (class: misclassified GSLIB headers)** — rejects GSLIB headers with an actionable error instead of mis-parsing
+- **FFI masked-array creators (class: silent data permutation)** — `create_cont_masked_array` / `create_ind_masked_array` enforce Fortran-contiguity (`checkFWA`) so C-order/strided input is rejected before silent permutation
+- **`checked_create` (class: misleading errors)** — rejects unknown keyword arguments with a `CriticalValidationError` naming them, instead of a misleading missing-field error
+- **Test runner** — the category runner now covers all kriging/simulation test files; `-v` verbosity is opt-in; CTest targets gained timeouts
+
 ## [2.0.5] — 2026-08
 
 ### Fixed

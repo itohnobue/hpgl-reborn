@@ -269,3 +269,126 @@ class TestSGSMinNeighboursFailureStats:
         assert any(
             "could not be kriged" in rec.message for rec in caplog.records
         ), "min_neighbours=0 no-neighbour warning must still fire"
+
+
+# =============================================================================
+# A-N1 — P-02 no-output guard pin (post-P-02 regression test)
+#
+# Mirrors the E-M57 SGS analog (test_production_fixes_201.py:250-299). SIS has
+# no ndmin gate, so the P-02 guard has two independently-pinnable halves:
+#   1. C++ stderr guard (sequential_indicator_simulation.cpp:244-251) — the
+#      normal-flow primary. A run where EVERY node is skipped (fully-informed
+#      property) previously returned the unchanged input clone with no signal
+#      at all; now the kernel writes "HPGL: SIS produced no output ..." to
+#      stderr when kriging_skipped >= property.size().
+#   2. Python logger warning (_warn_all_skipped, sis.py:66-96) — reachable via
+#      the progress-handler-cancellation path (E-04, adversarially verified):
+#      the C++ loop breaks on reporter.cancelled() before any uninformed cell
+#      is processed, leaving all three outcome counters at zero while
+#      uninformed > 0 — the same all-skipped signature the C++ guard surfaces
+#      in normal flow. The Python analog therefore carries the cancelled-run
+#      signal and must not be removed as "dead code".
+# =============================================================================
+
+
+@pytest.mark.hpgl
+@pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL (geo_bsd.geo) not available")
+class TestSISNoOutputGuard:
+    """A-N1: both halves of the P-02 SIS no-output guard emit a warning."""
+
+    def test_fully_informed_run_emits_cpp_stderr_guard(self, capfd):
+        """C++ stderr guard: a fully-informed SIS run (every node skipped →
+        kriging_skipped == property.size()) must emit "SIS produced no output".
+
+        Pre-P-02: the run returned the unchanged input clone with no signal
+        at all (the only stderr path required kriging_failures > 0). This pin
+        is the normal-flow primary of the P-02 guard; a regression removing
+        the C++ block (sequential_indicator_simulation.cpp:244-251) passes
+        the suite silently without it.
+        """
+        from geo_bsd.sis import sis_simulation
+
+        grid = SugarboxGrid(x=4, y=4, z=2)
+        size = grid.x * grid.y * grid.z  # 32
+        rng = np.random.RandomState(7)
+        data = rng.randint(0, 2, size, dtype="uint8")
+        mask = np.ones(size, dtype="uint8")  # FULLY informed → all nodes skipped
+        prop = IndProperty(data, mask, 2)
+        prop.fix_shape(grid)
+
+        cov_model = CovarianceModel(
+            type=covariance.spherical, ranges=(3.0, 3.0, 2.0), sill=1.0, nugget=0.1
+        )
+        sis_data = _sis_data(2, cov_model, radiuses=(3, 3, 2), max_neighbours=12)
+
+        result = sis_simulation(
+            prop=prop, grid=grid, data=sis_data,
+            seed=42, marginal_probs=[0.5, 0.5],
+        )
+
+        captured = capfd.readouterr()
+        assert "SIS produced no output" in captured.err, (
+            "P-02 C++ stderr guard did not fire on a fully-informed SIS run; "
+            f"stderr={captured.err!r}"
+        )
+        # The output is the unchanged input clone (nothing was simulated).
+        assert result.indicator_count == 2
+        np.testing.assert_array_equal(result.data, prop.data)
+
+    def test_cancelled_progress_handler_fires_python_logger_warning(self, caplog):
+        """Python logger half (_warn_all_skipped): a cancelling progress
+        handler leaves every outcome counter at zero while uninformed > 0 →
+        the "no nodes were simulated" warning fires (E-04 reachable path).
+
+        E-04 (adversarially verified): the C++ SIS loop breaks on
+        reporter.cancelled() (sequential_indicator_simulation.cpp:89-96)
+        before any uninformed cell is processed, producing the all-zero
+        signature the _warn_all_skipped analog detects. This is the
+        cancellation-path counterpart of the normal-flow C++ stderr guard
+        above; removing the Python analog would silently lose the cancelled-run
+        signal.
+        """
+        import logging
+
+        import geo_bsd.geo as geo_mod
+        from geo_bsd.sis import sis_simulation
+
+        grid = SugarboxGrid(x=2, y=2, z=2)
+        size = grid.x * grid.y * grid.z  # 8
+        data = np.zeros(size, dtype="uint8")
+        mask = np.ones(size, dtype="uint8")
+        mask[0] = 0  # 1 uninformed cell (not the seed-0 first path node, index 5)
+        prop = IndProperty(data, mask, 2)
+        prop.fix_shape(grid)
+
+        cov_model = CovarianceModel(
+            type=covariance.spherical, ranges=(1.0, 1.0, 1.0), sill=1.0, nugget=0.1
+        )
+        sis_data = _sis_data(2, cov_model, radiuses=(1, 1, 1), max_neighbours=4)
+
+        # Cancel on the first progress tick: the handler's non-zero return is
+        # propagated by update_progress → progress_reporter_t::next_lap sets
+        # m_cancelled, and the SIS loop breaks before simulating any cell.
+        geo_mod.set_progress_handler(lambda stage, percent, param: 1, None)
+        try:
+            with caplog.at_level(logging.WARNING, logger="geo_bsd.sis"):
+                result = sis_simulation(
+                    prop=prop, grid=grid, data=sis_data,
+                    seed=0, marginal_probs=[0.5, 0.5],
+                )
+        finally:
+            # MUST restore — a lingering cancelling handler would abort every
+            # later simulation in this process (cross-test pollution).
+            geo_mod.set_progress_handler(None, None)
+
+        assert any(
+            "no nodes were simulated" in rec.message for rec in caplog.records
+        ), f"P-02 Python no-output warning did not fire: {[r.message for r in caplog.records]}"
+        # The zero-attempt signature: no kriging evaluation, no marginal
+        # substitution, no singular failure.
+        stats = geo_mod._last_kriging_stats or {}
+        assert stats.get("points_calculated", -1) == 0, f"stats={stats}"
+        assert stats.get("points_without_neighbours", -1) == 0, f"stats={stats}"
+        assert stats.get("points_singularity", -1) == 0, f"stats={stats}"
+        # Output stays finite (cancellation leaves the initial state).
+        assert np.all(np.isfinite(result.data))

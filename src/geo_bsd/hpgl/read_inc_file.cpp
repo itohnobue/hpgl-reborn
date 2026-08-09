@@ -366,16 +366,37 @@ namespace hpgl
 				// same window (get_gslib_property / LoadGslibFile), so the fast
 				// reader must not load third-party sentinels as data. Strict
 				// inequality per the GSLIB convention ("less than -1.0e21 or
-				// greater than 1.0e21"); an exact ±1.0e21 value still relies on
-				// exact undefined_value equality (float32 round-trip of the
-				// HPGL writer's own sentinel is exact). The window constant is
+				// greater than 1.0e21").
+				//
+				// P-01: the GSLIB window is a float64 contract shared with the
+				// Python readers (gslib_ref.py GSLIB_SENTINEL_WINDOW = 1.0e21,
+				// |v| > 1.0e21 strict). Comparing in float32 as before widened
+				// the window to float32(1.0e21) = 1.0000000200408773e21, so the
+				// writer's own %.9E output "1.000000020E+21" for the float32
+				// value 1.0e21f was classified DATA here but SENTINEL->NaN by
+				// every Python reader. Data is stored float32 (sscanf("%f")),
+				// so float32(±1.0e21) is genuinely out-of-window in float64
+				// space and must be masked, matching Python. Exact
+				// undefined_value equality below is unchanged: float -> double
+				// promotion is exact, so v == undefined_value still compares
+				// the original float32 bit patterns. The window constant is
 				// the shared GSLIB reference-fact table value (api.h
 				// HPGL_GSLIB_SENTINEL_WINDOW, got-20260802092630).
-				const float sentinel_min = -static_cast<float>(HPGL_GSLIB_SENTINEL_WINDOW);
-				const float sentinel_max =  static_cast<float>(HPGL_GSLIB_SENTINEL_WINDOW);
+				//
+				// Residual edge (accepted): a literal "1.0E+21" /
+				// "1.000000000E+21" token in a third-party hand-written file
+				// classifies DATA in Python (float64 exact 1.0e21 is not >
+				// 1.0e21) but SENTINEL here (sscanf("%f") rounds float64 1.0e21
+				// to float32 1.0000000200408773e21, which IS > 1.0e21). Such a
+				// token is unreachable from the HPGL writer (which emits
+				// "1.000000020E+21" for float32 1.0e21f), so it cannot affect
+				// project-produced files. Do NOT reintroduce a float32 window
+				// to "match" this literal — it would recreate the divergence.
+				const double sentinel_min = -static_cast<double>(HPGL_GSLIB_SENTINEL_WINDOW);
+				const double sentinel_max =  static_cast<double>(HPGL_GSLIB_SENTINEL_WINDOW);
 				for (int i = 0; i < size; ++i)
 				{
-					const float v = data_buffer[i];
+					const double v = data_buffer[i];
 					mask_buffer[i] = (v == undefined_value || v < sentinel_min || v > sentinel_max) ? 0 : 1;
 				}
 			}

@@ -411,10 +411,19 @@ class TestLoadShapeNormalization:
 
         Pre-fix: fast success returned 1D, fallback returned 3D. Post-fix:
         the public load_cont_property normalizes both to 3D for a 3-tuple.
+
+        N2-20: the fixture must GENUINELY force the fallback. Post-F-54 the
+        C++ tokenizer skips mid-line '--' comment tokens, so the old
+        ``... 8 -- 9`` fixture let the fast reader succeed (9 numeric
+        values) and the fallback-reshape path was never entered. A junk
+        token ('abc') is rejected by the fast reader (E-M73 full-token
+        validation / I2-56 extra-token check → RuntimeError) while the
+        slow parser SKIPS non-numeric tokens (F-54 documented divergence,
+        geo.py:808-809) — the fallback runs and must reshape to 3D.
         """
         fpath = tmp_path / "fallback.inc"
-        # File with 8 values and a mid-line comment the fast reader rejects.
-        _write_text(fpath, "prop\n0 1 2 3 4 5 6 7 8 -- 9\n/\n")
+        # File with 9 values plus a junk token the fast reader rejects.
+        _write_text(fpath, "prop\n0 1 2 3 4 5 6 7 8 abc\n/\n")
 
         loaded = load_cont_property(str(fpath), -99.0, (3, 3, 1), basedir=str(tmp_path))
         assert loaded.data.shape == (3, 3, 1)

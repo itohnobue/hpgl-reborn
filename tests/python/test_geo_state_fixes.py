@@ -109,43 +109,33 @@ class TestSimulationStatsSentinel:
         F-M6 wiring: the C++ SGS path now calls set_kriging_stats, so a
         successful simulation leaves the documented inspection point
         populated with the simulation's failure counters (previously None).
+
+        T-27: the pre-seed is 0 (not 777) so a stale surviving value FAILS
+        the > 0 assertion — deleting the entire Python stats wiring
+        (reset+populate) leaves the seed in place and the test turns red
+        instead of passing vacuously.
         """
         from geo_bsd import geo
         from geo_bsd.sgs import sgs_simulation
 
         grid = SugarboxGrid(x=5, y=5, z=3)
         prop = _cont_prop()
-        geo._last_kriging_stats = {"points_calculated": 777}
-        sgs_simulation(
-            prop=prop, grid=grid, cdf_data=None,
-            radiuses=(3, 3, 2), max_neighbours=8,
-            cov_model=_cov_model(), seed=42, kriging_type="sk",
-        )
-        assert geo._last_kriging_stats is not None, (
-            "geo._last_kriging_stats should be populated after sgs_simulation"
-        )
-        assert geo._last_kriging_stats["points_calculated"] > 0, (
-            f"Expected positive points_calculated after SGS, got {geo._last_kriging_stats}"
-        )
-
-    def test_sis_simulation_populates_geo_last_kriging_stats(self):
-        """sis_simulation populates geo._last_kriging_stats (F-11 + F-M6/F-N4)."""
-        from geo_bsd import geo
-        from geo_bsd.sis import sis_simulation
-
-        grid = SugarboxGrid(x=5, y=5, z=3)
-        prop = _ind_prop(count=3)
-        geo._last_kriging_stats = {"points_calculated": 777}
-        sis_simulation(
-            prop=prop, grid=grid, data=_sis_data(3),
-            seed=42, marginal_probs=[0.33, 0.33, 0.34],
-        )
-        assert geo._last_kriging_stats is not None, (
-            "geo._last_kriging_stats should be populated after sis_simulation"
-        )
-        assert geo._last_kriging_stats["points_calculated"] > 0, (
-            f"Expected positive points_calculated after SIS, got {geo._last_kriging_stats}"
-        )
+        geo._last_kriging_stats = {"points_calculated": 0}  # T-27: stale value must fail > 0
+        try:
+            sgs_simulation(
+                prop=prop, grid=grid, cdf_data=None,
+                radiuses=(3, 3, 2), max_neighbours=8,
+                cov_model=_cov_model(), seed=42, kriging_type="sk",
+            )
+            assert geo._last_kriging_stats is not None, (
+                "geo._last_kriging_stats should be populated after sgs_simulation"
+            )
+            assert geo._last_kriging_stats["points_calculated"] > 0, (
+                f"Expected positive points_calculated after SGS, got {geo._last_kriging_stats}"
+            )
+        finally:
+            # N2-L21: the module-global sentinel must not leak into later tests.
+            geo._last_kriging_stats = None
 
     def test_dead_module_local_shadows_removed(self):
         """The dead sgs._/sis._last_kriging_stats shadow globals are gone (F-11)."""

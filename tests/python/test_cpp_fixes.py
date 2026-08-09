@@ -91,35 +91,6 @@ def sample_cov_model():
 
 
 @pytest.fixture
-def sis_data_2ind():
-    """SIS data config for 2-indicator case."""
-    return [
-        {
-            "cov_model": CovarianceModel(
-                type=covariance.spherical,
-                ranges=(3.0, 3.0, 2.0),
-                angles=(0.0, 0.0, 0.0),
-                sill=1.0,
-                nugget=0.1,
-            ),
-            "radiuses": (3, 3, 2),
-            "max_neighbours": 8,
-        },
-        {
-            "cov_model": CovarianceModel(
-                type=covariance.spherical,
-                ranges=(3.0, 3.0, 2.0),
-                angles=(0.0, 0.0, 0.0),
-                sill=1.0,
-                nugget=0.1,
-            ),
-            "radiuses": (3, 3, 2),
-            "max_neighbours": 8,
-        },
-    ]
-
-
-@pytest.fixture
 def sis_data_3ind():
     """SIS data config for 3-indicator case."""
     data = []
@@ -332,13 +303,14 @@ class TestSISNanProbabilityDetection:
     """Tests exercising the NaN probability detection fix in C++ sample().
 
     The Python LVM path validates marginal_probs for NaN via numpy.isfinite()
-    before calling C++ (sis.py:213-218). The C++ fix (F-39/I2-F09) is a
+    before calling C++ (sis.py:344-348). The C++ fix (F-39/I2-F09) is a
     defense-in-depth layer that detects NaN in sample() if it reaches C++.
 
     We test:
       1. Python validates NaN and rejects it (gatekeeping layer works)
-      2. Valid SIS completes successfully (C++ fix path exercises valid data)
-      3. Valid SIS via LVM path completes successfully (exercises correlogram path)
+      2. Python rejects out-of-[0,1] LVM probabilities (sis.py:304-309)
+      3. Valid SIS completes successfully (C++ fix path exercises valid data)
+      4. Valid SIS via LVM path completes successfully (exercises correlogram path)
     """
 
     def test_sis_lvm_nan_probs_rejected(
@@ -347,9 +319,9 @@ class TestSISNanProbabilityDetection:
         """NaN in LVM marginal_probs must be rejected.
 
         When NaN is injected, the per-cell probability sum check at
-        sis.py:195-202 fires first (NaN propagates through sum),
+        sis.py:293-300 fires first (NaN propagates through sum),
         producing a "deviates from 1.0" error with nan deviation.
-        The isfinite check at sis.py:213-218 is the second line of
+        The isfinite check at sis.py:344-348 is the second line of
         defense that catches NaN that somehow survives the sum check.
         Both checks together ensure NaN never reaches C++.
         """
@@ -413,22 +385,6 @@ class TestSISNanProbabilityDetection:
                 marginal_probs=lvm_probs,
                 use_correlogram=True,
             )
-
-    def test_sis_completes_successfully_non_lvm(
-        self, small_ind_prop, small_grid, sis_data_3ind
-    ):
-        """Valid SIS simulation (non-LVM) completes — exercises C++ sample() path."""
-        result = sis_simulation(
-            prop=small_ind_prop,
-            grid=small_grid,
-            data=sis_data_3ind,
-            seed=42,
-            marginal_probs=[0.33, 0.33, 0.34],
-            use_correlogram=False,
-        )
-        assert isinstance(result, IndProperty)
-        assert result.data.size == 75
-        assert result.indicator_count == 3
 
     def test_sis_completes_successfully_lvm(
         self, small_ind_prop, small_grid, sis_data_3ind
@@ -639,15 +595,23 @@ class TestCovModelRangeThreshold:
 
     The fix ensures the range-relative threshold in cov_model.h prevents
     division by zero or degenerate behavior. We test that kriging with
-    valid model parameters completes successfully — verifying the C++
-    covariance calculations work correctly.
+    valid model parameters completes successfully AND produces finite
+    output with nonzero kriging stats — a threshold regression that
+    silently mean-fills or emits NaN/Inf now fails the hardened asserts.
     """
 
     def test_kriging_with_exponential_model_completes(
         self, small_cont_prop, small_grid
     ):
-        """Kriging with exponential covariance model exercises range-relative threshold."""
+        """Kriging with exponential covariance model exercises range-relative threshold.
+
+        Hardened (L-25): assert finite output + nonzero kriging stats — a
+        silent mean-fill regression on the F-46 threshold would produce
+        finite-but-degenerate results that the old isinstance+size-only
+        checks could not detect.
+        """
         from geo_bsd.geo import ordinary_kriging
+        from geo_bsd.hpgl_wrap import _HAS_KRIGING_STATS, get_kriging_stats
 
         exp_cov = CovarianceModel(
             type=covariance.exponential,
@@ -666,12 +630,24 @@ class TestCovModelRangeThreshold:
         )
         assert isinstance(result, ContProperty)
         assert result.data.size == 75
+        assert np.all(np.isfinite(result.data)), (
+            "F-46 regression: kriging produced non-finite output"
+        )
+        if _HAS_KRIGING_STATS:
+            assert get_kriging_stats()["points_calculated"] > 0, (
+                "F-46 regression: no cells kriged (stats points_calculated == 0)"
+            )
 
     def test_kriging_with_gaussian_model_completes(
         self, small_cont_prop, small_grid
     ):
-        """Kriging with Gaussian covariance model exercises range-relative threshold."""
+        """Kriging with Gaussian covariance model exercises range-relative threshold.
+
+        Hardened (L-25): assert finite output + nonzero kriging stats (see
+        the exponential sibling).
+        """
         from geo_bsd.geo import ordinary_kriging
+        from geo_bsd.hpgl_wrap import _HAS_KRIGING_STATS, get_kriging_stats
 
         gauss_cov = CovarianceModel(
             type=covariance.gaussian,
@@ -690,6 +666,13 @@ class TestCovModelRangeThreshold:
         )
         assert isinstance(result, ContProperty)
         assert result.data.size == 75
+        assert np.all(np.isfinite(result.data)), (
+            "F-46 regression: kriging produced non-finite output"
+        )
+        if _HAS_KRIGING_STATS:
+            assert get_kriging_stats()["points_calculated"] > 0, (
+                "F-46 regression: no cells kriged (stats points_calculated == 0)"
+            )
 
 
 # ==============================================================================
@@ -699,35 +682,13 @@ class TestCovModelRangeThreshold:
 
 @pytest.mark.hpgl
 class TestOpenMPCancelFix:
-    """Exercises the C++ OpenMP cancel fix (F-42) in indicator_kriging / median_ik.
+    """Exercises the C++ OpenMP cancel fix (F-42) in median_ik.
 
     The fix correctly handles OpenMP cancellation in indicator kriging loops.
-    We exercise the path by running indicator_kriging and median_ik operations.
+    median_ik is the direct Python entry to the fixed C++ path (the
+    2-category indicator_kriging wrapper redirects to median_ik internally).
+    No C++-layer OpenMP-cancel test exists, so this is the sole guard.
     """
-
-    def test_indicator_kriging_completes(self, small_grid, sis_data_2ind):
-        """Two-category indicator_kriging exercises OpenMP cancel path.
-
-        The 2-category case redirects to median_ik internally (geo.py:1451-1470).
-        Must use an IndProperty with indicator_count=2.
-        """
-        from geo_bsd.geo import indicator_kriging
-
-        # Create 2-category indicator property
-        size = 5 * 5 * 3
-        data = np.random.RandomState(44).randint(0, 2, size, dtype="uint8")
-        mask = np.ones(size, dtype="uint8")
-        mask[::10] = 0
-        prop2 = IndProperty(data, mask, 2)
-
-        result = indicator_kriging(
-            prop=prop2,
-            grid=small_grid,
-            data=sis_data_2ind,
-            marginal_probs=[0.45, 0.55],
-        )
-        assert isinstance(result, IndProperty)
-        assert result.data.size == 75
 
     def test_median_ik_completes(self, small_grid, sample_cov_model):
         """Median IK exercises the OpenMP cancel path in C++."""
@@ -753,159 +714,9 @@ class TestOpenMPCancelFix:
 
 
 # ==============================================================================
-# F-39: NaN detection in C++ sample() — directly via LVM mode with valid data
+# Removed in v2.0.6 (redundant smokes, L-07):
+#   - TestSampleFunctionNaNDetection / CF-22: dup of test_production_fixes_203.py
+#   - TestAPIValidationOrdering / CF-23, CF-24: valid-input shape checks whose
+#     named branches fire only on invalid input
+#   - TestEndToEndCppFixes / CF-25: composite whose steps are individually pinned
 # ==============================================================================
-
-
-@pytest.mark.hpgl
-class TestSampleFunctionNaNDetection:
-    """Tests exercising the C++ sample() NaN detection fix (F-39 / I2-F09).
-
-    The C++ fix in sample.cpp detects NaN probabilities and produces a
-    logged warning rather than silently consuming NaN. These tests
-    exercise the C++ sample() function through SIS with valid data,
-    verifying the function works correctly.
-
-    Additional tests verify that the 2-indicator SIS path (which
-    redirects to median_ik internally) also completes correctly.
-    """
-
-    def test_sis_2indicator_non_lvm_completes(
-        self, small_grid, sis_data_2ind
-    ):
-        """2-indicator SIS (non-LVM) exercises sample() path.
-
-        Uses a 2-category property matching the 2-indicator data config
-        (F-24: indicator_count must match len(data) — a mismatch now raises).
-        """
-        # Create 2-category indicator property matching sis_data_2ind
-        size = 5 * 5 * 3
-        data = np.random.RandomState(44).randint(0, 2, size, dtype="uint8")
-        mask = np.ones(size, dtype="uint8")
-        mask[::10] = 0
-        prop2 = IndProperty(data, mask, 2)
-
-        result = sis_simulation(
-            prop=prop2,
-            grid=small_grid,
-            data=sis_data_2ind,
-            seed=42,
-            marginal_probs=[0.4, 0.6],
-            use_correlogram=False,
-        )
-        assert isinstance(result, IndProperty)
-        assert result.data.size == 75
-        assert result.indicator_count == 2
-
-
-# ==============================================================================
-# Regression: API validation ordering / shape checks (F-23, F-25, F-27, F-31)
-# ==============================================================================
-
-
-@pytest.mark.hpgl
-class TestAPIValidationOrdering:
-    """Tests exercising C++ API validation ordering and shape check fixes.
-
-    F-23/F-25: Validation ordering in api.cpp
-    F-27/F-31: Shape dimension checks in api.cpp
-    The Python layer adds its own validation; these tests verify valid
-    operations complete, exercising the C++ fix paths.
-    """
-
-    def test_ordinary_kriging_shape_check_completes(
-        self, small_cont_prop, small_grid, sample_cov_model
-    ):
-        """Valid ordinary_kriging call exercises C++ shape validation path."""
-        from geo_bsd.geo import ordinary_kriging
-
-        result = ordinary_kriging(
-            prop=small_cont_prop,
-            grid=small_grid,
-            radiuses=(3, 3, 2),
-            max_neighbours=8,
-            cov_model=sample_cov_model,
-        )
-        assert isinstance(result, ContProperty)
-        assert result.data.shape == small_cont_prop.data.shape
-
-    def test_simple_kriging_shape_check_completes(
-        self, small_cont_prop, small_grid, sample_cov_model
-    ):
-        """Valid simple_kriging call exercises C++ shape validation path."""
-        from geo_bsd.geo import simple_kriging
-
-        result = simple_kriging(
-            prop=small_cont_prop,
-            grid=small_grid,
-            radiuses=(3, 3, 2),
-            max_neighbours=8,
-            cov_model=sample_cov_model,
-            mean=50.0,
-        )
-        assert isinstance(result, ContProperty)
-        assert result.data.shape == small_cont_prop.data.shape
-
-
-# ==============================================================================
-# End-to-end: All C++ fix paths exercised in one integration flow
-# ==============================================================================
-
-
-@pytest.mark.hpgl
-class TestEndToEndCppFixes:
-    """Single end-to-end test exercising as many C++ fix paths as possible.
-
-    Runs: set_thread_num → ordinary_kriging → SIS simulation → get_kriging_stats
-    This exercises F-41 (set_thread_num), F-46 (cov threshold), F-60/F-61
-    (kriging failure tracking), and F-39 (sample() NaN detection) in one flow.
-    """
-
-    def test_end_to_end_cpp_fix_flow(self, small_cont_prop, small_grid, sis_data_3ind):
-        """Full flow: set threads → krige → simulate → check stats."""
-        from geo_bsd.geo import ordinary_kriging, set_thread_num
-        from geo_bsd.hpgl_wrap import _HAS_KRIGING_STATS, get_kriging_stats
-
-        # F-41: Set threads (valid value)
-        set_thread_num(1)
-
-        # Need a 3-indicator property for SIS
-        size = 5 * 5 * 3
-        rng = np.random.RandomState(300)
-        ind_data = rng.randint(0, 3, size, dtype="uint8")
-        ind_mask = np.ones(size, dtype="uint8")
-        ind_mask[::10] = 0
-        ind_prop = IndProperty(ind_data, ind_mask, 3)
-
-        # F-46: Run ordinary kriging (exercises cov_model range threshold)
-        cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(3.0, 3.0, 2.0),
-            sill=1.0,
-            nugget=0.1,
-        )
-        krige_result = ordinary_kriging(
-            prop=small_cont_prop,
-            grid=small_grid,
-            radiuses=(3, 3, 2),
-            max_neighbours=8,
-            cov_model=cov_model,
-        )
-        assert isinstance(krige_result, ContProperty)
-
-        # F-60/F-61: Check kriging stats after kriging
-        if _HAS_KRIGING_STATS:
-            stats = get_kriging_stats()
-            assert stats["points_calculated"] > 0
-
-        # F-39: Run SIS (exercises C++ sample())
-        sis_result = sis_simulation(
-            prop=ind_prop,
-            grid=small_grid,
-            data=sis_data_3ind,
-            seed=42,
-            marginal_probs=[0.33, 0.33, 0.34],
-            use_correlogram=False,
-        )
-        assert isinstance(sis_result, IndProperty)
-        assert sis_result.data.size == 75

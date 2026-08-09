@@ -40,10 +40,15 @@ class TestValidateGridSizeParam:
         GridValidator.validate_grid_size_param((10, 10, 5))
         GridValidator.validate_grid_size_param([3, 4, 2])
 
-    def test_scalar_int_passes(self):
-        """Scalar int passes (downstream caller enforces caps)."""
+    def test_non_3tuple_scalar_or_string_skips_validation(self):
+        """Scalar int / string / non-3-length values skip validation (no error).
+
+        Both the scalar-int (:43) and string (:58) variants hit the same
+        ``isinstance(size, (tuple, list)) and len == 3`` no-op branch — merged.
+        """
         GridValidator.validate_grid_size_param(42, "test_func")
         GridValidator.validate_grid_size_param(1)
+        GridValidator.validate_grid_size_param("not_grid")
 
     def test_invalid_3tuple_raises_on_validate(self):
         """3-tuple with negative dimension raises via validate_grid_dimensions."""
@@ -55,11 +60,6 @@ class TestValidateGridSizeParam:
         with pytest.raises(CriticalValidationError):
             GridValidator.validate_grid_size_param((0, 10, 5))
 
-    def test_non_tuple_non_int_skips_validation(self):
-        """Non-3-tuple, non-int values skip validation (no error)."""
-        # A string or float that is not a 3-length tuple/list → skip
-        GridValidator.validate_grid_size_param("not_grid")
-
 
 # =============================================================================
 # M-P-37: Non-integer radius tests
@@ -68,29 +68,26 @@ class TestValidateGridSizeParam:
 
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestNonIntegerRadius:
-    """Test non-integer radius raises CriticalValidationError (M-P-37)."""
+    """Test non-integer radius raises CriticalValidationError (M-P-37).
 
-    def test_float_radius_55_raises(self):
-        """Radius 5.5 is not an integer — raises."""
+    The 5 raise-variants hit the same ``not float(r).is_integer()`` branch
+    (validation.py:679) — consolidated to 3 shape variants (scalar, tuple,
+    numpy) plus the 2 discriminating pass-tests.
+    """
+
+    @pytest.mark.parametrize("bad_radius", [5.5, 1.3])
+    def test_scalar_float_radius_raises(self, bad_radius):
+        """Scalar non-integer radius raises."""
         with pytest.raises(CriticalValidationError, match="not an integer"):
-            ParameterValidator.validate_radius(5.5, "radius")
+            ParameterValidator.validate_radius(bad_radius, "radius")
 
-    def test_float_radius_13_raises(self):
-        """Radius 1.3 is not an integer — raises."""
+    @pytest.mark.parametrize("bad_tuple", [(5, 5.5, 3), (1.3, 2, 3)])
+    def test_tuple_float_radius_raises(self, bad_tuple):
+        """Tuple radius with non-integer value raises."""
         with pytest.raises(CriticalValidationError, match="not an integer"):
-            ParameterValidator.validate_radius(1.3)
+            ParameterValidator.validate_radius(bad_tuple)
 
-    def test_tuple_with_float_55_raises(self):
-        """Tuple radius with non-integer value 5.5 raises."""
-        with pytest.raises(CriticalValidationError, match="not an integer"):
-            ParameterValidator.validate_radius((5, 5.5, 3))
-
-    def test_tuple_with_float_13_raises(self):
-        """Tuple radius with non-integer value 1.3 raises."""
-        with pytest.raises(CriticalValidationError, match="not an integer"):
-            ParameterValidator.validate_radius((1.3, 2, 3))
-
-    def test_numpy_float_radius_55_raises(self):
+    def test_numpy_float_radius_raises(self):
         """Numpy float64 5.5 radius raises."""
         with pytest.raises(CriticalValidationError, match="not an integer"):
             ParameterValidator.validate_radius(np.float64(5.5))
@@ -113,32 +110,23 @@ class TestNonIntegerRadius:
 
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestNanInfInValidateProbability:
-    """Test NaN/Inf in validate_probability (M-P-38)."""
+    """Test NaN/Inf in validate_probability (M-P-38).
 
-    def test_nan_probability_raises(self):
-        """NaN probability raises CriticalValidationError."""
+    nan/inf/-inf/np.nan/np.inf all hit the single
+    ``numpy.isnan(prob) or numpy.isinf(prob)`` branch (validation.py:891-892)
+    — consolidated to one parametrized scalar case + one numpy variant.
+    """
+
+    @pytest.mark.parametrize("bad_prob", [float("nan"), float("inf"), -float("inf")])
+    def test_non_finite_probability_raises(self, bad_prob):
+        """Non-finite probability raises CriticalValidationError."""
         with pytest.raises(CriticalValidationError, match="NaN or infinite"):
-            ParameterValidator.validate_probability(float("nan"), "prob")
+            ParameterValidator.validate_probability(bad_prob, "prob")
 
-    def test_inf_probability_raises(self):
-        """Inf probability raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError, match="NaN or infinite"):
-            ParameterValidator.validate_probability(float("inf"), "prob")
-
-    def test_negative_inf_probability_raises(self):
-        """-Inf probability raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError, match="NaN or infinite"):
-            ParameterValidator.validate_probability(-float("inf"), "prob")
-
-    def test_numpy_nan_probability_raises(self):
-        """NumPy NaN probability raises."""
+    def test_numpy_non_finite_probability_raises(self):
+        """NumPy floating non-finite probability raises."""
         with pytest.raises(CriticalValidationError, match="NaN or infinite"):
             ParameterValidator.validate_probability(np.float64(float("nan")))
-
-    def test_numpy_inf_probability_raises(self):
-        """NumPy Inf probability raises."""
-        with pytest.raises(CriticalValidationError, match="NaN or infinite"):
-            ParameterValidator.validate_probability(np.float32(float("inf")))
 
 
 # =============================================================================
@@ -148,29 +136,28 @@ class TestNanInfInValidateProbability:
 
 @pytest.mark.skipif(not VALIDATION_AVAILABLE, reason="validation module not available")
 class TestNanInfInValidateProbabilitySum:
-    """Test NaN/Inf in validate_probability_sum (M-P-39)."""
+    """Test NaN/Inf in validate_probability_sum (M-P-39).
 
-    def test_nan_in_probability_list_raises(self):
-        """NaN in probability list raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError, match="NaN or infinite"):
-            ParameterValidator.validate_probability_sum([0.5, float("nan"), 0.5])
+    nan/inf/-inf/all-nan/single-inf all hit the same per-element
+    ``numpy.isnan or numpy.isinf`` check (validation.py:914-915) —
+    consolidated to one parametrized list-family + one all-NaN case.
+    """
 
-    def test_inf_in_probability_list_raises(self):
-        """Inf in probability list raises."""
+    @pytest.mark.parametrize(
+        "bad_list",
+        [
+            [0.5, float("nan"), 0.5],
+            [0.3, float("inf"), 0.7],
+            [-float("inf"), 1.0],
+            [float("inf")],
+        ],
+    )
+    def test_non_finite_in_probability_list_raises(self, bad_list):
+        """Non-finite value in probability list raises."""
         with pytest.raises(CriticalValidationError, match="NaN or infinite"):
-            ParameterValidator.validate_probability_sum([0.3, float("inf"), 0.7])
-
-    def test_negative_inf_in_probability_list_raises(self):
-        """-Inf in probability list raises."""
-        with pytest.raises(CriticalValidationError, match="NaN or infinite"):
-            ParameterValidator.validate_probability_sum([-float("inf"), 1.0])
+            ParameterValidator.validate_probability_sum(bad_list)
 
     def test_all_nan_list_raises(self):
         """All-NaN list raises."""
         with pytest.raises(CriticalValidationError, match="NaN or infinite"):
             ParameterValidator.validate_probability_sum([float("nan"), float("nan")])
-
-    def test_single_inf_raises(self):
-        """Single Inf value raises."""
-        with pytest.raises(CriticalValidationError, match="NaN or infinite"):
-            ParameterValidator.validate_probability_sum([float("inf")])

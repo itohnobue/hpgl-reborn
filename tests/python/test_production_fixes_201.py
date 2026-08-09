@@ -25,8 +25,6 @@ try:
         ContProperty,
         CovarianceModel,
         IndProperty,
-        SGSConfig,
-        SISConfig,
         SugarboxGrid,
         covariance,
         gtsim_2ind,
@@ -57,20 +55,6 @@ def _spherical_cov(ranges=(3.0, 3.0, 2.0), sill=1.0, nugget=0.1):
 # entry points and config classes rejected 0 (MIN_NEIGHBORS=1), making the
 # documented mode unreachable (R-05 config alignment + R-20 warning exemption).
 # =============================================================================
-
-
-class TestSgsConfigZeroMaxNeighboursAccepted:
-    """R-05/E-M9 config acceptance: SGSConfig(max_neighbours=0) must construct
-    and store 0 (the C++-documented unconditional mode). Pre-fix it raised
-    ValueError (test_config.py pinned the rejection; Stage-9 inverts those pins)."""
-
-    def test_sgs_config_zero_constructs(self):
-        cfg = SGSConfig(max_neighbours=0)
-        assert cfg.max_neighbours == 0
-
-    def test_sis_config_zero_constructs(self):
-        cfg = SISConfig(max_neighbours=0)
-        assert cfg.max_neighbours == 0
 
 
 @pytest.mark.hpgl

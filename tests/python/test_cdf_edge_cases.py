@@ -43,8 +43,9 @@ class TestCalcCdfDuplicateValues:
         assert cdf.values.size == 2
         expected_values = np.array([1.0, 2.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([0.5, 1.0], dtype="float32")
-        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
+        assert cdf.probs[0] == 0.5
+        # T-16: the clamp (cdf.py) pins the tail strictly below 1.0.
+        assert cdf.probs[-1] < 1.0
 
     def test_three_groups_of_duplicates(self):
         prop = _make_prop([1.0] * 3 + [2.0] * 3 + [3.0] * 3, grid_shape=(3, 3, 1))
@@ -52,8 +53,9 @@ class TestCalcCdfDuplicateValues:
         assert cdf.values.size == 3
         expected_values = np.array([1.0, 2.0, 3.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([1 / 3, 2 / 3, 1.0], dtype="float32")
-        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
+        assert cdf.probs[0] == pytest.approx(1 / 3)
+        # T-16: the clamp pins the tail strictly below 1.0.
+        assert cdf.probs[-1] < 1.0
 
 
 @pytest.mark.hpgl
@@ -66,50 +68,9 @@ class TestCalcCdfSingleValue:
         # F-04: last CDF probability must be strictly below 1.0.
         assert cdf.probs[0] < 1.0
 
-    def test_single_value_many_cells(self):
-        prop = _make_prop([7.0] * 27, grid_shape=(3, 3, 3))
-        cdf = calc_cdf(prop)
-        assert cdf.values.size == 1
-        assert cdf.values[0] == 7.0
-        # F-04: last CDF probability must be strictly below 1.0.
-        assert cdf.probs[0] < 1.0
-
-
-@pytest.mark.hpgl
-class TestCalcCdfAllSame:
-    def test_all_same_positive(self):
-        prop = _make_prop([100.0] * 12, grid_shape=(3, 2, 2))
-        cdf = calc_cdf(prop)
-        assert cdf.values.size == 1
-        assert cdf.values[0] == 100.0
-
-    def test_all_same_zero(self):
-        prop = _make_prop([0.0] * 8, grid_shape=(2, 2, 2))
-        cdf = calc_cdf(prop)
-        assert cdf.values.size == 1
-        assert cdf.values[0] == 0.0
-
-    def test_all_same_float(self):
-        prop = _make_prop([3.14] * 8, grid_shape=(2, 2, 2))
-        cdf = calc_cdf(prop)
-        assert cdf.values.size == 1
-        assert abs(cdf.values[0] - 3.14) < 1e-5
-
 
 @pytest.mark.hpgl
 class TestCalcCdfNegativeValues:
-    def test_negative_values(self):
-        prop = _make_prop([-5.0, -3.0, -1.0, 1.0, 3.0, 5.0, -2.0, 2.0], grid_shape=(2, 2, 2))
-        cdf = calc_cdf(prop)
-        assert cdf.values[0] < 0
-        assert np.all(np.diff(cdf.values) >= 0)
-
-    def test_all_negative(self):
-        prop = _make_prop([-10.0, -5.0, -1.0, -3.0], grid_shape=(2, 2, 1))
-        cdf = calc_cdf(prop)
-        assert np.all(cdf.values < 0)
-        assert np.all(np.diff(cdf.values) >= 0)
-
     def test_mixed_positive_negative(self):
         prop = _make_prop([-100.0, -50.0, 0.0, 50.0, 100.0], grid_shape=(5, 1, 1))
         cdf = calc_cdf(prop)
@@ -139,33 +100,17 @@ class TestCalcCdfEdgeCases:
         assert cdf.values.size == 2
         expected_values = np.array([1.0, 2.0], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([0.5, 1.0], dtype="float32")
-        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
-
-    def test_two_unique_values_equal_counts(self):
-        prop = _make_prop([10.0] * 6 + [20.0] * 6, grid_shape=(3, 2, 2))
-        cdf = calc_cdf(prop)
-        assert cdf.values.size == 2
-        expected_values = np.array([10.0, 20.0], dtype="float32")
-        np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([0.5, 1.0], dtype="float32")
-        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
+        assert cdf.probs[0] == 0.5
+        # T-16: the clamp pins the tail strictly below 1.0.
+        assert cdf.probs[-1] < 1.0
 
     def test_many_unique_sorted(self):
-        np.random.seed(42)
-        values = np.random.rand(30).astype("float32") * 100
+        rng = np.random.RandomState(42)
+        values = rng.rand(30).astype("float32") * 100
         prop = _make_prop(list(values), grid_shape=(5, 3, 2))
         cdf = calc_cdf(prop)
-        if cdf.values.size > 1:
-            assert np.all(np.diff(cdf.values) > 0)
-
-    def test_probs_monotonically_increasing(self):
-        np.random.seed(42)
-        values = np.random.rand(30).astype("float32") * 100
-        prop = _make_prop(list(values), grid_shape=(5, 3, 2))
-        cdf = calc_cdf(prop)
-        if cdf.probs.size > 1:
-            assert np.all(np.diff(cdf.probs) >= 0)
+        # np.unique guarantees sorted output; assert unconditionally (N2-L15).
+        assert np.all(np.diff(cdf.values) > 0)
 
 
 # =============================================================================
@@ -190,6 +135,7 @@ class TestCalcCdfMultiValueTail:
         assert cdf.probs[-1] < 1.0, "float32-downcast tail must be clamped below 1.0"
         assert cdf.probs[-1] == np.nextafter(np.float32(1.0), np.float32(0.0))
 
+    @pytest.mark.slow
     def test_large_grid_monotonic_no_spurious_value_error(self):
         """F-N13b: full_count >= 2^25 must not raise a spurious ValueError.
 
@@ -201,6 +147,10 @@ class TestCalcCdfMultiValueTail:
         1.0f suffix so the float32 output stays monotonic and probs[-1] < 1.
         calc_cdf supports flat (1D) property data — no grid needed, so the
         2^25-cell property is not subject to the 1e7 per-axis grid cap.
+
+        T-31 (slow): 2^25 cells ≈ 134 MB float32 + 34 MB mask, peak
+        ~168-400 MB during np.unique — machine-freeze risk in the default
+        suite (AGENTS.md:28 slow-marker policy).
         """
         n = 2**25
         data = np.zeros(n, dtype="float32")
@@ -224,14 +174,9 @@ class TestCalcCdfMultiValueTail:
         assert cdf.values.size == 2
         expected_values = np.array([1e-10, 1e10], dtype="float32")
         np.testing.assert_array_almost_equal(cdf.values, expected_values)
-        expected_probs = np.array([0.5, 1.0], dtype="float32")
-        np.testing.assert_array_almost_equal(cdf.probs, expected_probs, decimal=5)
-
-    def test_near_equal_floats(self):
-        prop = _make_prop([1.0, 1.0000001, 1.0000002], grid_shape=(3, 1, 1))
-        cdf = calc_cdf(prop)
-        assert cdf.values.size >= 1
-        assert np.all(np.diff(cdf.values) >= 0)
+        assert cdf.probs[0] == 0.5
+        # T-16: the clamp pins the tail strictly below 1.0.
+        assert cdf.probs[-1] < 1.0
 
     def test_all_nan_informed_raises(self):
         """ContProperty construction raises ValueError when all values are NaN."""
@@ -246,31 +191,10 @@ class TestCalcCdfMultiValueTail:
 
 @pytest.mark.hpgl
 class TestCdfDataCreation:
-    def test_basic_creation(self):
-        cdf = CdfData([1.0, 2.0, 3.0], [0.33, 0.66, 1.0])
-        assert cdf.values.dtype == np.float32
-        assert cdf.probs.dtype == np.float32
-        assert len(cdf.values) == 3
-
-    def test_empty_creation(self):
-        cdf = CdfData([], [])
-        assert cdf.values.size == 0
-        assert cdf.probs.size == 0
-
-    def test_single_point(self):
-        cdf = CdfData([5.0], [1.0])
-        assert cdf.values[0] == 5.0
-        assert cdf.probs[0] == 1.0
-
     def test_length_mismatch_raises(self):
         """CdfData raises ValueError when values and probs have mismatched lengths."""
         with pytest.raises(ValueError, match="values length.*must match.*probs length"):
             CdfData([1.0, 2.0, 3.0], [0.5, 1.0])
-
-    def test_length_mismatch_empty_vs_nonempty(self):
-        """CdfData raises ValueError when one array is empty and the other is not."""
-        with pytest.raises(ValueError):
-            CdfData([1.0, 2.0], [])
 
     # ---- F-209: CdfData non-monotonic probability/value validation ----
 

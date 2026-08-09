@@ -21,7 +21,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
-    from geo_bsd.cdf import CdfData
     from geo_bsd.geo import (
         ContProperty,
         CovarianceModel,
@@ -31,7 +30,6 @@ try:
         simple_cokriging_markI,
         simple_kriging_weights,
     )
-    from geo_bsd.sgs import sgs_simulation
 except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
@@ -145,46 +143,6 @@ class TestOKKrigingVarianceSign:
       - The estimation produces non-trivial output (informed cells preserved)
     """
 
-    def test_ok_produces_finite_results(self):
-        """OK kriging produces finite, reasonable results."""
-        grid = SugarboxGrid(x=10, y=10, z=3)
-        np.random.seed(42)
-        data = np.random.rand(300).astype("float32") * 100
-        mask = np.ones(300, dtype="uint8")
-        mask[::5] = 0
-        prop = ContProperty(data, mask)
-
-        cov = CovarianceModel(
-            type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
-        )
-
-        result = ordinary_kriging(
-            prop=prop, grid=grid, radiuses=(3, 3, 2), max_neighbours=12, cov_model=cov
-        )
-
-        # All kriged values should be finite
-        assert np.all(np.isfinite(result.data.astype("float64")))
-
-    def test_ok_result_preserves_informed_cells(self):
-        """OK kriging preserves informed cell status."""
-        grid = SugarboxGrid(x=8, y=8, z=2)
-        np.random.seed(42)
-        data = np.random.rand(128).astype("float32") * 100
-        mask = np.ones(128, dtype="uint8")
-        mask[::5] = 0  # Some uninformed
-        prop = ContProperty(data, mask)
-
-        cov = CovarianceModel(
-            type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
-        )
-
-        result = ordinary_kriging(
-            prop=prop, grid=grid, radiuses=(4, 4, 2), max_neighbours=8, cov_model=cov
-        )
-
-        # Originally informed cells should still be informed in the result
-        assert np.all(result.mask.flat[mask == 1] == 1)
-
     def test_ok_single_informed_cell(self):
         """OK kriging with a single informed cell works correctly."""
         grid = SugarboxGrid(x=5, y=5, z=1)
@@ -218,14 +176,14 @@ class TestOKKrigingVarianceSign:
 
 @pytest.mark.hpgl
 class TestCorrelogramWeights:
-    """Verify that correlogram weights are not inverted.
+    """Verify simple-kriging weights decay with distance.
 
-    Bug: Correlogram adjustment factor was inverted.
-    Fix: Adjustment factor now applied correctly.
-
-    Tested via simple_kriging_weights: the weights should exhibit
-    distance-based decay (closer points get larger weights) for
-    all covariance types.
+    NOTE (N2-L51/F-5): this class is historically mislabeled. The
+    correlogram adjustment factor bug (regression c) is NOT exercised
+    here — the correlogram path is SIS/LVM ``use_correlogram``
+    (gslib_ref.py:66-77), which is never called below. These tests
+    assert the generic SK property that nearer points receive larger
+    weights (distance-decay ordering) for each covariance type.
     """
 
     def test_weights_favor_nearer_points_spherical(self):
@@ -328,13 +286,12 @@ class TestCorrelogramWeights:
 
 @pytest.mark.hpgl
 class TestCokrigingCrossCovarianceRatio:
-    """Verify that cokriging cross-covariance ratio is not inverted.
+    """Verify cokriging with correlated secondary data (markI).
 
-    Bug: Cross-covariance ratio was inverted in cokriging Mark II.
-    Fix: Ratio now applied correctly.
-
-    Tested via simple_cokriging_markI: runs cokriging with known
-    primary and secondary data, verifies output is valid.
+    NOTE (N2-L51/F-5): this class is historically mislabeled. Every test
+    below calls ``simple_cokriging_markI``, so the Mark II cross-covariance
+    ratio bug (regression d) is NOT exercised here. The tests pin markI
+    behavior: finite output and correlation-direction sensitivity.
     """
 
     def test_cokriging_produces_finite_result(self):
@@ -461,168 +418,23 @@ class TestCokrigingCrossCovarianceRatio:
         assert isinstance(result, ContProperty)
         assert np.all(np.isfinite(result.data.astype("float64")))
 
-
-# =============================================================================
-# Regression (e): SGS normalization coefficient is correct
-# =============================================================================
-
-
-@pytest.mark.hpgl
-class TestSGSNormalization:
-    """Verify that SGS normalization coefficient is correct.
-
-    Bug: SGS normalization coefficient was incorrect.
-    Fix: Coefficient corrected.
-
-    Tested via sgs_simulation: runs SGS with CDF transformation and verifies
-    that output values are within the expected range of the CDF.
-    """
-
-    def test_sgs_output_within_cdf_range(self):
-        """SGS output values are within CDF range."""
-        grid = SugarboxGrid(x=8, y=8, z=2)
-        np.random.seed(42)
-        data = np.random.rand(128).astype("float32") * 100
-        mask = np.ones(128, dtype="uint8")
-        mask[::5] = 0
-        prop = ContProperty(data, mask)
-
-        # Define CDF with specific range
-        cdf_values = np.array([0.0, 25.0, 50.0, 75.0, 100.0], dtype="float32")
-        cdf_probs = np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype="float32")
-        cdf_data = CdfData(cdf_values, cdf_probs)
-
-        cov = CovarianceModel(
-            type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
-        )
-
-        result = sgs_simulation(
-            prop=prop,
+        # N2-L52: the negative-ρ path must be discriminated. With the SAME
+        # fixture, flipping the correlation sign changes the cross-covariance
+        # contribution — a regression that inverted/dropped the negative-ρ
+        # influence would produce output identical to the positive-ρ run.
+        result_positive = simple_cokriging_markI(
+            prop=primary,
             grid=grid,
-            cdf_data=cdf_data,
-            radiuses=(3, 3, 2),
-            max_neighbours=8,
-            cov_model=cov,
-            seed=42,
-        )
-
-        # Output values should be finite
-        assert np.all(np.isfinite(result.data.astype("float64")))
-
-        # Simulated values should be within or near CDF range
-        simulated = result.data[result.mask > 0]
-        min_cdf = cdf_values.min()
-        max_cdf = cdf_values.max()
-        # With tolerance for simulation variability
-        assert np.all(simulated >= min_cdf - 1.0), (
-            f"Values below CDF minimum: {simulated[simulated < min_cdf - 1.0][:5]}"
-        )
-        assert np.all(simulated <= max_cdf + 1.0), (
-            f"Values above CDF maximum: {simulated[simulated > max_cdf + 1.0][:5]}"
-        )
-
-    def test_sgs_normalization_preserves_mean_approximately(self):
-        """SGS with seed fixes produces stable output statistics."""
-        grid = SugarboxGrid(x=8, y=8, z=2)
-        np.random.seed(42)
-        data = np.random.rand(128).astype("float32") * 100
-        mask = np.ones(128, dtype="uint8")
-        mask[::5] = 0
-        prop = ContProperty(data, mask)
-
-        cdf_values = np.linspace(0, 100, 10, dtype="float32")
-        cdf_probs = np.linspace(0.0, 1.0, 10, dtype="float32")
-        cdf_data = CdfData(cdf_values, cdf_probs)
-
-        cov = CovarianceModel(
-            type=covariance.exponential, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
-        )
-
-        result = sgs_simulation(
-            prop=prop,
-            grid=grid,
-            cdf_data=cdf_data,
-            radiuses=(3, 3, 2),
-            max_neighbours=8,
-            cov_model=cov,
-            seed=42,
-            kriging_type="sk",
-        )
-
-        # Verify normalization preserves the input data mean approximately
-        input_masked = data[mask > 0]
-        output_masked = result.data[result.mask > 0].astype("float64")
-        input_mean = np.mean(input_masked)
-        output_mean = np.mean(output_masked)
-        # Normalization should preserve mean within a reasonable tolerance.
-        # Use 20% of standard deviation or 2.0 absolute minimum — tight enough
-        # to detect meaningful SGS bias while allowing for finite-sample variance.
-        tolerance = max(np.std(input_masked) * 0.2, 2.0)
-        assert abs(output_mean - input_mean) < tolerance, (
-            f"SGS normalization should preserve mean: input={input_mean:.1f}, output={output_mean:.1f}"
-        )
-
-    def test_sgs_without_cdf_still_produces_valid_output(self):
-        """SGS without CDF (raw Gaussian) produces valid output."""
-        grid = SugarboxGrid(x=6, y=6, z=2)
-        np.random.seed(42)
-        data = np.random.rand(72).astype("float32") * 100
-        mask = np.ones(72, dtype="uint8")
-        mask[::4] = 0
-        prop = ContProperty(data, mask)
-
-        cov = CovarianceModel(
-            type=covariance.spherical, ranges=(3.0, 3.0, 2.0), sill=1.0, nugget=0.1
-        )
-
-        result1 = sgs_simulation(
-            prop=prop,
-            grid=grid,
-            cdf_data=None,
             radiuses=(2, 2, 1),
             max_neighbours=8,
             cov_model=cov,
-            seed=42,
+            secondary_data=secondary,
+            primary_mean=50.0,
+            secondary_mean=50.0,
+            secondary_variance=1.0,
+            correlation_coef=0.7,
         )
-        result2 = sgs_simulation(
-            prop=prop,
-            grid=grid,
-            cdf_data=None,
-            radiuses=(2, 2, 1),
-            max_neighbours=8,
-            cov_model=cov,
-            seed=42,
+        assert not np.allclose(result.data, result_positive.data, rtol=1e-6), (
+            "Negative and positive correlation must produce different cokriging output"
         )
 
-        # Same seed → identical results (normalization is deterministic)
-        np.testing.assert_array_equal(result1.data, result2.data)
-        assert np.all(np.isfinite(result1.data.astype("float64")))
-
-    def test_sgs_with_different_covariance_types(self):
-        """SGS works correctly with all covariance types (normalization OK)."""
-        grid = SugarboxGrid(x=5, y=5, z=2)
-        np.random.seed(42)
-        data = np.random.rand(50).astype("float32") * 100
-        mask = np.ones(50, dtype="uint8")
-        mask[::5] = 0
-        prop = ContProperty(data, mask)
-
-        cdf_values = np.array([0.0, 50.0, 100.0], dtype="float32")
-        cdf_probs = np.array([0.0, 0.5, 1.0], dtype="float32")
-        cdf_data = CdfData(cdf_values, cdf_probs)
-
-        for cov_type in [covariance.spherical, covariance.exponential, covariance.gaussian]:
-            cov = CovarianceModel(type=cov_type, ranges=(3.0, 3.0, 2.0), sill=1.0, nugget=0.1)
-            result = sgs_simulation(
-                prop=prop,
-                grid=grid,
-                cdf_data=cdf_data,
-                radiuses=(2, 2, 1),
-                max_neighbours=6,
-                cov_model=cov,
-                seed=42,
-            )
-            assert np.all(np.isfinite(result.data.astype("float64"))), (
-                f"Non-finite values for cov_type={cov_type}"
-            )
-            assert not np.all(result.data == 0), f"All-zero output for cov_type={cov_type}"

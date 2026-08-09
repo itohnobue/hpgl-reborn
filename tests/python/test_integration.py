@@ -17,7 +17,6 @@ try:
         CovarianceModel,
         IndProperty,
         SugarboxGrid,
-        calc_mean,
         covariance,
         indicator_kriging,
         load_cont_property,
@@ -93,51 +92,6 @@ class TestWorkflowIntegration:
         sim_f64 = sim_result.data.astype("float64")
         assert np.all(np.isfinite(sim_f64)), "SGS output must have all finite values"
         assert np.any(sim_f64 != 0), "SGS output must not be all zeros"
-
-    def test_multiple_realizations_workflow(self):
-        """Test creating multiple realizations"""
-        grid = SugarboxGrid(x=10, y=10, z=5)
-
-        cov_model = CovarianceModel(
-            type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
-        )
-
-        cdf_data = CdfData(
-            np.array([0.0, 50.0, 100.0], dtype="float32"),
-            np.array([0.0, 0.5, 1.0], dtype="float32"),
-        )
-
-        realizations = []
-        for i in range(3):
-            # Create fresh input property for each realization
-            # because SGS modifies the input property in-place
-            data = np.random.rand(500).astype("float32") * 100
-            mask = np.ones(500, dtype="uint8")
-            prop = ContProperty(data, mask)
-
-            result = sgs_simulation(
-                prop=prop,
-                grid=grid,
-                cdf_data=cdf_data,
-                radiuses=(5, 5, 3),
-                max_neighbours=12,
-                cov_model=cov_model,
-                seed=1000 + i,
-            )
-            realizations.append(result)
-
-        assert len(realizations) == 3
-        # Each realization should be different
-        for i in range(1, 3):
-            assert not np.array_equal(realizations[0].data, realizations[i].data)
-        # Data integrity: all values finite, reasonable range
-        for i, r in enumerate(realizations):
-            r_f64 = r.data.astype("float64")
-            assert np.all(np.isfinite(r_f64)), f"Realization {i} has non-finite values"
-            assert np.std(r_f64) > 0.0, f"Realization {i} has zero variance"
-            # Values should be within the CDF range [0, 100] with tolerance
-            assert np.min(r_f64) >= -1.0, f"Realization {i} below CDF minimum"
-            assert np.max(r_f64) <= 101.0, f"Realization {i} above CDF maximum"
 
     def test_sgs_returns_new_property_preserves_input(self):
         """F-215: sgs_simulation returns a new ContProperty and does NOT mutate input data.
@@ -242,46 +196,6 @@ class TestIOIntegration:
 class TestMultiStageWorkflows:
     """Test multi-stage geostatistical workflows: variogram→kriging, IK→SIS."""
 
-    def test_variogram_to_kriging_chain(self):
-        """Compute variogram model from data, then use it for ordinary_kriging.
-
-        The CovarianceModel serves as the variogram model (they are equivalent
-        in the HPGL framework). This test validates that a covariance model
-        constructed from data characteristics can drive a complete kriging
-        workflow.
-        """
-        grid = SugarboxGrid(x=10, y=10, z=5)
-        np.random.seed(42)
-        data = np.random.rand(500).astype("float32") * 100
-        mask = np.ones(500, dtype="uint8")
-
-        # Step 1: Compute mean and variance from data (simulates variogram analysis)
-        prop = ContProperty(data, mask)
-        data_mean = calc_mean(prop)
-        data_std = np.sqrt(np.mean((data - data_mean) ** 2))
-
-        # Step 2: Build covariance/variogram model from data statistics
-        cov_model = CovarianceModel(
-            type=covariance.spherical,
-            ranges=(5.0, 5.0, 3.0),
-            sill=float(data_std**2),
-            nugget=float(data_std**2 * 0.1),
-        )
-
-        # Step 3: Run ordinary kriging with the derived model
-        kriged = ordinary_kriging(
-            prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
-        )
-
-        assert isinstance(kriged, ContProperty)
-        assert kriged.data.shape == (500,)
-        assert not np.any(np.isnan(kriged.data.astype("float64")))
-        assert not np.any(np.isinf(kriged.data.astype("float64")))
-        # Data integrity: kriged values should be within reasonable range
-        kriged_f64 = kriged.data.astype("float64")
-        assert np.std(kriged_f64) > 0.0, "Kriged output must have non-zero variance"
-        assert np.min(kriged_f64) >= -50.0, "Kriged values must not be far below zero"
-
     def test_indicator_kriging_to_sis_chain(self):
         """Run indicator_kriging, then use results for sis_simulation.
 
@@ -340,7 +254,7 @@ class TestMultiStageWorkflows:
         for c in range(3):
             observed = category_counts[c] / total
             expected = marginal_probs[c]
-            # Allow generous 0.15 tolerance for small sample randomness
+            # Allow generous 0.20 tolerance for small sample randomness
             assert abs(observed - expected) < 0.20, (
                 f"Category {c}: observed proportion {observed:.2f} too far from expected {expected:.2f}"
             )

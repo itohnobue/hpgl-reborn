@@ -132,17 +132,6 @@ class TestValidateAndReshapeFallback:
         assert prop.mask.ndim == 3
         assert prop.mask.shape == (4, 3, 2)
 
-    def test_validate_reshape_with_list_size(self):
-        """List size [2, 3, 4] works like tuple."""
-        data = np.arange(24, dtype="float32")
-        mask = np.ones(24, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        _validate_and_reshape_fallback(prop, [2, 3, 4], "test_func")
-
-        assert prop.data.shape == (2, 3, 4)
-        assert prop.mask.shape == (2, 3, 4)
-
     def test_validate_reshape_with_scalar_size(self):
         """Scalar size: validates element count but does NOT reshape."""
         data = np.arange(10, dtype="float32")
@@ -172,14 +161,3 @@ class TestValidateAndReshapeFallback:
         with pytest.raises(RuntimeError, match="Slow parser read"):
             _validate_and_reshape_fallback(prop, 100, "test_func")
         # 7 != 100
-
-    def test_validate_reshape_exact_match(self):
-        """Exact element count match with 3-tuple produces correct reshape."""
-        data = np.arange(8, dtype="float32")
-        mask = np.arange(8, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        _validate_and_reshape_fallback(prop, (2, 2, 2), "test_func")
-        assert prop.data.shape == (2, 2, 2)
-        assert prop.mask.shape == (2, 2, 2)
-        np.testing.assert_array_equal(prop.data.flatten("F"), data)

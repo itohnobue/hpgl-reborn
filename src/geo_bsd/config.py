@@ -113,7 +113,7 @@ class SGSConfig:
                 f"got {self.max_neighbours}"
             )
         # M-20: hard-reject above the C++ engine's upper bound (api.cpp
-        # MAX_NEIGHBOURS_UPPER_BOUND = 100000) so construction fails fast
+        # MAX_NEIGHBOURS_UPPER_BOUND = 10000) so construction fails fast
         # instead of deferring to a late C++ RuntimeError.
         if self.max_neighbours > ValidationConstants.MAX_NEIGHBORS_HARD_LIMIT:
             raise ValueError(
@@ -238,7 +238,7 @@ class SISConfig:
                 f"got {self.max_neighbours}"
             )
         # M-20: hard-reject above the C++ engine's upper bound (api.cpp
-        # MAX_NEIGHBOURS_UPPER_BOUND = 100000) so construction fails fast
+        # MAX_NEIGHBOURS_UPPER_BOUND = 10000) so construction fails fast
         # instead of deferring to a late C++ RuntimeError.
         if self.max_neighbours > ValidationConstants.MAX_NEIGHBORS_HARD_LIMIT:
             raise ValueError(

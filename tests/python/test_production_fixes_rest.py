@@ -9,7 +9,7 @@ Covers:
 - M-10: SGSConfig/SISConfig radiuses and GTSIMConfig tk_mean/tk_std_dev type
   gates accept numpy scalars and exclude bool (matching sibling gates and
   validate_radius)
-- M-20: max_neighbours hard cap aligned with the C++ engine (100000) in
+- M-20: max_neighbours hard cap aligned with the C++ engine (10000) in
   validation and config classes; warn at 1000 retained
 - M-24: gtsim_2ind never mutates the caller's pk_prop.data buffer (both
   overshoot and no-overshoot paths)
@@ -143,7 +143,10 @@ class TestVersionMetadata:
         else:
             # No source tree: the metadata lookup must run; a
             # PackageNotFoundError falls back to the documented literal.
-            expected = "2.0.5"
+            # N2-L19: derive from geo_bsd's single fallback constant
+            # (src/geo_bsd/__init__.py _VERSION_FALLBACK) so a version
+            # bump updates one place, not four hardcoded copies.
+            expected = geo_bsd._VERSION_FALLBACK
 
             def _raise_not_found(name):
                 raise importlib.metadata.PackageNotFoundError(name)
@@ -155,56 +158,6 @@ class TestVersionMetadata:
         monkeypatch.undo()
         importlib.reload(geo_bsd)
         assert isinstance(geo_bsd.__version__, str) and geo_bsd.__version__
-
-
-# =============================================================================
-# II-29 — gtsim_2ind exported at the package top level
-# =============================================================================
-
-
-class TestGtsim2IndTopLevelExport:
-    def test_gtsim_2ind_accessible_at_top_level(self):
-        """II-29: gtsim_2ind is a first-class simulation entry point; it must
-        be reachable as geo_bsd.gtsim_2ind like its siblings
-        sgs_simulation / sis_simulation. Pre-fix it raised AttributeError."""
-        import geo_bsd
-
-        assert callable(geo_bsd.gtsim_2ind), (
-            "geo_bsd.gtsim_2ind must be exported at the top level (II-29)"
-        )
-
-    def test_gtsim_2ind_in_all(self):
-        """The export must be part of the package's public __all__."""
-        import geo_bsd
-
-        assert "gtsim_2ind" in geo_bsd.__all__
-
-
-# =============================================================================
-# II-30 — SGSConfig/SISConfig/GTSIMConfig exported at the package top level
-# =============================================================================
-
-
-class TestConfigClassesTopLevelExport:
-    @pytest.mark.parametrize(
-        "name", ["SGSConfig", "SISConfig", "GTSIMConfig"]
-    )
-    def test_config_class_accessible_at_top_level(self, name):
-        """II-30: the frozen-config dataclasses are documented public API
-        (config.py); they must be reachable as geo_bsd.<name>. Pre-fix each
-        raised AttributeError at the top level."""
-        import geo_bsd
-
-        assert hasattr(geo_bsd, name), (
-            f"geo_bsd.{name} must be exported at the top level (II-30)"
-        )
-
-    def test_config_classes_in_all(self):
-        """The exports must be part of the package's public __all__."""
-        import geo_bsd
-
-        for name in ("SGSConfig", "SISConfig", "GTSIMConfig"):
-            assert name in geo_bsd.__all__
 
 
 # =============================================================================
@@ -276,18 +229,29 @@ class TestConfigNumpyRadiusGates:
 
 
 # =============================================================================
-# M-20 — max_neighbours hard cap aligned with the C++ engine (100000)
+# M-20 — max_neighbours hard cap aligned with the C++ engine (10000)
 # =============================================================================
 
 
 class TestMaxNeighboursHardCap:
-    def test_validation_hard_rejects_above_100000(self):
+    def test_validation_hard_rejects_above_hard_limit(self):
         """M-20: values above the C++ engine bound must be hard-rejected,
         not warn-only (pre-fix: MAX_NEIGHBORS=1000 warned but accepted)."""
         from geo_bsd.validation import CriticalValidationError, ParameterValidator
 
         with pytest.raises(CriticalValidationError, match="maximum allowed"):
             ParameterValidator.validate_max_neighbors(100001)
+
+    def test_validation_hard_rejects_boundary_plus_one(self):
+        """M-20: the discriminating boundary — the first value ABOVE the
+        real C++ hard limit (MAX_NEIGHBORS_HARD_LIMIT = 10000,
+        validation.py:70 / api.cpp:135) must be rejected. Pre-this-test any
+        limit in (10000, 100000] passed the class's checks, so a regression
+        moving the limit to 100000 went undetected."""
+        from geo_bsd.validation import CriticalValidationError, ParameterValidator
+
+        with pytest.raises(CriticalValidationError, match="maximum allowed"):
+            ParameterValidator.validate_max_neighbors(10001)
 
     def test_validation_accepts_up_to_10000(self):
         from geo_bsd.validation import ParameterValidator
@@ -343,22 +307,30 @@ class TestValidateSeedCritical:
         with pytest.raises(CriticalValidationError, match="negative"):
             ParameterValidator.validate_seed(-1)
 
-    def test_negative_seed_not_base_only(self):
-        """The raised exception must be CriticalValidationError specifically
-        (the base-class match would pass pre-fix too)."""
-        from geo_bsd.validation import CriticalValidationError, ParameterValidator
-
-        try:
-            ParameterValidator.validate_seed(-5)
-        except CriticalValidationError:
-            pass  # expected
-        else:
-            raise AssertionError("validate_seed(-5) did not raise CriticalValidationError")
-
 
 # =============================================================================
 # M-24 / 2-M-12 — gtsim_2ind never mutates caller-owned data
 # =============================================================================
+
+
+@pytest.mark.hpgl
+class TestGtsim2IndTopLevelExport:
+    def test_gtsim_2ind_accessible_and_callable_at_top_level(self):
+        """II-29/L-27: gtsim_2ind is a first-class simulation entry point; it
+        must be reachable as geo_bsd.gtsim_2ind AND callable, like its
+        siblings sgs_simulation / sis_simulation.
+
+        L-27 (post-fix TEST-UPDATE): the B-08 sibling test
+        (test_production_fixes_203.py) checks __all__ membership + hasattr
+        only — a `gtsim_2ind = None` re-export would slip through. Pre-fix
+        it raised AttributeError; this restores the callable assertion that
+        was dropped with the class deletion.
+        """
+        import geo_bsd
+
+        assert callable(geo_bsd.gtsim_2ind), (
+            "geo_bsd.gtsim_2ind must be callable at the top level (II-29)"
+        )
 
 
 @pytest.mark.hpgl
@@ -1064,15 +1036,6 @@ class TestLoadGslibFileTruncationMemory:
             f"truncation path allocated {peak / 1e6:.1f} MB (expected < 16 MB)"
         )
 
-    def test_truncated_small_grid_still_raises(self, tmp_path):
-        """The existing row-count error message is preserved."""
-        from geo_bsd.routines import LoadGslibFile
-
-        fpath = tmp_path / "trunc_small.gslib"
-        fpath.write_text("caption\n1\nA\n1.0\n2.0\n")
-        with pytest.raises(RuntimeError, match="expected 3"):
-            LoadGslibFile(str(fpath), property_size=(1, 1, 3), basedir=str(tmp_path))
-
 
 # =============================================================================
 # F-20 / II-10 — cokriging NaN-proof guards + zero-variance primary-only
@@ -1080,6 +1043,7 @@ class TestLoadGslibFileTruncationMemory:
 # =============================================================================
 
 
+@pytest.mark.hpgl
 class TestCokrigingKrigingHardening:
     """Python-side regression tests for the C++ kriging fixes in
     simple_cokriging_markI.cpp (F-20 isfinite-first entry guards, II-10
@@ -1103,6 +1067,12 @@ class TestCokrigingKrigingHardening:
         raises RuntimeError ("kriging system was singular"). Post-fix: the
         secondary equation is dropped entirely (primary-only kriging) → the
         call succeeds with finite output.
+
+        N2-19: the PRIMARY mask is partially uninformed (mask[::2]=0), so
+        the uninformed cells are genuinely kriged (the C++ does not simply
+        copy every cell). Pre-this-hardening the mask=ones fixture made the
+        II-10 secondary-equation path unreachable and the test passed on
+        pre-fix code.
         """
         from geo_bsd.geo import (
             ContProperty,
@@ -1119,6 +1089,9 @@ class TestCokrigingKrigingHardening:
             rng.rand(size).astype("float32") * 100,
             np.ones(size, dtype="uint8"),
         )
+        # N2-19: half the primary cells uninformed → the kriging system is
+        # actually built for them (mask=ones previously copied every cell).
+        primary.mask[::2] = 0
         # Secondary fully informed — the variance, not the data, is the trigger.
         secondary = ContProperty(
             rng.rand(size).astype("float32") * 100,
@@ -1146,6 +1119,8 @@ class TestCokrigingKrigingHardening:
         )
         assert isinstance(result, ContProperty)
         assert result.data.size == size
+        # No RuntimeError must have propagated (pre-fix: singular system) and
+        # the kriged output must be finite.
         assert np.all(np.isfinite(result.data.astype("float64")))
 
     def test_cokriging_markI_negative_variance_rejected(self):
@@ -1153,9 +1128,10 @@ class TestCokrigingKrigingHardening:
 
         F-20 hardened the C++ entry guard (isfinite-first) so a negative/NaN
         variance can never reach the kernel even for direct-C++ callers. The
-        Python path surfaces the rejection via the validation layer and/or the
-        C++ entry guard (both fire); the assertion is that an error is raised
-        rather than silent NaN output.
+        Python path surfaces the rejection deterministically via the
+        validation layer (validation.py:1013-1014, called from geo.py:2377)
+        BEFORE any FFI call — so the raised type is pinned to
+        CriticalValidationError (N2-L18/H3), not a 3-type tuple.
         """
         from geo_bsd.geo import (
             ContProperty,
@@ -1185,7 +1161,9 @@ class TestCokrigingKrigingHardening:
             nugget=0.1,
         )
 
-        with pytest.raises((ValueError, RuntimeError, CriticalValidationError)):
+        with pytest.raises(
+            CriticalValidationError, match="secondary_variance must be non-negative"
+        ):
             simple_cokriging_markI(
                 prop=primary,
                 grid=grid,
@@ -1200,6 +1178,7 @@ class TestCokrigingKrigingHardening:
             )
 
 
+@pytest.mark.hpgl
 class TestCovModelRangeRatioOverflow:
     """III-09: anisotropy range ratios that overflow to Inf/NaN must be
     rejected. Pre-fix, ranges {1e10, 1e-300, 1} produced ratio 1e310 → Inf
@@ -1217,7 +1196,6 @@ class TestCovModelRangeRatioOverflow:
             covariance,
             simple_cokriging_markI,
         )
-        from geo_bsd.validation import CriticalValidationError
 
         grid = SugarboxGrid(x=3, y=3, z=1)
         size = 3 * 3 * 1
@@ -1240,7 +1218,10 @@ class TestCovModelRangeRatioOverflow:
             nugget=0.0,
         )
 
-        with pytest.raises((RuntimeError, ValueError, CriticalValidationError)):
+        # N2-L18/H4: pin RuntimeError — the Python validation accepts the
+        # finite ranges, so the C++ entry guard (simple_cokriging_markI.cpp
+        # anisotropy range-ratio check) surfaces via the FFI error guard.
+        with pytest.raises(RuntimeError, match="range ratio"):
             simple_cokriging_markI(
                 prop=primary,
                 grid=grid,
@@ -1369,14 +1350,6 @@ class TestCovarianceRangeRejectsZero:
                 sill=1.0, nugget=0.0, ranges=(0.0, 5.0, 5.0)
             )
 
-    def test_validate_covariance_rejects_negative_range(self):
-        from geo_bsd.validation import CriticalValidationError, ParameterValidator
-
-        with pytest.raises(CriticalValidationError, match="must be > 0"):
-            ParameterValidator.validate_covariance_parameters(
-                sill=1.0, nugget=0.0, ranges=(-1.0, 5.0, 5.0)
-            )
-
     def test_validate_covariance_accepts_positive_range(self):
         from geo_bsd.validation import ParameterValidator
 
@@ -1427,35 +1400,115 @@ class TestCubeScanGridWorkCap:
 # =============================================================================
 
 
+@pytest.mark.hpgl
 class TestSampleScriptImports:
-    """F-04: the gtsim/gtsimk scripts import _clone_prop/_create_cont_prop
-    from geo_bsd.geo (the defining module), not the geo_bsd top level."""
+    """F-04/II-43/II-44/II-45/III-19/III-20: the gtsim/gtsimk sample scripts
+    import _clone_prop/_create_cont_prop from geo_bsd.geo (the defining
+    module), not the geo_bsd top level, and their internal truncation loops
+    follow the documented II-43/44/45/III-19 semantics.
 
-    def test_gtsim_imports_from_geo_module(self):
+    T-28 (N2-L18/H2): import correctness is verified by EXECUTION (exec_module
+    — a broken import raises ImportError at load), not by source-string
+    substring checks. The five internal-loop pins (II-43 elif, II-44 snapshot,
+    III-19 value-driven, II-45 list-form, III-20 sgs_params guard) cannot be
+    armed by individual execution without full-pipeline fixtures, so they are
+    KEPT as documented static guards; test_gtsim_script_execution_smoke
+    proves the scripts actually run end-to-end.
+
+    E-06 (post-fix TEST-UPDATE): @pytest.mark.hpgl added — the exec'd scripts
+    import geo_bsd, whose import chain loads the C++ library at module level
+    (hpgl_wrap._safe_load_library raises OSError without the lib). Without the
+    marker the two exec tests ERROR in lib-less environments instead of
+    SKIPping via conftest's hpgl-keyword skip machinery.
+    """
+
+    @staticmethod
+    def _load_script(name, module_name):
         import importlib.util
 
-        spec = importlib.util.spec_from_file_location(
-            "gtsim_script",
-            str(REPO_ROOT / "sample-scripts/gtsim.py"),
-        )
+        sys.path.insert(0, str(REPO_ROOT / "sample-scripts"))
+        script = REPO_ROOT / "sample-scripts" / name
+        spec = importlib.util.spec_from_file_location(module_name, str(script))
         mod = importlib.util.module_from_spec(spec)
-        assert mod is not None
+        spec.loader.exec_module(mod)
+        return mod
 
-    def test_gtsim_script_source_uses_geo_import(self):
-        with open(REPO_ROOT / "sample-scripts/gtsim.py") as fh:
-            src = fh.read()
-        assert "from geo_bsd.geo import _clone_prop" in src
-        assert "from geo_bsd import (" in src
-        with open(REPO_ROOT / "sample-scripts/gtsimk.py") as fh:
-            src = fh.read()
-        assert "from geo_bsd.geo import _clone_prop, _create_cont_prop" in src
-        with open(REPO_ROOT / "sample-scripts/gtsimk_const_prob.py") as fh:
-            src = fh.read()
-        assert "from geo_bsd.geo import _clone_prop" in src
+    def test_gtsim_scripts_import_and_execute(self):
+        """F-04: the gtsim/gtsimk scripts must actually LOAD and EXECUTE —
+        a broken import (e.g. `from geo_bsd.geo import _clone_prop` reverted
+        to the geo_bsd top level) raises ImportError at exec_module, not a
+        silent source-string absence."""
+        import numpy as _np
+
+        # The scripts seed the numpy global RNG at import time
+        # (np.random.seed(3439275)); save/restore so this test does not
+        # perturb later unseeded consumers.
+        rng_state = _np.random.get_state()
+        try:
+            for name, modname in (
+                ("gtsim.py", "sample_gtsim_imports"),
+                ("gtsimk.py", "sample_gtsimk_imports"),
+                ("gtsimk_const_prob.py", "sample_gtsimk_cp_imports"),
+            ):
+                self._load_script(name, modname)
+        finally:
+            _np.random.set_state(rng_state)
+
+    def test_gtsim_script_execution_smoke(self, monkeypatch):
+        """One end-to-end execution smoke: gtsim.py's gtsim_2ind must run
+        through the truncation on a tiny fixture and return a finite
+        indicator result (proving the script's runtime path works, which no
+        source-string assertion can)."""
+        import numpy as _np
+
+        from geo_bsd.geo import (
+            ContProperty,
+            CovarianceModel,
+            SugarboxGrid,
+            covariance,
+        )
+
+        # The script seeds the numpy global RNG at import time
+        # (np.random.seed(3439275)); save/restore so this test does not
+        # perturb later unseeded consumers (L-26, same guard as the sibling
+        # test_gtsim_scripts_import_and_execute).
+        rng_state = _np.random.get_state()
+        try:
+            gtsim = self._load_script("gtsim.py", "sample_gtsim_smoke")
+        finally:
+            _np.random.set_state(rng_state)
+        # The script writes results/GTSIM_*.INC into the CWD — redirect to a
+        # no-op so the test has no filesystem side effects (R-07 pattern).
+        monkeypatch.setattr(gtsim, "write_property", lambda *a, **k: None)
+
+        grid = SugarboxGrid(x=4, y=4, z=2)
+        size = grid.x * grid.y * grid.z
+        data = np.full(size, -99.0, dtype="float32")
+        mask = np.zeros(size, dtype="uint8")
+        data[:8] = 0.0
+        mask[:8] = 1
+        data[8:16] = 1.0
+        mask[8:16] = 1
+        prop = ContProperty(data, mask)
+
+        cov = CovarianceModel(
+            type=covariance.spherical, ranges=(4, 4, 2), sill=1.0, nugget=0.1
+        )
+        params = {"radiuses": (4, 4, 2), "max_neighbours": 8, "cov_model": cov}
+        result = gtsim.gtsim_2ind(grid, prop, params, params)
+        assert np.all(np.isfinite(result.data.astype("float64")))
+        # Hard-data facies must survive the truncation (P-02 family).
+        hard = np.where(mask == 1)[0]
+        np.testing.assert_array_equal(
+            result.data.flat[hard],
+            prop.data.flat[hard],
+            err_msg="execution smoke: hard-data facies not preserved",
+        )
 
     def test_gtsim_truncation_uses_elif(self):
         """II-43: the double-if truncation (all-facies-1 when tk <= 0) must
-        be an if/elif."""
+        be an if/elif. Static source guard — cannot be armed by individual
+        execution without a full-pipeline fixture (see T-28 note)."""
         with open(REPO_ROOT / "sample-scripts/gtsim.py") as fh:
             src = fh.read()
         # After the first `if <` block there must be an `else:` (not a
@@ -1464,7 +1517,8 @@ class TestSampleScriptImports:
 
     def test_gtsim_pk_only_flow_validates_sgs_params(self):
         """III-20: the user-pk flow must not leave sgs_params=None (`**None`
-        TypeError)."""
+        TypeError). Static source guard — the runtime ValueError is executed
+        by TestGtsimkSiblingSgsParamsGuard (test_production_fixes_geo.py)."""
         with open(REPO_ROOT / "sample-scripts/gtsim.py") as fh:
             src = fh.read()
         assert "sgs_params is None" in src
@@ -1472,21 +1526,22 @@ class TestSampleScriptImports:
 
     def test_gtsimk_truncation_snapshots_value(self):
         """II-44: the truncation loop must compare the ORIGINAL value, not
-        the overwritten integer."""
+        the overwritten integer. Static source guard (see T-28 note)."""
         with open(REPO_ROOT / "sample-scripts/gtsimk.py") as fh:
             src = fh.read()
         assert "value = prop1.data.flat[i]" in src
 
     def test_gtsimk_pseudo_gaussian_value_driven(self):
         """III-19: interval selected by the cell facies value, not the last
-        j iteration."""
+        j iteration. Static source guard (see T-28 note)."""
         with open(REPO_ROOT / "sample-scripts/gtsimk.py") as fh:
             src = fh.read()
         assert "val = int(result.data.flat[i])" in src
 
     def test_gtsimk_pk_prop_list_form(self):
         """II-45: user pk_prop must be a list of ContProperty (one per
-        indicator), not a single ContProperty."""
+        indicator), not a single ContProperty. Static source guard (see
+        T-28 note)."""
         with open(REPO_ROOT / "sample-scripts/gtsimk.py") as fh:
             src = fh.read()
         assert "all(isinstance(p, ContProperty) for p in pk_prop)" in src

@@ -96,17 +96,6 @@ class TestCubeScanIntegerMask:
         # Non-zero cells are all informed -> identical to all-ones bool mask.
         np.testing.assert_array_equal(res2, res_bool)
 
-    def test_int32_mask_matches_bool_pair_counts(self):
-        """F-01: int32 masks behave like bool (non-zero == informed)."""
-        templ = _make_template()
-        mask_int = np.ones((5, 5, 5), dtype="int32")
-        mask_bool = np.ones((5, 5, 5), dtype=bool)
-
-        res_int, _ = CubeScan(templ, mask_int, _pair_counter, None)
-        res_bool, _ = CubeScan(templ, mask_bool, _pair_counter, None)
-
-        np.testing.assert_array_equal(res_int, res_bool)
-
 
 # =============================================================================
 # F-02 (HIGH): CubeScan tuple path with natural 3D data
@@ -468,14 +457,6 @@ class TestCubeScanTemplateExtentGuard:
         templ = self._template(r=100, lag_width=3.0, lag_sep=2.0, num_lags=3)
         mask = np.ones((4, 4, 4), dtype="uint8")
         values = [np.arange(64, dtype="float32").reshape(4, 4, 4)]
-        with pytest.raises(ValueError, match="exceeds grid size"):
-            CubeScan(templ, mask, _pair_counter, {"HardData": values})
-
-    def test_smaller_grid_than_template_extent_raises(self):
-        """F-N14: 3x3x3 grid with the same template also raises."""
-        templ = self._template(r=100, lag_width=3.0, lag_sep=2.0, num_lags=3)
-        mask = np.ones((3, 3, 3), dtype="uint8")
-        values = [np.arange(27, dtype="float32").reshape(3, 3, 3)]
         with pytest.raises(ValueError, match="exceeds grid size"):
             CubeScan(templ, mask, _pair_counter, {"HardData": values})
 

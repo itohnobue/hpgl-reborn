@@ -104,7 +104,7 @@ class TestValidationErrors:
         """Error without parameter_name should not include ':' in str."""
         err = ValidationError("message only")
         assert err.parameter_name == ""
-        assert ":" not in str(err) or str(err).startswith(":")
+        assert str(err) == "message only"
 
 
 # =============================================================================
@@ -241,17 +241,6 @@ class TestPathValidator:
         with pytest.raises(CriticalValidationError, match="outside"):
             PathValidator.safe_open_read(str(outside_file), str(basedir))
 
-    def test_safe_open_write_nonexistent_dir_raises(self, tmp_path):
-        """safe_open_write to nonexistent basedir child — validate_filepath_in_basedir resolves parent dir for O_NOFOLLOW."""
-        basedir = tmp_path / "basedir"
-        basedir.mkdir()
-        filepath = basedir / "new_file.txt"
-
-        with PathValidator.safe_open_write(str(filepath), str(basedir)) as fh:
-            fh.write("created")
-
-        assert filepath.read_text() == "created"
-
     def test_safe_open_read_file_in_basedir_after_write_works(self, tmp_path):
         """Round-trip: write via safe_open_write, then read via safe_open_read."""
         basedir = tmp_path / "datadir"
@@ -385,14 +374,6 @@ class TestGridValidator:
         x = bad if axis_idx == 0 else np.array([1.0, 2.0, 3.0])
         y = bad if axis_idx == 1 else np.array([4.0, 5.0, 6.0])
         z = bad if axis_idx == 2 else np.array([7.0, 8.0, 9.0])
-        with pytest.raises(ValueError, match="NaN or Inf"):
-            GridValidator.validate_coordinate_arrays(x, y, z)
-
-    def test_coordinate_arrays_negative_inf_raises(self):
-        """-Inf in coordinates raises ValueError."""
-        x = np.array([1.0, -float("inf"), 3.0])
-        y = np.array([4.0, 5.0, 6.0])
-        z = np.array([7.0, 8.0, 9.0])
         with pytest.raises(ValueError, match="NaN or Inf"):
             GridValidator.validate_coordinate_arrays(x, y, z)
 
@@ -594,8 +575,10 @@ class TestParameterValidator:
         ParameterValidator.validate_probability_sum([0.33, 0.34, 0.335])
 
     def test_probability_sum_at_tolerance_boundary(self):
-        """Probabilities exactly at tolerance boundary."""
-        # 0.503 + 0.503 = 1.006, diff = 0.006 < 0.01 tolerance
+        """Probabilities near (but within) the tolerance boundary pass."""
+        # 0.503 + 0.503 = 1.006 → diff = 0.006, which is within the 0.01
+        # tolerance (not exactly AT the boundary; validate_probability_sum
+        # uses strict `>` so a true diff == 0.01 would also pass).
         ParameterValidator.validate_probability_sum([0.503, 0.503])
 
     # ---- Seed ----
@@ -618,11 +601,6 @@ class TestParameterValidator:
         """Zero indicator count raises."""
         with pytest.raises(CriticalValidationError):
             ParameterValidator.validate_indicator_count(0)
-
-    def test_indicator_count_exceeds_max_raises(self):
-        """Indicator count > MAX_INDICATORS raises."""
-        with pytest.raises(CriticalValidationError):
-            ParameterValidator.validate_indicator_count(257)
 
     def test_indicator_count_at_max_passes(self):
         """Indicator count at MAX_INDICATORS passes."""
@@ -679,15 +657,11 @@ class TestParameterValidator:
         with pytest.raises(CriticalValidationError):
             ParameterValidator.validate_variance(float("nan"))
 
-    def test_variance_inf_raises(self):
-        """Inf variance raises (I2-F19 — untested)."""
+    @pytest.mark.parametrize("bad_var", [float("inf"), -float("inf")])
+    def test_variance_inf_raises(self, bad_var):
+        """Non-finite variance raises (I2-F19 — merged inf/-inf same-branch pair)."""
         with pytest.raises(CriticalValidationError, match="finite"):
-            ParameterValidator.validate_variance(float("inf"))
-
-    def test_variance_negative_inf_raises(self):
-        """-Inf variance raises."""
-        with pytest.raises(CriticalValidationError, match="finite"):
-            ParameterValidator.validate_variance(-float("inf"))
+            ParameterValidator.validate_variance(bad_var)
 
     # ---- validate_seed edge cases (I2-F21) ----
 

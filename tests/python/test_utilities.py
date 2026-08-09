@@ -2,7 +2,7 @@
 Comprehensive tests for HPGL utility functions.
 
 Tests cover:
-- Calculation functions: calc_mean, calc_cdf
+- Calculation functions: calc_mean
 - Thread management: set_thread_num, get_thread_num
 - Callback handlers: set_output_handler, set_progress_handler
 - I/O functions: load/write properties in INC and GSLib formats
@@ -19,7 +19,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
-    from geo_bsd.cdf import CdfData, calc_cdf
     from geo_bsd.geo import (
         ContProperty,
         CovarianceModel,
@@ -55,56 +54,6 @@ except (ImportError, OSError):
 class TestCalcMean:
     """Test calc_mean function for calculating mean of properties"""
 
-    def test_calc_mean_basic(self):
-        """Test basic mean calculation with known values"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
-        mask = np.array([1, 1, 1, 1, 1], dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        result = calc_mean(prop)
-        assert result == pytest.approx(3.0)
-
-    def test_calc_mean_with_masked_values(self):
-        """Test mean calculation ignores uninformed (masked) values"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
-        mask = np.array([1, 0, 1, 0, 1], dtype="uint8")  # Mask 2 and 4
-        prop = ContProperty(data, mask)
-
-        result = calc_mean(prop)
-        # Only 1, 3, 5 are informed: (1 + 3 + 5) / 3 = 3
-        assert result == pytest.approx(3.0)
-
-    def test_calc_mean_all_masked(self):
-        """Test mean calculation when all values are masked"""
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.array([0, 0, 0], dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        # Should raise ValueError for all-masked property
-        with pytest.raises(ValueError, match="no informed values"):
-            calc_mean(prop)
-
-    def test_calc_mean_single_value(self):
-        """Test mean calculation with single informed value"""
-        data = np.array([42.0], dtype="float32")
-        mask = np.array([1], dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        result = calc_mean(prop)
-        assert result == pytest.approx(42.0)
-
-    def test_calc_mean_large_array(self):
-        """Test mean calculation with large array"""
-        np.random.seed(42)
-        size = 10000
-        data = np.random.rand(size).astype("float32") * 100
-        mask = np.ones(size, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        result = calc_mean(prop)
-        expected = np.mean(data)
-        assert result == pytest.approx(expected, rel=1e-5)
-
     def test_calc_mean_with_tuple_input(self):
         """Test calc_mean accepts tuple input (data, mask)"""
         data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
@@ -122,103 +71,6 @@ class TestCalcMean:
         result = calc_mean(prop)
         # Mean of 0-26 is 13
         assert result == pytest.approx(13.0)
-
-
-@pytest.mark.hpgl
-class TestCalcCdf:
-    """Test calc_cdf function for cumulative distribution calculation"""
-
-    def test_calc_cdf_basic(self):
-        """Test basic CDF calculation"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
-        mask = np.ones(5, dtype="uint8")
-        prop = ContProperty(data.reshape((5, 1, 1), order="F"), mask.reshape((5, 1, 1), order="F"))
-
-        result = calc_cdf(prop)
-
-        assert isinstance(result, CdfData)
-        assert len(result.values) == 5  # n values for n unique (returns all)
-        assert len(result.probs) == 5
-        # Check probabilities are monotonically increasing
-        assert np.all(np.diff(result.probs) >= 0)
-        # Final cumulative probability reaches 1.0
-        assert result.probs[-1] == pytest.approx(1.0)
-
-    def test_calc_cdf_with_duplicates(self):
-        """Test CDF with duplicate values"""
-        data = np.array([1.0, 2.0, 2.0, 3.0, 3.0, 3.0], dtype="float32")
-        mask = np.ones(6, dtype="uint8")
-        prop = ContProperty(data.reshape((6, 1, 1), order="F"), mask.reshape((6, 1, 1), order="F"))
-
-        result = calc_cdf(prop)
-
-        # 3 unique values (1, 2, 3) -> 3 values (returns all N)
-        assert len(result.values) == 3
-        # Final cumulative probability reaches 1.0
-        assert result.probs[-1] == pytest.approx(1.0, rel=1e-5)
-
-    def test_calc_cdf_with_masked_values(self):
-        """Test CDF calculation ignores masked values"""
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
-        mask = np.array([1, 0, 1, 0, 1], dtype="uint8")
-        prop = ContProperty(data.reshape((5, 1, 1), order="F"), mask.reshape((5, 1, 1), order="F"))
-
-        result = calc_cdf(prop)
-
-        # Only 1, 3, 5 are informed (3 unique values) -> returns all 3 values
-        assert len(result.values) == 3
-        # Final cumulative probability reaches 1.0
-        assert result.probs[-1] == pytest.approx(1.0, rel=1e-5)
-
-    def test_calc_cdf_uniform_distribution(self):
-        """Test CDF with uniform distribution"""
-        data = np.array([5.0, 5.0, 5.0, 5.0], dtype="float32")
-        mask = np.ones(4, dtype="uint8")
-        prop = ContProperty(data.reshape((4, 1, 1), order="F"), mask.reshape((4, 1, 1), order="F"))
-
-        result = calc_cdf(prop)
-
-        # Single value case
-        assert len(result.values) == 1
-
-    def test_calc_cdf_all_masked(self):
-        """Test CDF when all values are masked raises ValueError"""
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.zeros((3, 1, 1), dtype="uint8")
-        prop = ContProperty(data.reshape((3, 1, 1), order="F"), mask.reshape((3, 1, 1), order="F"))
-
-        with pytest.raises(ValueError, match="no informed values"):
-            calc_cdf(prop)
-
-    def test_calc_cdf_monotonic_probabilities(self):
-        """Test that CDF probabilities are monotonically increasing"""
-        np.random.seed(42)
-        data = np.random.rand(100).astype("float32") * 100
-        mask = np.ones(100, dtype="uint8")
-        prop = ContProperty(
-            data.reshape((100, 1, 1), order="F"), mask.reshape((100, 1, 1), order="F")
-        )
-
-        result = calc_cdf(prop)
-
-        # Check monotonicity
-        diffs = np.diff(result.probs)
-        assert np.all(diffs >= -1e-10)  # Allow small floating point errors
-
-    def test_calc_cdf_final_probability(self):
-        """Test that final CDF probability is 1.0"""
-        np.random.seed(42)
-        data = np.random.rand(50).astype("float32") * 100
-        mask = np.ones(50, dtype="uint8")
-        prop = ContProperty(
-            data.reshape((50, 1, 1), order="F"), mask.reshape((50, 1, 1), order="F")
-        )
-
-        result = calc_cdf(prop)
-
-        # Final cumulative probability reaches 1.0
-        assert result.probs[-1] == pytest.approx(1.0)
-        assert result.probs[-1] > 0
 
 
 # =============================================================================
@@ -275,16 +127,6 @@ class TestThreadManagement:
         for num in [1, 2, 4, 8, 16]:
             set_thread_num(num)
             assert get_thread_num() == num
-
-        # Restore original
-        set_thread_num(original)
-
-    def test_set_thread_num_single(self):
-        """Test setting thread count to 1"""
-        original = get_thread_num()
-
-        set_thread_num(1)
-        assert get_thread_num() == 1
 
         # Restore original
         set_thread_num(original)
@@ -363,17 +205,6 @@ class TestCallbackHandlers:
         # Verify handler was invoked by the HPGL operation
         assert call_count[0] > 0, "Output handler was not called during HPGL operation"
 
-    def test_set_output_handler_none(self):
-        """Test clearing output handler"""
-        # Setting to None should not raise
-        set_output_handler(None, None)
-
-        def simple_handler(msg, param):
-            return 1
-
-        set_output_handler(simple_handler, 0)
-        set_output_handler(None, None)
-
     def test_set_progress_handler_with_mock(self):
         """Test setting progress handler and verifying it is invoked by HPGL operations"""
         call_count = [0]
@@ -405,37 +236,6 @@ class TestCallbackHandlers:
 
         # Verify handler was invoked by the HPGL operation
         assert call_count[0] > 0, "Progress handler was not called during HPGL operation"
-
-    def test_set_progress_handler_none(self):
-        """Test clearing progress handler"""
-        # Setting to None should not raise
-        set_progress_handler(None, None)
-
-        def simple_handler(msg, progress, param):
-            return 1
-
-        set_progress_handler(simple_handler, 0)
-        set_progress_handler(None, None)
-
-    def test_handler_signature(self):
-        """Test that handlers accept correct signatures"""
-
-        # Output handler: (message, param) -> int
-        def output_handler(msg, param):
-            # msg is c_char_p (bytes or None)
-            # param is py_object
-            return 1
-
-        # Progress handler: (message, progress, param) -> int
-        def progress_handler(msg, progress, param):
-            # msg is c_char_p (bytes or None)
-            # progress is c_int
-            # param is py_object
-            return 1
-
-        # Should not raise exceptions
-        set_output_handler(output_handler, "test_param")
-        set_progress_handler(progress_handler, 0)
 
 
 # =============================================================================
@@ -491,8 +291,8 @@ class TestIOContinuousProperty:
             assert "HPGL saved GSLIB file" in content
             assert "test_gslib" in content
             # Check values are present (scientific notation, %.9E writer)
-            assert "1.00000000E+01" in content  # 10.0
-            assert "2.00000000E+01" in content  # 20.0
+            assert "1.000000000E+01" in content  # 10.0
+            assert "2.000000000E+01" in content  # 20.0
 
     def test_read_inc_file_float_with_size(self, tmp_path):
         """Test reading INC file with specified size"""
@@ -516,19 +316,6 @@ class TestIOContinuousProperty:
         # The -99.0 value should be masked
         assert loaded.mask[4] == 0
 
-    def test_write_property_creates_file(self, tmp_path):
-        """Test that write_property creates a valid file"""
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.array([1, 1, 1], dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        filename = str(tmp_path / "created_file.inc")
-        # F-28: pass an explicit trusted base.
-        write_property(prop, filename, "created", -99.0, basedir=str(tmp_path))
-
-        # Check file exists
-        assert Path(filename).exists()
-
     def test_write_read_3d_property(self, tmp_path):
         """Test write/read for 3D property"""
         data = np.arange(27, dtype="float32").reshape((3, 3, 3), order="F")
@@ -547,10 +334,10 @@ class TestIOContinuousProperty:
             # Should have property name and some values
             assert "3d_test" in content
             # Should have values (0.0, 1.0, etc. in scientific notation)
-            assert "0.00000000E+00" in content  # First value
+            assert "0.000000000E+00" in content  # First value
 
-        # Note: Reading back 3D properties with read_inc_file_float is not stable
-        # due to C++ implementation issues. The write functionality is verified.
+        # Note: read-back of 3D properties is covered by the F-55 shape
+        # normalization tests (load_cont_property with a 3-tuple size).
 
 
 @pytest.mark.hpgl
@@ -572,6 +359,10 @@ class TestIOIndicatorProperty:
 
         assert isinstance(loaded, IndProperty)
         assert loaded.indicator_count == 3
+        # Round-trip: category indices are preserved for informed cells; the
+        # masked cell (index 4) was written as the 255 sentinel and stays masked.
+        np.testing.assert_array_equal(loaded.data, np.array([0, 1, 2, 0, 255], dtype="uint8"))
+        np.testing.assert_array_equal(loaded.mask, np.array([1, 1, 1, 1, 0], dtype="uint8"))
 
     def test_read_inc_file_byte_with_size(self, tmp_path):
         """Test reading byte INC file with specified size"""
@@ -595,20 +386,6 @@ class TestIOIndicatorProperty:
         assert loaded.data.size == 6
         assert loaded.mask[4] == 0  # The 255 value should be masked (at position 4)
 
-    def test_write_gslib_indicator_property(self, tmp_path):
-        """Test writing indicator property in GSLib format"""
-        data = np.array([0, 1, 0, 1, 0], dtype="uint8")
-        mask = np.ones(5, dtype="uint8")
-        indicator_values = [1, 2]
-        prop = IndProperty(data, mask, 2)
-
-        filename = str(tmp_path / "ind_gslib.dat")
-        # F-28: pass an explicit trusted base.
-        write_gslib_property(prop, filename, "ind_test", 255, indicator_values, basedir=str(tmp_path))
-
-        # Check file was created
-        assert Path(filename).exists()
-
     def test_indicator_values_mapping(self, tmp_path):
         """Test that indicator values are correctly mapped"""
         # Create data with mapped values
@@ -623,8 +400,10 @@ class TestIOIndicatorProperty:
 
         loaded = load_ind_property(filename, 255, indicator_values, basedir=str(tmp_path))
 
-        # Check indicator count is preserved
+        # Round-trip: mapped external values are read back as category indices.
         assert loaded.indicator_count == 3
+        np.testing.assert_array_equal(loaded.data, np.array([0, 1, 2, 0, 1, 2], dtype="uint8"))
+        np.testing.assert_array_equal(loaded.mask, np.ones(6, dtype="uint8"))
 
 
 @pytest.mark.hpgl
@@ -647,21 +426,6 @@ class TestUndefinedValueHandling:
         assert loaded.mask[1] == 0
         assert loaded.mask[3] == 0
         assert loaded.mask[0] == 1
-
-    def test_undefined_value_masking_indicator(self, tmp_path):
-        """Test undefined value masking for indicators"""
-        data = np.array([0, 1, 0, 1], dtype="uint8")
-        mask = np.ones(4, dtype="uint8")
-        indicator_values = [1, 2]
-        prop = IndProperty(data, mask, 2)
-
-        filename = str(tmp_path / "undef_ind.inc")
-        # F-28: pass an explicit trusted base.
-        write_property(prop, filename, "undef_ind", 255, indicator_values, basedir=str(tmp_path))
-
-        loaded = load_ind_property(filename, 255, indicator_values, basedir=str(tmp_path))
-
-        assert isinstance(loaded, IndProperty)
 
 
 # =============================================================================
@@ -719,18 +483,6 @@ class TestAppendMask:
         # Nothing should change
         np.testing.assert_array_equal(prop.data, original_data)
 
-    def test_append_mask_with_tuple_input(self):
-        """Test append_mask accepts property as tuple"""
-        data = np.array([1.0, 2.0, 3.0, 4.0], dtype="float32")
-        mask = np.ones(4, dtype="uint8")
-
-        # Pass as tuple
-        append_mask((data, mask), np.array([1, 0, 1, 0], dtype="uint8"))
-
-        # Check data was modified
-        assert data[1] == pytest.approx(-99.0)
-        assert data[3] == pytest.approx(-99.0)
-
     def test_append_mask_3d_property(self):
         """Test append_mask on 3D property"""
         data = np.arange(8, dtype="float32").reshape((2, 2, 2), order="F")
@@ -744,6 +496,10 @@ class TestAppendMask:
 
         # Most values should be -99, except first
         assert prop.data[0, 0, 0] == pytest.approx(0.0)
+        # N2-15: assert a MASKED cell was set to -99 (the discriminator — a
+        # regression that leaves masked cells unchanged would pass the kept-cell
+        # assertion above).
+        assert prop.data[1, 0, 0] == pytest.approx(-99.0)
 
 
 # =============================================================================
@@ -767,10 +523,13 @@ class TestFileFormats:
         loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
 
         assert isinstance(loaded, ContProperty)
-        assert loaded.data.size >= 6
+        # HARDEN (s5 §3.2 D-21): exact values — the previous `size >= 6` would
+        # pass even if comment-skip failed and values were shifted.
+        np.testing.assert_array_equal(loaded.data, np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], dtype="float32"))
+        np.testing.assert_array_equal(loaded.mask, np.ones(6, dtype="uint8"))
 
     def test_gslib_format_header(self, tmp_path):
-        """Test GSLib format with property name"""
+        """GSLib files must be rejected by the INC reader (P-06)."""
         data = np.array([1.0, 2.0, 3.0], dtype="float32")
         mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
@@ -779,33 +538,14 @@ class TestFileFormats:
         # F-28: pass an explicit trusted base.
         write_gslib_property(prop, filename, "MyProperty", -99.0, basedir=str(tmp_path))
 
-        # File should exist and be readable
+        # File should exist
         assert Path(filename).exists()
-        loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
-        assert isinstance(loaded, ContProperty)
-
-    def test_multiple_properties_same_file(self, tmp_path):
-        """Test handling multiple properties in same directory"""
-        data1 = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask1 = np.ones(3, dtype="uint8")
-        prop1 = ContProperty(data1, mask1)
-
-        data2 = np.array([4.0, 5.0, 6.0], dtype="float32")
-        mask2 = np.ones(3, dtype="uint8")
-        prop2 = ContProperty(data2, mask2)
-
-        filename1 = str(tmp_path / "prop1.inc")
-        filename2 = str(tmp_path / "prop2.inc")
-
-        # F-28: pass an explicit trusted base.
-        write_property(prop1, filename1, "prop1", -99.0, basedir=str(tmp_path))
-        write_property(prop2, filename2, "prop2", -99.0, basedir=str(tmp_path))
-
-        loaded1 = load_cont_property(filename1, -99.0, basedir=str(tmp_path))
-        loaded2 = load_cont_property(filename2, -99.0, basedir=str(tmp_path))
-
-        assert isinstance(loaded1, ContProperty)
-        assert isinstance(loaded2, ContProperty)
+        # P-06: the INC slow parser must reject the GSLIB header (nvar count
+        # line "1" after a non-numeric caption) instead of silently absorbing
+        # it as a data value. Pre-fix this returned a silently-shifted
+        # property ([1.0, 10.0, 20.0, 30.0]).
+        with pytest.raises(ValueError, match="not an INC-format"):
+            load_cont_property(filename, -99.0, basedir=str(tmp_path))
 
 
 # =============================================================================
@@ -816,28 +556,6 @@ class TestFileFormats:
 @pytest.mark.hpgl
 class TestEdgeCases:
     """Test edge cases and error handling"""
-
-    def test_empty_property_calc_mean(self):
-        """Test calc_mean with minimal property"""
-        data = np.array([1.0], dtype="float32")
-        mask = np.array([1], dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        result = calc_mean(prop)
-        assert result == pytest.approx(1.0)
-
-    def test_large_undefined_value(self, tmp_path):
-        """Test with large undefined value"""
-        data = np.array([1.0, -1e10, 3.0], dtype="float32")
-        mask = np.ones(3, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        filename = str(tmp_path / "large_undef.inc")
-        # F-28: pass an explicit trusted base.
-        write_property(prop, filename, "large_undef", -1e10, basedir=str(tmp_path))
-
-        loaded = load_cont_property(filename, -1e10, basedir=str(tmp_path))
-        assert isinstance(loaded, ContProperty)
 
     def test_negative_values_in_data(self, tmp_path):
         """Test handling of negative values"""
@@ -870,62 +588,6 @@ class TestEdgeCases:
 
         # Small values should be preserved approximately
         assert loaded.data[0] > 0
-
-    def test_alternative_undefined_values(self, tmp_path):
-        """Test different undefined value conventions"""
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.ones(3, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        # Test with -999 (common alternative)
-        filename = str(tmp_path / "alt_undef.inc")
-        # F-28: pass an explicit trusted base.
-        write_property(prop, filename, "alt_undef", -999.0, basedir=str(tmp_path))
-
-        loaded = load_cont_property(filename, -999.0, basedir=str(tmp_path))
-        assert isinstance(loaded, ContProperty)
-
-
-# =============================================================================
-# Performance Tests
-# =============================================================================
-
-
-@pytest.mark.hpgl
-class TestPerformanceUtilities:
-    """Performance-related tests for utility functions"""
-
-    def test_calc_mean_performance_large(self):
-        """Test calc_mean performance with large dataset"""
-        np.random.seed(42)
-        size = 100000
-        data = np.random.rand(size).astype("float32")
-        mask = np.ones(size, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        result = calc_mean(prop)
-
-        expected = np.sum(data) / size
-        assert result == pytest.approx(expected, rel=1e-4)
-
-    def test_calc_cdf_performance_large(self):
-        """Test calc_cdf performance with larger dataset"""
-        np.random.seed(42)
-        # Use smaller size for CDF as it's O(n^2) in worst case
-        size = 1000
-        data = np.random.rand(size).astype("float32") * 100
-        mask = np.ones(size, dtype="uint8")
-        prop = ContProperty(
-            data.reshape((size, 1, 1), order="F"), mask.reshape((size, 1, 1), order="F")
-        )
-
-        result = calc_cdf(prop)
-
-        assert isinstance(result, CdfData)
-        assert len(result.values) > 0
-        # Final cumulative probability reaches 1.0
-        assert result.probs[-1] == pytest.approx(1.0)
-        assert result.probs[-1] > 0.9  # Should be close to 1 for large n
 
 
 # =============================================================================

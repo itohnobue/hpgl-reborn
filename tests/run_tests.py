@@ -137,11 +137,14 @@ def check_hpgl_available() -> tuple[bool, str]:
     """
     project_root = get_project_root()
 
-    # Add potential source paths
+    # Add potential source paths (N2-L23): the geo_bsd PACKAGE lives under
+    # src/geo_bsd/, so the PARENT directory (src/, build/lib/, ...) must be
+    # placed on sys.path for `import geo_bsd` to resolve — inserting the
+    # package dir itself yields a false "not available" warning.
     src_paths = [
-        project_root / "src" / "geo_bsd",
-        project_root / "build" / "lib" / "geo_bsd",
-        project_root / "build" / "lib.win-amd64-3.11" / "geo_bsd",
+        project_root / "src",
+        project_root / "build" / "lib",
+        project_root / "build" / "lib.win-amd64-3.11",
     ]
 
     for src_path in src_paths:
@@ -203,11 +206,17 @@ def build_pytest_args(
         args.extend(["--cov=geo_bsd"])
         args.extend([f"--cov-report={cov_report}", "--cov-report=html"])
 
-    # Verbosity
+    # Verbosity (T-21): opt-in only. The runner must NOT force -v on every
+    # run — the historical pytest INTERNALERROR trigger ('str' object has no
+    # attribute 'parts') came from test_ffi_contract.py's GLOBAL
+    # pathlib.Path.__truediv__ monkeypatch family. That family was REMOVED by
+    # the H-03 fix pass (real filesystem paths now exercise the escape and
+    # continue-on-OSError paths), so -v is technically unblocked — but keeping
+    # it opt-in is the deliberate T-21 design (L-23; the CTest target also
+    # runs without -v pending the TEST-stage decision). -vv is added only
+    # when --verbose is explicitly requested.
     if verbose:
         args.append("-vv")
-    else:
-        args.append("-v")
 
     # Show output
     if show_output:
@@ -228,8 +237,12 @@ def build_pytest_args(
     if workers is not None:
         args.extend(["-n", str(workers)])
 
-    # Slow tests marker
-    if include_slow:
+    # Slow tests marker. Default: exclude slow-marked tests from the default
+    # suite. Exception: the 'performance' and 'memory' categories are entirely
+    # slow-marked (H-11: test_mean_calculation_performance is @slow), so the
+    # "not slow" filter would collect zero tests and exit 5 — collect the
+    # slow-marked tests via marker match for those categories.
+    if include_slow or test_type in ("performance", "memory"):
         args.extend(["-m", "slow or not slow"])
     else:
         args.extend(["-m", "not slow"])
@@ -241,33 +254,46 @@ def build_pytest_args(
     # Get tests directory and determine target
     tests_dir = get_tests_dir()
 
-    # Map test types to files/directories
+    # Map test types to files/directories (N2-L26: values are argument LISTS,
+    # never whitespace-joined strings, so repo paths containing spaces survive).
+    # T-20: kriging/simulation categories include their sibling files.
     test_targets = {
-        "all": str(tests_dir),
-        "kriging": str(tests_dir / "test_kriging_complete.py"),
-        "simulation": str(tests_dir / "test_simulation_complete.py"),
-        "numpy2": str(tests_dir / "test_numpy2_compat.py"),
-        "memory": str(tests_dir / "test_memory_leaks.py"),
-        "performance": str(tests_dir / "test_performance.py"),
-        "integration": str(tests_dir / "test_integration.py"),
-        "utilities": str(tests_dir / "test_utilities.py")
+        "all": [str(tests_dir)],
+        "kriging": [
+            str(tests_dir / "test_kriging_complete.py"),
+            str(tests_dir / "test_parametrized_kriging.py"),
+            str(tests_dir / "test_kriging_edge_cases.py"),
+            str(tests_dir / "test_covariance_math.py"),
+        ],
+        "simulation": [
+            str(tests_dir / "test_simulation_complete.py"),
+            str(tests_dir / "test_parametrized_simulation.py"),
+            str(tests_dir / "test_sgs.py"),
+            str(tests_dir / "test_sis.py"),
+            str(tests_dir / "test_gtsim.py"),
+        ],
+        "numpy2": [str(tests_dir / "test_numpy2_compat.py")],
+        "memory": [str(tests_dir / "test_memory_leaks.py")],
+        "performance": [str(tests_dir / "test_performance.py")],
+        "integration": [str(tests_dir / "test_integration.py")],
+        "utilities": [str(tests_dir / "test_utilities.py")]
         if (tests_dir / "test_utilities.py").exists()
-        else str(tests_dir),
-        "classes": str(tests_dir / "test_classes.py")
+        else [str(tests_dir)],
+        "classes": [str(tests_dir / "test_classes.py")]
         if (tests_dir / "test_classes.py").exists()
-        else str(tests_dir),
-        "edge": str(tests_dir / "test_edge_cases.py")
+        else [str(tests_dir)],
+        "edge": [str(tests_dir / "test_edge_cases.py")]
         if (tests_dir / "test_edge_cases.py").exists()
-        else str(tests_dir),
-        "legacy": str(tests_dir / "test_legacy_migrated.py")
+        else [str(tests_dir)],
+        "legacy": [str(tests_dir / "test_legacy_migrated.py")]
         if (tests_dir / "test_legacy_migrated.py").exists()
-        else str(tests_dir),
-        "slow": f"-m slow {tests_dir}",
+        else [str(tests_dir)],
+        "slow": ["-m", "slow", str(tests_dir)],
     }
 
     # Get target for test type
-    target = test_targets.get(test_type, str(tests_dir))
-    args.extend(target.split())
+    target = test_targets.get(test_type, [str(tests_dir)])
+    args.extend(target)
 
     # Extra arguments
     if extra_args:
@@ -303,7 +329,10 @@ def print_summary(test_type: str, result: subprocess.CompletedProcess[bytes]) ->
 
     print()
 
-    if result.returncode == 0 and "--cov" in " ".join(result.args):
+    # N2-L25: report coverage only when --cov (or --cov=<value>) is ACTUALLY
+    # in args — a substring match fires on --cov-report without --cov.
+    cov_requested = any(a == "--cov" or a.startswith("--cov=") for a in result.args)
+    if result.returncode == 0 and cov_requested:
         print_color("Coverage report generated in htmlcov/ directory", Colors.OKCYAN)
         if sys.platform == "win32":
             print_color("  View with: start htmlcov/index.html", Colors.OKCYAN)

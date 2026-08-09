@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import functools
+import itertools
 import logging
 import math
 import os
@@ -683,6 +684,42 @@ class CovarianceModel:
         ParameterValidator.validate_covariance_parameters(sill, nugget, ranges, angles)
 
 
+def _looks_like_gslib_header(first_line, second_line):
+    """P-06: detect a GSLIB-format header in the INC slow parser.
+
+    A GSLIB file starts with a caption line followed by the property-count
+    (nvar) line — a bare integer written with ``%d``
+    (property_writer.cpp:403). The INC writer emits every data value via
+    ``write_value`` in %.9E scientific notation (property_writer.cpp:121),
+    so a bare-integer second line after a non-numeric first line is the
+    GSLIB header fingerprint: a pure-data INC file would have a numeric
+    first line, and HPGL-written INC data lines are never bare integers.
+
+    This is deliberately a heuristic — a hand-written INC file whose
+    property name is the first line and whose first data value is a bare
+    integer (e.g. remapped categories) is indistinguishable from a GSLIB
+    header. The actionable ValueError below is the safe resolution for
+    that ambiguity: silently absorbing the nvar count as the first data
+    value (the pre-fix behavior) silently corrupts every GSLIB load.
+    """
+    first = first_line.strip()
+    second = second_line.strip()
+    if not first or not second:
+        return False
+    try:
+        float(first)
+    except ValueError:
+        pass
+    else:
+        # Numeric first line → pure-data file, not a GSLIB caption.
+        return False
+    try:
+        int(second)
+    except ValueError:
+        return False
+    return True
+
+
 def _load_prop_cont_slow(filename, undefined_value, basedir=None):
     values = []
     mask = []
@@ -696,7 +733,23 @@ def _load_prop_cont_slow(filename, undefined_value, basedir=None):
     if basedir is None:
         basedir = PathValidator.DEFAULT_BASE_DIR
     with PathValidator.safe_open_read(filename, basedir=basedir) as f:
-        for line in f:
+        # P-06: peek at the first two lines to reject a GSLIB header
+        # BEFORE any token is absorbed as data. The GSLIB writer emits the
+        # nvar count as a bare integer (property_writer.cpp:403) on line 2
+        # after a caption line; the INC writer emits data in %.9E notation
+        # from line 2 on. Pre-fix the nvar line was silently absorbed as
+        # the first data value (reproduced: [1.0, 10.0, 20.0, 30.0]).
+        first_line = f.readline()
+        second_line = f.readline()
+        if _looks_like_gslib_header(first_line, second_line):
+            raise ValueError(
+                f"_load_prop_cont_slow: '{filename}' is not an INC-format "
+                f"property file — it looks like a GSLIB file (bare integer "
+                f"count line after a non-numeric caption line). Load GSLIB "
+                f"data with LoadGslibFile (geo_bsd.routines) instead of "
+                f"load_cont_property."
+            )
+        for line in itertools.chain((first_line, second_line), f):
             # 2-M-16: bound the per-line processing BEFORE any strip/split
             # work. A crafted newline-free line would otherwise materialize
             # a multi-GB token list (and strip() copy) before the element
@@ -2124,6 +2177,18 @@ def median_ik(prop, grid, marginal_probs, radiuses, max_neighbours, cov_model):
     if prop.indicator_count != 2:
         raise ValueError(f"median_ik: indicator_count must be 2, got {prop.indicator_count}")
 
+    # Validate property data size against grid (mirror ordinary_kriging).
+    # Without these checks an empty or wrong-size property is consumed by
+    # flat node index in C++ and silently produces a wrong-shaped result.
+    if prop.data.size == 0:
+        raise ValueError("median_ik: prop.data is empty")
+    expected_size = grid.x * grid.y * grid.z
+    if prop.data.size != expected_size:
+        raise ValueError(
+            f"median_ik: prop.data size {prop.data.size} does not match "
+            f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
+        )
+
     # Validate prop.data for NaN/Inf before C++ call (defensive consistency).
     # IndProperty uses uint8 data which cannot hold NaN/Inf natively,
     # but the guard matches the pattern used by all kriging functions
@@ -2214,6 +2279,18 @@ def indicator_kriging(prop, grid, data, marginal_probs):
     )):
         raise ValueError(
             "indicator_kriging: prop.data contains NaN or Inf values"
+        )
+
+    # Validate property data size against grid (mirror ordinary_kriging).
+    # Without these checks an empty or wrong-size property is consumed by
+    # flat node index in C++ and silently produces a wrong-shaped result.
+    if prop.data.size == 0:
+        raise ValueError("indicator_kriging: prop.data is empty")
+    expected_size = grid.x * grid.y * grid.z
+    if prop.data.size != expected_size:
+        raise ValueError(
+            f"indicator_kriging: prop.data size {prop.data.size} does not match "
+            f"grid size {expected_size} ({grid.x}x{grid.y}x{grid.z})"
         )
 
     if len(data) == 2:

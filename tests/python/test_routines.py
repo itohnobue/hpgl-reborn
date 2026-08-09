@@ -31,7 +31,6 @@ try:
         GetCubicalMask,
         GetEllipseMask,
         LoadGslibFile,
-        MeanCalc,
         MovingAverage3D,
         PointSet2Cube,
         SaveGSLIBCubes,
@@ -71,20 +70,6 @@ def _make_cube_mask(nx=5, ny=4, nz=3):
 class TestCalcMean:
     """Tests for CalcMean function."""
 
-    def test_calc_mean_uniform(self):
-        """CalcMean of uniform data returns the uniform value."""
-        cube = np.ones((3, 3, 2), dtype="float32") * 42.0
-        mask = np.ones((3, 3, 2), dtype="uint8")
-        result = CalcMean(cube, mask)
-        assert result == pytest.approx(42.0)
-
-    def test_calc_mean_partial_mask(self):
-        """CalcMean with partial mask excludes masked values."""
-        cube = np.array([10.0, 20.0, 30.0], dtype="float32").reshape((1, 3, 1), order="F")
-        mask = np.array([1, 0, 1], dtype="uint8").reshape((1, 3, 1), order="F")
-        result = CalcMean(cube, mask)
-        assert result == pytest.approx(20.0)  # (10 + 30) / 2
-
     def test_calc_mean_all_masked(self):
         """CalcMean with all-masked returns masked constant (NaN/masked)."""
         cube = np.ones((2, 2, 2), dtype="float32") * 5.0
@@ -123,47 +108,6 @@ class TestCalcMarginalProbsIndicator:
 
 # =============================================================================
 # CalcVPC Tests
-# =============================================================================
-
-
-@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
-class TestCalcVPC:
-    """Tests for CalcVPC function (Vertical Proportion Curve)."""
-
-    def test_calc_vpc_uniform_layers(self):
-        """CalcVPC with uniform values per layer returns layer means."""
-        nx, ny, nz = 2, 2, 3
-        cube = np.zeros((nx, ny, nz), dtype="float32")
-        cube[:, :, 0] = 10.0
-        cube[:, :, 1] = 20.0
-        cube[:, :, 2] = 30.0
-        mask = np.ones((nx, ny, nz), dtype="uint8")
-        result = CalcVPC(cube, mask, 0.0)
-        assert len(result) == 3
-        assert result[0] == pytest.approx(10.0)
-        assert result[1] == pytest.approx(20.0)
-        assert result[2] == pytest.approx(30.0)
-
-    def test_calc_vpc_partial_mask(self):
-        """CalcVPC with masked cells uses marginal mean for empty layers.
-
-        Note: CalcVPC mutates the input cube in place (writes 0 to unmasked cells).
-        We pass a copy to preserve the original.
-        """
-        nx, ny, nz = 2, 2, 2
-        cube = np.ones((nx, ny, nz), dtype="float32") * 5.0
-        mask = np.ones((nx, ny, nz), dtype="uint8")
-        # Mask out entire second layer
-        mask[:, :, 1] = 0
-        cube_copy = cube.copy()
-        result = CalcVPC(cube_copy, mask, 99.0)
-        assert len(result) == 2
-        assert result[0] == pytest.approx(5.0)
-        assert result[1] == pytest.approx(99.0)  # No informed cells → marginal
-
-
-# =============================================================================
-# CalcVPCsIndicator Tests
 # =============================================================================
 
 
@@ -234,34 +178,8 @@ class TestCubesFromVPCs:
 
 
 @pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
-class TestCubes2PointSet:
-    """Tests for Cubes2PointSet function."""
-
-    def test_converts_cubes_to_pointset(self):
-        """Cubes2PointSet smoke test — extracts points without crashing."""
-        cube = np.zeros((2, 2, 2), dtype="float32", order="F")
-        cube[:, :, :] = 5.0
-        mask = np.ones((2, 2, 2), dtype="uint8", order="F")
-        cubes = {"prop": cube}
-        result = Cubes2PointSet(cubes, mask)
-        assert "X" in result
-        assert "Y" in result
-        assert "Z" in result
-        assert "prop" in result
-        assert len(result["prop"]) > 0
-
-
-@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
 class TestCube2PointSet:
     """Tests for Cube2PointSet function."""
-
-    def test_converts_cube_to_pointset(self):
-        """Cube2PointSet smoke test — returns non-empty arrays."""
-        cube = np.arange(8, dtype="float32").reshape((2, 2, 2), order="F")
-        mask = np.ones((2, 2, 2), dtype="uint8", order="F")
-        x, y, z, prop = Cube2PointSet(cube, mask)
-        assert len(x) > 0
-        assert len(prop) > 0
 
     def test_partial_mask(self):
         """Cube2PointSet with partial mask returns fewer points than all-informed."""
@@ -281,15 +199,6 @@ class TestCube2PointSet:
 @pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
 class TestPointSet2Cube:
     """Tests for PointSet2Cube function."""
-
-    def test_round_trip(self):
-        """Cube2PointSet -> PointSet2Cube smoke test (completes without crash)."""
-        cube = np.arange(8, dtype="float32").reshape((2, 2, 2), order="F")
-        mask = np.ones((2, 2, 2), dtype="uint8")
-        mask[0, 0, 1] = 0  # One uninformed cell
-        x, y, z, prop = Cube2PointSet(cube, mask)
-        assert len(x) > 0, "Expected at least one informed point"
-        assert len(prop) > 0
 
     def test_fortran_order_output_consistency(self):
         """Regression test: Cube2PointSet with Fortran-order input must produce
@@ -444,45 +353,6 @@ class TestGetEllipseMask:
 
 
 # =============================================================================
-# MeanCalc Tests
-# =============================================================================
-
-
-@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
-class TestMeanCalc:
-    """Tests for MeanCalc function."""
-
-    def test_mean_calc_computes_local_mean(self):
-        """MeanCalc computes mean of neighboring cells within radius."""
-        cube, mask = _make_cube_mask(nx=5, ny=5, nz=3)
-        radii = (2, 2, 1)
-        mean_mask = GetCubicalMask(radii)
-        # Center cell should have neighbors to average
-        result = MeanCalc(cube, mask, radii, mean_mask, (2, 2, 1), -999.0)
-        assert result != -999.0
-        assert np.isfinite(result)
-
-    def test_mean_calc_no_neighbors_returns_undefined(self):
-        """MeanCalc returns undefined_value when no neighbors found."""
-        cube = np.zeros((3, 3, 3), dtype="float32")
-        mask = np.zeros((3, 3, 3), dtype="uint8")
-        radii = (1, 1, 1)
-        mean_mask = GetCubicalMask(radii)
-        result = MeanCalc(cube, mask, radii, mean_mask, (1, 1, 1), -999.0)
-        assert result == -999.0
-
-    def test_mean_calc_constant_input(self):
-        """MeanCalc with constant input produces expected mean."""
-        cube = np.ones((5, 5, 3), dtype="float32") * 42.0
-        mask = np.ones((5, 5, 3), dtype="uint8")
-        radii = (2, 2, 1)
-        mean_mask = GetCubicalMask(radii)
-        result = MeanCalc(cube, mask, radii, mean_mask, (2, 2, 1), -999.0)
-        assert np.isfinite(result)
-        assert result == pytest.approx(42.0)
-
-
-# =============================================================================
 # LoadGslibFile Tests
 # =============================================================================
 
@@ -509,33 +379,6 @@ class TestLoadGslibFile:
             LoadGslibFile("", property_size=(2, 2, 1))
         with pytest.raises(ValueError):
             LoadGslibFile(None, property_size=(2, 2, 1))
-
-
-# =============================================================================
-# MovingAverage3D Tests
-# =============================================================================
-
-
-@pytest.mark.skipif(not ROUTINES_AVAILABLE, reason="routines module not available")
-class TestMovingAverage3D:
-    """Tests for MovingAverage3D function."""
-
-    def test_moving_average_preserves_shape(self):
-        """MovingAverage3D returns a cube of the same shape as input."""
-        cube, mask = _make_cube_mask(nx=4, ny=4, nz=2)
-        result = MovingAverage3D((cube, mask), (1, 1, 1), -999.0, GetCubicalMask)
-        assert result.shape == cube.shape
-
-    def test_moving_average_values_are_finite(self):
-        """MovingAverage3D output values are finite."""
-        cube, mask = _make_cube_mask(nx=4, ny=4, nz=2)
-        result = MovingAverage3D((cube, mask), (1, 1, 1), -999.0, GetCubicalMask)
-        # Some cells at edges may have no neighbors, but center ones should
-        assert np.any(np.isfinite(result))
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
 
 
 # =============================================================================

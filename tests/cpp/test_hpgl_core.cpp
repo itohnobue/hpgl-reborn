@@ -51,9 +51,12 @@
 #include "src/geo_bsd/hpgl/property_array.h"
 #include "src/geo_bsd/hpgl/select.h"
 #include "src/geo_bsd/hpgl/cdf_utils.h"
+#include "src/geo_bsd/hpgl/sample.h"
+#include "src/geo_bsd/hpgl/api_helpers.hpp"
 
 #ifndef _WIN32
 #include <unistd.h>
+#include <dirent.h>
 #endif
 
 // ---- Minimal test framework ----
@@ -116,25 +119,6 @@ void test_gauss_solve_3x3_known_system() {
     CHECK_CLOSE(X[0],  2.0, 1e-14);
     CHECK_CLOSE(X[1],  3.0, 1e-14);
     CHECK_CLOSE(X[2], -1.0, 1e-14);
-}
-
-void test_gauss_solve_2x2_diagonal() {
-    TEST("gauss_solve 2x2 diagonal");
-    int size = 2;
-    std::vector<double> A = {
-        3.0, 0.0,
-        0.0, 4.0
-    };
-    std::vector<double> B = { 15.0, 8.0 };
-    std::vector<double> X(size, 0.0);
-
-    std::vector<double> A_work = A;
-    std::vector<double> B_work = B;
-
-    bool ok = hpgl::gauss_solve(A_work.data(), B_work.data(), X.data(), size);
-    CHECK(ok);
-    CHECK_CLOSE(X[0], 5.0, 1e-14);
-    CHECK_CLOSE(X[1], 2.0, 1e-14);
 }
 
 void test_gauss_solve_singular_returns_false() {
@@ -358,15 +342,37 @@ void test_cholesky_solve_3x3() {
 // ---- C API / writer / handler regression tests ----
 
 #ifndef _WIN32
+// Registry of temp dirs created by make_temp_dir() (N2-L30: mkdtemp dirs
+// were never removed — 14 orphan dirs per CTest run in /tmp).
+static std::vector<std::string> & temp_dir_registry()
+{
+    static std::vector<std::string> dirs;
+    return dirs;
+}
+
 // Creates a unique temporary directory for file I/O tests.
 static std::string make_temp_dir()
 {
     char tmpl[] = "/tmp/hpgl_cpp_test_XXXXXX";
     char * dir = mkdtemp(tmpl);
-    return std::string(dir == nullptr ? "." : dir);
+    std::string result(dir == nullptr ? "." : dir);
+    if (dir != nullptr)
+        temp_dir_registry().push_back(result);
+    return result;
+}
+
+// Removes every directory created by make_temp_dir() (files inside have
+// already been removed by the individual tests).
+static void cleanup_temp_dirs()
+{
+    std::vector<std::string> & dirs = temp_dir_registry();
+    for (size_t i = 0; i < dirs.size(); ++i)
+        rmdir(dirs[i].c_str());
+    dirs.clear();
 }
 #else
 static std::string make_temp_dir() { return std::string("."); }
+static void cleanup_temp_dirs() {}
 #endif
 
 static void write_inc_text_file(const std::string & path, const char * content)
@@ -441,6 +447,14 @@ void test_write_inc_file_float_rejects_nonpositive_dims()
 // an out-of-window value is written then masked by the reader (never NaN in
 // the file itself). The window constant is the shared reference-fact value
 // (api.h HPGL_GSLIB_SENTINEL_WINDOW).
+//
+// P-01 (v2.0.6): the C++ reader's window is compared in float64, matching
+// every Python reader. float32(1.0e21) = 1.0000000200408773e21 > 1.0e21, so
+// the exact-edge value 1.0e21f — written by this project's own %.9E writer as
+// the token "1.000000020E+21" — now classifies SENTINEL (mask==0) on the
+// C++ reader, matching Python's float64 readers. This read-back hardening
+// (H-02/A-02) pins the post-P-01 semantics: in-window values are DATA, the
+// exact edge is SENTINEL, and the %.9E token round-trips bit-exact float32.
 void test_write_gslib_sentinel_round_trip()
 {
     TEST("got-20260802092630: GSLIB sentinel window reader-side masking (round-trip)");
@@ -449,17 +463,45 @@ void test_write_gslib_sentinel_round_trip()
 
     std::string dir = make_temp_dir();
     std::string filename = dir + "/sentinel.inc";
-    float data[2] = {1.0f, 1.0e21f};  // exact edge — NOT a sentinel (strict >)
-    unsigned char mask[2] = {1, 1};
+    // H-02/A-02: {in-window, exact-edge, out-of-window} — plus the A-02 %.9E
+    // float32 bit-exact round-trip trio {0.12345679f, -0.0f, 1.0e21f}.
+    float data[6] = {1.0f, 1.0e21f, 2.0e21f, 0.12345679f, -0.0f, 1.0e21f};
+    unsigned char mask[6] = {1, 1, 1, 1, 1, 1};
     hpgl_cont_masked_array_t arr;
     arr.m_data = data;
     arr.m_mask = mask;
-    init_shape(arr.m_shape, 2, 1, 1);
+    init_shape(arr.m_shape, 6, 1, 1);
     char name[] = "sentinel";
     char * fname = const_cast<char *>(filename.c_str());
-    // Exact ±1.0e21 is a real data value (strict inequality) — writes fine.
+    // Exact ±1.0e21 is a real data value pre-P-01 (strict inequality in
+    // float32); the writer accepts finite values regardless.
     int rc = hpgl_write_inc_file_float(fname, &arr, -99.0f, name);
     CHECK(rc == 0);
+
+    // H-02 read-back: read the writer's own file with the C reader and
+    // assert the POST-P-01 mask semantics (matches Python float64 readers).
+    float out_data[6] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    unsigned char out_mask[6] = {0, 0, 0, 0, 0, 0};
+    rc = hpgl_read_inc_file_float(fname, -99.0f, 6, out_data, out_mask);
+    CHECK(rc == 0);
+    // In-window value 1.0f → DATA (mask==1) and bit-exact float32.
+    CHECK(out_mask[0] == 1);
+    CHECK(out_data[0] == 1.0f);
+    // Exact edge float32(1.0e21) → SENTINEL (mask==0) post-P-01, matching
+    // Python. Pre-P-01 (float32 window) this read back as DATA.
+    CHECK(out_mask[1] == 0);
+    // Far out-of-window 2.0e21f → SENTINEL (mask==0) on both pre/post-P-01.
+    CHECK(out_mask[2] == 0);
+    // A-02 %.9E float32 bit-exact round-trip (E2-06): every written value
+    // parses back to the identical float32 bit pattern.
+    CHECK(out_data[3] == 0.12345679f);
+    CHECK(std::signbit(out_data[4]));          // -0.0f sign bit preserved
+    CHECK(out_mask[3] == 1);                   // in-window fractional → DATA
+    CHECK(out_mask[4] == 1);                   // -0.0 in-window → DATA
+    // The A-02 exact-edge value is bit-exact float32(1.0e21) and masked.
+    CHECK(out_data[5] == 1.0e21f);
+    CHECK(out_mask[5] == 0);
+
     std::remove(filename.c_str());
 }
 
@@ -487,7 +529,7 @@ void test_ordinary_kriging_rejects_huge_max_neighbours()
     params.m_sill = 1.0;
     params.m_nugget = 0.0;
     params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
-    params.m_max_neighbours = 50000000;  // above the 1e7 upper bound
+    params.m_max_neighbours = 50000000;  // above the 1e4 upper bound (MAX_NEIGHBOURS_UPPER_BOUND=10000)
 
     hpgl_ordinary_kriging(&in, &params, &out);
     const char * msg = hpgl_get_last_exception_message();
@@ -525,8 +567,8 @@ void test_ordinary_kriging_rejects_zero_radius()
     CHECK(msg != nullptr && strstr(msg, "radius") != nullptr);
 }
 
-// F-52: a write that fails mid-stream (NaN value) must not leave <file>.tmp
-// behind on the failure path.
+// F-52: a write that fails mid-stream (NaN value) must not leave a temp
+// file behind on the failure path.
 void test_property_writer_removes_tmp_on_failure()
 {
     TEST("F-52: failed write leaves no .tmp file behind");
@@ -537,18 +579,44 @@ void test_property_writer_removes_tmp_on_failure()
     hpgl::cont_property_array_t prop(data, mask, 3);
     hpgl::property_writer_t writer;
     writer.init(filename, "leak");
+    bool threw = false;
     try
     {
         writer.write_double(prop, -99.0);
     }
     catch (const hpgl::hpgl_exception &)
     {
-        // expected — non-finite values are rejected
+        threw = true;  // expected — non-finite values are rejected
     }
+    CHECK(threw);  // pre-fix: writer silently accepted NaN (no exception)
+    // F-M19 temp naming is <target>.tmp.<pid>.<counter> — the legacy
+    // <target>.tmp name is never created, so the old `fopen(".tmp")` check
+    // was trivially true in every state and could not detect the F-52
+    // regression (a leaked .tmp.<pid>.<counter>). Scan the directory for the
+    // real F-M19 pattern.
+    bool tmp_leftover = false;
+#ifndef _WIN32
+    DIR * d = opendir(dir.c_str());
+    if (d != nullptr)
+    {
+        const std::string prefix = "leak_test.inc.tmp.";
+        struct dirent * ent;
+        while ((ent = readdir(d)) != nullptr)
+        {
+            if (std::strncmp(ent->d_name, prefix.c_str(), prefix.size()) == 0)
+                tmp_leftover = true;
+        }
+        closedir(d);
+    }
+#else
+    // Windows: fall back to the legacy .tmp probe (FindFirstFile is not
+    // worth the extra branch for a test-only check).
     FILE * tmp = fopen((filename + ".tmp").c_str(), "r");
-    CHECK(tmp == nullptr);  // pre-fix: .tmp remains on disk
+    tmp_leftover = (tmp != nullptr);
     if (tmp != nullptr)
         fclose(tmp);
+#endif
+    CHECK(!tmp_leftover);  // pre-fix: leaked <file>.tmp.<pid>.<counter>
     std::remove(filename.c_str());
 }
 
@@ -1505,6 +1573,12 @@ void test_median_ik_rejects_invalid_marginal_probs() {
     out.m_indicator_count = cats;
 
     // 1) Value outside [0,1] → clear error (pre-fix: silent all-1 output).
+    // T-24: the fixture {-0.5, 1.5} SUMS to 1.0, so the sum gate is silent
+    // and ONLY the [0,1] gate can fire — and the checked substring "in [0, 1]"
+    // appears only in the [0,1]-gate message (api.cpp:1616), not in the sum
+    // gate's "marginal_probs must sum to 1.0 (within 0.01)". Pre-fix the old
+    // {0.5, 5.0} fixture fired the sum gate whose message also contains
+    // "marginal_probs" → case 1 false-passed if the [0,1] gate were removed.
     {
         hpgl_median_ik_params_t params;
         params.m_covariance_type = 0;
@@ -1514,11 +1588,11 @@ void test_median_ik_rejects_invalid_marginal_probs() {
         params.m_nugget = 0.0;
         params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
         params.m_max_neighbours = 8;
-        params.m_marginal_probs[0] = 0.5;
-        params.m_marginal_probs[1] = 5.0;  // pre-fix: silent all-1 output
+        params.m_marginal_probs[0] = -0.5;  // outside [0,1]; sum == 1.0
+        params.m_marginal_probs[1] = 1.5;   // only the [0,1] gate fires
         hpgl_median_ik(&in, &params, &out);
         const char * msg = hpgl_get_last_exception_message();
-        CHECK(msg != nullptr && strstr(msg, "marginal_probs") != nullptr);
+        CHECK(msg != nullptr && strstr(msg, "in [0, 1]") != nullptr);
     }
     // 2) Pair not summing to ~1 → clear error.
     {
@@ -1560,58 +1634,71 @@ void test_median_ik_rejects_invalid_marginal_probs() {
 // M-28: m_min_neighbours must be validated at the C API boundary. Pre-fix,
 // min>max ⇒ every node skipped → fully-unsimulated SGS output with no error.
 // The fix rejects min<0 and min>max with a clear error message.
+// T-23: the two gates are SEPARATE ifs in init_sgs_params (api_helpers.cpp:
+// 103-111) that produce DISTINCT messages ("cannot be negative" vs "exceeds
+// m_max_neighbours"). They were previously two adjacent tests both checking
+// the shared substring "m_min_neighbours", so a sibling-only regression
+// (min<0 gate removed) false-passed on the stale message from the min>max
+// test (the C ABI never clears the message on success, III-06). Merged into
+// one test with DISTINCT substrings — a min<0 regression now leaves the
+// stale "exceeds m_max_neighbours" message, which fails the "cannot be
+// negative" check.
 void test_sgs_rejects_invalid_min_neighbours() {
-    TEST("M-28: SGS rejects min_neighbours > max_neighbours");
-    float data[4] = {1.0f, 0, 0, 0};
-    unsigned char mask[4] = {1, 0, 0, 0};
-    hpgl_cont_masked_array_t in;
-    in.m_data = data;
-    in.m_mask = mask;
-    init_shape(in.m_shape, 2, 2, 1);
+    TEST("M-28: SGS rejects min_neighbours > max_neighbours or negative");
+    // (a) min > max → "m_min_neighbours 5 exceeds m_max_neighbours 3".
+    {
+        float data[4] = {1.0f, 0, 0, 0};
+        unsigned char mask[4] = {1, 0, 0, 0};
+        hpgl_cont_masked_array_t in;
+        in.m_data = data;
+        in.m_mask = mask;
+        init_shape(in.m_shape, 2, 2, 1);
 
-    hpgl_sgs_params_t params;
-    params.m_covariance_type = 0;
-    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
-    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
-    params.m_sill = 1.0;
-    params.m_nugget = 0.0;
-    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
-    params.m_max_neighbours = 3;
-    params.m_kriging_kind = 1;
-    params.m_seed = 42;
-    params.m_min_neighbours = 5;  // > max
+        hpgl_sgs_params_t params;
+        params.m_covariance_type = 0;
+        params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 3;
+        params.m_kriging_kind = 1;
+        params.m_seed = 42;
+        params.m_min_neighbours = 5;  // > max
 
-    double mean = 0.0;
-    hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
-    const char * msg = hpgl_get_last_exception_message();
-    CHECK(msg != nullptr && strstr(msg, "m_min_neighbours") != nullptr);
-}
+        double mean = 0.0;
+        hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "exceeds m_max_neighbours") != nullptr);
+    }
+    // (b) min < 0 → "m_min_neighbours cannot be negative". Distinct
+    // substring from (a) so a min<0-gate regression cannot false-pass on
+    // (a)'s stale message.
+    {
+        float data[4] = {1.0f, 0, 0, 0};
+        unsigned char mask[4] = {1, 0, 0, 0};
+        hpgl_cont_masked_array_t in;
+        in.m_data = data;
+        in.m_mask = mask;
+        init_shape(in.m_shape, 2, 2, 1);
 
-void test_sgs_rejects_negative_min_neighbours() {
-    TEST("M-28: SGS rejects negative min_neighbours");
-    float data[4] = {1.0f, 0, 0, 0};
-    unsigned char mask[4] = {1, 0, 0, 0};
-    hpgl_cont_masked_array_t in;
-    in.m_data = data;
-    in.m_mask = mask;
-    init_shape(in.m_shape, 2, 2, 1);
+        hpgl_sgs_params_t params;
+        params.m_covariance_type = 0;
+        params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
+        params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
+        params.m_sill = 1.0;
+        params.m_nugget = 0.0;
+        params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
+        params.m_max_neighbours = 8;
+        params.m_kriging_kind = 1;
+        params.m_seed = 42;
+        params.m_min_neighbours = -1;
 
-    hpgl_sgs_params_t params;
-    params.m_covariance_type = 0;
-    params.m_ranges[0] = 1; params.m_ranges[1] = 1; params.m_ranges[2] = 1;
-    params.m_angles[0] = 0; params.m_angles[1] = 0; params.m_angles[2] = 0;
-    params.m_sill = 1.0;
-    params.m_nugget = 0.0;
-    params.m_radiuses[0] = 1; params.m_radiuses[1] = 1; params.m_radiuses[2] = 1;
-    params.m_max_neighbours = 8;
-    params.m_kriging_kind = 1;
-    params.m_seed = 42;
-    params.m_min_neighbours = -1;
-
-    double mean = 0.0;
-    hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
-    const char * msg = hpgl_get_last_exception_message();
-    CHECK(msg != nullptr && strstr(msg, "m_min_neighbours") != nullptr);
+        double mean = 0.0;
+        hpgl_sgs_simulation(&in, &params, nullptr, &mean, nullptr);
+        const char * msg = hpgl_get_last_exception_message();
+        CHECK(msg != nullptr && strstr(msg, "cannot be negative") != nullptr);
+    }
 }
 
 // M-29 + 2-M-33: with max_neighbours=0 (unconditional simulation) every node
@@ -2072,6 +2159,13 @@ void test_sgs_rejects_invalid_cdf_struct() {
         CHECK(msg != nullptr && strstr(msg, "m_probs") != nullptr);
     }
     // (c) negative m_size → clear error (pre-fix UB pointer arithmetic).
+    // N2-L29: case (d) shares the "m_size" substring, so a regression that
+    // drops ONLY the upper-bound leg (m_size > MAX) would leave case (d)
+    // succeeding and false-pass on case (c)'s stale "m_size" message (the
+    // C ABI never clears the message on success, III-06). The messages embed
+    // the offending value ("cdf m_size -1 out of range" vs "cdf m_size
+    // 5000000000 out of range"), so checking the value-bearing substring
+    // pins each leg independently.
     {
         float values[2] = {0.0f, 1.0f};
         float probs[2] = {0.5f, 1.0f};
@@ -2079,7 +2173,7 @@ void test_sgs_rejects_invalid_cdf_struct() {
         cdf.m_values = values; cdf.m_probs = probs; cdf.m_size = -1;
         hpgl_sgs_simulation(&in, &params, &cdf, &mean, nullptr);
         const char * msg = hpgl_get_last_exception_message();
-        CHECK(msg != nullptr && strstr(msg, "m_size") != nullptr);
+        CHECK(msg != nullptr && strstr(msg, "cdf m_size -1") != nullptr);
     }
     // (d) absurdly large m_size → clear error (pre-fix heap OOB read).
     {
@@ -2089,7 +2183,7 @@ void test_sgs_rejects_invalid_cdf_struct() {
         cdf.m_values = values; cdf.m_probs = probs; cdf.m_size = 5000000000LL;
         hpgl_sgs_simulation(&in, &params, &cdf, &mean, nullptr);
         const char * msg = hpgl_get_last_exception_message();
-        CHECK(msg != nullptr && strstr(msg, "m_size") != nullptr);
+        CHECK(msg != nullptr && strstr(msg, "cdf m_size 5000000000") != nullptr);
     }
 }
 
@@ -2138,10 +2232,19 @@ void test_sis_rejects_out_of_range_marginal_prob() {
         CHECK(msg != nullptr && strstr(msg, "marginal_prob") != nullptr);
     }
     // (b) hpgl_sis_simulation with NaN → error (NaN fails the range check).
+    // T-23: cases (a)/(b) store BYTE-IDENTICAL messages ("m_marginal_prob
+    // must be in [0, 1]"), so the stale-message false-pass cannot be closed
+    // by distinct substrings or a text snapshot (the correct state also
+    // leaves identical text). Poison the message with a sentinel before the
+    // call: a correct failure OVERWRITES it with the real error, while the
+    // NaN-bypass regression (comparison-only gate `p < 0 || p > 1` passes
+    // NaN) makes the call SUCCEED and leave the sentinel in place → the
+    // "marginal_prob" substring check fails loudly.
     {
         hpgl_ik_params_t params[cats];
         init_ik_param(params[0], 0.5);
         init_ik_param(params[1], std::numeric_limits<double>::quiet_NaN());
+        hpgl::set_last_exception_message("F-19 sentinel: no error stored");
         hpgl_sis_simulation(&in, params, cats, 42, nullptr);
         const char * msg = hpgl_get_last_exception_message();
         CHECK(msg != nullptr && strstr(msg, "marginal_prob") != nullptr);
@@ -2487,6 +2590,13 @@ void test_cokriging_rejects_per_dim_shape_mismatch() {
     out.m_data = out_data; out.m_mask = out_mask; init_shape(out.m_shape, 2, 2, 2);
 
     // (a) mark1 → per-dim error.
+    // T-23: the mark1 gate (api.cpp:1920-1931) and mark2 gate
+    // (api.cpp:2082-2093) are SEPARATE code blocks emitting DISTINCT
+    // messages ("cokriging_m1: ..." vs "cokriging_m2: ..."). Checking the
+    // entry-specific prefix pins each sibling independently: a mark2-only
+    // regression leaves case (b) succeeding and case (a)'s stale
+    // "cokriging_m1" message, which does NOT contain "cokriging_m2" → case
+    // (b) fails loudly (previously both checked "shape[" and false-passed).
     {
         hpgl_cokriging_m1_params_t params;
         params.m_covariance_type = 0;
@@ -2502,7 +2612,7 @@ void test_cokriging_rejects_per_dim_shape_mismatch() {
         params.m_correlation_coef = 0.5;
         hpgl_simple_cokriging_mark1(&in, &sec, &params, &out);
         const char * msg = hpgl_get_last_exception_message();
-        CHECK(msg != nullptr && strstr(msg, "shape[") != nullptr);
+        CHECK(msg != nullptr && strstr(msg, "cokriging_m1:") != nullptr);
     }
     // (b) mark2 → per-dim error.
     {
@@ -2524,7 +2634,7 @@ void test_cokriging_rejects_per_dim_shape_mismatch() {
         params.m_correlation_coef = 0.5;
         hpgl_simple_cokriging_mark2(&in, &sec, &params, &out);
         const char * msg = hpgl_get_last_exception_message();
-        CHECK(msg != nullptr && strstr(msg, "shape[") != nullptr);
+        CHECK(msg != nullptr && strstr(msg, "cokriging_m2:") != nullptr);
     }
     // (c) control: matching per-dim shapes (2,2,2)+(2,2,2) still run.
     // The C ABI keeps the last error message indefinitely (no clear-error
@@ -3183,17 +3293,24 @@ void test_kriging_rejects_aliased_buffers() {
     params.m_mean = 0.0;
 
     // (a) Data aliasing: the SAME buffer for input_data and output_data.
+    // T-23: the data-aliasing gate (api.cpp:914) and mask-aliasing gate
+    // (api.cpp:917) are separate `if`s emitting DISTINCT messages ("aliased
+    // input/output" vs "aliased masks"). Checking the entry-specific phrase
+    // pins each sibling independently: a mask-gate-only regression leaves
+    // case (b) succeeding and case (a)'s stale "aliased input/output"
+    // message, which does NOT contain "aliased masks" → case (b) fails
+    // loudly (previously both checked "must not be the same buffer").
     {
         hpgl_simple_kriging(data, mask, &shape, &params, data, mask, &shape);
         const char * msg = hpgl_get_last_exception_message();
-        CHECK(msg != nullptr && strstr(msg, "must not be the same buffer") != nullptr);
+        CHECK(msg != nullptr && strstr(msg, "aliased input/output") != nullptr);
     }
     // (b) Mask aliasing: same non-null mask for both input and output.
     {
         float out_data[4] = {0, 0, 0, 0};
         hpgl_simple_kriging(data, mask, &shape, &params, out_data, mask, &shape);
         const char * msg = hpgl_get_last_exception_message();
-        CHECK(msg != nullptr && strstr(msg, "must not be the same buffer") != nullptr);
+        CHECK(msg != nullptr && strstr(msg, "aliased masks") != nullptr);
     }
     // (c) Control: distinct buffers work (all-informed → finite output). The
     // C ABI keeps the last error message indefinitely — there is no
@@ -3494,9 +3611,30 @@ void test_scan_limit_prefix_truncation() {
     CHECK(found_close);
 }
 
+// N2-25: sample()'s NaN guard (sample.cpp:16-17) has zero C++-layer test
+// coverage — no test includes sample.h, and the Python wrapper blocks NaN
+// before C++ (sis.py:228-233), so deleting the guard fails nothing. A NaN
+// probability vector must return 0 (the safe first-category fallback), and a
+// valid vector must return an index in range.
+void test_sample_nan_guard() {
+    TEST("sample(): NaN probability vector returns 0; valid vector in range");
+    hpgl::mt_random_generator_t gen(42);
+    // NaN sum → std::isnan(sum) → return 0 (first category), never an
+    // out-of-range index.
+    std::vector<hpgl::indicator_probability_t> nan_probs = {0.5f, std::numeric_limits<float>::quiet_NaN()};
+    hpgl::indicator_index_t idx_nan = hpgl::sample(gen, nan_probs);
+    CHECK(idx_nan == 0);
+    // Valid probabilities → index always within [0, size).
+    std::vector<hpgl::indicator_probability_t> probs = {0.2f, 0.3f, 0.5f};
+    for (int i = 0; i < 100; ++i)
+    {
+        hpgl::indicator_index_t idx = hpgl::sample(gen, probs);
+        CHECK(idx < probs.size());
+    }
+}
+
 int main() {
     test_gauss_solve_3x3_known_system();
-    test_gauss_solve_2x2_diagonal();
     test_gauss_solve_singular_returns_false();
     test_cholesky_decomposition_3x3();
     test_covariance_zero_lag_equals_sill();
@@ -3539,7 +3677,6 @@ int main() {
     test_median_ik_emits_stderr_failure_signal();
     test_sgs_ndmin_skips_nodes_with_few_originals_despite_inflated_total();
     test_sgs_rejects_invalid_min_neighbours();
-    test_sgs_rejects_negative_min_neighbours();
     test_sgs_ok_fallback_uses_gmean_and_stats_denominator();
     test_kriging_rejects_zero_max_neighbours();
     test_sgs_rejects_invalid_kriging_kind();
@@ -3607,6 +3744,12 @@ int main() {
     test_clusterizer_memory_safe_limit_boundary();
     test_plain_lookup_fallback_bounded_by_distance_cap();
     test_scan_limit_prefix_truncation();
+
+    // N2-25: sample() NaN guard.
+    test_sample_nan_guard();
+
+    // N2-L30: remove the mkdtemp temp dirs created by the file I/O tests.
+    cleanup_temp_dirs();
 
     std::printf("C++ unit tests: %d run, %d failed\n", g_tests_run, g_tests_failed);
     return g_tests_failed > 0 ? 1 : 0;

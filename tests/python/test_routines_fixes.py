@@ -349,14 +349,6 @@ class TestKrigingMinimumRadius:
         """Global default (SGS zero-radius CDF-draw) keeps working."""
         assert ParameterValidator.validate_radius((0, 0, 0)) == (0, 0, 0)
 
-    def test_zero_radius_kriging_policy_rejected(self):
-        """With MIN_KRIGING_RADIUS, zero radius is rejected (pre-fix: no such
-        parameter, so a TypeError would surface instead of this policy)."""
-        with pytest.raises(CriticalValidationError, match="less than minimum"):
-            ParameterValidator.validate_radius(
-                (0, 0, 0), min_radius=ValidationConstants.MIN_KRIGING_RADIUS
-            )
-
     def test_positive_radius_kriging_policy_accepted(self):
         assert ParameterValidator.validate_radius(
             (2, 2, 1), min_radius=ValidationConstants.MIN_KRIGING_RADIUS

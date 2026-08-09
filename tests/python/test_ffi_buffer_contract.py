@@ -22,7 +22,21 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-from geo_bsd import ffi_adapter  # noqa: E402
+# N2-L39: importing geo_bsd.ffi_adapter triggers the package __init__ chain,
+# which loads the compiled HPGL library at import time (geo.py → hpgl_wrap).
+# On a library-less environment the whole file must SKIP, not error at
+# collection.
+try:
+    from geo_bsd import ffi_adapter  # noqa: E402
+
+    FFI_AVAILABLE = True
+except (ImportError, OSError):
+    ffi_adapter = None
+    FFI_AVAILABLE = False
+
+pytestmark = pytest.mark.skipif(
+    not FFI_AVAILABLE, reason="HPGL library not available"
+)
 
 
 @pytest.fixture

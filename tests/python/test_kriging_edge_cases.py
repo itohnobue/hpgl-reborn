@@ -1,9 +1,9 @@
 """Edge case tests for HPGL kriging and simulation — M-P-05, M-P-10, M-P-26.
 
 Covers:
-- M-P-10: lvm_kriging NaN/Inf validation guards (geo.py:1320-1323)
+- M-P-10: lvm_kriging NaN/Inf validation guards (geo.py lvm_kriging)
 - M-P-05: median_ik / indicator_kriging edge cases (empty data, data-size mismatch)
-- M-P-26: SIS empty marginal_probs ValueError (sis.py:150-151)
+- M-P-26: SIS empty marginal_probs ValueError (sis.py sis_simulation)
 """
 
 import sys
@@ -41,7 +41,7 @@ class TestLvmKrigingNanInf:
     """Test lvm_kriging guards for NaN/Inf in prop.data and mean_data (M-P-10)."""
 
     def test_lvm_kriging_nan_in_prop_data_raises(self):
-        """prop.data with NaN raises ValueError at geo.py:1320-1321."""
+        """prop.data with NaN raises ValueError (lvm_kriging NaN/Inf guard)."""
         grid = SugarboxGrid(x=3, y=3, z=2)
         size = grid.x * grid.y * grid.z  # 18
 
@@ -85,7 +85,7 @@ class TestLvmKrigingNanInf:
             lvm_kriging(prop, grid, mean_data, (2, 2, 1), 4, cov_model)
 
     def test_lvm_kriging_nan_in_mean_data_raises(self):
-        """mean_data with NaN raises ValueError at geo.py:1322-1323."""
+        """mean_data with NaN raises ValueError (lvm_kriging NaN/Inf guard)."""
         grid = SugarboxGrid(x=3, y=3, z=2)
         size = grid.x * grid.y * grid.z  # 18
 
@@ -166,35 +166,26 @@ class TestMedianIkEdgeCases:
         with pytest.raises(ValueError, match="indicator_count must be 2"):
             median_ik(prop, grid, (0.5, 0.5), (1, 1, 1), 4, cov_model)
 
-    def test_median_ik_empty_data_not_allowed(self):
-        """IndProperty with empty data array raises ValueError (0D data not allowed).
+    def test_median_ik_empty_data_raises(self):
+        """median_ik with prop.data.size == 0 raises ValueError (P-05).
 
-        Empty arrays produce ndim==0 or ndim==1 with size 0 — IndProperty
-        requires 1D or 3D, so empty (ndim=1 size=0) passes initial check
-        but later operations fail.
+        ADD-K1: the empty-data guard (geo.py:2183-2184, "prop.data is empty")
+        is the first of P-05's two checks. The size-vs-grid mismatch is pinned
+        separately; this completes the empty-data coverage a revert of the
+        `size == 0` check would otherwise slip through silently.
         """
+        grid = SugarboxGrid(x=3, y=3, z=2)
+
         data = np.array([], dtype="uint8")
         mask = np.array([], dtype="uint8")
-        # Empty 1D array should be constructible
-        prop = IndProperty(data, mask, 2)
-        assert prop.data.size == 0
-
-    def test_median_ik_valid_2cat_execution(self):
-        """median_ik with valid 2-category indicator property works."""
-        grid = SugarboxGrid(x=3, y=3, z=2)
-        size = grid.x * grid.y * grid.z
-
-        data = np.random.randint(0, 2, size, dtype="uint8")
-        mask = np.ones(size, dtype="uint8")
         prop = IndProperty(data, mask, 2)
 
         cov_model = CovarianceModel(
             type=covariance.spherical, ranges=(3.0, 3.0, 2.0), sill=1.0, nugget=0.1
         )
 
-        result = median_ik(prop, grid, (0.4, 0.6), (2, 2, 1), 4, cov_model)
-        assert result.data is not None
-        assert result.data.size == size
+        with pytest.raises(ValueError, match="prop.data is empty"):
+            median_ik(prop, grid, (0.5, 0.5), (2, 2, 1), 4, cov_model)
 
 
 @pytest.mark.hpgl
@@ -226,8 +217,6 @@ class TestIndicatorKrigingEdgeCases:
 
     def test_indicator_kriging_two_category_redirects_to_median_ik(self):
         """2-category indicator_kriging redirects to median_ik with warning."""
-        import logging
-
         grid = SugarboxGrid(x=3, y=3, z=2)
         size = grid.x * grid.y * grid.z
 
@@ -258,9 +247,14 @@ class TestIndicatorKrigingEdgeCases:
         assert result.data.size == size
 
     def test_indicator_kriging_mismatched_prop_data_size(self):
-        """indicator_kriging with prop data size not matching grid."""
+        """indicator_kriging with prop data size not matching grid.
+
+        After P-05 (parallel prod-py fix, geo.py median_ik/indicator_kriging
+        size-vs-grid ValueError checks) the mismatch raises ValueError at the
+        Python layer. The parallel prod-py agent lands P-05; the build-gate
+        verifies this assertion against the landed fix.
+        """
         grid = SugarboxGrid(x=3, y=3, z=2)
-        size = int(grid.x * grid.y * grid.z)
 
         # Create smaller data than grid needs
         data = np.random.randint(0, 3, 5, dtype="uint8")
@@ -278,8 +272,41 @@ class TestIndicatorKrigingEdgeCases:
             for _ in range(3)
         ]
 
-        # The FFI call may fail with a RuntimeError due to size mismatch
-        with pytest.raises((ValueError, RuntimeError)):
+        # P-05: size-vs-grid mismatch raises ValueError (mirrored from
+        # ordinary_kriging geo.py:1810-1818, landed by the parallel prod-py
+        # fix). Narrowed from the old (ValueError, RuntimeError) tuple — the
+        # RuntimeError was the FFI-adapter layer and no longer fires once the
+        # Python check lands.
+        with pytest.raises(ValueError, match="does not match grid size"):
+            indicator_kriging(prop, grid, ik_data, [0.3, 0.3, 0.4])
+
+    def test_indicator_kriging_empty_data_raises(self):
+        """indicator_kriging with prop.data.size == 0 raises ValueError (P-05).
+
+        ADD-06: the empty-data guard (geo.py:2287-2288, "prop.data is empty")
+        is the first of P-05's two checks for indicator_kriging; the size-vs-
+        grid mismatch is pinned by test_indicator_kriging_mismatched_prop_data_size.
+        This pins the `size == 0` guard so a revert of just that check is not
+        silently green.
+        """
+        grid = SugarboxGrid(x=3, y=3, z=2)
+
+        data = np.array([], dtype="uint8")
+        mask = np.array([], dtype="uint8")
+        prop = IndProperty(data, mask, 3)
+
+        ik_data = [
+            {
+                "cov_model": CovarianceModel(
+                    covariance.spherical, (3.0, 3.0, 2.0), (0, 0, 0), 1.0, 0.1
+                ),
+                "radiuses": (2, 2, 1),
+                "max_neighbours": 4,
+            }
+            for _ in range(3)
+        ]
+
+        with pytest.raises(ValueError, match="prop.data is empty"):
             indicator_kriging(prop, grid, ik_data, [0.3, 0.3, 0.4])
 
 

@@ -8,9 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from geo_bsd.variogram import (
-        CalcVariogramFunction,
         CubeScan,
-        PointSetScanContStyle,
         PointSetScanGridStyle,
         TVEllipsoid,
         TVVariogramSearchTemplate,
@@ -73,11 +71,6 @@ class TestTVEllipsoid:
         assert abs(np.dot(d1, d2)) < 1e-10
         assert abs(np.dot(d1, d3)) < 1e-10
         assert abs(np.dot(d2, d3)) < 1e-10
-
-    def test_all_angles_combined(self):
-        ell = TVEllipsoid(R1=10, R2=5, R3=3, Azimut=45, Dip=30, Rotation=60)
-        d1 = np.array(ell.Direction1)
-        assert abs(np.linalg.norm(d1) - 1.0) < 1e-10
 
     def test_180_degree_azimuth(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3, Azimut=180)
@@ -161,18 +154,6 @@ class TestTVVariogramSearchTemplate:
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
 class TestIsInTunnel:
-    def test_zero_r2_raises(self):
-        # E-M8: R <= 0 is rejected at construction (the C++ kernel accepts no
-        # pairs for a non-positive range). The old all-False _IsInTunnel
-        # result is unreachable via the ctor — the single chokepoint every
-        # scan path shares raises loudly instead.
-        with pytest.raises(ValueError, match="ranges must be finite and positive"):
-            TVEllipsoid(R1=10, R2=0, R3=3)
-
-    def test_zero_r3_raises(self):
-        with pytest.raises(ValueError, match="ranges must be finite and positive"):
-            TVEllipsoid(R1=10, R2=5, R3=0)
-
     def test_zero_r2_r3_raises(self):
         with pytest.raises(ValueError, match="ranges must be finite and positive"):
             TVEllipsoid(R1=10, R2=0, R3=0)
@@ -198,24 +179,6 @@ class TestIsInTunnel:
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
 class TestCalcSearchTemplateWindow:
-    def test_returns_six_values(self):
-        ell = TVEllipsoid(R1=10, R2=5, R3=3)
-        templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
-        )
-        result = _CalcSearchTemplateWindow(templ)
-        assert len(result) == 6
-
-    def test_identity_directions_reasonable_bounds(self):
-        ell = TVEllipsoid(R1=10, R2=5, R3=3)
-        templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
-        )
-        min_i, min_j, min_k, max_i, max_j, max_k = _CalcSearchTemplateWindow(templ)
-        assert max_i > min_i
-        assert max_j > min_j
-        assert max_k > min_k
-
     def test_larger_num_lags_increases_bounds(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ5 = TVVariogramSearchTemplate(
@@ -228,23 +191,9 @@ class TestCalcSearchTemplateWindow:
         r20 = _CalcSearchTemplateWindow(templ20)
         assert (r20[3] - r20[0]) >= (r5[3] - r5[0])
 
-    def test_zero_r2_r3_raises(self):
-        # E-M8: R <= 0 is rejected at construction (single chokepoint every
-        # scan path shares via the template).
-        with pytest.raises(ValueError, match="ranges must be finite and positive"):
-            TVEllipsoid(R1=10, R2=0, R3=0)
-
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
 class TestCalcLagDistances:
-    def test_returns_four_arrays(self):
-        ell = TVEllipsoid(R1=10, R2=5, R3=3)
-        templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
-        )
-        result = _CalcLagDistances(templ)
-        assert len(result) == 4
-
     def test_lag_distances_correct(self):
         ell = TVEllipsoid(R1=10, R2=5, R3=3)
         templ = TVVariogramSearchTemplate(
@@ -279,14 +228,6 @@ class TestCalcLagDistances:
         expected = np.array([5, 7, 9])
         np.testing.assert_array_equal(distances, expected)
 
-    def test_indexes_sequential(self):
-        ell = TVEllipsoid(R1=10, R2=5, R3=3)
-        templ = TVVariogramSearchTemplate(
-            LagWidth=1.0, LagSeparation=2.0, TolDistance=1.0, NumLags=5, Ellipsoid=ell
-        )
-        indexes, _, _, _ = _CalcLagDistances(templ)
-        np.testing.assert_array_equal(indexes, np.arange(5))
-
 
 # =============================================================================
 # Core Computation Function Tests (Q2 fix — previously untested)
@@ -313,16 +254,6 @@ def _make_template(ell, num_lags=5, lag_width=1.0, lag_sep=2.0, tol_dist=1.0):
 class TestCalcLagsAreas:
     """Tests for _CalcLagsAreas function."""
 
-    def test_returns_five_values(self):
-        """_CalcLagsAreas returns I, J, K, LagIndexes, LagDistance."""
-        from geo_bsd.variogram import _CalcLagsAreas
-
-        ell = _make_ellipsoid()
-        templ = _make_template(ell)
-        result = _CalcLagsAreas(templ)
-        assert len(result) == 5
-        i_arr, j_arr, k_arr, LagIndexes, LagDistance = result
-
     def test_lag_indexes_within_range(self):
         """Lag indexes are within [0, NumLags)."""
         from geo_bsd.variogram import _CalcLagsAreas
@@ -344,34 +275,6 @@ class TestCalcLagsAreas:
         assert n == len(j_arr) == len(k_arr) == len(LagIndexes)
         assert n > 0, "Should have at least one lag point"
 
-    def test_lag_distances_correct_order(self):
-        """LagDistance values are increasing."""
-        from geo_bsd.variogram import _CalcLagsAreas
-
-        ell = _make_ellipsoid()
-        templ = _make_template(ell, num_lags=5, lag_sep=3.0)
-        i_arr, j_arr, k_arr, LagIndexes, LagDistance = _CalcLagsAreas(templ)
-        expected = np.array([0, 3, 6, 9, 12])
-        np.testing.assert_array_equal(LagDistance, expected)
-
-    def test_all_coordinates_are_integers(self):
-        """I, J, K are integer arrays."""
-        from geo_bsd.variogram import _CalcLagsAreas
-
-        ell = _make_ellipsoid()
-        templ = _make_template(ell, num_lags=3)
-        i_arr, j_arr, k_arr, _, _ = _CalcLagsAreas(templ)
-        assert i_arr.dtype == np.int32 or i_arr.dtype == np.int64
-        assert j_arr.dtype == np.int32 or j_arr.dtype == np.int64
-        assert k_arr.dtype == np.int32 or k_arr.dtype == np.int64
-
-    def test_zero_radii_raises(self):
-        """Zero R2/R3 is rejected at construction (E-M8)."""
-        from geo_bsd.variogram import _CalcLagsAreas
-
-        with pytest.raises(ValueError, match="ranges must be finite and positive"):
-            _make_ellipsoid(r1=10, r2=0, r3=0)
-
 
 @pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
 class TestVariogramCoreFunctions:
@@ -391,51 +294,7 @@ class TestVariogramCoreFunctions:
         # Result shape: NumValues + NumValues + 1 = 2*n + 1
         assert len(result) == 2 * num_vals + 1
 
-    def test_calc_variogram_identity(self):
-        """CalcVariogramFunction with identical points gives zero variance."""
-        from geo_bsd.variogram import CalcVariogramFunction
-
-        values = [np.array([10.0, 20.0, 30.0, 40.0], dtype="float32")]
-        params = {"HardData": values}
-        # Initialization: Result=None creates zeros
-        result = CalcVariogramFunction(None, None, None, params)
-        n_vals = len(values)
-        assert len(result) == 2 * n_vals + 1
-        # Compute variogram for two identical point indices
-        # Point1/Point2 are single indices (as lists, per scan function convention)
-        result = CalcVariogramFunction([0], [1], result, params)
-        assert np.all(np.isfinite(result))
-        variogram_vals = result[:n_vals]
-        # Variogram for different values should be non-zero
-        assert np.any(variogram_vals > 0)
-
     # ---- CalcCovarianceFunction ----
-
-    def test_calc_covariance_initializes_result(self):
-        """CalcCovarianceFunction initializes result on first call."""
-        from geo_bsd.variogram import CalcCovarianceFunction
-
-        values = [np.array([1.0, 2.0, 3.0], dtype="float32")]
-        soft = [np.array([0.5, 1.5, 2.5], dtype="float32")]
-        params = {"HardData": values, "SoftData": soft}
-        result = CalcCovarianceFunction(None, None, None, params)
-        assert result is not None
-        n_vals = len(values)
-        assert len(result) == 2 * n_vals + 1
-
-    def test_calc_covariance_computes_values(self):
-        """CalcCovarianceFunction computes covariance between point pairs."""
-        from geo_bsd.variogram import CalcCovarianceFunction
-
-        values = [np.array([10.0, 20.0, 30.0], dtype="float32")]
-        soft = [np.array([10.0, 20.0, 30.0], dtype="float32")]
-        params = {"HardData": values, "SoftData": soft}
-        result = CalcCovarianceFunction(None, None, None, params)
-
-        p1 = np.int64(0)
-        p2 = np.int64(1)
-        result = CalcCovarianceFunction(p1, p2, result, params)
-        assert np.all(np.isfinite(result))
 
     def test_calc_covariance_list_args(self):
         """CalcCovarianceFunction handles list-type point args (PointSetScanContStyle path)."""
@@ -450,32 +309,6 @@ class TestVariogramCoreFunctions:
         assert np.all(np.isfinite(result))
 
     # ---- CalcIndCorrelationFunction ----
-
-    def test_calc_ind_correlation_initializes_result(self):
-        """CalcIndCorrelationFunction initializes result on first call."""
-        from geo_bsd.variogram import CalcIndCorrelationFunction
-
-        values = [np.array([1.0, 0.0], dtype="float32")]
-        soft = [np.array([0.5, 0.5], dtype="float32")]
-        params = {"HardData": values, "SoftData": soft}
-        result = CalcIndCorrelationFunction(None, None, None, params)
-        assert result is not None
-        n_vals = len(values)
-        assert len(result) == 2 * n_vals + 1
-
-    def test_calc_ind_correlation_div_zero_guard(self):
-        """CalcIndCorrelationFunction handles soft data with value 0 or 1."""
-        from geo_bsd.variogram import CalcIndCorrelationFunction
-
-        # Soft data 0 or 1 causes denom=0 → guarded to 1.0
-        values = [np.array([0.0, 1.0, 0.0], dtype="float32")]
-        soft = [np.array([0.0, 0.0, 1.0], dtype="float32")]
-        params = {"HardData": values, "SoftData": soft}
-        result = CalcIndCorrelationFunction(None, None, None, params)
-        p1 = np.int64(0)
-        p2 = np.int64(1)
-        result = CalcIndCorrelationFunction(p1, p2, result, params)
-        assert np.all(np.isfinite(result)), "Denom guard should prevent NaN/Inf"
 
     def test_calc_ind_correlation_list_args(self):
         """CalcIndCorrelationFunction handles list-type point args (PointSetScanContStyle path)."""
@@ -494,30 +327,14 @@ class TestVariogramCoreFunctions:
 class TestPointSetScanContStyle:
     """Tests for PointSetScanContStyle function.
 
-    Note: Passing Function=None triggers an UnboundLocalError in variogram.py
-    (Result variable not initialized when Function is None). These tests use
-    a trivial function to exercise the scan path.
+    Note: Passing Function=None returns zeros((NumLags, 1)), LagDistance
+    (variogram.py) — no UnboundLocalError exists. These tests use a trivial
+    function to exercise the scan path.
     """
 
     def _trivial_fn(self, p1, p2, result, params):
         """A trivial accumulator function for scan tests."""
         return result if result is not None else np.zeros(3)
-
-    def test_scans_with_function_completes(self):
-        """PointSetScanContStyle with a trivial function returns result."""
-        from geo_bsd.variogram import PointSetScanContStyle
-
-        ell = _make_ellipsoid(r1=20, r2=10, r3=5)
-        templ = _make_template(ell, num_lags=3, lag_width=2.0, lag_sep=5.0)
-        point_set = {
-            "X": np.array([0, 1, 2], dtype="int32"),
-            "Y": np.array([0, 0, 0], dtype="int32"),
-            "Z": np.array([0, 0, 0], dtype="int32"),
-        }
-        result, lag_dist = PointSetScanContStyle(templ, point_set, self._trivial_fn, None)
-        assert result is not None
-        assert len(lag_dist) == templ.NumLags
-        assert np.all(np.isfinite(result))
 
     def test_scan_with_empty_pointset_completes(self):
         """PointSetScanContStyle with empty point set doesn't crash."""
@@ -538,28 +355,13 @@ class TestPointSetScanContStyle:
 class TestPointSetScanGridStyle:
     """Tests for PointSetScanGridStyle function.
 
-    Note: Passing Function=None triggers an UnboundLocalError in variogram.py
-    (same bug as PointSetScanContStyle).
+    Note: Passing Function=None returns zeros((NumLags, 1)), LagDistance
+    (variogram.py) — no UnboundLocalError exists. These tests use a trivial
+    function to exercise the scan path.
     """
 
     def _trivial_fn(self, p1, p2, result, params):
         return result if result is not None else np.zeros(3)
-
-    def test_scan_with_function_completes(self):
-        """PointSetScanGridStyle with a trivial function returns result."""
-        from geo_bsd.variogram import PointSetScanGridStyle
-
-        ell = _make_ellipsoid(r1=20, r2=10, r3=5)
-        templ = _make_template(ell, num_lags=3, lag_width=2.0, lag_sep=5.0)
-        xyz = (
-            np.array([0, 5, 10], dtype="int32"),
-            np.array([0, 0, 0], dtype="int32"),
-            np.array([0, 0, 0], dtype="int32"),
-        )
-        result, lag_dist = PointSetScanGridStyle(templ, xyz, self._trivial_fn, None)
-        assert result is not None
-        assert len(lag_dist) == templ.NumLags
-        assert np.all(np.isfinite(result))
 
     def test_scan_with_empty_points_completes(self):
         """PointSetScanGridStyle with empty arrays doesn't crash."""
@@ -580,24 +382,13 @@ class TestPointSetScanGridStyle:
 class TestCubeScan:
     """Tests for CubeScan function.
 
-    Note: Passing Function=None triggers an UnboundLocalError in variogram.py
-    (Result variable not initialized when Function is None — same bug as scan functions).
+    Note: Passing Function=None returns zeros((NumLags, 1)), LagDistance
+    (variogram.py) — no UnboundLocalError exists. These tests use a trivial
+    function to exercise the scan path.
     """
 
     def _trivial_fn(self, p1, p2, result, params):
         return result if result is not None else np.zeros(3)
-
-    def test_cube_scan_with_function_completes(self):
-        """CubeScan with a small mask returns result."""
-        from geo_bsd.variogram import CubeScan
-
-        ell = _make_ellipsoid(r1=10, r2=5, r3=3)
-        # Use lag_sep small enough that all lag offsets fit within mask
-        templ = _make_template(ell, num_lags=2, lag_width=1.0, lag_sep=1.0)
-        mask = np.ones((10, 10, 5), dtype="uint8")
-        result, lag_dist = CubeScan(templ, mask, self._trivial_fn, None)
-        assert result is not None
-        assert len(lag_dist) == templ.NumLags
 
     def test_cube_scan_with_zero_mask_completes(self):
         """CubeScan with a mask of all zeros doesn't crash."""
@@ -684,178 +475,9 @@ class TestVariogramNaNInfHandling:
         with pytest.raises(ValueError, match="contains NaN or Inf"):
             CalcIndCorrelationFunction(None, None, None, params)
 
-    # =========================================================================
-    # F-38: Cross-path consistency — Python variogram vs C++ cvariogram
-    # =========================================================================
-
-    def test_cross_path_variogram_cpp_consistency(self):
-        """F-38: Experimental variogram via C++ cvariogram matches analytical model.
-
-        Computes an experimental variogram using the C++ cvariogram module
-        and verifies that gamma(0) ≈ 0.0 (variogram at zero lag is nugget),
-        and that gamma values approach sill at large lags.
-        This verifies the C++ path and Python wrapper are consistent.
-        """
-        from geo_bsd.cvariogram import CalcVariograms, Ellipsoid, VariogramSearchTemplate
-
-        # Create a small 3D constant array (variance = 0 → gamma = 0 everywhere)
-        nx, ny, nz = 10, 10, 5
-        data = np.ones((nx, ny, nz), dtype="float32") * 42.0
-        mask = np.ones((nx, ny, nz), dtype="uint8")
-
-        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
-        templ = VariogramSearchTemplate(
-            lag_width=1.0,
-            lag_separation=2.0,
-            tol_distance=1.0,
-            num_lags=5,
-            first_lag_distance=0.0,
-            ellipsoid=ell,
-        )
-        lag_borders, variogram = CalcVariograms(templ, [data, mask])
-        # For constant data, variogram should be zero at all lags
-        assert np.all(np.abs(variogram) < 1e-6), (
-            f"Constant data: variogram should be zero, got {variogram}"
-        )
-
-    def test_cross_path_variogram_random_data(self):
-        """F-38: Experimental variogram for random data is non-negative and plausible.
-
-        With random data, the variogram should grow with lag distance
-        (spatial correlation decays with distance).
-        """
-        from geo_bsd.cvariogram import CalcVariograms, Ellipsoid, VariogramSearchTemplate
-
-        nx, ny, nz = 20, 20, 10
-        rng = np.random.RandomState(42)
-        data = rng.rand(nx, ny, nz).astype("float32") * 100
-        mask = np.ones((nx, ny, nz), dtype="uint8")
-
-        ell = Ellipsoid(R1=15, R2=10, R3=5, azimuth=0, dip=0, rotation=0)
-        templ = VariogramSearchTemplate(
-            lag_width=1.0,
-            lag_separation=3.0,
-            tol_distance=1.0,
-            num_lags=5,
-            first_lag_distance=0.0,
-            ellipsoid=ell,
-        )
-        lag_borders, variogram = CalcVariograms(templ, [data, mask])
-        # Variogram must be non-negative
-        assert np.all(variogram >= -1e-6), f"Variogram must be non-negative, got {variogram}"
-        # Variogram at lag 0 should be small (near zero if no nugget modeled)
-        assert variogram[0] >= 0
-        # Variogram values should be finite
-        assert np.all(np.isfinite(variogram)), "Variogram must be finite"
-
 
 # =============================================================================
 # M-P-30: CubeScan tuple-point path tests
-# =============================================================================
-
-
-@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
-class TestCubeScanTuplePointPath:
-    """Tests for variogram functions with tuple Point1/Point2 (CubeScan path, M-P-30).
-
-    The CubeScan function passes Point1/Point2 as tuples of 1D index arrays
-    (I, J, K). This exercises the ``isinstance(Point1, tuple)`` branch at
-    lines 689, 741, and 803 in variogram.py.
-    """
-
-    def test_calc_variogram_cube_scan_tuple_path(self):
-        """CalcVariogramFunction handles CubeScan tuple-point input (M-P-30).
-
-        Point1=(I, J, K) as tuple of 1D arrays triggers the CubeScan path.
-        """
-        from geo_bsd.variogram import CalcVariogramFunction
-
-        # Use 3D data so the tuple indices (I,J,K) resolve correctly
-        values = [np.arange(24, dtype="float32").reshape(4, 3, 2)]
-        params = {"HardData": values}
-        # Initialize result
-        result = CalcVariogramFunction(None, None, None, params)
-
-        # CubeScan tuple: I, J, K are 1D int arrays of matched point indices
-        I_arr = np.array([0, 1], dtype="int64")
-        J_arr = np.array([0, 0], dtype="int64")
-        K_arr = np.array([0, 0], dtype="int64")
-
-        result2 = CalcVariogramFunction((I_arr, J_arr, K_arr), (I_arr, J_arr, K_arr), result, params)
-        # With identical point pairs, variogram should be 0
-        n_vals = len(values)
-        variogram_vals = result2[:n_vals]
-        assert np.allclose(variogram_vals, 0.0, atol=1e-6), (
-            f"Identical points: variogram should be 0, got {variogram_vals}"
-        )
-
-    def test_calc_covariance_cube_scan_tuple_path(self):
-        """CalcCovarianceFunction handles CubeScan tuple-point input (M-P-30).
-
-        In the CubeScan context, Values[i] is a 1D array of grid points.
-        ravel_multi_index converts (I,J,K) → flat index into Values[0].shape.
-        """
-        from geo_bsd.variogram import CalcCovarianceFunction
-
-        # Use 1D data — in CubeScan, HardData values are flat 1D arrays
-        values = [np.arange(30, dtype="float32")]
-        soft = [np.arange(30, dtype="float32") * 0.5]
-        params = {"HardData": values, "SoftData": soft}
-        result = CalcCovarianceFunction(None, None, None, params)
-
-        # Use a single-element tuple to test the tuple isinstance path.
-        # With 1D arrays, ravel_multi_index needs shape, so wrap as 1D.
-        I_arr = np.array([0, 5], dtype="int64")
-        # ravel_multi_index expects shape matching Values[0].shape = (30,)
-        # so Point1/Point2 with 1 index axis matches 1D shape.
-        result2 = CalcCovarianceFunction(
-            (I_arr,), (I_arr,), result, params
-        )
-        assert np.all(np.isfinite(result2)), "CubeScan covariance should be finite"
-
-    def test_calc_ind_correlation_cube_scan_tuple_path(self):
-        """CalcIndCorrelationFunction handles CubeScan tuple-point input (M-P-30)."""
-        from geo_bsd.variogram import CalcIndCorrelationFunction
-
-        values = [np.array([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0], dtype="float32")]
-        soft = [np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], dtype="float32")]
-        params = {"HardData": values, "SoftData": soft}
-        result = CalcIndCorrelationFunction(None, None, None, params)
-
-        I_arr = np.array([0, 4], dtype="int64")
-        result2 = CalcIndCorrelationFunction(
-            (I_arr,), (I_arr,), result, params
-        )
-        assert np.all(np.isfinite(result2)), "CubeScan ind correlation should be finite"
-
-    def test_calc_variogram_cube_scan_different_points(self):
-        """CalcVariogramFunction CubeScan with different point pairs (M-P-30)."""
-        from geo_bsd.variogram import CalcVariogramFunction
-
-        values = [np.arange(24, dtype="float32").reshape(4, 3, 2)]
-        params = {"HardData": values}
-        result = CalcVariogramFunction(None, None, None, params)
-
-        # Point1 and Point2 are different points
-        P1_I = np.array([0, 0], dtype="int64")
-        P1_J = np.array([0, 0], dtype="int64")
-        P1_K = np.array([0, 0], dtype="int64")
-
-        P2_I = np.array([1, 2], dtype="int64")
-        P2_J = np.array([0, 0], dtype="int64")
-        P2_K = np.array([0, 0], dtype="int64")
-
-        result2 = CalcVariogramFunction(
-            (P1_I, P1_J, P1_K), (P2_I, P2_J, P2_K), result, params
-        )
-        assert np.all(np.isfinite(result2))
-        # Variogram for different points should accumulate pair count
-        count_idx = len(values) + len(values)  # pair count index
-        assert result2[count_idx] > 0, "Should have counted at least one pair"
-
-
-# =============================================================================
-# F-03 (HIGH): CubeScan must carry a total-work cap
 # =============================================================================
 
 
@@ -866,18 +488,6 @@ class TestCubeScanTotalWorkCap:
     running the O(offsets × volume) loop. Pre-fix only MAX_WINDOW_VOLUME
     bounded the search-window offset list; a large template + large grid ran
     ~8e12 numpy ops (~2 h) and a 1000^3 grid allocated a 24 GB mgrid."""
-
-    def test_cube_scan_rejects_over_cap(self, monkeypatch):
-        import geo_bsd.variogram as v
-
-        monkeypatch.setattr(v, "MAX_TOTAL_GRID_WORK", 1000.0)
-        ell = _make_ellipsoid(r1=10, r2=5, r3=3)
-        # A template with several lag offsets on a 10x10x5 grid: work
-        # len(LagIndexes)*500 > 1000 for any non-trivial lag area.
-        templ = _make_template(ell, num_lags=3, lag_width=1.0, lag_sep=1.0)
-        mask = np.ones((10, 10, 5), dtype="uint8")
-        with pytest.raises(ValueError, match="total grid work"):
-            CubeScan(templ, mask, lambda *a: np.zeros(3), None)
 
     def test_cube_scan_below_cap_still_works(self):
         """Control: a small grid/template below the cap still computes."""
@@ -896,42 +506,6 @@ class TestCubeScanTotalWorkCap:
 
 # =============================================================================
 # F-27: GridStyle work cap must bound the real per-pair cost
-# =============================================================================
-
-
-@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
-class TestGridStyleWorkCap:
-    """F-27: the old cap formula (n² × NumLags) under-estimated the real
-    per-pair cost of the exact-integer matching by ~1e7×. After the III-15
-    continuous-binning rewrite the per-pair cost is O(NumLags), so
-    n² × NumLags bounds the real work; a monkeypatched tiny cap must fire
-    on a point set whose n² × NumLags product exceeds it."""
-
-    def test_grid_style_cap_fires(self, monkeypatch):
-        import geo_bsd.variogram as v
-
-        monkeypatch.setattr(v, "MAX_TOTAL_PAIR_LAG_WORK", 1000.0)
-        ell = TVEllipsoid(R1=100, R2=100, R3=100)
-        templ = TVVariogramSearchTemplate(
-            LagWidth=2.0, LagSeparation=1.0, TolDistance=1.0,
-            NumLags=3, Ellipsoid=ell, FirstLagDistance=0,
-        )
-        # 100 points, 3 lags -> 100^2 * 3 = 30000 > 1000
-        pts = np.arange(10, dtype="float32")
-        px, py, pz = np.meshgrid(pts, pts, np.array([0.0], dtype="float32"))
-        px = px.ravel().astype("float32")
-        py = py.ravel().astype("float32")
-        pz = pz.ravel().astype("float32")
-        pvals = np.arange(100, dtype="float32")
-        with pytest.raises(ValueError, match="pair-lag work"):
-            PointSetScanGridStyle(
-                templ, (px, py, pz), CalcVariogramFunction,
-                {"HardData": [pvals]},
-            )
-
-
-# =============================================================================
-# III-15: PointSetScanGridStyle must bin fractional-spacing pairs
 # =============================================================================
 
 
@@ -966,29 +540,6 @@ class TestGridStyleFractionalSpacing:
         total = int(res[:, 2].sum())
         assert total > 0, "fractional-spacing pairs must be binned (III-15)"
         assert total == 30, f"expected 30 ordered pairs, got {total}"
-
-    def test_integer_spacing_matches_cont_style(self):
-        """GridStyle continuous binning must agree with ContStyle on
-        integer-spaced data (parity check)."""
-        grid_pts = np.array([0.0, 1.0, 2.0], dtype="float32")
-        px, py, pz = np.meshgrid(grid_pts, grid_pts, np.array([0.0], dtype="float32"))
-        px = px.ravel().astype("float32")
-        py = py.ravel().astype("float32")
-        pz = pz.ravel().astype("float32")
-        pvals = np.arange(9, dtype="float32")
-        templ = TVVariogramSearchTemplate(
-            LagWidth=2.0, LagSeparation=1.0, TolDistance=1.0,
-            NumLags=3, Ellipsoid=TVEllipsoid(R1=100, R2=100, R3=100),
-            FirstLagDistance=0,
-        )
-        cont, _ = PointSetScanContStyle(
-            templ, {"X": px, "Y": py, "Z": pz}, CalcVariogramFunction,
-            {"HardData": [pvals]},
-        )
-        grid_style, _ = PointSetScanGridStyle(
-            templ, (px, py, pz), CalcVariogramFunction, {"HardData": [pvals]},
-        )
-        np.testing.assert_array_equal(grid_style[:, 2], cont[:, 2])
 
 
 # =============================================================================

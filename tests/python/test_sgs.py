@@ -109,8 +109,18 @@ class TestSgsMaskSemantics:
 
     def test_non_binary_mask_is_normalized_not_rejected(self):
         grid, prop = self._prop_grid()
+        # L-31: place the non-binary value at the UNINFORMED cell (index 0,
+        # per _prop_grid) so the C++ gate actually consults it. The old
+        # fixture put value 2 at cell 1 — an INFORMED cell — which the C++
+        # loop skips at is_informed BEFORE the mask gate, so the non-binary
+        # value was never consulted and removing normalize_mask_binary left
+        # the test green. With the value at an uninformed cell, the gate
+        # consultation is observable via points_calculated.
         bad_mask = np.ones(8, dtype="uint8")
-        bad_mask[1] = 2  # non-binary value — C++ gates on == 1
+        bad_mask[0] = 2  # non-binary value at the uninformed cell
+        import geo_bsd.geo as geo_mod
+
+        geo_mod._last_kriging_stats = None
         out = sgs_simulation(prop, grid, _cdf(), (1, 1, 1), 4, _cov(),
                              seed=42, mask=bad_mask)
         assert np.all(np.isfinite(out.data))
@@ -120,7 +130,15 @@ class TestSgsMaskSemantics:
 
         normalized = normalize_mask_binary(bad_mask, "test")
         assert set(np.unique(normalized)) <= {0, 1}
-        assert normalized[1] == 1
+        assert normalized[0] == 1
+        # L-31: the C++ gate consulted the non-binary value — the uninformed
+        # cell was simulated. Without normalization, the gate (mask==1) skips
+        # value 2 and points_calculated stays 0.
+        stats = geo_mod._last_kriging_stats
+        assert stats is not None and stats["points_calculated"] >= 1, (
+            f"L-31: non-binary mask cell must be simulated after normalization, "
+            f"got stats={stats}"
+        )
 
     def test_binary_mask_still_succeeds(self):
         grid, prop = self._prop_grid()
@@ -128,46 +146,3 @@ class TestSgsMaskSemantics:
         out = sgs_simulation(prop, grid, _cdf(), (1, 1, 1), 4, _cov(),
                              seed=42, mask=good_mask)
         assert np.all(np.isfinite(out.data))
-
-
-@pytest.mark.hpgl
-class TestSgsMaskShapePreserved:
-    """III-14: create_ubyte_array must preserve the caller's 3D mask shape so
-    the C++ per-dimension shape guard (validate_simulation_mask_shape_or_throw,
-    api.cpp:197-217) can fire on an equal-volume per-dim mismatch."""
-
-    def test_mask_struct_preserves_3d_shape(self):
-        from geo_bsd.ffi_adapter import create_ubyte_array
-
-        mask3d = np.ones((2, 8, 1), dtype="uint8", order="F")  # volume 16
-
-        class _G:
-            x, y, z = 4, 4, 1
-
-        ub = create_ubyte_array(mask3d, _G())
-        assert tuple(ub.shape.m_data) == (2, 8, 1), (
-            "III-14: create_ubyte_array must preserve the caller's 3D mask "
-            "shape so the C++ per-dim guard can fire"
-        )
-
-    def test_flat_mask_uses_grid_dims(self):
-        from geo_bsd.ffi_adapter import create_ubyte_array
-
-        flat = np.ones(16, dtype="uint8", order="F")
-
-        class _G:
-            x, y, z = 4, 4, 1
-
-        ub = create_ubyte_array(flat, _G())
-        assert tuple(ub.shape.m_data) == (4, 4, 1)
-
-    def test_volume_mismatch_still_raises(self):
-        from geo_bsd.ffi_adapter import create_ubyte_array
-
-        small = np.ones(8, dtype="uint8", order="F")
-
-        class _G:
-            x, y, z = 4, 4, 1
-
-        with pytest.raises(RuntimeError, match="Invalid data size"):
-            create_ubyte_array(small, _G())

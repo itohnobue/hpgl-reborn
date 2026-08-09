@@ -264,6 +264,8 @@ class TestPerformance:
 
 
 @pytest.mark.hpgl
+@pytest.mark.slow  # H-11: consistency with the sibling benchmark tests; the
+# run_tests.py "performance" category map is fixed in the same pass (T-20).
 def test_mean_calculation_performance():
     """Test mean calculation performance with baseline comparison"""
     from geo_bsd.geo import ContProperty

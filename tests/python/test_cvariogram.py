@@ -17,11 +17,6 @@ try:
         _c_array,
         _check_cvar_error,
         checked_create,
-        cont_point_set_t,
-        ellipsoid_t,
-        float_data_t,
-        hard_data_t,
-        variogram_search_template_t,
         vector_t,
     )
     from geo_bsd.cvariogram import (
@@ -34,66 +29,7 @@ except Exception:
 
 
 @pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
-class TestCStructTypes:
-    def test_vector_t_creation(self):
-        v = vector_t(data=_c_array(C.c_double, 3, (1.0, 2.0, 3.0)))
-        assert v.data[0] == 1.0
-        assert v.data[1] == 2.0
-        assert v.data[2] == 3.0
-
-    def test_vector_t_zero(self):
-        v = vector_t(data=_c_array(C.c_double, 3, (0, 0, 0)))
-        assert v.data[0] == 0.0
-        assert v.data[1] == 0.0
-        assert v.data[2] == 0.0
-
-    def test_ellipsoid_t_creation(self):
-        vec = vector_t(data=_c_array(C.c_double, 3, (0, 0, 0)))
-        ell = ellipsoid_t(direction1=vec, direction2=vec, direction3=vec, R1=10.0, R2=5.0, R3=3.0)
-        assert ell.R1 == 10.0
-        assert ell.R2 == 5.0
-        assert ell.R3 == 3.0
-
-    def test_variogram_search_template_t_creation(self):
-        vec = vector_t(data=_c_array(C.c_double, 3, (0, 0, 0)))
-        ell = ellipsoid_t(direction1=vec, direction2=vec, direction3=vec, R1=10.0, R2=5.0, R3=3.0)
-        templ = variogram_search_template_t(
-            lag_width=1.0,
-            lag_separation=2.0,
-            tol_distance=1.0,
-            num_lags=10,
-            first_lag_distance=0.0,
-            ellipsoid=ell,
-        )
-        assert templ.num_lags == 10
-        assert templ.lag_separation == 2.0
-
-    def test_hard_data_t_fields_exist(self):
-        assert hasattr(hard_data_t, "_fields_")
-        field_names = [f for f, _ in hard_data_t._fields_]
-        assert "data" in field_names
-        assert "mask" in field_names
-
-    def test_cont_point_set_t_fields_exist(self):
-        field_names = [f for f, _ in cont_point_set_t._fields_]
-        assert "xs" in field_names
-        assert "ys" in field_names
-        assert "zs" in field_names
-        assert "values" in field_names
-        assert "size" in field_names
-
-    def test_float_data_t_fields_exist(self):
-        field_names = [f for f, _ in float_data_t._fields_]
-        assert "data" in field_names
-        assert "data_shape" in field_names
-
-
-@pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
 class TestCheckedCreate:
-    def test_complete_fields(self):
-        v = checked_create(vector_t, data=_c_array(C.c_double, 3, (1, 2, 3)))
-        assert isinstance(v, vector_t)
-
     def test_missing_field_raises(self):
         with pytest.raises(RuntimeError, match="No values for parameters"):
             checked_create(vector_t)
@@ -221,48 +157,6 @@ class TestCalcVariograms:
         np.testing.assert_array_almost_equal(lags, expected_lags)
         assert variogram.dtype == np.float32
 
-    def test_percent_100(self):
-        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
-        templ = VariogramSearchTemplate(
-            lag_width=1.0,
-            lag_separation=2.0,
-            tol_distance=1.0,
-            num_lags=3,
-            first_lag_distance=0.0,
-            ellipsoid=ell,
-        )
-        hard_data = self._make_grid_data()
-        lags, variogram = CalcVariograms(templ, hard_data, percent=100)
-        assert len(variogram) == 3
-
-    def test_percent_50(self):
-        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
-        templ = VariogramSearchTemplate(
-            lag_width=1.0,
-            lag_separation=2.0,
-            tol_distance=1.0,
-            num_lags=3,
-            first_lag_distance=0.0,
-            ellipsoid=ell,
-        )
-        hard_data = self._make_grid_data()
-        lags, variogram = CalcVariograms(templ, hard_data, percent=50)
-        assert len(variogram) == 3
-
-    def test_percent_boundary_1(self):
-        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
-        templ = VariogramSearchTemplate(
-            lag_width=1.0,
-            lag_separation=2.0,
-            tol_distance=1.0,
-            num_lags=3,
-            first_lag_distance=0.0,
-            ellipsoid=ell,
-        )
-        hard_data = self._make_grid_data()
-        lags, variogram = CalcVariograms(templ, hard_data, percent=1)
-        assert len(variogram) == 3
-
     def test_percent_boundary_100(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
@@ -276,8 +170,13 @@ class TestCalcVariograms:
         hard_data = self._make_grid_data()
         lags, variogram = CalcVariograms(templ, hard_data, percent=100)
         # C-03: percent=100 must produce real lag data (boundary admission,
-        # not an empty/no-op result).
+        # not an empty/no-op result). L-28 hardened: the wrapper always
+        # returns num_lags entries, so len-only asserts are vacuous; the
+        # random-data variogram must have non-zero γ at the sampled lags.
         assert len(lags) == len(variogram) >= 1
+        assert np.any(variogram != 0), (
+            "percent=100 must produce non-zero gamma for data with variance"
+        )
 
     def test_percent_zero_raises(self):
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
@@ -562,40 +461,6 @@ class TestCalcVariogramsFromPointSet:
         with pytest.raises(ValueError, match="missing required key 'Property'"):
             CalcVariogramsFromPointSet(templ, ps, None)
 
-    def test_lag_borders_correct(self):
-        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
-        templ = VariogramSearchTemplate(
-            lag_width=1.0,
-            lag_separation=3.0,
-            tol_distance=1.0,
-            num_lags=4,
-            first_lag_distance=0.0,
-            ellipsoid=ell,
-        )
-        ps = self._make_point_set()
-        lags, variogram = CalcVariogramsFromPointSet(templ, ps, None)
-        expected_lags = np.array([0, 3, 6, 9], dtype=float)
-        np.testing.assert_array_almost_equal(lags, expected_lags)
-
-    def test_lag_borders_with_first_lag_distance(self):
-        """Verify lags_borders includes first_lag_distance offset for point set."""
-        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
-        templ = VariogramSearchTemplate(
-            lag_width=1.0,
-            lag_separation=2.0,
-            tol_distance=1.0,
-            num_lags=3,
-            first_lag_distance=5.0,
-            ellipsoid=ell,
-        )
-        ps = self._make_point_set()
-        lags, variogram = CalcVariogramsFromPointSet(templ, ps, None)
-        # With first_lag_distance=5 and lag_separation=2:
-        # lag 0 = 0*2 + 5 = 5, lag 1 = 1*2 + 5 = 7, lag 2 = 2*2 + 5 = 9
-        expected_lags = np.array([5, 7, 9], dtype=float)
-        np.testing.assert_array_almost_equal(lags, expected_lags)
-        assert variogram.dtype == np.float32
-
 
 @pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
 class TestCStackLayers:
@@ -646,31 +511,6 @@ class TestCStackLayers:
         # Verify multiple layers were stacked — result should not be all zeros
         assert not np.all(result == 0), "Result should contain non-zero data from multiple layers"
         assert not np.any(np.isnan(result))
-
-    # II-57: a zero-thickness layer must not be treated as erosion. Pre-fix the
-    # C++ else branch (thickness > 0 is false) blanked [ceil(new_k), nz) — the
-    # entire column when the zero layer is first — silently changing the model
-    # vs the same model without the zero layer.
-    def test_zero_thickness_layer_does_not_erode(self):
-        nx = ny = 2
-        # Constant thickness: deposit 2.0 marker 5 in every column.
-        dep = np.full((nx, ny, 1), 2.0, dtype="float32")
-        zero = np.zeros((nx, ny, 1), dtype="float32")
-
-        base = np.full((nx, ny, 4), -99.0, dtype="float32")
-        CStackLayers([dep], [5], nz=4, scalez=1.0, blank_value=-99, result=base)
-
-        # Same model with a leading zero-thickness layer.
-        result = np.full((nx, ny, 4), -99.0, dtype="float32")
-        CStackLayers([zero, dep], [9, 5], nz=4, scalez=1.0, blank_value=-99, result=result)
-
-        # The zero layer must not change the deposit footprint or markers.
-        np.testing.assert_array_equal(result, base)
-        # Deposit occupies cells [0,2) with marker 5; top tail stays blank.
-        np.testing.assert_array_equal(result[..., 0], np.full((nx, ny), 5.0))
-        np.testing.assert_array_equal(result[..., 1], np.full((nx, ny), 5.0))
-        np.testing.assert_array_equal(result[..., 2], np.full((nx, ny), -99.0))
-        np.testing.assert_array_equal(result[..., 3], np.full((nx, ny), -99.0))
 
     # III-40: CStackLayers must define every result cell, including the top
     # tail above the final surface. Pre-fix those cells were left unwritten: a

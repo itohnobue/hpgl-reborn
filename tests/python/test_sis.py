@@ -106,18 +106,37 @@ class TestSisMaskSemantics:
 
     def test_non_binary_mask_is_normalized_not_rejected(self):
         grid, prop = self._prop_grid()
+        # L-31: place the non-binary value at the UNINFORMED cell (index 0,
+        # per _prop_grid) so the C++ gate actually consults it. The old
+        # fixture put value 2 at cell 1 — an INFORMED cell — which the C++
+        # loop skips at is_informed BEFORE the mask gate, so the non-binary
+        # value was never consulted and removing normalize_mask_binary left
+        # the test green. With the value at an uninformed cell, the gate
+        # consultation is observable via points_calculated.
         bad_mask = np.ones(8, dtype="uint8")
-        bad_mask[1] = 2
+        bad_mask[0] = 2  # non-binary value at the uninformed cell
+        import geo_bsd.geo as geo_mod
         from geo_bsd.ffi_adapter import normalize_mask_binary
 
         normalized = normalize_mask_binary(bad_mask, "test")
         assert set(np.unique(normalized)) <= {0, 1}
-        assert normalized[1] == 1
+        assert normalized[0] == 1
+        geo_mod._last_kriging_stats = None
         out = sis_simulation(prop, grid, _sis_data(), seed=42,
                              marginal_probs=[0.5, 0.5], mask=bad_mask)
         assert np.all(np.isfinite(np.asarray(out.data, dtype="float32")))
+        # L-31: the C++ gate consulted the non-binary value — the uninformed
+        # cell was simulated. Without normalization, the gate (mask==1) skips
+        # value 2 and points_calculated stays 0.
+        stats = geo_mod._last_kriging_stats
+        assert stats is not None and stats["points_calculated"] >= 1, (
+            f"L-31: non-binary mask cell must be simulated after normalization, "
+            f"got stats={stats}"
+        )
 
     def test_binary_mask_still_succeeds(self):
+        # N-09: kept as the binary-acceptance half of the mask contract —
+        # normalization must not alter binary masks.
         grid, prop = self._prop_grid()
         good_mask = np.ones(8, dtype="uint8")
         out = sis_simulation(prop, grid, _sis_data(), seed=42,

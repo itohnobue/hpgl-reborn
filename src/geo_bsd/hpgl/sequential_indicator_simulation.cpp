@@ -235,6 +235,20 @@ void do_sis(
 			kriging_failures, static_cast<unsigned long>(property.size()),
 			kriging_skipped);
 	}
+	// P-02: no-output guard mirroring the SGS analog
+	// (sequential_simulation.h:443-449). SIS has no ndmin gate, so every path
+	// node reaches exactly one of {kriging_skipped, nodes_processed} — an
+	// all-masked / fully-informed run previously returned the unchanged input
+	// clone with no signal at all (the only stderr path above requires
+	// kriging_failures > 0). Warn when every node was skipped.
+	if (kriging_skipped >= static_cast<unsigned long>(property.size()))
+	{
+		fprintf(stderr,
+			"HPGL: SIS produced no output — all %lu nodes were either already informed, masked out, "
+			"or out of bounds. Check that the output property grid contains uninformed cells, "
+			"and the mask permits processing.\n",
+			static_cast<unsigned long>(property.size()));
+	}
 }
 
 struct no_mask_t

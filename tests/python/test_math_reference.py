@@ -289,7 +289,7 @@ class TestCDFAnalytical:
     """CDF construction and invariants from known datasets."""
 
     def test_cdf_uniform_distribution(self):
-        """CDF-ANALYTIC-1: 9 values 0.0..2.0 step 0.25 → probs=[1/9, 2/9, ..., 1.0]."""
+        """CDF-ANALYTIC-1: 9 values 0.0..2.0 step 0.25 → probs=[1/9, 2/9, ..., <1.0]."""
         data = np.array([0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0], dtype="float32")
         mask = np.ones(9, dtype="uint8")
         prop = ContProperty(data, mask)
@@ -297,11 +297,12 @@ class TestCDFAnalytical:
 
         assert len(cdf.values) == 9
         assert len(cdf.probs) == 9
-        # Expected probs: cumulative after each unique value
-        for i in range(9):
+        # Expected probs: cumulative after each unique value. The tail is
+        # clamped below 1.0 (F-04/F-N13) — assert the nextafter value rather
+        # than ≈1.0 so a clamp regression fails loudly (T-16).
+        for i in range(8):
             np.testing.assert_allclose(cdf.probs[i], (i + 1) / 9.0, rtol=1e-6, atol=1e-8)
-        # Last prob must be 1.0
-        np.testing.assert_allclose(cdf.probs[-1], 1.0)
+        assert cdf.probs[-1] == np.nextafter(np.float32(1.0), np.float32(0.0))
 
     def test_cdf_sorted_values(self):
         """CDF values must be sorted ascending."""
@@ -323,50 +324,21 @@ class TestCDFAnalytical:
         assert np.all(np.diff(cdf.probs) >= 0), "CDF probs must be non-decreasing"
 
     def test_cdf_last_prob_is_one(self):
-        """CDF invariant: last probability must be 1.0."""
+        """CDF invariant: last probability is the F-04-clamped nextafter value.
+
+        The clamp pins the stored tail to 0.99999994 (nextafter(1.0f, 0.0f))
+        so the max datum does not map to p=1.0 in the SGS back-transform.
+        T-16/L-26: assert the exact clamped value instead of ≈1.0 so a clamp
+        regression fails loudly.
+        """
         np.random.seed(42)
         data = np.random.rand(100).astype("float32") * 100
         mask = np.ones(100, dtype="uint8")
         prop = ContProperty(data, mask)
         cdf = calc_cdf(prop)
 
-        np.testing.assert_allclose(cdf.probs[-1], 1.0, rtol=1e-6, atol=1e-8)
-
-    def test_cdf_multi_value_tail_below_one_after_float32_downcast(self):
-        """F-N13: multi-value float32-downcast tail must stay strictly below 1.0.
-
-        F-M11 facet (a): with 3 equal-count values the float64 cumulative sum
-        is 0.9999999999999999 (not >= 1.0), so the pre-fix clamp was skipped
-        and the float32 downcast rounded the tail to exactly 1.0f — re-creating
-        the F-04 max-datum->median collapse. The clamp must run on the float32
-        values so the stored tail is < 1.0 and equals the nextafter value.
-        """
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.ones(3, dtype="uint8")
-        prop = ContProperty(data, mask)
-        cdf = calc_cdf(prop)
-
-        assert len(cdf.values) == 3
-        assert cdf.probs[-1] < 1.0, "float32-downcast tail must be clamped below 1.0"
-        assert cdf.probs[-1] == np.nextafter(np.float32(1.0), np.float32(0.0))
-        assert np.all(np.diff(cdf.probs) >= 0)
-
-    def test_cdf_large_count_monotonic_float32_tail(self):
-        """F-N13: full_count >= 2^25 must keep the float32 tail monotonic.
-
-        F-M11 facet (b): a 2^25-cell grid with a one-cell last value rounds
-        the second-to-last cumulative probability up to exactly 1.0f; the
-        pre-fix clamp then produced [.., 1.0f, 0.99999994f] and a spurious
-        monotonicity ValueError. The fixed clamp caps the 1.0f suffix.
-        """
-        n = 2**25
-        data = np.zeros(n, dtype="float32")
-        data[-1] = 1.0
-        prop = ContProperty(data, np.ones(n, dtype="uint8"))
-        cdf = calc_cdf(prop)
-
-        assert np.all(np.diff(cdf.probs) >= 0), "float32 CDF must stay monotonic"
         assert cdf.probs[-1] < 1.0
+        assert cdf.probs[-1] == np.nextafter(np.float32(1.0), np.float32(0.0))
 
     def test_cdf_first_prob_positive(self):
         """CDF invariant: first probability must be strictly positive (>0)."""
@@ -396,10 +368,13 @@ class TestCDFAnalytical:
         cdf = calc_cdf(prop)
 
         assert len(cdf.values) == 3  # Only 3 unique values
-        np.testing.assert_allclose(cdf.probs, [1.0 / 3.0, 2.0 / 3.0, 1.0], rtol=1e-6)
+        np.testing.assert_allclose(cdf.probs[0], 1.0 / 3.0, rtol=1e-6)
+        np.testing.assert_allclose(cdf.probs[1], 2.0 / 3.0, rtol=1e-6)
+        # T-16: the clamp pins the tail strictly below 1.0 (nextafter).
+        assert cdf.probs[-1] == np.nextafter(np.float32(1.0), np.float32(0.0))
 
     def test_cdf_single_value(self):
-        """CDF with a single value: one entry with prob=1.0."""
+        """CDF with a single value: one entry with the F-04-clamped prob."""
         data = np.array([42.0, 42.0, 42.0], dtype="float32")
         mask = np.ones(3, dtype="uint8")
         prop = ContProperty(data, mask)
@@ -407,7 +382,10 @@ class TestCDFAnalytical:
 
         assert len(cdf.values) == 1
         assert cdf.values[0] == 42.0
-        np.testing.assert_allclose(cdf.probs[0], 1.0)
+        # T-16: single-value tail is clamped to nextafter(1.0f, 0.0f) — the
+        # max datum must not map to p=1.0 (F-04).
+        assert cdf.probs[0] < 1.0
+        assert cdf.probs[0] == np.nextafter(np.float32(1.0), np.float32(0.0))
 
     def test_cdf_with_masked_values(self):
         """CDF only considers informed (unmasked) cells."""
@@ -418,15 +396,6 @@ class TestCDFAnalytical:
 
         assert len(cdf.values) == 3
         np.testing.assert_allclose(cdf.values, [1.0, 3.0, 5.0])
-
-    def test_cdf_all_masked_raises(self):
-        """calc_cdf raises ValueError when all cells are masked."""
-        data = np.array([1.0, 2.0, 3.0], dtype="float32")
-        mask = np.zeros(3, dtype="uint8")
-        prop = ContProperty(data, mask)
-
-        with pytest.raises(ValueError, match="no informed values"):
-            calc_cdf(prop)
 
     def test_cdf_3d_grid(self):
         """CDF from 3D grid produces same result as flat array with same data."""
@@ -440,17 +409,21 @@ class TestCDFAnalytical:
         assert len(cdf.values) == 4
         np.testing.assert_allclose(cdf.probs[-1], 1.0)
 
-    def test_cdf_nan_in_data(self):
-        """ContProperty rejects NaN in data at construction — no NaN reaches calc_cdf."""
-        data = np.array([1.0, np.nan, 3.0, 4.0], dtype="float32")
-        mask = np.ones(4, dtype="uint8")
-        with pytest.raises(ValueError, match="NaN or Inf"):
-            ContProperty(data, mask)
-
 
 # =============================================================================
 # CalcMean Tests
 # =============================================================================
+
+# NOTE (s6-fix-var, N2-13 DEVIATION): N2-13 prescribed deleting this class
+# because it is "strictly subsumed by test_utilities.py:55-119 (7 tests,
+# stronger)". That premise is now FALSE in the working tree: the parallel
+# utils fix agent deleted 5 of those 7 tests (incl. the masked-exclusion
+# test_calc_mean_with_masked_values) citing math_reference as the surviving
+# dup. Deleting this class too would leave geo.calc_mean (ContProperty
+# path) masked-exclusion with ZERO coverage — the remaining utilities tests
+# (tuple_input all-ones, 3d_property all-ones) cover only the all-informed
+# path. Mutual deletion would violate the "both files' copies cannot die"
+# doctrine (H-4). KEPT as the masked-exclusion home. Reported to the lead.
 
 
 @pytest.mark.hpgl
@@ -478,6 +451,25 @@ class TestCalcMean:
 
         result = calc_mean(prop)
         np.testing.assert_allclose(result, 20.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)
+
+    def test_calc_mean_all_masked(self):
+        """calc_mean: all cells masked → ValueError (no informed values).
+
+        E-02 (post-fix TEST-UPDATE): the all-masked raise at geo.py:1629-1630
+        was left unpinned by a cross-agent mutual-deletion race (utils deleted
+        its all-masked test citing edge_cases survivors; edge_cases deleted
+        its copies citing utilities survivors — both cited tests were deleted
+        by the other agent). This restores the masked-exclusion home pin that
+        the class docstring above documents.
+        """
+        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
+        mask = np.zeros(5, dtype="uint8")
+        prop = ContProperty(data, mask)
+
+        from geo_bsd.geo import calc_mean
+
+        with pytest.raises(ValueError, match="no informed values"):
+            calc_mean(prop)
 
 
 # =============================================================================
@@ -908,8 +900,9 @@ class TestRotationAnisotropy:
         Neighbor at (7.07, 7.07, 0): distance=10, but after 45° rotation,
         this maps entirely to the rotated X axis → h_eff along range=20.
         """
-        # This is a qualitative test: verify that with an anisotropic model
-        # and non-zero azimuth, the weight differs from isotropic expectation.
+        # L-26: the body previously asserted only finiteness — vacuous. Harden:
+        # the 45° azimuth on an anisotropic model must actually change the
+        # weight vs the isotropic (0°) case (verified: 0.43795 vs 0.63281).
         ranges = (20.0, 10.0, 10.0)
         dist_xy = 5.0 / np.sqrt(2.0)  # ~3.5355 each axis → total distance 5
 
@@ -939,9 +932,13 @@ class TestRotationAnisotropy:
             nugget=0.0,
         )
 
-        # With rotation, the effective scaled distance should differ
-        # Both should be valid (finite, non-NaN)
+        # With rotation, the effective scaled distance should differ — the
+        # weight must actually change, not just be finite (L-26).
         assert np.isfinite(w_no_rot[0]) and np.isfinite(w_rot[0])
+        assert not np.isclose(w_no_rot[0], w_rot[0], rtol=1e-3), (
+            "45° azimuth on anisotropic ranges must change the weight "
+            f"(no-rot {w_no_rot[0]:.6f} vs rot {w_rot[0]:.6f})"
+        )
 
     def test_rot_zyx_convention_independent_verification(self):
         """ROT-T5: Verify ZYX convention independently.
@@ -1104,12 +1101,18 @@ class TestRotationAnisotropy:
         )
 
     def test_rot_zyx_not_zxz(self):
-        """ROT-T6: Verify HPGL is ZYX (not ZXZ as GSLIB uses).
+        """ROT-T6: Verify HPGL's convention is intrinsic Z-Y-X, not ZXZ.
 
-        Under ZXZ convention, the same angles would produce markedly different
-        effective distances for certain displacement directions. This test
-        verifies that HPGL's output matches the ZYX calculation and does NOT
-        match a ZXZ calculation.
+        L-34 (docs correction): the GSLIB attribution in the original
+        comment was WRONG. GSLIB setrot.for computes
+        R = Rx(−θ)·Ry(−β)·Rz(−α) — an intrinsic Z-Y-X (Tait-Bryan) sequence,
+        the SAME matrix family as HPGL's ZYX; the difference between the
+        libraries is a 90° azimuth reference offset plus a sign flip on the
+        third angle (GSLIB(a1,a2,a3) == HPGL(a1−90, a2, −a3)), NOT a ZXZ
+        order. This test keeps the ZXZ-vs-ZYX discrimination because it
+        still verifies HPGL is not the ZXZ convention — the assertion is a
+        valid discriminator of HPGL's own convention, it just must not be
+        attributed to GSLIB.
         """
         from math import cos, radians, sin
 
@@ -1134,7 +1137,7 @@ class TestRotationAnisotropy:
             )
 
         def zxz_effective_distance(ranges, angles, vec):
-            """ZXZ (GSLIB) convention: R = Rz2 * Rx * Rz1."""
+            """ZXZ convention (NOT GSLIB — L-34): R = Rz2 * Rx * Rz1."""
             rx, ry, rz = ranges
             Rz1 = make_rz(angles[0])
             Rx = make_rx(angles[1])
@@ -1170,7 +1173,8 @@ class TestRotationAnisotropy:
             nugget=0.0,
         )
 
-        # ZXZ effective distance (GSLIB convention — should NOT match)
+        # ZXZ effective distance (reference construction — NOT GSLIB, see
+        # L-34: GSLIB setrot.for is intrinsic Z-Y-X, not ZXZ)
         h_eff_zxz = zxz_effective_distance(ranges, angles, displacement)
         zxz_cov = spherical_cov(h_eff_zxz, sill=1.0, nugget=0.0, range_val=ranges[0])
         zxz_weight = zxz_cov

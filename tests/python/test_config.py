@@ -113,6 +113,21 @@ class TestSGSConfig:
         with pytest.raises(ValueError, match="max_neighbours"):
             SGSConfig(max_neighbours=-5)
 
+    def test_max_neighbours_over_hard_limit_raises(self):
+        """M-20: max_neighbours above the C++ hard limit (10000) is rejected.
+
+        The discriminating boundary is 10001 — a limit regression to 100000
+        passes every pre-existing test (which only cover 100001-rejected and
+        10000-accepted), so this pins the exact cap+1 rejection.
+        """
+        with pytest.raises(ValueError, match="exceeds the maximum"):
+            SGSConfig(max_neighbours=10001)
+
+    def test_max_neighbours_at_hard_limit_accepted(self):
+        """M-20: max_neighbours == the C++ hard limit (10000) is accepted."""
+        cfg = SGSConfig(max_neighbours=10000)
+        assert cfg.max_neighbours == 10000
+
     # ---- radiuses ----
 
     def test_radiuses_tuple_accepted(self):
@@ -129,11 +144,6 @@ class TestSGSConfig:
         """Wrong-length radiuses tuple raises ValueError."""
         with pytest.raises(ValueError, match="radiuses"):
             SGSConfig(radiuses=(1, 2))
-
-    def test_radius_unpack_raises_for_2_element(self):
-        """2-element radiuses tuple raises."""
-        with pytest.raises(ValueError, match="radiuses"):
-            SGSConfig(radiuses=(10, 20))
 
     @pytest.mark.parametrize("bad_value,desc", [
         (float("nan"), "NaN"),
@@ -216,6 +226,16 @@ class TestSISConfig:
         """Zero max_neighbours accepted (R-05/E-M9 unconditional mode)."""
         cfg = SISConfig(max_neighbours=0)
         assert cfg.max_neighbours == 0
+
+    def test_max_neighbours_over_hard_limit_raises(self):
+        """M-20: max_neighbours above the C++ hard limit (10000) is rejected."""
+        with pytest.raises(ValueError, match="exceeds the maximum"):
+            SISConfig(max_neighbours=10001)
+
+    def test_max_neighbours_at_hard_limit_accepted(self):
+        """M-20: max_neighbours == the C++ hard limit (10000) is accepted."""
+        cfg = SISConfig(max_neighbours=10000)
+        assert cfg.max_neighbours == 10000
 
     # ---- radiuses NaN/Inf (F-02) ----
 

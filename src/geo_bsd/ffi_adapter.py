@@ -524,7 +524,11 @@ def checked_create(T, **kargs):
 
     Verifies that every field in the struct's ``_fields_`` is provided
     as a keyword argument. Raises ``CriticalValidationError`` if any
-    field is missing.
+    field is missing. P-04: unknown keyword arguments (typo'd field
+    names) are also rejected with ``CriticalValidationError`` — a
+    replacement typo previously degraded to the misleading
+    missing-field error, and an extra typo was silently passed to the
+    ctypes constructor.
 
     .. note::
 
@@ -539,9 +543,16 @@ def checked_create(T, **kargs):
     fields = []
     for f, _ in T._fields_:
         fields.append(f)
+    unknown = []
     for k in kargs.keys():
         if k in fields:
             fields.remove(k)
+        else:
+            unknown.append(k)
+    if unknown:
+        raise CriticalValidationError(
+            f"Unexpected keyword arguments: {unknown}", "ctypes_struct"
+        )
     if fields:
         raise CriticalValidationError(
             f"No values for parameters: {fields}", "ctypes_struct"
@@ -565,6 +576,14 @@ def create_cont_masked_array(prop, grid):
     Returns:
         ``_HPGL_CONT_MASKED_ARRAY`` with pinned array references.
     """
+    # N2-26: enforce the FWA contract on the property arrays at the FFI
+    # boundary (mirror create_ubyte_array:706 / create_float_array:738).
+    # m_strides is inert in C++ (the kernels read both buffers flat by
+    # node index), so a C-order or strided input would be silently
+    # permuted with no exception. ContProperty's setters/ctor already
+    # coerce Fortran order; this guard catches direct FFI misuse.
+    checkFWA(prop.data)
+    checkFWA(prop.mask)
     if grid is None:
         # F-24: validate that data and mask have the same element count.
         # C++ indexes both arrays with the same stride values, so a
@@ -642,6 +661,14 @@ def create_ind_masked_array(prop, grid):
     Returns:
         ``_HPGL_IND_MASKED_ARRAY`` with pinned array references.
     """
+    # N2-26: enforce the FWA contract on the property arrays at the FFI
+    # boundary (mirror create_ubyte_array:706 / create_float_array:738).
+    # m_strides is inert in C++ (the kernels read both buffers flat by
+    # node index), so a C-order or strided input would be silently
+    # permuted with no exception. IndProperty's setters/ctor already
+    # coerce Fortran order; this guard catches direct FFI misuse.
+    checkFWA(prop.data)
+    checkFWA(prop.mask)
     if grid is None:
         sh = _create_hpgl_shape(prop.data.shape, __get_strides(prop.data))
         # F-25: validate that data and mask have the same element count.

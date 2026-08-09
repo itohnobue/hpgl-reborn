@@ -61,12 +61,6 @@ def krig_medium_grid():
 
 
 @pytest.fixture
-def krig_large_grid():
-    """Create a large 3D grid for kriging stress tests"""
-    return SugarboxGrid(x=20, y=20, z=10)
-
-
-@pytest.fixture
 def continuous_property_small(krig_small_grid):
     """Create continuous property for small grid"""
     np.random.seed(42)
@@ -137,30 +131,6 @@ def covariance_spherical():
     """Spherical covariance model"""
     return CovarianceModel(
         type=covariance.spherical,
-        ranges=(5.0, 5.0, 3.0),
-        angles=(0.0, 0.0, 0.0),
-        sill=1.0,
-        nugget=0.1,
-    )
-
-
-@pytest.fixture
-def covariance_exponential():
-    """Exponential covariance model"""
-    return CovarianceModel(
-        type=covariance.exponential,
-        ranges=(5.0, 5.0, 3.0),
-        angles=(0.0, 0.0, 0.0),
-        sill=1.0,
-        nugget=0.1,
-    )
-
-
-@pytest.fixture
-def covariance_gaussian():
-    """Gaussian covariance model"""
-    return CovarianceModel(
-        type=covariance.gaussian,
         ranges=(5.0, 5.0, 3.0),
         angles=(0.0, 0.0, 0.0),
         sill=1.0,
@@ -547,15 +517,22 @@ class TestOrdinaryKriging:
     def test_ok_radius_affects_result(
         self, continuous_property_medium, krig_medium_grid, covariance_spherical
     ):
-        """F-124: radius=(3,3,2) vs (15,15,8) produces measurably different result.
+        """F-124: radius=(1,1,1) vs (15,15,8) produces measurably different result.
 
         Different search radii change the neighborhood of informed data, so the
         estimates MUST differ — otherwise the radius parameter is ignored.
+
+        NOTE: the pair must be discriminating on the dense 10x10x5 fixture —
+        every target cell has >=36 informed candidates within radius (3,3,2),
+        so that pair selects the same 12 nearest neighbors under
+        max_neighbours=12 (bit-identical output). Radius (1,1,1) is small
+        enough that every target cell is neighborhood-constrained (<12
+        candidates), forcing a genuinely different neighborhood than (15,15,8).
         """
         result_small = ordinary_kriging(
             prop=continuous_property_medium,
             grid=krig_medium_grid,
-            radiuses=(3, 3, 2),
+            radiuses=(1, 1, 1),
             max_neighbours=12,
             cov_model=covariance_spherical,
         )
@@ -572,7 +549,7 @@ class TestOrdinaryKriging:
             result_large.data.astype("float64"),
             rtol=1e-4,
             atol=1e-4,
-        ), "radius (3,3,2) vs (15,15,8): results should differ, parameter effect unverified"
+        ), "radius (1,1,1) vs (15,15,8): results should differ, parameter effect unverified"
 
     def test_ok_covariance_type_affects_result(self, continuous_property_medium, krig_medium_grid):
         """F-124: spherical vs exponential produces measurably different kriging result."""
@@ -667,10 +644,11 @@ class TestOrdinaryKriging:
         a silent behavioral change in kriging weights or covariance would be
         detected.
 
-        The reference values were generated from a known-good run (seed=42,
-        spherical covariance, medium grid). The test uses float32-compatible
-        tolerance to avoid false positives from platform-specific LAPACK
-        differences.
+        The reference values are the first 5 estimates at cells informed in
+        the ORIGINAL input mask (mask==1), captured from a verified v2.0.5
+        run (seed=42, spherical covariance, medium grid). The test uses
+        float32-compatible tolerance to avoid false positives from
+        platform-specific LAPACK differences.
         """
         np.random.seed(42)
         result = ordinary_kriging(
@@ -683,34 +661,22 @@ class TestOrdinaryKriging:
 
         assert isinstance(result, ContProperty)
 
-        # Golden reference: first 3 informed-cell estimates from the
-        # known-good run (generated once and verified to be stable).
-        informed_mask = result.mask.astype("float64") == 1
-        informed_data = result.data.astype("float64")[informed_mask]
-        assert len(informed_data) > 0, "Should have informed cells after kriging"
+        # Golden reference: first 5 informed-cell estimates from the
+        # known-good run. The result mask is mutated to all-ones by the C++
+        # fill, so the ORIGINAL input mask selects the truly informed cells.
+        input_informed = continuous_property_medium.mask == 1
+        assert np.any(input_informed), "Fixture should have informed cells"
+        first_values = result.data.astype("float64")[input_informed][:5]
+        assert len(first_values) == 5, "Expected at least 5 informed cells"
 
-        # Check first few informed values for regression protection.
-        # These are benchmarked from the original run — they document expected
-        # behavior, not mathematical identities.
-        first_values = informed_data[:5]
-        assert np.all(np.isfinite(first_values)), "First values must be finite"
-        # Values should be in a reasonable range (input data went from ~0-100)
-        assert np.all(first_values > -100.0) and np.all(first_values < 200.0), (
-            f"Kriged values out of plausibility range: {first_values}"
+        golden = np.array([95.071426, 73.199394, 59.865849, 15.601865, 15.599452])
+        np.testing.assert_allclose(
+            first_values,
+            golden,
+            rtol=1e-3,
+            atol=0.02,
+            err_msg="OK golden reference mismatch — kriging weights or covariance changed",
         )
-        # Not all the same (variance regression protection)
-        assert np.std(first_values) > 0, "Kriged values should not be identical"
-
-        # Re-run with same seed → identical result
-        np.random.seed(42)
-        result2 = ordinary_kriging(
-            prop=continuous_property_medium,
-            grid=krig_medium_grid,
-            radiuses=(5, 5, 3),
-            max_neighbours=12,
-            cov_model=covariance_spherical,
-        )
-        np.testing.assert_array_almost_equal(result.data, result2.data, decimal=5)
 
 
 # =============================================================================
@@ -1929,43 +1895,6 @@ class TestSimpleKrigingWeights:
             )
             assert isinstance(weights, np.ndarray)
 
-    def test_weights_nugget_equals_sill(self, neighbor_points):
-        """Test weights with nugget==sill (edge case).
-
-        When nugget==sill, the covariance between distinct points is zero
-        (only the nugget contribution remains). The function should either
-        return valid weights or raise an exception — either behavior is
-        acceptable for this edge case.
-        """
-        n_x, n_y, n_z = neighbor_points
-        center_point = (5.0, 5.0, 2.5)
-
-        # Verify CovarianceModel accepts nugget==sill
-        model = CovarianceModel(
-            type=covariance.exponential, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=1.0
-        )
-        assert model.nugget == 1.0
-        assert model.sill == 1.0
-
-        # With nugget==sill, covariance at nonzero distances is 0.
-        # The function may raise (singular matrix) or return weights —
-        # both are acceptable behaviors for this degenerate case.
-        try:
-            weights = simple_kriging_weights(
-                center_point=center_point,
-                n_x=n_x,
-                n_y=n_y,
-                n_z=n_z,
-                ranges=(5.0, 5.0, 3.0),
-                sill=1.0,
-                cov_type=covariance.exponential,
-                nugget=1.0,
-            )
-            # If it succeeds, verify it returns an array
-            assert isinstance(weights, np.ndarray)
-        except RuntimeError:
-            pass  # Expected: singular matrix
-
     def test_weights_various_ranges(self, neighbor_points):
         """Test weights with various range values"""
         n_x, n_y, n_z = neighbor_points
@@ -1997,12 +1926,19 @@ class TestSimpleKrigingWeights:
         assert isinstance(weights, np.ndarray)
 
     def test_weights_custom_angles(self, neighbor_points):
-        """Test weights with custom angles"""
+        """Test weights with custom angles (rotation path coverage).
+
+        This is the ONLY angle-path test for simple_kriging_weights in the
+        suite — a rotation-matrix regression must be detected, not just
+        "doesn't crash". Asserts finite weights and that a non-trivial
+        rotation changes the weights vs the zero-rotation baseline.
+        """
         n_x, n_y, n_z = neighbor_points
         center_point = (5.0, 5.0, 2.5)
 
         angles = [(0.0, 0.0, 0.0), (30.0, 45.0, 60.0), (90.0, 0.0, 0.0)]
 
+        all_weights = {}
         for angles_val in angles:
             weights = simple_kriging_weights(
                 center_point=center_point,
@@ -2016,6 +1952,21 @@ class TestSimpleKrigingWeights:
                 angles=angles_val,
             )
             assert isinstance(weights, np.ndarray)
+            assert len(weights) == len(n_x)
+            assert np.all(np.isfinite(weights)), (
+                f"Non-finite weights at angles={angles_val}"
+            )
+            all_weights[angles_val] = weights
+
+        # A non-trivial rotation must actually change the weights (the
+        # rotation convention is a documented hazard — L-34). If the rotation
+        # path is ignored, (30,45,60) equals (0,0,0) and the test fails.
+        assert not np.allclose(
+            all_weights[(0.0, 0.0, 0.0)],
+            all_weights[(30.0, 45.0, 60.0)],
+            rtol=1e-4,
+            atol=1e-5,
+        ), "Rotation angles (30,45,60) should produce weights different from (0,0,0)"
 
     def test_weights_result_validation(self, neighbor_points):
         """Test weights are valid (no NaN, Inf, correct count, finite)"""
@@ -2353,10 +2304,8 @@ class TestKrigingNegativeCases:
             simple_kriging(prop, krig_medium_grid, (5, 5, 3), 0, covariance_spherical)
 
     def test_sk_none_prop_raises(self):
-        """simple_kriging raises RuntimeError when prop is None"""
-        from geo_bsd.validation import CriticalValidationError
-
-        with pytest.raises((RuntimeError, CriticalValidationError, AttributeError)):
+        """simple_kriging raises RuntimeError when prop is None."""
+        with pytest.raises(RuntimeError, match="expected ContProperty"):
             simple_kriging(
                 None,
                 SugarboxGrid(10, 10, 5),
@@ -2430,10 +2379,10 @@ class TestKrigingNegativeCases:
             indicator_kriging(indicator_property_medium, krig_medium_grid, ik_data, [0.3, 0.7])
 
     def test_ik_empty_data_list(self, indicator_property_medium, krig_medium_grid):
-        """indicator_kriging raises error when data list is empty"""
+        """indicator_kriging raises CriticalValidationError when data list is empty."""
         from geo_bsd.validation import CriticalValidationError
 
-        with pytest.raises((CriticalValidationError, ValueError)):
+        with pytest.raises(CriticalValidationError, match="Indicator count must be positive"):
             indicator_kriging(indicator_property_medium, krig_medium_grid, [], [0.5])
 
     def test_mik_wrong_marginal_probs_count(self, indicator_property_medium, krig_medium_grid):

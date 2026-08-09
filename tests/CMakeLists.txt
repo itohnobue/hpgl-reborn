@@ -16,10 +16,14 @@ if(HPGL_BUILD_PYTHON)
     elseif(WIN32 AND EXISTS ${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe)
         set(_hpgl_test_python ${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe)
     endif()
-    # NOTE: no `-v` flag — test_ffi_contract.py::test_safe_load_library_path_escape_raises
-    # monkeypatches pathlib.Path.__truediv__ globally; under pytest's verbose
-    # nodeid reporting (pytest 9.0.2 AND 9.0.3) that leaks into cwd_relative_nodeid
-    # and crashes pytest with INTERNALERROR ('str' object has no attribute 'parts').
+    # NOTE: no `-v` flag here — the historical pytest INTERNALERROR trigger
+    # ('str' object has no attribute 'parts' in cwd_relative_nodeid) came from
+    # test_ffi_contract.py's GLOBAL pathlib.Path.__truediv__ monkeypatch family.
+    # That patch family was REMOVED by the H-03 fix pass (the path-escape and
+    # oserror-continue tests now use real filesystem paths, see
+    # test_ffi_contract.py), so -v is technically unblocked — but restoring it
+    # on the CTest target is a deliberate deferral to the TEST stage
+    # (L-23/T-21: the run_tests.py runner keeps -v opt-in via --verbose).
     # III-31: mirror run_tests.py's default marker selection (-m "not slow" —
     # slow/perf/memory/simulation tests are excluded from the default suite)
     # and set a timeout so a hung test cannot wedge the CTest run forever.
@@ -68,6 +72,10 @@ endif()
 add_test(NAME hpgl_cpp_tests
     COMMAND hpgl_core_tests
 )
+# T-22: explicit TIMEOUT so a hung C++ binary cannot wedge the CTest run
+# indefinitely (matches hpgl_python_tests' TIMEOUT 1800; the project has a
+# documented hang history).
+set_tests_properties(hpgl_cpp_tests PROPERTIES TIMEOUT 1800)
 
 # ============================================================================
 # LAPACK solver entry-point tests
@@ -103,6 +111,8 @@ endif()
 add_test(NAME hpgl_solver_entry_point_tests
     COMMAND hpgl_solver_tests
 )
+# T-22: explicit TIMEOUT (same hang-wedge rationale as hpgl_cpp_tests).
+set_tests_properties(hpgl_solver_entry_point_tests PROPERTIES TIMEOUT 1800)
 
 # ============================================================================
 # cvariogram module regression tests
@@ -136,3 +146,5 @@ endif()
 add_test(NAME hpgl_variogram_tests
     COMMAND hpgl_variogram_tests
 )
+# T-22: explicit TIMEOUT (same hang-wedge rationale as hpgl_cpp_tests).
+set_tests_properties(hpgl_variogram_tests PROPERTIES TIMEOUT 1800)

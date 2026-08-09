@@ -41,11 +41,12 @@ def check_numpy():
         version_parts = numpy.__version__.split(".")
         major, minor = int(version_parts[0]), int(version_parts[1])
 
-        if (major, minor) >= (1, 24):
-            print("  [PASS] NumPy version is acceptable (>= 1.24)")
+        # L-21: project declares numpy>=2.0,<3.0 (pyproject.toml); accept only 2.0+
+        if (major, minor) >= (2, 0):
+            print("  [PASS] NumPy version is acceptable (>= 2.0)")
             return True
         else:
-            print(f"  [WARN] NumPy version {numpy.__version__} < 1.24, upgrade recommended")
+            print(f"  [WARN] NumPy version {numpy.__version__} < 2.0, upgrade recommended")
             return False
     except ImportError:
         print("  [FAIL] NumPy not installed")
@@ -156,7 +157,7 @@ def check_build_files():
     if cvar_found:
         cvar_files = [geo_bsd_dir / n for n in cvar_globs if (geo_bsd_dir / n).exists()]
 
-    found = bool(dll_files)
+    found = bool(dll_files) and bool(cvar_files)
     if dll_files:
         for f in dll_files:
             print(f"  [OK] {f.name}")
@@ -183,26 +184,13 @@ def check_test_files():
     print("\nChecking test files...")
 
     tests_dir = Path(__file__).parent / "python"
-    test_files = [
-        "conftest.py",
-        "test_classes.py",
-        "test_kriging_complete.py",
-        "test_simulation_complete.py",
-        "test_routines.py",
-        "test_utilities.py",
-        "test_integration.py",
-        "test_edge_cases.py",
-        "test_numpy2_compat.py",
-        "test_memory_leaks.py",
-        "test_performance.py",
-        "test_legacy_migrated.py",
-        "test_cvariogram.py",
-        "test_gtsim.py",
-        "test_cdf_edge_cases.py",
-        "test_variogram.py",
-        "test_validation.py",
-        "test_regression_v150.py",
-    ]
+    # L-21: derive the manifest from the filesystem instead of maintaining a
+    # stale hardcoded list (the old 18-file list silently passed with the
+    # pin/FFI/s6 families missing from the checkout). Glob over test_*.py so
+    # the check stays in sync as files are added/removed.
+    test_files = ["conftest.py"] + sorted(
+        p.name for p in tests_dir.glob("test_*.py") if p.is_file()
+    )
 
     all_exist = True
     for test_file in test_files:
@@ -251,7 +239,11 @@ def main():
 
     if passed == total:
         print("\n[SUCCESS] Environment is ready for testing!")
-        print("\nRun tests with: uv run pytest tests/python/ -v")
+        # N2-L24/N2-L27-adjacent: recommend the operational default-marker
+        # command (no -v — unconditional verbose is the documented pytest
+        # INTERNALERROR trigger — and slow tests are excluded from the
+        # default suite by design).
+        print("\nRun tests with: uv run pytest tests/python/ -m \"not slow\"")
         return 0
     elif results["HPGL library"] or results["Build files"]:
         print("\n[PARTIAL] Some checks failed")
