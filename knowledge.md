@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-06T18:27:33.080683
+Last updated: 2026-08-10T00:42:09.091212
 
 ## [got-20260616055758-f1d951]
 Category: gotcha
@@ -805,4 +805,53 @@ Tags: cpp, numerical
 Changed: 2026-08-06T18:27:13.391053
 
 loop-counter type must cover the count's range: an unsigned char (or other undersized) loop index wraps at 256 and can produce an infinite loop or wrap-around when the iteration count can exceed it - hpgl-reborn E-M54 pretty_printer.cpp:103 loops an indicator_index_t (unsigned char, typedefs.h:122) against size_t m_category_count: count >= 256 makes idx wrap 0-255-0 forever (hang); add_indicator has no cap and the C API gates block >255 but the direct-C++ path reaches print_params before kernel guards. Fix: use the same integer type as the count variable (size_t) for loop counters; validate/cap the count at the API boundary; when a type is deliberately narrow (uint8 indicator_index_t), enforce the cap at EVERY entry point, not only the C API. Checklist: (a) grep loop counters whose declared type is narrower than the compared count, (b) verify caps exist at all entry points reaching the loop, (c) test the boundary count (256, 65536) not just nominal values.
+
+## [pat-20260810004155-7e2ae6]
+Category: pattern
+Tags: testing, simulation, regression, cpp
+Changed: 2026-08-10T00:41:55.598331
+
+simulation OUTPUT masks are all-ones — sample the ORIGINAL input mask, never the result mask: C++ set_at writes m_mask=1 for every simulated node (property_array.h:68/:132, called from sequential_simulation.h:397/:522 and sequential_indicator_simulation.cpp:212), so after SGS/SIS the result property's mask is ALL-ONES regardless of input arming — any 'sample mask==0' hardening prescription targeting the OUTPUT mask selects the empty set (hpgl-reborn N2-02/N2-03, empirically proven; invalidated iter-1 T-12/T-13 hardening prescriptions computed on a population the tests never select). Fix: keep a reference to the ORIGINAL input mask (sample_property.mask==0) before simulation and sample uninformed cells from that snapshot; never derive 'uninformed' from the result property. Checklist: (a) for any post-simulation mask assertion, verify whether the mask is the input or the mutated output, (b) tests sampling result.mask==0 after SGS/SIS structurally select nothing, (c) snapshot the input mask before simulation when the test needs uninformed cells.
+
+## [pat-20260810004157-4ebcac]
+Category: pattern
+Tags: testing, coordination, parallel, regression
+Changed: 2026-08-10T00:41:57.350095
+
+mutual-deletion race in parallel test-suite audits — cross-agent sibling citations must be verified against the FINAL tree state, not mid-race reads: when two audit agents run in parallel on the same test file and each deletes a coverage class citing the OTHER's file as the surviving non-vacuous sibling, both deletions land and the coverage is lost unpinned (hpgl-reborn E-02: two agents deleted the same calc_mean coverage class, each citing the other's file as its surviving sibling → the all-masked pin was left unpinned and had to be restored post-fix). Mid-race reads show the sibling still present, so the citation checks out at read time. Fix: sibling-survival citations must be re-verified against the merged tree AFTER all parallel agents complete (post-merge grep for the cited survivor), and deletion scopes that cite cross-agent survivors should be single-owner or serialized. Checklist: (a) when deleting test X because 'sibling Y covers it', grep Y in the final tree — not mid-race, (b) parallel audit agents deleting from the same file must not both cite the other's deletion as surviving coverage, (c) post-fix review re-checks restored pins against the merged tree.
+
+## [got-20260810004159-e00b59]
+Category: gotcha
+Tags: numerical, io, cpp, python, sentinel
+Changed: 2026-08-10T00:41:59.573396
+
+numeric sentinel windows must be computed in the same floating-point space as the comparison target: a float32 data value near the sentinel boundary (float32(1.0e21)=1.000000020E+21) is DATA when compared against a window computed in float32 but SENTINEL when the same numeric window is computed in float64, because the boundary constant itself does not round-trip exactly (hpgl-reborn P-01, 4-PFA repeat-regression hotspot in read_inc_file.cpp:374-380, 17-agent cluster both-found+boundary; fixed by computing the sentinel window in float64 and comparing promoted doubles — read_inc_file.cpp:395-401). The C++ fast reader and the Python float64 readers disagreed on the writer's own output at the exact float32 edge. Fix: compute comparison windows (min/max sentinel bounds) in the same arithmetic type as the values being compared (or promote both sides to the wider type), and pin the exact-edge behavior with a cross-stack parity test. Checklist: (a) for any numeric window/magnitude comparison, verify the window constant and the compared value are in the same float type, (b) test the exact boundary value (float32 1.0e21f) through BOTH stacks, (c) a float32 value that is data under float32 math and sentinel under float64 math indicates a window-space mismatch. Extends got-20260802092630-2eec8a (window consistency across paths) and got-20260806182536-168e5f (write precision).
+
+## [pat-20260810004201-dde35e]
+Category: pattern
+Tags: testing, verification, cpp, regression
+Changed: 2026-08-10T00:42:01.453741
+
+proposed test additions can be bool-invariant or permanently-red — verify observable discrimination BEFORE writing: an addition that asserts a gate firing identically with and without the code under test (magnitude gate !isfinite catches NaN-in-X with/without the B-scan → the scan removal is undetectable; HPGL_LOG_STRING no-op in test builds) is bool-invariant and can never fail — it is not a regression test. A construction whose key conjunct is structurally dead (gauss-fallback wild: indefinite-matrix wild solutions have B'X<0 → Schur-consistency conjunct always false → gauss returns TRUE → permanently RED) can never pass. In hpgl-reborn N2-22/N2-23 adversarial review REJECTED both proposed additions after proving the invariants. Extends the vacuous-test family (pat-20260802223242 / pat-20260806182549) to the ADDITION side: a test that cannot fail (vacuous) and a test that cannot pass (permanently red) are equally useless. Fix: before writing a test, prove it discriminates — enumerate the code states it must distinguish and confirm the assertion flips between them; check for no-op macros and structurally-dead conjuncts. Checklist: (a) for any new test, verify the asserted gate changes with the code state (bool-invariant = useless), (b) grep for no-op test-build macros before relying on log/status output, (c) prove the discriminating conjunct is satisfiable in both directions (can pass AND can fail).
+
+## [got-20260810004205-1abfee]
+Category: gotcha
+Tags: testing, fixtures, python, regression
+Changed: 2026-08-10T00:42:05.671281
+
+test fixture helper parameters can lie about arming — a parameter named informed_frac=1.0 does not guarantee full arming: helper math that clamps or masks independently of the parameter (hpgl-reborn T-08: informed_frac=1.0 still masks index 0; values <0.5 are impossible because the step clamps to 2 → ~50%) makes every test built on the helper silently exercise a different fixture than the parameter promises, and downstream vacuity analysis blames the TEST when the HELPER is the liar. Fix: verify the helper's parameter-to-fixture mapping with a small discriminator test (assert masked-cell count is exactly 0 for informed_frac=1.0), and audit helper parameter ranges for clamping that defeats the documented contract. Checklist: (a) for any fixture helper with an 'informed/armed fraction' parameter, test the parameter's extreme values produce the claimed fixture state, (b) a name/param that promises full arming must mean full arming — 0 masked cells when informed_frac=1.0, (c) clamp logic in helpers hides vacuity behind plausible parameter names. Complements pat-20260806182549 (vacuous-fixture family — this is the helper-mechanism facet).
+
+## [got-20260810004207-a5b38c]
+Category: gotcha
+Tags: testing, cpp, ffi, regression
+Changed: 2026-08-10T00:42:07.382703
+
+C-ABI status/message buffers are never cleared on success — adjacent tests asserting the same substring false-pass: when a C entry point leaves its message buffer populated after a failure and does not clear it on the NEXT successful call, sibling sub-tests that check for a substring ('marginal_probs', '.tmp') pass against the PREVIOUS failure's residue (hpgl-reborn T-23/T-24: M-28/F-19/III-36/E2-53 family in test_hpgl_core.cpp — C ABI never clears message on success per III-06; median_ik {0.5,5.0} fires a sum gate whose message also contains 'marginal_probs', so the [0,1]-range gate test false-passes against it). Fix: message-gate tests must use DISTINCT substrings per gate (or snapshot-before/assert-changed) so sibling gates cannot satisfy each other, and the C ABI should clear the message buffer on success. Checklist: (a) for every substring-based gate assertion, grep the sibling gates in the same test for substring overlap, (b) verify the message buffer is cleared between calls or use snapshot-before, (c) a test that passes both with and without its guard firing is a stale-message false-pass.
+
+## [dis-20260810004209-b6adb2]
+Category: discovery
+Tags: testing, fixtures, slow, python
+Changed: 2026-08-10T00:42:09.085669
+
+BIG_SOFT_DATA big fixtures are 468,120 cells = 166×141×20, NOT 160×141×20 as the filenames imply: BIG_SOFT_DATA_160_141_20.INC and BIG_SOFT_DATA_CON_160_141_20.INC (both ~2MB) contain a 166×141×20 property (166*141*20 = 468,120; 160*141*20 = 451,200); any analysis computing geometry from the filename mis-sizes the grid. These fixtures are the top machine-freeze-risk class in the test suite — H-02 (AGENTS.md MANDATORY) requires @pytest.mark.slow on every test loading them; all legacy big-fixture tests and R-06 load cases now carry @slow (17 slow markers across 6 files: test_legacy_migrated 11, test_performance 2, test_cdf_edge_cases 1, test_edge_cases 1, test_memory_leaks 1, test_production_fixes_geo 1), excluding 468K-cell loads from the default suite. Checklist: (a) always verify fixture geometry from the data, not the filename, (b) any test loading a big fixture must be @slow-marked and run last/alone, (c) the default suite must exclude 468K-cell loads entirely.
 
