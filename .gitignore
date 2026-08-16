@@ -85,8 +85,6 @@ tmp/
 AGENTS.md
 session.md
 opencode.json
-loop-tasks.txt
-loop-tasks-run.sh
 
 # Build logs
 *.log
