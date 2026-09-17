@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-08-10T00:42:09.091212
+Last updated: 2026-09-09T21:07:43.928832
 
 ## [got-20260616055758-f1d951]
 Category: gotcha
@@ -854,4 +854,11 @@ Tags: testing, fixtures, slow, python
 Changed: 2026-08-10T00:42:09.085669
 
 BIG_SOFT_DATA big fixtures are 468,120 cells = 166×141×20, NOT 160×141×20 as the filenames imply: BIG_SOFT_DATA_160_141_20.INC and BIG_SOFT_DATA_CON_160_141_20.INC (both ~2MB) contain a 166×141×20 property (166*141*20 = 468,120; 160*141*20 = 451,200); any analysis computing geometry from the filename mis-sizes the grid. These fixtures are the top machine-freeze-risk class in the test suite — H-02 (AGENTS.md MANDATORY) requires @pytest.mark.slow on every test loading them; all legacy big-fixture tests and R-06 load cases now carry @slow (17 slow markers across 6 files: test_legacy_migrated 11, test_performance 2, test_cdf_edge_cases 1, test_edge_cases 1, test_memory_leaks 1, test_production_fixes_geo 1), excluding 468K-cell loads from the default suite. Checklist: (a) always verify fixture geometry from the data, not the filename, (b) any test loading a big fixture must be @slow-marked and run last/alone, (c) the default suite must exclude 468K-cell loads entirely.
+
+## [got-20260909210743-855c2c]
+Category: gotcha
+Tags: numerical, cpp, python, verification
+Changed: 2026-09-09T21:07:43.922650
+
+hygienic-vs-not: after C++ E-M74 (grid kernel skips (0,0,0) window vector, variograms.cpp:702) the Python CubeScan still bins the (0,0,0) offset into lag 0 — 5*last-cell-count zero-var self-pairs per informed cell (probe: 5x5x5 grid => 125 self-pairs in lag 0, py lag-0 count 125 vs C++ count 0). Value-equivalent (self var=0) so the 2-M-13 pin test still passes, and latent for other geometry: with unit Direction1=(1,0,0) the GSLIB tunnel condition sqrt((j/R2)^2+(k/R3)^2) <= |i|/R1 excludes EVERY other dist-0 offset, so lag 0 contains only the zero offset on both paths. Count-sensitive comparisons and FirstLagDistance-larger-than-0 templates (self-pair lands in no band) diverge; templates whose D1 projection admits other dist-0 in-tunnel offsets would dilute the py lag-0 mean vs C++.
 
