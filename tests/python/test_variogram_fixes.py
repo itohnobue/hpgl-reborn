@@ -68,6 +68,13 @@ class TestCubeScanIntegerMask:
         band but whose PROJECTION |dx|=2 the Euclidean metric had dropped.
         The new value is cross-checked against the C++ grid kernel
         (CalcVariograms) in TestVariogramProjectionMetric.
+
+        F-651: the lag-0 count is **0**, not 125. F-001 removed the (0,0,0)
+        offset from CubeScan (the self-pair skip the C++ kernel
+        variograms.cpp:702-703 and both point-set twins already had), so no
+        informed cell is paired with itself any more. The previous
+        ``125`` pinned that divergent self-pair count as "correct", which
+        blocked the parity fix.
         """
         templ = _make_template(r1=5, r2=5, r3=5, lag_width=1.0, lag_sep=1.0, num_lags=3)
         mask_u8 = np.ones((5, 5, 5), dtype="uint8")
@@ -77,8 +84,10 @@ class TestCubeScanIntegerMask:
         res_bool, _ = CubeScan(templ, mask_bool, _pair_counter, None)
 
         np.testing.assert_array_equal(res_u8, res_bool)
-        # Correct (bool) pair counts for this template — not the inflated 5x.
-        np.testing.assert_array_equal(res_bool[:, 2], np.array([125, 420, 687]))
+        # F-01/F-001 parity counts: lag 0 has no self-pairs (0), lag 1/lag 2
+        # carry the genuine cross-cell pairs. This is not the inflated 5x
+        # uint8 count either.
+        np.testing.assert_array_equal(res_bool[:, 2], np.array([0, 420, 687]))
 
     def test_non_binary_integer_mask_does_not_index_error(self):
         """F-01: masks with values >= 2 must not IndexError / inflate counts.
@@ -310,19 +319,26 @@ class TestCalcCovarianceVectorized:
         p2 = np.arange(25) + 25
         result = CalcCovarianceFunction(p1, p2, result, params)
 
-        # Manual accumulation: sum over pairs of (v1-s1)*(v2-s2)
+        # Manual accumulation: sum over pairs of (v1-s1)*(v2-s2).
+        # F-659: the products must be formed in float64 (float() on the float32
+        # cells). A `float(np.float32(...))` cast is a no-op here — the cells are
+        # already float32, so the product stays float32 and the reference then
+        # cannot tell float64 accumulation from the E-M10 float32-product
+        # regression (measured: |diff| 8.0e-09, i.e. ~1250x below the old
+        # atol=1e-5). With a float64 product the implementation matches
+        # exactly, so rtol=0/atol=1e-12 discriminates the regression.
         expected = np.zeros(2 * len(values) + 1)
         for i in range(25):
             v1 = values[0][p1[i]]
             v2 = values[0][p2[i]]
             s1 = soft[0][p1[i]]
             s2 = soft[0][p2[i]]
-            expected[1] += float(np.float32((v1 - s1) * (v2 - s2)))
+            expected[1] += (float(v1) - float(s1)) * (float(v2) - float(s2))
             expected[2] += 1
         if expected[2] > 0:
             expected[0] = expected[1] / expected[2]
         assert expected[2] == 25
-        np.testing.assert_allclose(result, expected, atol=1e-5)
+        np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12)
 
     def test_ind_correlation_batch_equals_manual(self):
         """I2-03: vectorized ind-correlation matches manual per-pair math."""
@@ -336,20 +352,23 @@ class TestCalcCovarianceVectorized:
         p2 = np.arange(20) + 20
         result = CalcIndCorrelationFunction(p1, p2, result, params)
 
+        # F-659: float64 products in the reference (see the covariance twin
+        # above) + rtol=0/atol=1e-12 — a float32-product regression is
+        # measured at |diff| 5.4e-09 and must fail here.
         expected = np.zeros(2 * len(values) + 1)
         for i in range(20):
             v1 = values[0][p1[i]]
             v2 = values[0][p2[i]]
-            s1 = soft[0][p1[i]]
-            s2 = soft[0][p2[i]]
+            s1 = float(soft[0][p1[i]])
+            s2 = float(soft[0][p2[i]])
             product = s1 * (1 - s1) * s2 * (1 - s2)
             denom = product**0.5 if product > 0 else 1.0
-            expected[1] += float(np.float32((v1 - s1) * (v2 - s2) / denom))
+            expected[1] += (float(v1) - s1) * (float(v2) - s2) / denom
             expected[2] += 1
         if expected[2] > 0:
             expected[0] = expected[1] / expected[2]
         assert expected[2] == 20
-        np.testing.assert_allclose(result, expected, atol=1e-5)
+        np.testing.assert_allclose(result, expected, rtol=0, atol=1e-12)
 
 
 # =============================================================================

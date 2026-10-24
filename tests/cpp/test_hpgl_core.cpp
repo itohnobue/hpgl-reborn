@@ -9,6 +9,8 @@
  *   - cholesky_decomposition: factor a known positive-definite matrix
  *   - cov_model_t: covariance value at zero lag includes nugget (C(0) = sill)
  *   - cov_model_t: covariance decays with distance
+ *   - cov_model_t: the sill is answered at the h <= 0 point only, not in a
+ *     range-relative band (F-641/F-655)
  *   - C API / writer / handler regression tests (F-05, F-16, F-25, F-34,
  *     F-43, F-52, F-53, F-54, I2-56)
  */
@@ -19,8 +21,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <functional>
-#include <future>
 #include <limits>
 #include <thread>
 #include <vector>
@@ -57,6 +59,13 @@
 #ifndef _WIN32
 #include <unistd.h>
 #include <dirent.h>
+#else
+// F-476: the Windows temp-leak probe enumerates the directory with
+// std::filesystem rather than <windows.h> — windows.h's rpcndr.h defines
+// `small` as a macro, which would break this file's `sugarbox_grid_t small`
+// identifier.
+#include <filesystem>
+#include <system_error>
 #endif
 
 // ---- Minimal test framework ----
@@ -79,16 +88,25 @@ static const char *g_current_test = "";
         }                                                                      \
     } while (0)
 
+// F-471: NaN defeats a plain `std::abs(_a - _b) > (eps)` test — every
+// comparison with NaN is false, so a NaN actual or expected value passed the
+// assertion silently (a compiled probe: CHECK_CLOSE(NaN, 2.0, 1e-14) and
+// CHECK_CLOSE(NaN, NaN, 1e-14) both reported zero failures; +Inf was caught).
+// The negated form `!(_d <= eps)` is false for NaN too, so NaN now fails while
+// in-tolerance finite values still pass and out-of-tolerance finite values
+// still fail.
 #define CHECK_CLOSE(a, b, eps)                                                 \
     do {                                                                       \
         double _a = (a);                                                       \
         double _b = (b);                                                       \
-        if (std::abs(_a - _b) > (eps)) {                                       \
-            std::fprintf(stderr,                                                \
-                         "FAIL: %s:%d in %s: |%.15g - %.15g| > %.15g\n",       \
-                         __FILE__, __LINE__, g_current_test, _a, _b, (double)(eps)); \
-            g_tests_failed++;                                                   \
-            return;                                                             \
+        double _d = std::abs(_a - _b);                                         \
+        if (!(_d <= (eps))) {                                                  \
+            std::fprintf(stderr,                                               \
+                         "FAIL: %s:%d in %s: |%.15g - %.15g| = %.15g > %.15g\n", \
+                         __FILE__, __LINE__, g_current_test, _a, _b, _d,       \
+                         (double)(eps));                                       \
+            g_tests_failed++;                                                  \
+            return;                                                            \
         }                                                                      \
     } while (0)
 
@@ -248,6 +266,63 @@ void test_covariance_nugget_contributes_at_lag_zero() {
     CHECK(ch_with_nug > 0.0);
 }
 
+// F-641 / F-655 (F-199): the kernels answer the SILL at the zero-distance
+// POINT and decay immediately above it — the old guard was a range-relative
+// band (`h < 1e-5 * ranges[0]` -> sill), which is wrong in both directions:
+//   (a) with a large legal range the band swallows real one-unit
+//       separations, so an entire kriging matrix collapses to the sill and
+//       the nugget — the term that makes such a system solvable — is
+//       discarded;
+//   (b) the zero-distance answer must stay the sill, NOT sill - nugget: the
+//       LHS diagonal is fetched through this same kernel
+//       (my_kriging_weights.h), so returning sill - nugget at h == 0
+//       re-creates the singularity.
+// The Python layer cannot pin this: `h` is the anisotropy-normalized
+// distance, so the minimum non-zero value on an integer lattice is 1.0 while
+// the band is only non-empty when ranges[0] > 1e4 (and there every pairwise
+// covariance is the sill, so a kriging fixture has no numeric oracle —
+// tmp/s6-fix-tests4-report.md). Hence this direct-construction pin, one per
+// kernel. Discriminating fixture: ranges = 1e6 makes the OLD band 10 units
+// wide, so h = 1.0 fell inside it and returned the sill 1.0; the fixed
+// kernel returns (sill - nugget) * rho(1e-6) ~= 0.9 and the two checks below
+// fail under the restored band.
+void test_cov_model_sill_only_at_zero_point() {
+    TEST("F-641/F-655: cov_model_t answers the sill only at h <= 0, not in a range band");
+    double ranges_a[3] = { 1e6, 1e6, 1e6 };
+    double angles_a[3] = { 0.0, 0.0, 0.0 };
+    const double sill = 1.0;
+    const double nugget = 0.1;
+
+    // --- gaussian: exp(-3 * (h/range)^2) ---
+    hpgl::cov_model_t gauss(
+        hpgl::covariance_type_t::COV_GAUSSIAN, ranges_a, angles_a, sill, nugget);
+    CHECK_CLOSE(gauss(0.0), sill, 1e-14);
+    CHECK_CLOSE(gauss(-1.0), sill, 1e-14);  // h <= 0 keeps the point answer
+    CHECK_CLOSE(gauss(1.0),
+                (sill - nugget) * std::exp(-3.0 * (1.0 / ranges_a[0]) * (1.0 / ranges_a[0])),
+                1e-12);
+    CHECK(gauss(1.0) < 0.99);  // inside the old band: 1.0 pre-fix
+
+    // --- exponential: exp(-3 * h/range) ---
+    hpgl::cov_model_t expo(
+        hpgl::covariance_type_t::COV_EXPONENTIAL, ranges_a, angles_a, sill, nugget);
+    CHECK_CLOSE(expo(0.0), sill, 1e-14);
+    CHECK_CLOSE(expo(-1.0), sill, 1e-14);
+    CHECK_CLOSE(expo(1.0), (sill - nugget) * std::exp(-3.0 * 1.0 / ranges_a[0]), 1e-12);
+    CHECK(expo(1.0) < 0.99);
+
+    // --- spherical: (sill - nugget) * (1 - 1.5x + 0.5x^3), x = h/range ---
+    hpgl::cov_model_t sph(
+        hpgl::covariance_type_t::COV_SPHERICAL, ranges_a, angles_a, sill, nugget);
+    CHECK_CLOSE(sph(0.0), sill, 1e-14);
+    CHECK_CLOSE(sph(-1.0), sill, 1e-14);
+    const double x = 1.0 / ranges_a[0];
+    CHECK_CLOSE(sph(1.0),
+                (sill - nugget) * (1.0 - x * (1.5 - 0.5 * x * x)),
+                1e-12);
+    CHECK(sph(1.0) < 0.99);
+}
+
 void test_covariance_spherical_at_range_boundary() {
     TEST("cov_model_t spherical at range boundary");
     double ranges_a[3] = { 10.0, 10.0, 10.0 };
@@ -266,13 +341,14 @@ void test_covariance_spherical_at_range_boundary() {
 }
 
 // got-20260724074703: cov_model_t kernels are the class-4 numerical NaN
-// hotspot. The gaussian/exponential/spherical guards were comparison-only
-// (`h < near_zero`) — IEEE-754 makes NaN < x false, so a NaN distance
-// (from NaN coordinates reaching the kernel through direct-C++ or FFI
-// callers that bypass the C-API boundary validation) flowed into
-// exp(-3*pow(NaN,2)) → NaN covariance. Post-fix the guard is
-// `!std::isfinite(h) || h < near_zero`, so a NaN h returns the sill
-// (finite, defined output) instead of propagating NaN.
+// hotspot. The original guards were comparison-only (`h < near_zero`) —
+// IEEE-754 makes NaN < x false, so a NaN distance (from NaN coordinates
+// reaching the kernel through direct-C++ or FFI callers that bypass the
+// C-API boundary validation) flowed into exp(-3*pow(NaN,2)) → NaN
+// covariance. The guard is now `!std::isfinite(h) || h <= 0.0` (F-199
+// replaced the near_zero band with the zero-distance point test), so a NaN h
+// returns the sill (finite, defined output) instead of propagating NaN.
+
 void test_cov_model_nan_distance_returns_sill() {
     TEST("got-20260724074703: cov_model_t NaN distance returns sill (isfinite-first)");
     double ranges_a[3] = { 10.0, 10.0, 10.0 };
@@ -415,6 +491,28 @@ void test_write_inc_file_byte_identity_remap_zero_values()
     char * fname = const_cast<char *>(filename.c_str());
     int rc = hpgl_write_inc_file_byte(fname, &arr, 255, name, empty_values, 0);
     CHECK(rc == 0);  // pre-fix: -1 with "Mismatch: 0 remap values"
+
+    // F-484: rc == 0 is satisfied by ANY remap table (api.cpp:674-675 writes
+    // through remap_table[val] and returns 0), so the documented identity
+    // mapping was never observed. Read the file back: the INC byte writer emits
+    // the property name on its own line, then one category code per line
+    // ("%d\n", property_writer.cpp write_value), then the "/" end marker — so
+    // the identity remap of {0,1,0,1} is exactly this text. A table shifted by
+    // one (codes 1,2,1,2) or a write that ignores the table fails here.
+    std::string content;
+    // Text mode ("r", not "rb"): the writer opens the temp with "w+", so a
+    // Windows build emits CRLF — the CRT translates it back on read. Same
+    // idiom as the read-back in test_property_writer_preserves_target_on_failure.
+    FILE * back = fopen(filename.c_str(), "r");
+    CHECK(back != nullptr);
+    if (back != nullptr)
+    {
+        char buf[64] = {0};
+        size_t nread = fread(buf, 1, sizeof(buf) - 1, back);
+        fclose(back);
+        content = std::string(buf, nread);
+    }
+    CHECK(content == "identity\n0\n1\n0\n1\n/\n");
     std::remove(filename.c_str());
 }
 
@@ -609,12 +707,17 @@ void test_property_writer_removes_tmp_on_failure()
         closedir(d);
     }
 #else
-    // Windows: fall back to the legacy .tmp probe (FindFirstFile is not
-    // worth the extra branch for a test-only check).
-    FILE * tmp = fopen((filename + ".tmp").c_str(), "r");
-    tmp_leftover = (tmp != nullptr);
-    if (tmp != nullptr)
-        fclose(tmp);
+    // F-476: both platform branches of open_tmp_file_checked name the temp
+    // "<target>.tmp.<pid>.<counter>" (property_writer.cpp POSIX :168, Windows
+    // :221), so the legacy "<target>.tmp" probe was constant-true in every
+    // state and could not detect the F-52 regression. Scan for the live prefix
+    // like the POSIX branch does: any "<target>.tmp.*" entry is a leftover.
+    std::error_code scan_error;
+    for (const auto & entry : std::filesystem::directory_iterator(dir, scan_error))
+    {
+        if (entry.path().filename().string().rfind("leak_test.inc.tmp.", 0) == 0)
+            tmp_leftover = true;
+    }
 #endif
     CHECK(!tmp_leftover);  // pre-fix: leaked <file>.tmp.<pid>.<counter>
     std::remove(filename.c_str());
@@ -632,12 +735,33 @@ static int slow_handler(char * data, void * param)
     return 0;
 }
 
+// F-473(a)/F-481: CHECK returns from the enclosing test body, so a failing
+// CHECK unwound through a joinable std::thread -> std::terminate (SIGABRT: the
+// run's "N run, M failed" summary and every later test were lost) and left
+// slow_handler installed process-wide for the tests that followed. This guard
+// joins and resets the handler on any exit path that skipped the success path's
+// explicit set_output_handler(nullptr) + join.
+struct handler_invocation_scope
+{
+    std::thread & m_writer;
+    explicit handler_invocation_scope(std::thread & writer) : m_writer(writer) {}
+    ~handler_invocation_scope()
+    {
+        if (m_writer.joinable())
+        {
+            hpgl_set_output_handler(nullptr, nullptr);
+            m_writer.join();
+        }
+    }
+};
+
 void test_handler_setter_blocks_during_invocation()
 {
     TEST("F-16: set_output_handler blocks during in-flight invocation");
     g_slow_handler_started = false;
     hpgl_set_output_handler(slow_handler, nullptr);
     std::thread writer([] { hpgl::write("blocking-write"); });
+    handler_invocation_scope writer_scope(writer);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!g_slow_handler_started.load() && std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -654,6 +778,7 @@ void test_handler_setter_blocks_during_invocation()
 // F-53: a handler that calls back into HPGL (re-entrant hpgl::write) must not
 // self-deadlock.
 static std::atomic<bool> g_reentrant_ran{false};
+static std::atomic<bool> g_reentrant_write_done{false};
 static int reentrant_handler(char * data, void * param)
 {
     (void)data;
@@ -667,10 +792,27 @@ void test_reentrant_handler_no_deadlock()
 {
     TEST("F-53: re-entrant handler does not deadlock");
     g_reentrant_ran = false;
+    g_reentrant_write_done = false;
     hpgl_set_output_handler(reentrant_handler, nullptr);
-    std::future<void> fut = std::async(std::launch::async, [] { hpgl::write("outer"); });
-    bool completed = fut.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+    // F-473(b): a std::future's destructor waits for its async task, so the
+    // timeout path could only hang, and a joinable std::thread would turn the
+    // CHECK below into std::terminate. A plain std::thread plus an atomic
+    // completion flag lets the failure path detach the (possibly stuck) worker
+    // and still report a FAIL. The lambda captures nothing, so a detached
+    // worker never touches a destroyed object.
+    std::thread worker([] {
+        hpgl::write("outer");
+        g_reentrant_write_done = true;
+    });
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!g_reentrant_write_done.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     hpgl_set_output_handler(nullptr, nullptr);
+    const bool completed = g_reentrant_write_done.load();
+    if (completed)
+        worker.join();
+    else
+        worker.detach();
     CHECK(completed);  // pre-fix: deadlocks (times out)
     CHECK(g_reentrant_ran.load());
 }
@@ -1012,11 +1154,20 @@ void test_cokriging_stats_and_missing_secondary() {
     skp.set_mean(0.0);
     hpgl::simple_kriging(primary, grid, skp, sk_output);
 
+    // F-472/F-485: the comparison below executes only for cells both outputs
+    // mask, so a masking regression that leaves either mask all-zero ran zero
+    // assertions and still printed PASS. ANY masked pair proves the property
+    // was actually compared (same guard as the siblings at
+    // test_cokriging_workspace_preserves_correctness and
+    // test_cokriging_zero_variance_primary_only).
+    bool any_compared = false;
     for (int i = 0; i < n; ++i) {
         if (output_mask[i] && sk_output_mask[i]) {
             CHECK_CLOSE(output_data[i], sk_output_data[i], 1e-3);
+            any_compared = true;
         }
     }
+    CHECK(any_compared);
 }
 
 // PR-05 (F-34 partial): hpgl_indicator_kriging must reject a zero search
@@ -1639,10 +1790,12 @@ void test_median_ik_rejects_invalid_marginal_probs() {
 // m_max_neighbours"). They were previously two adjacent tests both checking
 // the shared substring "m_min_neighbours", so a sibling-only regression
 // (min<0 gate removed) false-passed on the stale message from the min>max
-// test (the C ABI never clears the message on success, III-06). Merged into
-// one test with DISTINCT substrings — a min<0 regression now leaves the
-// stale "exceeds m_max_neighbours" message, which fails the "cannot be
-// negative" check.
+// test — pre-F-182 the C ABI never cleared the message on success (the
+// removed III-06 limitation; compute entries now clear the slot on entry,
+// api.h:229-242). Merged into one test with DISTINCT substrings — a min<0
+// regression leaves the stale "exceeds m_max_neighbours" message, which
+// fails the "cannot be negative" check; and with the slot cleared on entry a
+// stale message cannot survive into the next call at all.
 void test_sgs_rejects_invalid_min_neighbours() {
     TEST("M-28: SGS rejects min_neighbours > max_neighbours or negative");
     // (a) min > max → "m_min_neighbours 5 exceeds m_max_neighbours 3".
@@ -2161,8 +2314,9 @@ void test_sgs_rejects_invalid_cdf_struct() {
     // (c) negative m_size → clear error (pre-fix UB pointer arithmetic).
     // N2-L29: case (d) shares the "m_size" substring, so a regression that
     // drops ONLY the upper-bound leg (m_size > MAX) would leave case (d)
-    // succeeding and false-pass on case (c)'s stale "m_size" message (the
-    // C ABI never clears the message on success, III-06). The messages embed
+    // succeeding and false-pass on case (c)'s stale "m_size" message
+    // (pre-F-182 the C ABI never cleared the message on success; compute
+    // entries now clear the slot on entry, api.h:229-242). The messages embed
     // the offending value ("cdf m_size -1 out of range" vs "cdf m_size
     // 5000000000 out of range"), so checking the value-bearing substring
     // pins each leg independently.
@@ -2258,21 +2412,20 @@ void test_sis_rejects_out_of_range_marginal_prob() {
         const char * msg = hpgl_get_last_exception_message();
         CHECK(msg != nullptr && strstr(msg, "marginal_prob") != nullptr);
     }
-    // (d) control: valid [0,1] marginals still run. The C ABI keeps the
-    // last error message indefinitely — there is no clear-error function
-    // (documented limitation III-06), so after a SUCCESSFUL call the stale
-    // "marginal_prob" message from case (c) is still observable. The
-    // success contract is "no NEW error stored for THIS call": snapshot
-    // the message before and assert it is unchanged after. A failure would
-    // overwrite it with a fresh error message.
+    // (d) control: valid [0,1] marginals still run. F-182: every void compute
+    // entry clears this thread's message slot on entry, so a message read
+    // after a call is always that call's (api.h:229-242). The success
+    // contract is therefore the EMPTY slot: case (c)'s stale "marginal_prob"
+    // message is cleared by the entry, and a SUCCESSFUL call must leave
+    // nothing behind. A call that failed, or a regression that stored a new
+    // error while succeeding, leaves a non-empty message and fails here.
     {
         hpgl_ik_params_t params[cats];
         init_ik_param(params[0], 0.5);
         init_ik_param(params[1], 0.5);
-        const std::string before = hpgl_get_last_exception_message();
         hpgl_sis_simulation(&in, params, cats, 42, nullptr);
         const std::string after = hpgl_get_last_exception_message();
-        CHECK(before == after);
+        CHECK(after.empty());
     }
 }
 
@@ -2324,17 +2477,16 @@ void test_lvm_kriging_rejects_nonfinite_means_contents() {
     const char * msg = hpgl_get_last_exception_message();
     CHECK(msg != nullptr && strstr(msg, "mean_data") != nullptr);
 
-    // Control: finite means still krige. The C ABI keeps the last error
-    // message indefinitely (no clear-error function, limitation III-06), so
-    // the stale "mean_data" message from the failing case above is still
-    // observable after a SUCCESSFUL call. Assert no NEW error was stored
-    // for THIS call: message must be unchanged.
+    // Control: finite means still krige. F-182: the compute entry clears this
+    // thread's message slot on entry, so a message read after a call is
+    // always that call's (api.h:229-242). The stale "mean_data" message from
+    // the failing case above must be GONE after a SUCCESSFUL call: the
+    // success contract is the empty slot.
     float good_mean[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    const std::string before = hpgl_get_last_exception_message();
     hpgl_lvm_kriging(in_data, in_mask, &shape, good_mean, &mean_shape,
                      &params, out_data, out_mask, &shape);
     const std::string after = hpgl_get_last_exception_message();
-    CHECK(before == after);
+    CHECK(after.empty());
 }
 
 // II-04: hpgl_sgs_lvm_simulation must scan means contents for finiteness.
@@ -2636,11 +2788,11 @@ void test_cokriging_rejects_per_dim_shape_mismatch() {
         const char * msg = hpgl_get_last_exception_message();
         CHECK(msg != nullptr && strstr(msg, "cokriging_m2:") != nullptr);
     }
-    // (c) control: matching per-dim shapes (2,2,2)+(2,2,2) still run.
-    // The C ABI keeps the last error message indefinitely (no clear-error
-    // function, limitation III-06), so the stale "shape[" message from
-    // cases (a)/(b) is still observable after a SUCCESSFUL call. Assert no
-    // NEW error was stored for THIS call: message must be unchanged.
+    // (c) control: matching per-dim shapes (2,2,2)+(2,2,2) still run. F-182:
+    // the compute entry clears this thread's message slot on entry, so a
+    // message read after a call is always that call's (api.h:229-242). The
+    // stale "shape[" message from cases (a)/(b) must be GONE after this
+    // SUCCESSFUL call: the success contract is the empty slot.
     {
         init_shape(sec.m_shape, 2, 2, 2);
         hpgl_cokriging_m1_params_t params;
@@ -2655,10 +2807,9 @@ void test_cokriging_rejects_per_dim_shape_mismatch() {
         params.m_secondary_mean = 0.0;
         params.m_secondary_variance = 1.0;
         params.m_correlation_coef = 0.5;
-        const std::string before = hpgl_get_last_exception_message();
         hpgl_simple_cokriging_mark1(&in, &sec, &params, &out);
         const std::string after = hpgl_get_last_exception_message();
-        CHECK(before == after);
+        CHECK(after.empty());
     }
 }
 
@@ -3312,21 +3463,19 @@ void test_kriging_rejects_aliased_buffers() {
         const char * msg = hpgl_get_last_exception_message();
         CHECK(msg != nullptr && strstr(msg, "aliased masks") != nullptr);
     }
-    // (c) Control: distinct buffers work (all-informed → finite output). The
-    // C ABI keeps the last error message indefinitely — there is no
-    // clear-error function (documented limitation III-06) — so after a
-    // SUCCESSFUL call the stale "must not be the same buffer" message from
-    // cases (a)/(b) is still observable. The success contract is "no NEW
-    // error stored for THIS call": snapshot the message before and assert it
-    // is unchanged after (same pattern as the SIS control at :2167-2170). A
-    // regression would overwrite it with a fresh error message.
+    // (c) Control: distinct buffers work (all-informed → finite output). F-182:
+    // the compute entry clears this thread's message slot on entry, so a
+    // message read after a call is always that call's (api.h:229-242). The
+    // stale "must not be the same buffer" message from cases (a)/(b) must be
+    // GONE after this SUCCESSFUL call: the success contract is the empty
+    // slot. A regression that stored a new error, or a failing call, leaves a
+    // non-empty message and fails here.
     {
         float out_data[4] = {0, 0, 0, 0};
         unsigned char out_mask[4] = {0, 0, 0, 0};
-        const std::string before = hpgl_get_last_exception_message();
         hpgl_simple_kriging(data, mask, &shape, &params, out_data, out_mask, &shape);
         const std::string after = hpgl_get_last_exception_message();
-        CHECK(before == after);
+        CHECK(after.empty());
         for (int i = 0; i < 4; ++i)
             CHECK(std::isfinite(out_data[i]));
     }
@@ -3633,120 +3782,145 @@ void test_sample_nan_guard() {
     }
 }
 
-int main() {
-    test_gauss_solve_3x3_known_system();
-    test_gauss_solve_singular_returns_false();
-    test_cholesky_decomposition_3x3();
-    test_covariance_zero_lag_equals_sill();
-    test_covariance_decays_with_distance();
-    test_covariance_nugget_contributes_at_lag_zero();
-    test_covariance_spherical_at_range_boundary();
-    test_cholesky_solve_3x3();
+// F-473(c): an exception escaping a test body — the direct C++ entry points
+// really do throw hpgl_exception on bad parameters — used to reach main()
+// uncaught, which is std::terminate: the "N run, M failed" summary and every
+// later test were lost. Report it as a test failure instead. Every test body
+// sets g_current_test through TEST() as its first statement, so the message
+// still names the failing test.
+static void run_test(void (*test_fn)())
+{
+    try
+    {
+        test_fn();
+    }
+    catch (const std::exception & ex)
+    {
+        std::fprintf(stderr, "FAIL: exception in %s: %s\n", g_current_test, ex.what());
+        g_tests_failed++;
+    }
+    catch (...)
+    {
+        std::fprintf(stderr, "FAIL: unknown exception in %s\n", g_current_test);
+        g_tests_failed++;
+    }
+}
 
-    test_write_inc_file_byte_identity_remap_zero_values();
-    test_write_inc_file_float_rejects_nonpositive_dims();
-    test_write_gslib_sentinel_round_trip();
-    test_ordinary_kriging_rejects_huge_max_neighbours();
-    test_ordinary_kriging_rejects_zero_radius();
-    test_property_writer_removes_tmp_on_failure();
-    test_handler_setter_blocks_during_invocation();
-    test_reentrant_handler_no_deadlock();
-    test_read_inc_file_skips_midline_slash();
-    test_read_inc_file_rejects_extra_tokens();
-    test_read_inc_file_exact_size_with_terminator();
+int main() {
+    run_test(test_gauss_solve_3x3_known_system);
+    run_test(test_gauss_solve_singular_returns_false);
+    run_test(test_cholesky_decomposition_3x3);
+    run_test(test_covariance_zero_lag_equals_sill);
+    run_test(test_covariance_decays_with_distance);
+    run_test(test_covariance_nugget_contributes_at_lag_zero);
+    run_test(test_cov_model_sill_only_at_zero_point);
+    run_test(test_covariance_spherical_at_range_boundary);
+    run_test(test_cholesky_solve_3x3);
+
+    run_test(test_write_inc_file_byte_identity_remap_zero_values);
+    run_test(test_write_inc_file_float_rejects_nonpositive_dims);
+    run_test(test_write_gslib_sentinel_round_trip);
+    run_test(test_ordinary_kriging_rejects_huge_max_neighbours);
+    run_test(test_ordinary_kriging_rejects_zero_radius);
+    run_test(test_property_writer_removes_tmp_on_failure);
+    run_test(test_handler_setter_blocks_during_invocation);
+    run_test(test_reentrant_handler_no_deadlock);
+    run_test(test_read_inc_file_skips_midline_slash);
+    run_test(test_read_inc_file_rejects_extra_tokens);
+    run_test(test_read_inc_file_exact_size_with_terminator);
 
     // Production-check regression tests (F-04, F-20, F-21, I2-24, F-09,
     // F-19, F-22, F-14).
-    test_gaussian_inverse_tail_saturation();
-    test_order_relations_gslib_envelope();
-    test_precalculated_covariance_exact_beyond_box();
-    test_precalculated_covariance_throws_on_huge_volume();
-    test_indexed_lookup_radius_bound();
-    test_cokriging_stats_and_missing_secondary();
-    test_sgs_min_neighbours_wired();
+    run_test(test_gaussian_inverse_tail_saturation);
+    run_test(test_order_relations_gslib_envelope);
+    run_test(test_precalculated_covariance_exact_beyond_box);
+    run_test(test_precalculated_covariance_throws_on_huge_volume);
+    run_test(test_indexed_lookup_radius_bound);
+    run_test(test_cokriging_stats_and_missing_secondary);
+    run_test(test_sgs_min_neighbours_wired);
 
     // FIX convergence pass (PR-05 C++ part, PR-06, PR-07).
-    test_indicator_kriging_rejects_zero_radius();
-    test_covariance_field_exact_beyond_box();
-    test_cokriging_rejects_huge_max_neighbours();
+    run_test(test_indicator_kriging_rejects_zero_radius);
+    run_test(test_covariance_field_exact_beyond_box);
+    run_test(test_cokriging_rejects_huge_max_neighbours);
 
     // s6-fix-cpp-engines regression tests (M-3, M-5, M-6, M-11, M-28, M-29,
     // M-31, 2-M-4, 2-M-32, 2-M-33) + s9 round-2 re-fixes (R-3, R-5, R-6, R-11).
-    test_ok_sgs_only_downgrades_under_4_neighbours();
-    test_user_cancellation_stops_kriging_loop();
-    test_median_ik_emits_stderr_failure_signal();
-    test_sgs_ndmin_skips_nodes_with_few_originals_despite_inflated_total();
-    test_sgs_rejects_invalid_min_neighbours();
-    test_sgs_ok_fallback_uses_gmean_and_stats_denominator();
-    test_kriging_rejects_zero_max_neighbours();
-    test_sgs_rejects_invalid_kriging_kind();
-    test_cokriging_pure_nugget_not_mean_filled();
-    test_median_ik_stats_mean_uses_all_processed();
-    test_sgs_ok_downgraded_estimate_has_no_mean_term();
-    test_plain_lookup_fallback_window_bounded();
-    test_median_ik_rejects_invalid_marginal_probs();
+    run_test(test_ok_sgs_only_downgrades_under_4_neighbours);
+    run_test(test_user_cancellation_stops_kriging_loop);
+    run_test(test_median_ik_emits_stderr_failure_signal);
+    run_test(test_sgs_ndmin_skips_nodes_with_few_originals_despite_inflated_total);
+    run_test(test_sgs_rejects_invalid_min_neighbours);
+    run_test(test_sgs_ok_fallback_uses_gmean_and_stats_denominator);
+    run_test(test_kriging_rejects_zero_max_neighbours);
+    run_test(test_sgs_rejects_invalid_kriging_kind);
+    run_test(test_cokriging_pure_nugget_not_mean_filled);
+    run_test(test_median_ik_stats_mean_uses_all_processed);
+    run_test(test_sgs_ok_downgraded_estimate_has_no_mean_term);
+    run_test(test_plain_lookup_fallback_window_bounded);
+    run_test(test_median_ik_rejects_invalid_marginal_probs);
 
     // s6-fix-cpp-hardening regression tests (M-12, 2-M-2, 2-M-9, 2-M-15).
-    test_simple_kriging_weights_rejects_huge_count();
-    test_cokriging_workspace_preserves_correctness();
-    test_property_array_mask_size_bounds();
-    test_clusterizer_rejects_memory_unsafe_volume();
+    run_test(test_simple_kriging_weights_rejects_huge_count);
+    run_test(test_cokriging_workspace_preserves_correctness);
+    run_test(test_property_array_mask_size_bounds);
+    run_test(test_clusterizer_rejects_memory_unsafe_volume);
 
     // s8-fix-cpp-api regression tests (C-boundary validation cluster:
     // F-18, F-19, II-02..II-06, II-49, II-50, III-03, III-34, III-35, III-36).
-    test_sgs_rejects_invalid_cdf_struct();
-    test_sgs_rejects_nonfinite_mean();
-    test_sis_rejects_out_of_range_marginal_prob();
-    test_simple_kriging_rejects_nonfinite_mean();
-    test_lvm_kriging_rejects_nonfinite_means_contents();
-    test_sgs_lvm_rejects_nonfinite_means();
-    test_sis_lvm_rejects_nonfinite_means();
-    test_cokriging_rejects_nonfinite_means();
-    test_simple_kriging_weights_resets_stats_before_validation();
-    test_read_inc_file_byte_preserves_buffer_on_unmapped_throw();
-    test_read_inc_file_byte_rejects_huge_values_count();
-    test_indicator_kriging_rejects_zero_indicator_count();
-    test_cokriging_rejects_per_dim_shape_mismatch();
+    run_test(test_sgs_rejects_invalid_cdf_struct);
+    run_test(test_sgs_rejects_nonfinite_mean);
+    run_test(test_sis_rejects_out_of_range_marginal_prob);
+    run_test(test_simple_kriging_rejects_nonfinite_mean);
+    run_test(test_lvm_kriging_rejects_nonfinite_means_contents);
+    run_test(test_sgs_lvm_rejects_nonfinite_means);
+    run_test(test_sis_lvm_rejects_nonfinite_means);
+    run_test(test_cokriging_rejects_nonfinite_means);
+    run_test(test_simple_kriging_weights_resets_stats_before_validation);
+    run_test(test_read_inc_file_byte_preserves_buffer_on_unmapped_throw);
+    run_test(test_read_inc_file_byte_rejects_huge_values_count);
+    run_test(test_indicator_kriging_rejects_zero_indicator_count);
+    run_test(test_cokriging_rejects_per_dim_shape_mismatch);
 
     // s8-fix-cpp-kriging regression tests (F-20, II-10, II-08, III-09).
-    test_cokriging_direct_cpp_rejects_nonfinite_params();
-    test_cokriging_zero_variance_primary_only();
-    test_correlogram_weights_embed_sigma_backtransform();
-    test_cov_model_rejects_overflowing_range_ratio();
+    run_test(test_cokriging_direct_cpp_rejects_nonfinite_params);
+    run_test(test_cokriging_zero_variance_primary_only);
+    run_test(test_correlogram_weights_embed_sigma_backtransform);
+    run_test(test_cov_model_rejects_overflowing_range_ratio);
 
     // got-20260724074703: cov_model kernels isfinite-first (NaN distance).
-    test_cov_model_nan_distance_returns_sill();
-    test_simple_kriging_weights_rejects_nonfinite_coords();
+    run_test(test_cov_model_nan_distance_returns_sill);
+    run_test(test_simple_kriging_weights_rejects_nonfinite_coords);
 
     // s8-fix-cpp-sim regression tests (F-01, F-37, II-11, II-12, II-13,
     // II-14, III-10).
-    test_select_throws_on_invalid_index();
-    test_sanitize_probability_nan_safe();
-    test_order_relations_nan_safe();
-    test_plain_lookup_zero_max_neighbours_empty();
-    test_read_inc_file_rejects_overlong_token();
-    test_property_writer_preserves_target_on_failure();
+    run_test(test_select_throws_on_invalid_index);
+    run_test(test_sanitize_probability_nan_safe);
+    run_test(test_order_relations_nan_safe);
+    run_test(test_plain_lookup_zero_max_neighbours_empty);
+    run_test(test_read_inc_file_rejects_overlong_token);
+    run_test(test_property_writer_preserves_target_on_failure);
 
     // s9 fix convergence pass 2 (R-02 tokenizer straddle, R-03 F-21 scan
     // bound, R-04 F-38 kriging-failure message).
-    test_read_inc_file_reassembles_straddling_token();
-    test_read_inc_file_byte_reassembles_straddling_token();
-    test_indexed_lookup_scan_bounded();
-    test_simple_kriging_weights_solve_failure_clean_message();
+    run_test(test_read_inc_file_reassembles_straddling_token);
+    run_test(test_read_inc_file_byte_reassembles_straddling_token);
+    run_test(test_indexed_lookup_scan_bounded);
+    run_test(test_simple_kriging_weights_solve_failure_clean_message);
 
     // Stage-8 TEST-ADD regression tests (T-11..T-25).
-    test_cokriging_fallback_scales_secondary();
-    test_kriging_rejects_aliased_buffers();
-    test_sgs_radius_gate_before_destructive_transform();
-    test_ordrel_s_gt_1_renormalizes();
-    test_far_data_admitted_full_radius();
-    test_max_neighbours_above_old_limit_honored();
-    test_clusterizer_memory_safe_limit_boundary();
-    test_plain_lookup_fallback_bounded_by_distance_cap();
-    test_scan_limit_prefix_truncation();
+    run_test(test_cokriging_fallback_scales_secondary);
+    run_test(test_kriging_rejects_aliased_buffers);
+    run_test(test_sgs_radius_gate_before_destructive_transform);
+    run_test(test_ordrel_s_gt_1_renormalizes);
+    run_test(test_far_data_admitted_full_radius);
+    run_test(test_max_neighbours_above_old_limit_honored);
+    run_test(test_clusterizer_memory_safe_limit_boundary);
+    run_test(test_plain_lookup_fallback_bounded_by_distance_cap);
+    run_test(test_scan_limit_prefix_truncation);
 
     // N2-25: sample() NaN guard.
-    test_sample_nan_guard();
+    run_test(test_sample_nan_guard);
 
     // N2-L30: remove the mkdtemp temp dirs created by the file I/O tests.
     cleanup_temp_dirs();

@@ -246,6 +246,54 @@ class TestMaskedArraySizeValidation:
         assert result._array_refs == (data, mask)
 
 
+class TestMaskedArrayGridShapeValidation:
+    """F-521: both masked-array creators reject a 3-D shape that ≠ the grid.
+
+    A 3-D property whose VOLUME equals the grid's but whose per-dimension
+    shape differs — e.g. (2, 8, 1) on a (4, 4, 1) grid — used to reach C++
+    with the grid's shape struct and the array's own strides: the kernels read
+    both buffers flat by node index, so the output is silently permuted, and
+    other stride/shape combinations read out of bounds. Neither ``RuntimeError``
+    at ffi_adapter.py:636/:717 had any coverage (grep "does not match grid
+    dimensions" in tests/ → 0 hits), so deleting either guard stayed green.
+    """
+
+    @pytest.mark.hpgl
+    def test_cont_masked_array_3d_shape_mismatch_raises(self):
+        from geo_bsd.ffi_adapter import create_cont_masked_array
+
+        data = np.zeros((2, 8, 1), dtype="float32", order="F")  # volume 16
+        mask = np.ones((2, 8, 1), dtype="uint8", order="F")
+
+        with pytest.raises(RuntimeError, match="3D data shape"):
+            create_cont_masked_array(_FakePropSize(data, mask), _FakeGrid(4, 4, 1))
+
+    @pytest.mark.hpgl
+    def test_ind_masked_array_3d_shape_mismatch_raises(self):
+        from geo_bsd.ffi_adapter import create_ind_masked_array
+
+        data = np.zeros((2, 8, 1), dtype="uint8", order="F")
+        mask = np.ones((2, 8, 1), dtype="uint8", order="F")
+
+        with pytest.raises(RuntimeError, match="3D data shape"):
+            create_ind_masked_array(_FakePropSize(data, mask), _FakeGrid(4, 4, 1))
+
+    @pytest.mark.hpgl
+    def test_matching_3d_shape_still_constructs(self):
+        """Control: a matching 3-D shape must still be accepted.
+
+        Without this the two rejection pins would also pass for a guard that
+        rejects every 3-D property.
+        """
+        from geo_bsd.ffi_adapter import create_cont_masked_array
+
+        data = np.zeros((4, 4, 1), dtype="float32", order="F")
+        mask = np.ones((4, 4, 1), dtype="uint8", order="F")
+
+        result = create_cont_masked_array(_FakePropSize(data, mask), _FakeGrid(4, 4, 1))
+        assert result._array_refs == (data, mask)
+
+
 class TestFloatArrayGridSizeValidation:
     """F-26: create_float_array must validate grid size in the grid path.
 

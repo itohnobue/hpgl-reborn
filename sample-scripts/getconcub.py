@@ -71,7 +71,11 @@ def getconcube(cube):
                                 qJ[iqe] = nj
                                 qK[iqe] = nk + 1
                                 conncube[ni, nj, nk + 1] = compnum
-    save_property_python(conncube, x, y, z, "SAVE_CUB.INC")
+    # F-363: this used to write the CWD-relative name "SAVE_CUB.INC", which is
+    # the git-TRACKED fixture sample-scripts/SAVE_CUB.INC — running the script
+    # from sample-scripts/ replaced it with a different cube (2323 of 2862
+    # tokens differ). Write to a name no tracked file uses.
+    save_property_python(conncube, x, y, z, "SAVE_CUB.out.INC")
     return compnum
 
 

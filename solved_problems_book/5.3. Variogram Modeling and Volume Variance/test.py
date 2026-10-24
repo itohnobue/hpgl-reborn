@@ -87,10 +87,27 @@ for q in range(5):
 	# points discretizing the block volume (1/N^2 sum_i sum_j gamma),
 	# giving the volume variance for the simple case.  The previous code
 	# printed the raw sum of the lag values, which is not a variance at
-	# all.  Modeled variogram: reference-faithful 5.3 vertical model
-	# (exponential, sill 11, range 35 m — see 3d_variogram.py).
+	# all.
+	# F-119: the block volume variance must use the chapter's 3-D model, not
+	# the vertical variogram alone (same kernel as gammabar.py). 5.3 models
+	# one exponential structure (sill 11) with per-direction ranges — 4000 m
+	# horizontal (azim 320), 5000 m horizontal (azim 230) and 35 m vertical
+	# (3d_variogram.py:34-43). Applying the 35 m vertical range to the full
+	# Euclidean 3-D distance between block discretisation points (the
+	# previous code) discarded the horizontal continuity and over-stated the
+	# volume variance. The kernel below is the anisotropic form of that
+	# model — horizontal range 4000 m (the shorter of the two horizontal
+	# ranges), vertical range 35 m — the same choice gammabar.py makes, so
+	# both scripts of this lesson print the same volume variance.
 	sill = 11.0
-	var_range = 35.0
+	var_range_hor = 4000.0
+	var_range_ver = 35.0
+
+	def exp_variogram(dx, dy, dz):
+		hn = np.sqrt((dx / var_range_hor) ** 2 + (dy / var_range_hor) ** 2
+			+ (dz / var_range_ver) ** 2)
+		return sill * (1.0 - np.exp(-3.0 * hn))
+
 	disc = 5
 	xs = (np.arange(disc) + 0.5) * nx[q] / disc
 	ys = (np.arange(disc) + 0.5) * ny[q] / disc
@@ -99,7 +116,7 @@ for q in range(5):
 	N = len(pts)
 	gammab = 0.0
 	for i in range(N):
-		h = np.sqrt(((pts - pts[i]) ** 2).sum(axis=1))
-		gammab += np.sum(sill * (1.0 - np.exp(-3.0 * h / var_range)))
+		gammab += np.sum(exp_variogram(pts[:, 0] - pts[i, 0],
+			pts[:, 1] - pts[i, 1], pts[:, 2] - pts[i, 2]))
 	gammab /= (N * N)
 	print("Gammab = ", gammab)

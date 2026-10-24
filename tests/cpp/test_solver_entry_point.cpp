@@ -9,7 +9,8 @@
  *   - lapack_spd_solve_1rhs: near-singular SPD rejection (II-09 magnitude
  *     gate on the dpotrs_ success path)
  *   - lapack_spd_solve_1rhs: σ-scaled correlogram σc > σ0 acceptance (R4-01)
- *   - lapack_spd_solve_1rhs: cross-scale cokriging acceptance (R2-01)
+ *   - lapack_spd_solve_1rhs: cross-scale cokriging RHS realizability —
+ *     accepted for B = A·w, rejected for an unrealizable B (R2-01/F-288)
  *   - lapack_spd_solve_2rhs: known SPD matrix with dual RHS (success path)
  *   - lapack_spd_solve_2rhs: non-SPD matrix (fallback to gauss_solve)
  *   - lapack_spd_solve_2rhs: NaN / Inf in A matrix (early rejection)
@@ -23,6 +24,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <limits>
 #include <vector>
 
@@ -52,16 +54,25 @@ static const char *g_current_test = "";
         }                                                                      \
     } while (0)
 
+// F-471 (sibling of test_hpgl_core.cpp): NaN defeats a plain
+// `std::abs(_a - _b) > (eps)` test — every comparison with NaN is false, so a
+// NaN actual or expected value passed the assertion silently (NaN, and the pair
+// Inf/Inf, both reported zero failures; a finite/Inf pair was caught). The
+// negated form `!(_d <= eps)` is false for NaN too, so NaN now fails while
+// in-tolerance finite values still pass and out-of-tolerance finite values
+// still fail.
 #define CHECK_CLOSE(a, b, eps)                                                 \
     do {                                                                       \
         double _a = (a);                                                       \
         double _b = (b);                                                       \
-        if (std::abs(_a - _b) > (eps)) {                                       \
-            std::fprintf(stderr,                                                \
-                         "FAIL: %s:%d in %s: |%.15g - %.15g| > %.15g\n",       \
-                         __FILE__, __LINE__, g_current_test, _a, _b, (double)(eps)); \
+        double _d = std::abs(_a - _b);                                         \
+        if (!(_d <= (eps))) {                                                  \
+            std::fprintf(stderr,                                               \
+                         "FAIL: %s:%d in %s: |%.15g - %.15g| = %.15g > %.15g\n", \
+                         __FILE__, __LINE__, g_current_test, _a, _b, _d,       \
+                         (double)(eps));                                       \
             g_tests_failed++;                                                   \
-            return;                                                             \
+            return;                                                            \
         }                                                                      \
     } while (0)
 
@@ -684,35 +695,73 @@ void test_2rhs_workspace_path() {
 }
 
 // A-04 (ADD-3, R2-01 gate acceptance-matrix completion): the legal
-// cross-scale cokriging class must be ACCEPTED. The 5-pass gate saga
-// regressed this exact class in pass 2 (the AND-form rejected
+// cross-scale cokriging class must be ACCEPTED — but only for a RHS that is a
+// realizable covariance vector for its LHS. The 5-pass gate saga regressed
+// this exact class in pass 2 (the AND-form rejected
 // A=[[1e4,0.5],[0.5,1e-4]], B=[1,1] → X=[−0.667, 13333] as wild). The
-// current dynamic-range-scaled bound 1e3·dr with dr=1e4 → bound 1e7 accepts
-// 13333; the pass-2 normalization made the bound tighter (wrong direction).
+// dynamic-range-scaled magnitude bound alone (1e3·dr with dr=1e4 → bound 1e7)
+// still accepts 13333; F-288 added the independent Schur arm
+// (solver_entry_point.h:326-378), and for this A that arm fires: B = [1,1]
+// gives B'X = 13332 > c = A[0][0] = 1e4 → kriging variance −3332, while B IS
+// covariance-shaped towards c (|B[i]| <= sqrt(A_ii·c)) — so the solve is
+// rejected as an invalid cross-covariance model, not as a magnitude outlier.
+// Both halves are pinned here:
+//   (a) B = [1,1], NOT A·w for any w → rejected (F-288).
+//   (b) B = A·w for w = [1e-3, 0.5] → accepted with X == w, so the legal
+//       cross-scale class (large variance ratio, well-posed SPD) keeps its
+//       acceptance coverage.
 void test_1rhs_cross_scale_cokriging_accepted() {
-    TEST("A-04: cross-scale cokriging accepted (R2-01)");
+    TEST("A-04: cross-scale cokriging rejects an unrealizable RHS, accepts a realizable one (R2-01/F-288)");
     int size = 2;
-    std::vector<double> A = {
+    const std::vector<double> A = {
         1e4, 0.5,
         0.5, 1e-4
     };
-    std::vector<double> B = { 1.0, 1.0 };  // raw [1,1], NOT A·[1,1]
-    std::vector<double> X(size, 0.0);
-    std::vector<double> A_orig(A);
 
-    bool ok = hpgl::detail::lapack_spd_solve_1rhs(
-        A.data(), size, X.data(), B.data(),
-        A_orig.data(), "cross-scale cokriging");
+    // (a) The pass-2 fixture. B = [1,1] is not A·w, so the solution
+    // X = [−0.6665333, 13332.6667] has B'X = 13332 > c: a NEGATIVE kriging
+    // variance, i.e. an invalid cross-covariance model. The detail function
+    // returns only bool (no message channel on this path), so the verdict is
+    // the observable.
+    {
+        std::vector<double> A_work(A);
+        std::vector<double> A_orig(A);
+        std::vector<double> B = { 1.0, 1.0 };
+        std::vector<double> X(size, 0.0);
 
-    // A = [[1e4,0.5],[0.5,1e-4]]: det = 1e4·1e-4 − 0.25 = 0.75,
-    // A⁻¹ = (1/0.75)·[[1e-4, −0.5],[−0.5, 1e4]] → X = A⁻¹·[1,1]
-    //     = (1/0.75)·[1e-4−0.5, 1e4−0.5] = [−0.6665333, 13332.6667].
-    CHECK(ok);
-    CHECK_CLOSE(X[0], (1e-4 - 0.5) / 0.75, 1e-6);
-    CHECK_CLOSE(X[1], (1e4 - 0.5) / 0.75, 1e-6);
-    // Exact residual: A·X == B.
-    CHECK_CLOSE(A_orig[0] * X[0] + A_orig[1] * X[1], 1.0, 1e-9);
-    CHECK_CLOSE(A_orig[2] * X[0] + A_orig[3] * X[1], 1.0, 1e-9);
+        bool ok = hpgl::detail::lapack_spd_solve_1rhs(
+            A_work.data(), size, X.data(), B.data(),
+            A_orig.data(), "cross-scale cokriging (unrealizable)");
+
+        CHECK(!ok);
+    }
+
+    // (b) Companion: the same matrix with a REALIZABLE covariance RHS.
+    // B = A·w for w = [1e-3, 0.5] → B = [10.25, 5.5e-4]; then
+    // B'X = w'Aw = 0.010525 <= c = 1e4 (kriging variance 9999.989475 > 0)
+    // and |X|_inf = 0.5, far inside the magnitude bound — the class the
+    // gate must keep accepting.
+    {
+        const double w0 = 1e-3;
+        const double w1 = 0.5;
+        std::vector<double> A_work(A);
+        std::vector<double> A_orig(A);
+        std::vector<double> B = { A[0] * w0 + A[1] * w1,
+                                  A[2] * w0 + A[3] * w1 };
+        std::vector<double> X(size, 0.0);
+
+        bool ok = hpgl::detail::lapack_spd_solve_1rhs(
+            A_work.data(), size, X.data(), B.data(),
+            A_orig.data(), "cross-scale cokriging (realizable)");
+
+        CHECK(ok);
+        // X must be the planted weights (tolerance covers cond(A) ≈ 1e8).
+        CHECK_CLOSE(X[0], w0, 1e-9);
+        CHECK_CLOSE(X[1], w1, 1e-9);
+        // Exact residual: A·X == B (backward-stable solve).
+        CHECK_CLOSE(A_orig[0] * X[0] + A_orig[1] * X[1], B[0], 1e-9);
+        CHECK_CLOSE(A_orig[2] * X[0] + A_orig[3] * X[1], B[1], 1e-12);
+    }
 }
 
 // A-04 (ADD-4, 2rhs Inf-in-A twin): the 2rhs A-scan (solver_entry_point.h:
@@ -746,37 +795,61 @@ void test_2rhs_inf_in_a_rejected() {
 
 // ---- Main ----
 
+// F-473(c) (sibling of test_hpgl_core.cpp:3733-3749): an exception escaping a
+// test body — the solver entry points throw on bad parameters — used to reach
+// main() uncaught, which is std::terminate: the "N run, M failed" summary and
+// every later test were lost. Report it as a test failure instead. Every test
+// body sets g_current_test through TEST() as its first statement, so the
+// message still names the failing test.
+static void run_test(void (*test_fn)())
+{
+    try
+    {
+        test_fn();
+    }
+    catch (const std::exception & ex)
+    {
+        std::fprintf(stderr, "FAIL: exception in %s: %s\n", g_current_test, ex.what());
+        g_tests_failed++;
+    }
+    catch (...)
+    {
+        std::fprintf(stderr, "FAIL: unknown exception in %s\n", g_current_test);
+        g_tests_failed++;
+    }
+}
+
 int main() {
     // 1rhs tests
-    test_1rhs_known_spd_integer_solution();
-    test_1rhs_non_spd_fallback();
-    test_1rhs_non_spd_solvable();
-    test_1rhs_nan_in_a_rejected();
-    test_1rhs_inf_in_a_rejected();
+    run_test(test_1rhs_known_spd_integer_solution);
+    run_test(test_1rhs_non_spd_fallback);
+    run_test(test_1rhs_non_spd_solvable);
+    run_test(test_1rhs_nan_in_a_rejected);
+    run_test(test_1rhs_inf_in_a_rejected);
 
     // 2rhs tests
-    test_2rhs_known_spd_success();
-    test_2rhs_non_spd_fallback();
-    test_2rhs_singular_returns_false();
-    test_2rhs_nan_in_a_rejected();
-    test_2rhs_inf_in_a_rejected();
+    run_test(test_2rhs_known_spd_success);
+    run_test(test_2rhs_non_spd_fallback);
+    run_test(test_2rhs_singular_returns_false);
+    run_test(test_2rhs_nan_in_a_rejected);
+    run_test(test_2rhs_inf_in_a_rejected);
 
     // II-09: near-singular SPD rejection on the dpotrs_ success path.
-    test_1rhs_near_singular_spd_rejected();
+    run_test(test_1rhs_near_singular_spd_rejected);
 
     // Stage-8 TEST-ADD (E-H1 2rhs gate, R-01 small-sill OK acceptance,
     // R4-01 correlogram σc > σ0 acceptance).
-    test_2rhs_near_singular_spd_rejected();
-    test_2rhs_small_sill_ok_accepted();
-    test_correlogram_sigma_c_gt_sigma_0_accepted();
+    run_test(test_2rhs_near_singular_spd_rejected);
+    run_test(test_2rhs_small_sill_ok_accepted);
+    run_test(test_correlogram_sigma_c_gt_sigma_0_accepted);
 
     // A-04 (corrected +4): path equivalence, E-M82 workspace, R2-01
     // cross-scale accept, 2rhs-Inf twin. (RHS-NaN scans REJECTED as
     // bool-invariant — N2-22; gauss-fallback wild REJECTED as permanently
     // RED — N2-23.)
-    test_1rhs_2rhs_path_equivalence();
-    test_2rhs_workspace_path();
-    test_1rhs_cross_scale_cokriging_accepted();
+    run_test(test_1rhs_2rhs_path_equivalence);
+    run_test(test_2rhs_workspace_path);
+    run_test(test_1rhs_cross_scale_cokriging_accepted);
 
     std::printf("C++ solver entry point tests: %d run, %d failed\n",
                 g_tests_run, g_tests_failed);

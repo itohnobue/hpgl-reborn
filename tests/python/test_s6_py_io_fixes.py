@@ -141,7 +141,14 @@ class TestGslibWritersRejectCraftedNames:
 
 @pytest.mark.skipif(not FIXES_AVAILABLE, reason="modules not available")
 class TestGslibWritersAtomicWrite:
-    """F-N18: GSLIB writers write to a temp file then os.replace."""
+    """F-N18: GSLIB writers write to a temp file then os.replace.
+
+    The "no leftovers" pins alone are satisfied by the pre-fix direct write
+    (no temp file is ever created), so they cannot detect an F-N18 revert.
+    ``test_mid_write_failure_keeps_original_target`` is the discriminating
+    pin: only a temp+rename implementation preserves the previous target
+    when the write dies half-way (F-622/F-632).
+    """
 
     def test_no_temp_files_left_after_success(self, tmp_path):
         fpath = str(tmp_path / "ps.inc")
@@ -165,6 +172,41 @@ class TestGslibWritersAtomicWrite:
         cubes = {"P": np.ones((2, 2, 2), dtype="float32")}
         SaveGSLIBCubes(cubes, fpath, "cap", basedir=str(tmp_path))
         assert os.path.exists(fpath)
+        leftovers = [p.name for p in tmp_path.iterdir() if ".tmp." in p.name]
+        assert leftovers == [], f"temp files left behind: {leftovers}"
+
+    @pytest.mark.parametrize("kind", ["point_set", "cubes"])
+    def test_mid_write_failure_keeps_original_target(self, tmp_path, monkeypatch, kind):
+        """F-N18 (F-622/F-632): a failure mid-write must not damage the target.
+
+        Discrimination: the pre-fix implementation opened the target directly
+        with O_TRUNC, so with this test the previous content is replaced by
+        the partial header and the assertion fails; only temp+rename keeps
+        the original bytes and leaves no temp file behind.
+        """
+        fpath = tmp_path / ("ps.inc" if kind == "point_set" else "cubes.inc")
+        sentinel = "PREVIOUS CONTENT - must survive a failed write\n"
+        fpath.write_text(sentinel, encoding="utf-8")
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("mid-write failure (F-N18 crash simulation)")
+
+        # routines.py calls the module-global `savetxt` (numpy's), which runs
+        # after the header — i.e. with the target already opened/truncated
+        # pre-fix and the temp file already open post-fix.
+        monkeypatch.setattr("geo_bsd.routines.savetxt", boom)
+        with pytest.raises(RuntimeError, match="mid-write"):
+            if kind == "point_set":
+                ps = {"P": np.array([1.0, 2.0, 3.0], dtype="float32")}
+                SaveGSLIBPointSet(ps, str(fpath), "cap", basedir=str(tmp_path))
+            else:
+                cubes = {"P": np.ones((2, 2, 2), dtype="float32")}
+                SaveGSLIBCubes(cubes, str(fpath), "cap", basedir=str(tmp_path))
+
+        assert fpath.read_text(encoding="utf-8") == sentinel, (
+            "a mid-write failure destroyed the previous target content — the "
+            "writer is not atomic"
+        )
         leftovers = [p.name for p in tmp_path.iterdir() if ".tmp." in p.name]
         assert leftovers == [], f"temp files left behind: {leftovers}"
 

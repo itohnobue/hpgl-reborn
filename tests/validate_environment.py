@@ -78,18 +78,39 @@ def check_hpgl():
     src_dir = project_root / "src"
     sys.path.insert(0, str(src_dir))
 
-    import importlib.util
+    # F-546/F-565: `importlib.util.find_spec("geo_bsd")` only proves that a
+    # module path exists — it never executes geo_bsd/__init__.py, so a missing,
+    # stale or corrupt native library still printed
+    # "[PASS] HPGL library imported successfully". Import the package for real:
+    # that runs hpgl_wrap's ctypes load and raises OSError when the library
+    # cannot be loaded.
+    try:
+        import geo_bsd
+    except (ImportError, OSError) as exc:
+        print(f"  [FAIL] Cannot import HPGL library: {exc}")
+        print("\nPossible reasons:")
+        print("  1. Build has not completed - run build.bat (Windows) or cmake (Linux)")
+        print("  2. DLL/SO not in expected location (src/geo_bsd/)")
+        print("  3. Missing dependencies (run: uv sync)")
+        return False
 
-    spec = importlib.util.find_spec("geo_bsd")
-    if spec is not None:
-        print("  [PASS] HPGL library imported successfully")
-        return True
-    print("  [FAIL] Cannot import HPGL library")
-    print("\nPossible reasons:")
-    print("  1. Build has not completed - run build.bat (Windows) or cmake (Linux)")
-    print("  2. DLL/SO not in expected location (src/geo_bsd/)")
-    print("  3. Missing dependencies (run: uv sync)")
-    return False
+    # F-565: report WHICH file ctypes actually resolved — a stale library
+    # shadowing the fresh build is the failure class this check exists to catch,
+    # and the only other trace of it is a loader warning nobody surfaces.
+    loaded = getattr(getattr(geo_bsd, "hpgl_wrap", None), "_hpgl_so", None)
+    loaded_path = getattr(loaded, "_name", None)
+    if loaded_path:
+        print(f"  [OK] HPGL native library: {Path(loaded_path).resolve()}")
+
+    # __init__.py:41-49 swallows a failed _cvariogram load, so a green import
+    # alone does not prove it loaded.
+    if getattr(geo_bsd, "cvariogram", None) is None:
+        print("  [FAIL] _cvariogram extension did not load")
+        print("  Rebuild with HPGL_BUILD_VARIOGRAM=ON (see cmake options)")
+        return False
+
+    print("  [PASS] HPGL library imported successfully")
+    return True
 
 
 # II-20: platform-aware native-library name table, mirroring hpgl_wrap.py's
@@ -138,6 +159,29 @@ def _build_files_present(geo_bsd_dir: Path):
     return hpgl_found, cvar_found
 
 
+def _report_lib_load(files):
+    """Probe each candidate native library with a real load; True if any loads.
+
+    F-565: ``Path.exists()`` passes for a truncated, wrong-architecture or
+    stale library — only ``dlopen`` reports that. Every candidate found by the
+    platform table is probed and its resolved path printed, because the
+    loader's preference order (hpgl.dylib before libhpgl.dylib, see
+    hpgl_wrap.py:280-315) decides which file ctypes actually uses.
+    """
+    import ctypes
+
+    any_ok = False
+    for f in files:
+        try:
+            ctypes.CDLL(str(f.resolve()))
+        except OSError as exc:
+            print(f"  [FAIL] {f.name} exists but does not load: {exc}")
+            continue
+        print(f"  [OK] {f.name} (loads: {f.resolve()})")
+        any_ok = True
+    return any_ok
+
+
 def check_build_files():
     """Check for built extension files"""
     print("\nChecking for built native libraries...")
@@ -157,24 +201,24 @@ def check_build_files():
     if cvar_found:
         cvar_files = [geo_bsd_dir / n for n in cvar_globs if (geo_bsd_dir / n).exists()]
 
-    found = bool(dll_files) and bool(cvar_files)
+    # F-565: existence is not loadability — probe every candidate found.
     if dll_files:
-        for f in dll_files:
-            print(f"  [OK] {f.name}")
+        hpgl_loads = _report_lib_load(dll_files)
     else:
         print(f"  [MISSING] hpgl library ({' / '.join(hpgl_globs)})")
+        hpgl_loads = False
 
     if cvar_files:
-        for f in cvar_files:
-            print(f"  [OK] {f.name}")
+        cvar_loads = _report_lib_load(cvar_files)
     else:
         print(f"  [MISSING] _cvariogram library ({' / '.join(cvar_globs)})")
+        cvar_loads = False
 
-    if found:
-        print("  [PASS] Native libraries exist")
+    if hpgl_loads and cvar_loads:
+        print("  [PASS] Native libraries exist and load")
         return True
     else:
-        print("  [FAIL] Native libraries not found")
+        print("  [FAIL] Native libraries not found or not loadable")
         print("\n  Build with: build.bat (Windows) or cmake (Linux/macOS)")
         return False
 

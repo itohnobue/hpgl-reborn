@@ -14,8 +14,15 @@
 #include "cov_model.h"
 #include "kriging_stats.h"
 #include "api.h"
+// G-01: the progress flush below uses detail::progress_flush_mutex(), whose
+// single program-wide definition lives in cont_kriging.h. Including the
+// definition site (rather than restating the helper here) keeps ONE mutex for
+// every kernel — the property that lets a progress handler re-enter ANY
+// kriging kernel from the same thread without a lock-order inversion.
+#include "cont_kriging.h"
 #include <cmath>
 #include <exception>
+#include <mutex>
 
 // OpenBLAS thread-control API — file-scope declarations so the in-function
 // branch compiles on Apple Clang too (extern "C" inside function bodies is
@@ -242,19 +249,136 @@ namespace hpgl
 		if (params.m_category_count == 0)
 			return;
 
+		// H-01 (c): the K-fold covariance/lookup construction below can take
+		// 62-75 % of a run at large K, and the reporter used to start only
+		// AFTER it, so that phase had no progress or cancel window. Start the
+		// reporter before the construction so the timer covers it.
 		progress_reporter_t report(grid.size());
+		report.start();
 
 		typedef precalculated_covariances_t cov_t;
-		std::vector<cov_t> covariances;
-		create_precalucated_cov_models(params, covariances);		
-
 		typedef indexed_neighbour_lookup_t<grid_t, cov_t> nl_t;
-		std::vector<nl_t> nblookups;
 
+		// H-01 (a): identical per-category parameters are the normal IK
+		// configuration (one model for all cutoffs), and building K
+		// byte-identical covariance tables plus K identical indexed lookups
+		// (each with its own offset list and clusterizer) wastes K-1 of them —
+		// measured 15.5-21.8 B per box cell per category. Map every category
+		// onto the first category with exactly equal (cov params, radiuses,
+		// neighbourhood params) and build one structure per distinct group.
+		// The comparison is exact on purpose: sharing is safe only for
+		// byte-identical structures, and per-category models (E-M56) must stay
+		// separate.
+		const auto same_structure = [&params](size_t i, size_t j) -> bool
+		{
+			const covariance_param_t & a = params.m_cov_params[i];
+			const covariance_param_t & b = params.m_cov_params[j];
+			if (a.m_covariance_type != b.m_covariance_type ||
+			    a.m_sill != b.m_sill ||
+			    a.m_nugget != b.m_nugget)
+				return false;
+			for (int k = 0; k < 3; ++k)
+			{
+				if (a.m_ranges[k] != b.m_ranges[k] ||
+				    a.m_angles[k] != b.m_angles[k])
+					return false;
+				if (params.m_radiuses[i][k] != params.m_radiuses[j][k] ||
+				    params.m_nb_params[i].m_radiuses[k] != params.m_nb_params[j].m_radiuses[k])
+					return false;
+			}
+			return params.m_nb_params[i].m_max_neighbours ==
+			       params.m_nb_params[j].m_max_neighbours;
+		};
+
+		std::vector<size_t> cov_owner(params.m_category_count, 0);
 		for (size_t i = 0; i < params.m_category_count; ++i)
-		{			
-			nblookups.push_back(nl_t(&grid, &covariances[i], params.m_nb_params[i]));
-		}	
+		{
+			cov_owner[i] = i;
+			for (size_t j = 0; j < i; ++j)
+			{
+				if (cov_owner[j] != j)
+					continue;
+				if (same_structure(i, j))
+				{
+					cov_owner[i] = j;
+					break;
+				}
+			}
+		}
+
+		// Representative category -> slot into the compact structure vectors.
+		std::vector<size_t> slot(params.m_category_count, 0);
+		size_t distinct = 0;
+		for (size_t i = 0; i < params.m_category_count; ++i)
+		{
+			if (cov_owner[i] == i)
+				slot[i] = distinct++;
+		}
+		for (size_t i = 0; i < params.m_category_count; ++i)
+		{
+			if (cov_owner[i] != i)
+				slot[i] = slot[cov_owner[i]];
+		}
+
+		// H-01 (b): aggregate budget over the DISTINCT structures. Each
+		// structure is validated per object by
+		// validate_covariance_radiuses_or_throw (1e8 cells ~ 2 GB,
+		// covariance_field.h), but K of them multiply that bound by K (K <=
+		// 255 is legal): K=255 at r=231 reaches 365-505 GiB. Budget: the
+		// documented single-structure worst case applied to the whole call, at
+		// the measured 20 B per box cell (8 B covariance table + 12 B
+		// offset/lookup vectors), checked BEFORE the first allocation. The
+		// per-group box is the larger of the covariance box and the lookup's
+		// own box (the lookup list is a filtered subset of its box).
+		// MERGE NOTE: the SIS and Mark II siblings need the same ceiling
+		// (H-01 aggravation) — unify into one shared constant when they gain
+		// theirs.
+		constexpr size_t MAX_AGGREGATE_COVARIANCE_BYTES = 2ULL * 1024 * 1024 * 1024;
+		constexpr size_t COVARIANCE_BYTES_PER_CELL = 20;
+		{
+			size_t aggregate_cells = 0;
+			for (size_t i = 0; i < params.m_category_count; ++i)
+			{
+				if (cov_owner[i] != i)
+					continue;
+				const size_t cov_box = validate_covariance_radiuses_or_throw(
+					params.m_radiuses[i], "do_indicator_kriging");
+				const size_t nb_box = validate_covariance_radiuses_or_throw(
+					params.m_nb_params[i].m_radiuses, "do_indicator_kriging");
+				aggregate_cells += cov_box > nb_box ? cov_box : nb_box;
+			}
+			if (aggregate_cells > MAX_AGGREGATE_COVARIANCE_BYTES / COVARIANCE_BYTES_PER_CELL)
+			{
+				std::ostringstream oss;
+				oss << "do_indicator_kriging: aggregate covariance memory for "
+				    << distinct << " distinct per-category structure(s) exceeds "
+				    << (MAX_AGGREGATE_COVARIANCE_BYTES / (1024 * 1024))
+				    << " MiB (reduce the search radiuses or the number of "
+				       "distinct per-category models)";
+				throw hpgl_exception("do_indicator_kriging", oss.str());
+			}
+		}
+
+		std::vector<cov_t> covariances;
+		covariances.reserve(distinct);
+		for (size_t i = 0; i < params.m_category_count; ++i)
+		{
+			if (cov_owner[i] != i)
+				continue;
+			covariances.push_back(cov_t(cov_model_t(params.m_cov_params[i]), params.m_radiuses[i]));
+		}
+
+		// Each lookup holds a pointer to its covariance table, so the
+		// covariance vector's storage must be final before the lookups are
+		// built — reserve(distinct) above guarantees that.
+		std::vector<nl_t> nblookups;
+		nblookups.reserve(distinct);
+		for (size_t i = 0; i < params.m_category_count; ++i)
+		{
+			if (cov_owner[i] != i)
+				continue;
+			nblookups.push_back(nl_t(&grid, &covariances[slot[i]], params.m_nb_params[i]));
+		}
 
 		add_defined_cells(nblookups, input_property);	
 
@@ -265,8 +389,6 @@ namespace hpgl
 		{
 			ind_props.push_back(indicator_array_adapter_t(&input_property, i));
 		}
-
-		report.start();
 
 		size_t size = input_property.size();
 		static const int LP_BATCH_SIZE = 1000;
@@ -335,7 +457,7 @@ namespace hpgl
 				{
 					indicator_probability_t prob;
 
-					ki_result_t ki_result = kriging_interpolation_ws(ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(input_property), node_idx, covariances[idx], mps[idx], nblookups[idx], sk_weight_calculator_t(), prob, ws);
+					ki_result_t ki_result = kriging_interpolation_ws(ind_props[idx], is_informed_predicate_t<indicator_property_array_t>(input_property), node_idx, covariances[slot[idx]], mps[idx], nblookups[slot[idx]], sk_weight_calculator_t(), prob, ws);
 
 					if (ki_result != ki_result_t::KI_SUCCESS)
 					{
@@ -378,10 +500,12 @@ namespace hpgl
 			local_lap_count++;
 			if (local_lap_count >= LP_BATCH_SIZE)
 			{
-				#pragma omp critical
-				{
-					report.next_lap(local_lap_count);
-				}
+				// G-01: re-entrant progress lock (detail::progress_flush_mutex,
+				// shared with every other kernel). The user handler runs inside
+				// next_lap(), so the lock must be held and must let the same
+				// thread re-enter; lock_guard releases it on an exception.
+				std::lock_guard<std::recursive_mutex> progress_lock(detail::progress_flush_mutex());
+				report.next_lap(local_lap_count);
 				local_lap_count = 0;
 				if (report.cancelled()) {
 					// M-5: set the cooperative stop flag instead of
@@ -410,10 +534,9 @@ namespace hpgl
 		// Flush remaining laps for this thread
 		if (local_lap_count > 0)
 		{
-			#pragma omp critical
-			{
-				report.next_lap(local_lap_count);
-			}
+			// G-01: re-entrant progress lock (see progress_flush_mutex).
+			std::lock_guard<std::recursive_mutex> progress_lock(detail::progress_flush_mutex());
+			report.next_lap(local_lap_count);
 		}
 		// NOTE: No #pragma omp cancel for here — the for-loop worksharing
 		// construct has already ended, and OMP §2.17.1 requires the cancel
@@ -446,13 +569,22 @@ namespace hpgl
 			// failure paths (mirrors cont_kriging.h, simple_cokriging_markI.cpp,
 			// and SIS). Previously singular/no-neighbour systems silently
 			// substituted the marginal probability with no observability.
+			// F-287: the counters are per (node x category) — one evaluation
+			// per category per node (the per-category loop above, which
+			// includes informed nodes, unlike cont_kriging) — so the
+			// denominator must be nodes * categories. The former cell-count
+			// denominator made the numerator exceed its own total ("192
+			// no-neighbours (of 100 total)" measured on a 10x10x1 grid with
+			// K=3) and hid the divergence from the Python consumer's
+			// cell-based `expected` (geo.py indicator_kriging), which is the
+			// F-287 root cause on the Python side (owned there).
 			if (stats.m_points_singularity > 0 || stats.m_points_without_neighbours > 0)
 			{
 				fprintf(stderr,
-					"HPGL: kriging failures: %lu singularity, %lu no-neighbours (of %lu total)\n",
+					"HPGL: kriging failures: %lu singularity, %lu no-neighbours (of %lu per-category evaluations)\n",
 					stats.m_points_singularity,
 					stats.m_points_without_neighbours,
-					static_cast<unsigned long>(size));
+					static_cast<unsigned long>(size) * static_cast<unsigned long>(params.m_category_count));
 			}
 		}
 		{

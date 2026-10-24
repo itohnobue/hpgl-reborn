@@ -83,6 +83,21 @@ namespace hpgl
 	{
 		m_end = std::chrono::high_resolution_clock::now();
 		write("\n");
+		// F-184: a cancelled run was previously indistinguishable from a
+		// completed one for the caller — m_cancelled is set here but has no
+		// C-ABI accessor (every compute entry returns void) and no other
+		// surface reported it, so a handler-driven cancellation produced
+		// truncated output that looked complete. Report the outcome on the
+		// output/handler channel, which is the channel the same handler and
+		// every kernel's informational lines already use (output.cpp:63-99),
+		// so a handler-based consumer sees "Done. Average speed ..." followed
+		// by the cancellation fact instead of silence.
+		if (m_cancelled)
+		{
+			write(std::string("HPGL: run cancelled by the progress handler after ")
+				+ std::to_string(m_counter) + " of "
+				+ std::to_string(m_iterations) + " iterations\n");
+		}
 	}
 
 	double progress_reporter_t::iterations_per_second()

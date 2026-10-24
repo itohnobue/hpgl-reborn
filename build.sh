@@ -247,6 +247,15 @@ if [[ -n "$USE_WHEEL" ]]; then
     fi
     echo "  wheel: $(basename "$WHEEL_FILE")"
 
+    # F-078: record the deployment target the wheel claims BEFORE delocate can
+    # rewrite the filename tag. The gate below derives its reference from the
+    # wheel's own tag, so when delocate renamed a wheel to a HIGHER macosx_*
+    # (because an embedded object claims a newer min-OS) the gate compared the
+    # dylib minos against a value recomputed from the same binaries and always
+    # passed — the tag has to be a ceiling the artifact meets, not a value the
+    # artifact defines. An empty value (non-macOS tag) keeps the tag fallback.
+    EXPECTED_TARGET=$(basename "$WHEEL_FILE" | sed -nE 's/.*macosx_([0-9]+_[0-9]+)_.*/\1/p')
+
     # macOS repair (H-3): delocate bundles any non-system dylibs into the
     # wheel, rewrites install names to @loader_path/... and ad-hoc re-signs
     # (mandatory on arm64). Skipped when delocate is unavailable — the
@@ -266,12 +275,21 @@ if [[ -n "$USE_WHEEL" ]]; then
     # Verification gate (H-3d): FAILS the build on violation. Covers:
     #  - no absolute build-machine paths in dylib load commands (H-3)
     #  - no LC_RPATH entries (R-24) — regression guard for the N4 fold-in
-    #  - LC_BUILD_VERSION min-OS <= deployment target (R-23, target read from
-    #    the wheel's own macosx_* tag — II-24)
+    #  - LC_BUILD_VERSION min-OS <= the deployment target the build declared
+    #    (R-23/II-24/F-078; the wheel's own tag is the fallback when the
+    #    pre-repair filename carried no macosx_* tag). F-079: this reads the
+    #    LINK IMAGE only — the linker stamps that minos from
+    #    -platform_version, so it always equals the target and cannot see the
+    #    min-OS of the members of a statically linked archive (libomp.a). That
+    #    property is inspected at configure time instead (CMakeLists.txt
+    #    R-23 probe, a warning because the archive belongs to Homebrew).
     #  - no absolute build-machine paths in shipped .cmake files (R-22)
     #  - exactly one dylib per library, macosx_* wheel tag (H-3d)
+    #  - every module present in src/geo_bsd/ is present in the wheel (F-076/
+    #    G-35: the wheel's Python payload is exactly the CMake install list,
+    #    which has silently omitted a module twice)
     echo "Verifying wheel relocatability..."
-    "$PYTHON_BIN" - "$WHEEL_FILE" <<'PYEOF'
+    "$PYTHON_BIN" - "$WHEEL_FILE" "$EXPECTED_TARGET" "$SCRIPT_DIR/src/geo_bsd" <<'PYEOF'
 import re, subprocess, sys, tempfile, zipfile
 from pathlib import Path
 
@@ -321,6 +339,21 @@ if not tag_m:
 else:
     DEPLOYMENT_TARGET = float(f"{tag_m.group(1)}.{tag_m.group(2)}")
 
+# F-078: the tag is a CEILING the artifact must meet, not the reference it
+# defines. EXPECTED_TARGET is the tag the wheel carried BEFORE delocate could
+# rewrite it (recorded by the shell and passed as argv[2]) — without it a
+# repaired wheel that raised its own tag compared minos against the raised
+# value and always passed.
+EXPECTED_TARGET = None
+_expected_raw = sys.argv[2].strip() if len(sys.argv) > 2 else ""
+if _expected_raw:
+    EXPECTED_TARGET = float(_expected_raw.replace("_", "."))
+    if DEPLOYMENT_TARGET > EXPECTED_TARGET:
+        fail(f"wheel tag macosx_{DEPLOYMENT_TARGET} is newer than the deployment target the build "
+             f"declared (macosx_{_expected_raw}): the repair raised the tag, so the artifact claims "
+             f"a newer macOS than it was built for")
+CEILING = EXPECTED_TARGET if EXPECTED_TARGET is not None else DEPLOYMENT_TARGET
+
 for d in dylibs:
     rel = str(d.relative_to(out))
     key = lib_key(d.name)
@@ -361,8 +394,13 @@ for d in dylibs:
                 minos = float(ls.split()[1])
             except (IndexError, ValueError):
                 pass
-    if minos is not None and minos > DEPLOYMENT_TARGET:
-        fail(f"{rel}: LC_BUILD_VERSION minos {minos} exceeds deployment target {DEPLOYMENT_TARGET}")
+    if minos is None:
+        # F-079: a dylib with no parseable LC_BUILD_VERSION used to SKIP the
+        # check silently, so a legacy LC_VERSION_MIN_MACOSX binary or a parse
+        # regression passed the gate while claiming it had been verified.
+        fail(f"{rel}: no LC_BUILD_VERSION minos found — the deployment-target claim cannot be verified")
+    elif minos > CEILING:
+        fail(f"{rel}: LC_BUILD_VERSION minos {minos} exceeds deployment target {CEILING}")
 
 # R-22: scan every shipped .cmake file for absolute build-machine paths — the
 # export defect class (INTERFACE_INCLUDE_DIRECTORIES leaking
@@ -381,12 +419,27 @@ for key, rels in seen.items():
     if len(rels) > 1:
         fail(f"multiple dylibs for library '{key}': {rels}")
 
+# F-076 (aggravated by G-35): the wheel's Python payload is EXACTLY the CMake
+# install(FILES ...) list — the package is named hpgl while the directory is
+# src/geo_bsd, so scikit-build-core's package auto-detection adds nothing. That
+# list has silently omitted a module twice (F-10, then gslib_ref.py), and
+# __init__.py degrades the missing case to a warning for cvariogram, so an
+# "install and import" smoke alone does not prove the API is complete. Compare
+# against the source tree instead of a second hand-maintained list.
+src_pkg = Path(sys.argv[3]) if len(sys.argv) > 3 else None
+if src_pkg is not None and src_pkg.is_dir():
+    shipped_py = {p.name for p in (out / "geo_bsd").glob("*.py")}
+    missing_py = sorted(p.name for p in src_pkg.glob("*.py") if p.name not in shipped_py)
+    if missing_py:
+        fail(f"wheel is missing Python module(s) present in src/geo_bsd/: {', '.join(missing_py)} "
+             f"(add them to install(FILES ...) in CMakeLists.txt)")
+
 if failures:
     print("WHEEL VERIFY FAILED:", file=sys.stderr)
     for f in failures:
         print("  -", f, file=sys.stderr)
     sys.exit(1)
-print(f"  WHEEL VERIFY PASSED: {len(dylibs)} dylib(s), no absolute build-machine paths, no LC_RPATH, minos <= {DEPLOYMENT_TARGET}, tag macosx_{DEPLOYMENT_TARGET}")
+print(f"  WHEEL VERIFY PASSED: {len(dylibs)} dylib(s), no absolute build-machine paths, no LC_RPATH, minos <= {CEILING}, tag macosx_{DEPLOYMENT_TARGET}, every src/geo_bsd/*.py module present")
 PYEOF
     if [[ $? -ne 0 ]]; then
         echo "ERROR: wheel verification failed" >&2
@@ -504,6 +557,34 @@ else
     SHARED_EXT=".so"
 fi
 
+# G-31: the runtime directory is the COMMIT POINT of this build, but every
+# validation gate runs AFTER the copy. Without a rollback a build the project's
+# own gates reject stays installed and its predecessor is gone — and because
+# *.dylib/*.so are gitignored there is no record that it happened. Snapshot the
+# installed libraries before the first destructive step and restore them on any
+# non-zero exit (that includes SIGINT, the partial-copy case, and every gate
+# failure). HPGL_RUNTIME_COMMITTED is set only after the last gate succeeds.
+RESTORE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/hpgl-runtime-backup-XXXXXX")
+HPGL_RUNTIME_COMMITTED=""
+_hpgl_restore_runtime_on_exit() {
+    local rc=$?
+    if [[ -d "$RESTORE_DIR" ]]; then
+        if [[ -z "$HPGL_RUNTIME_COMMITTED" && $rc -ne 0 ]]; then
+            for f in "$RESTORE_DIR"/*; do
+                [[ -e "$f" ]] || continue
+                cp -p "$f" "$RUNTIME_DIR/" 2>/dev/null || true
+            done
+            echo "  NOTE: build failed — runtime libraries in $RUNTIME_DIR restored to their pre-build state." >&2
+        fi
+        rm -f "$RUNTIME_DIR"/.hpgl.*.new "$RUNTIME_DIR"/._cvariogram.*.new 2>/dev/null || true
+        rm -rf "$RESTORE_DIR"
+    fi
+    exit $rc
+}
+trap _hpgl_restore_runtime_on_exit EXIT
+# Snapshot every name the prunes below delete (hpgl.*, libhpgl.*, *_cvariogram*) — no-op on a first build.
+cp -p "$RUNTIME_DIR"/hpgl.* "$RUNTIME_DIR"/libhpgl.* "$RUNTIME_DIR"/*_cvariogram* "$RESTORE_DIR"/ 2>/dev/null || true
+
 echo ""
 echo "Copying libraries to runtime location..."
 
@@ -531,7 +612,12 @@ if [[ -n "$HPGL_LIB" ]]; then
     find "$RUNTIME_DIR" -maxdepth 1 \
         \( -name "libhpgl.*" -o -name "hpgl.so" -o -name "hpgl.dylib" \) \
         -delete 2>/dev/null || true
-    cp "$HPGL_LIB" "${RUNTIME_DIR}/hpgl${SHARED_EXT}"
+    # G-31/F-158: install atomically. A partially written file at the loader's
+    # first candidate name is indistinguishable from a fresh build (the smoke
+    # gate below only checks symbols), so write a temp name and rename it into
+    # place — rename is atomic and unlinks the predecessor in one step.
+    cp "$HPGL_LIB" "${RUNTIME_DIR}/.hpgl${SHARED_EXT}.new"
+    mv -f "${RUNTIME_DIR}/.hpgl${SHARED_EXT}.new" "${RUNTIME_DIR}/hpgl${SHARED_EXT}"
     echo "  $(basename "$HPGL_LIB") -> ${RUNTIME_DIR}/hpgl${SHARED_EXT}"
 else
     # 2-M-22: a missing library must FAIL the build — a broken artifact
@@ -548,7 +634,10 @@ if [[ -n "$VARIO_LIB" ]]; then
     find "$RUNTIME_DIR" -maxdepth 1 \
         \( -name "lib_cvariogram.*" -o -name "_cvariogram.so" -o -name "_cvariogram.dylib" \) \
         -delete 2>/dev/null || true
-    cp "$VARIO_LIB" "${RUNTIME_DIR}/_cvariogram${SHARED_EXT}"
+    # G-31/F-158: same atomic install as the main library (a partial copy here
+    # would leave a mixed-generation pair the symbol check cannot detect).
+    cp "$VARIO_LIB" "${RUNTIME_DIR}/._cvariogram${SHARED_EXT}.new"
+    mv -f "${RUNTIME_DIR}/._cvariogram${SHARED_EXT}.new" "${RUNTIME_DIR}/_cvariogram${SHARED_EXT}"
     echo "  $(basename "$VARIO_LIB") -> ${RUNTIME_DIR}/_cvariogram${SHARED_EXT}"
 else
     # 2-M-22: same as above — the variogram module is required.
@@ -556,11 +645,11 @@ else
     exit 1
 fi
 
-echo ""
-echo "========================================"
-echo "Build completed successfully!"
-echo "========================================"
-echo ""
+# G-31: the success banner belongs to the COMMIT POINT, not here — the gates
+# below (smoke, py39 grammar, relocatability, CTest) can still reject this
+# build, and printing "Build completed successfully!" first told the operator
+# the build was good while a rejected artifact sat installed. It is printed at
+# the end of this script, immediately after the last gate.
 
 # Post-build smoke test: verify the FRESH native libraries load via Python.
 # _HAS_KRIGING_STATS is only True for builds exporting hpgl_get_kriging_stats —
@@ -575,19 +664,26 @@ echo ""
 echo "Smoke test: verifying library load..."
 SMOKE_CMD="import sys; sys.path.insert(0, '${RUNTIME_DIR}/..'); from geo_bsd import hpgl_wrap; assert hpgl_wrap._HAS_KRIGING_STATS, 'stale library loaded (_HAS_KRIGING_STATS=False)'; print('  hpgl shared library loaded:', hpgl_wrap._hpgl_so._name); from geo_bsd import cvariogram; assert hasattr(cvariogram.cvar, 'cvar_get_last_error'), '_cvariogram failed to load'; assert hasattr(cvariogram.cvar, 'cvar_clear_last_error'), '_cvariogram missing cvar_clear_last_error (stale build)'; print('  _cvariogram shared library loaded: OK')"
 if command -v uv &>/dev/null; then
-    if uv run python -c "$SMOKE_CMD" 2>/dev/null; then
+    # F-162: stderr is NOT discarded — the assertion text added by 2-M-22
+    # ('stale library loaded (_HAS_KRIGING_STATS=False)', '… missing
+    # cvar_clear_last_error') is the only evidence that distinguishes a stale
+    # or ABI-mismatched library from a missing dependency.
+    if uv run python -c "$SMOKE_CMD"; then
         echo "  Smoke test: PASSED"
     else
-        echo "  ERROR: Smoke test failed — the freshly built library does not load." >&2
-        echo "  Check that all dependencies are installed and LD_LIBRARY_PATH is set." >&2
+        echo "  ERROR: Smoke test failed — see the assertion/traceback above." >&2
+        echo "  A missing dependency, a stale library in src/geo_bsd, or a partially" >&2
+        echo "  installed artifact all land here; the message names which one." >&2
         exit 1
     fi
 else
-    if python3 -c "$SMOKE_CMD" 2>/dev/null || python -c "$SMOKE_CMD" 2>/dev/null; then
+    # F-162: stderr kept for the same reason (both fallback attempts print why).
+    if python3 -c "$SMOKE_CMD" || python -c "$SMOKE_CMD"; then
         echo "  Smoke test: PASSED"
     else
-        echo "  ERROR: Smoke test failed — the freshly built library does not load." >&2
-        echo "  Check that all dependencies are installed and LD_LIBRARY_PATH is set." >&2
+        echo "  ERROR: Smoke test failed — see the assertion/traceback above." >&2
+        echo "  A missing dependency, a stale library in src/geo_bsd, or a partially" >&2
+        echo "  installed artifact all land here; the message names which one." >&2
         exit 1
     fi
 fi
@@ -626,6 +722,21 @@ fi
 # other machines. The CMake RPATH extraction (CMakeLists.txt) deliberately
 # embeds non-system library dirs, so standalone installs must be gated here.
 echo "Smoke test: checking runtime library relocatability..."
+# F-157: the deployment target this build was configured with — the cache is
+# authoritative (CMakeLists.txt pins 11.0 only when nothing is set). The dev
+# gate below needs it to mirror the wheel gate's min-OS check.
+# The cache ENTRY TYPE is not stable: the CMakeLists.txt pin yields :STRING=,
+# but a -DCMAKE_OSX_DEPLOYMENT_TARGET=<v> configure override (documented at
+# CMakeLists.txt:43) is cached :UNINITIALIZED=. Matching :STRING= only dropped
+# the override, fell back to 11.0 and rejected a legal 12.0 build with a
+# message naming the wrong target — so match every cache type.
+DEV_DEPLOYMENT_TARGET="11.0"
+if [[ -f "$SEARCH_DIR/CMakeCache.txt" ]]; then
+    _hpgl_cached_target=$(awk -F= '/^CMAKE_OSX_DEPLOYMENT_TARGET:/ {print $2; exit}' "$SEARCH_DIR/CMakeCache.txt")
+    if [[ -n "$_hpgl_cached_target" ]]; then
+        DEV_DEPLOYMENT_TARGET="$_hpgl_cached_target"
+    fi
+fi
 if [[ "$PLATFORM" == "macos" ]]; then
     RELOC_BAD=0
     for lib in "${RUNTIME_DIR}/hpgl${SHARED_EXT}" "${RUNTIME_DIR}/_cvariogram${SHARED_EXT}"; do
@@ -633,21 +744,50 @@ if [[ "$PLATFORM" == "macos" ]]; then
             echo "  WARNING: $lib not found — skipping relocatability check for it" >&2
             continue
         fi
-        # Absolute deps under /opt/homebrew|/usr/local|/Users/|/Applications/Xcode
-        # indicate a non-static (or stale-cache) build — the H-3 defect class.
-        ABS=$(otool -L "$lib" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E '^/(opt/homebrew|usr/local|Users/|Applications/Xcode)' || true)
+        # F-157: ONE predicate with the wheel gate (build.sh:369-370) — every
+        # absolute dependency except the system prefixes /System/ and /usr/lib
+        # is a build-machine leak (non-static or stale-cache build: the H-3
+        # defect class). The previous four-prefix allowlist let
+        # /Library/Frameworks and MacPorts /opt/local dependencies through.
+        ABS=$(otool -L "$lib" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E '^/' | grep -Ev '^/(System/|usr/lib)' || true)
         if [[ -n "$ABS" ]]; then
             echo "  ERROR: $lib carries absolute build-machine dependencies (HPGL_STATIC_LIBOMP=ON expected static embed):" >&2
             echo "$ABS" | sed 's/^/    /' >&2
             RELOC_BAD=1
         fi
+        # F-157: otool -L covers only the dependency list. The wheel gate also
+        # parses otool -l for LC_RPATH entries and the LC_BUILD_VERSION minos
+        # (build.sh wheel gate), and the Linux branch below checks the
+        # equivalent RPATH/RUNPATH — this path checked neither, so a dylib with
+        # an absolute LC_RPATH (non-system BLAS prefix, CMakeLists.txt
+        # INSTALL_RPATH extraction) or a raised minos (stale
+        # CMAKE_OSX_DEPLOYMENT_TARGET cache) printed "PASSED" and the test
+        # suite then ran against a non-relocatable binary.
+        OT_L=$(otool -l "$lib" 2>/dev/null || true)
+        ABS_RPATH=$(printf '%s\n' "$OT_L" \
+            | awk '/cmd LC_RPATH/ {f=1; next} f && $1 == "path" {print $2; f=0}' \
+            | grep -E '^/' || true)
+        if [[ -n "$ABS_RPATH" ]]; then
+            echo "  ERROR: $lib carries absolute LC_RPATH entries:" >&2
+            echo "$ABS_RPATH" | sed 's/^/    /' >&2
+            RELOC_BAD=1
+        fi
+        MINOS=$(printf '%s\n' "$OT_L" | awk '$1 == "minos" {print $2; exit}')
+        if [[ -z "$MINOS" ]]; then
+            echo "  ERROR: $lib declares no LC_BUILD_VERSION minos — its deployment-target claim cannot be verified" >&2
+            RELOC_BAD=1
+        elif ! awk -v m="$MINOS" -v t="$DEV_DEPLOYMENT_TARGET" 'BEGIN { exit !(m + 0 <= t + 0) }'; then
+            echo "  ERROR: $lib declares minos $MINOS, newer than the configured deployment target $DEV_DEPLOYMENT_TARGET" >&2
+            RELOC_BAD=1
+        fi
     done
     if [[ $RELOC_BAD -ne 0 ]]; then
         echo "  ERROR: runtime dylib relocatability check FAILED — the build is not self-contained." >&2
-        echo "  This is usually a stale CMake cache with HPGL_STATIC_LIBOMP=OFF; delete the cache dir and rebuild." >&2
+        echo "  A stale CMake cache with HPGL_STATIC_LIBOMP=OFF, a non-system BLAS prefix baked into" >&2
+        echo "  LC_RPATH, or a raised CMAKE_OSX_DEPLOYMENT_TARGET all land here; delete the cache dir and rebuild." >&2
         exit 1
     fi
-    echo "  Relocatability check: PASSED (no absolute build-machine deps)"
+    echo "  Relocatability check: PASSED (no absolute deps or LC_RPATH, minos <= $DEV_DEPLOYMENT_TARGET)"
 elif [[ "$PLATFORM" == "linux" ]]; then
     RELOC_BAD=0
     for lib in "${RUNTIME_DIR}/hpgl.so" "${RUNTIME_DIR}/_cvariogram.so"; do
@@ -711,16 +851,51 @@ fi
 if [[ -f "$CTestDir/CTestTestfile.cmake" ]]; then
     if (cd "$CTestDir" && ctest --output-on-failure); then
         echo "  CTest suite: PASSED"
+        CTEST_STATE="PASSED"
     else
         echo "  ERROR: CTest suite FAILED — see failures above" >&2
         exit 1
     fi
 else
     echo "  CTest suite: SKIPPED (no CTestTestfile.cmake in $CTestDir — tests not configured)"
+    CTEST_STATE="SKIPPED"
 fi
 
 echo ""
+
+# G-31: COMMIT POINT. Every gate above passed, so the installed libraries are
+# the validated ones — from here on the EXIT trap must not restore the
+# pre-build state.
+HPGL_RUNTIME_COMMITTED=1
+
+# G-31/F-071 (shared remedy): record which build produced the installed
+# libraries. Nothing else in the tree does — *.dylib/*.so are gitignored, so a
+# rejected or stale artifact was indistinguishable from a validated one. The
+# stamp lives in the build directory (gitignored, no source-tree noise) and
+# pins the exact bytes that were installed.
+_hpgl_sha256() {
+    if command -v shasum &>/dev/null; then
+        shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v sha256sum &>/dev/null; then
+        sha256sum "$1" 2>/dev/null | awk '{print $1}'
+    else
+        echo "unavailable"
+    fi
+}
+STAMP_FILE="${SEARCH_DIR}/hpgl-install-stamp.txt"
+{
+    echo "timestamp:   $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo "config:      $BUILD_CONFIG"
+    echo "preset:      ${USE_PRESET:-<none>}"
+    echo "git:         $(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "gates:       smoke, py39-grammar, relocatability ($PLATFORM) PASSED; ctest $CTEST_STATE"
+    echo "hpgl:        $(_hpgl_sha256 "${RUNTIME_DIR}/hpgl${SHARED_EXT}")"
+    echo "cvariogram:  $(_hpgl_sha256 "${RUNTIME_DIR}/_cvariogram${SHARED_EXT}")"
+} > "$STAMP_FILE" 2>/dev/null || true
+
 echo "========================================"
+echo "Build completed successfully!"
 echo "All checks passed. HPGL build is ready."
+echo "  install stamp: $STAMP_FILE"
 echo "========================================"
 echo ""

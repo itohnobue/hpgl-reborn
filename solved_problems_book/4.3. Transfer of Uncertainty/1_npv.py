@@ -40,7 +40,11 @@ np.random.seed(12345)
 def npv_calculate(R, C, r, n):
 	npv = 0.0
 	for i in range(n):
-		npv = npv + ((R[i] - C[i]) / (1 + r)**i)
+		# F-034: year i is discounted i+1 periods. The previous exponent `i`
+		# left year 1 undiscounted (mean NPV 8.34 instead of 7.58); the book's
+		# published P10/P50/P90 (3.4/7.5/12.1 M) are reproduced only when all
+		# five years are discounted.
+		npv = npv + ((R[i] - C[i]) / (1 + r)**(i+1))
 	return npv
 
 npv_array = []

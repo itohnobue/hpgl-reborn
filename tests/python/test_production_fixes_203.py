@@ -5,10 +5,12 @@ through the top-level import path. Pre-fix the suite imported submodules
 regression (a name dropped from ``__all__`` or a broken top-level import
 chain) was undetected for the majority of the 38 names.
 
-The __all__ list is read dynamically at collection time so the parametrized
-presence test stays correct if the public surface changes; the behavioral
-tests then exercise representative top-level entry points with value
-assertions (not presence-only).
+The parametrized presence list below is a FROZEN pin of the documented public
+surface: ``test_all_names_in_all_resolve`` asserts it set-equal to
+``geo_bsd.__all__``, so adding, removing or renaming a public name fails the
+gate loudly instead of silently thinning it (F-611). The behavioural tests then
+exercise representative top-level entry points with value assertions (not
+presence-only), and the presence test rejects a ``None`` re-export (F-610).
 """
 
 import sys
@@ -26,6 +28,26 @@ except (ImportError, OSError):
     HPGL_AVAILABLE = False
 
 
+# F-611: frozen pin of the documented 38-name public surface (B-08). Do not
+# read __all__ dynamically here — the pin is what makes a surface change fail
+# loudly; ``test_all_names_in_all_resolve`` asserts it set-equal to
+# ``geo_bsd.__all__`` in both directions.
+PINNED_PUBLIC_NAMES = [
+    "ordinary_kriging", "simple_kriging", "lvm_kriging",
+    "indicator_kriging", "median_ik", "simple_cokriging_markI",
+    "simple_cokriging_markII", "simple_kriging_weights",
+    "sgs_simulation", "sis_simulation", "gtsim_2ind",
+    "get_kriging_stats", "calc_cdf",
+    "ContProperty", "IndProperty", "CovarianceModel", "SugarboxGrid",
+    "covariance", "CdfData", "SGSConfig", "SISConfig", "GTSIMConfig",
+    "variogram", "routines", "cvariogram", "validation",
+    "load_cont_property", "load_ind_property", "read_inc_file_float",
+    "read_inc_file_byte", "write_property", "write_gslib_property",
+    "calc_mean", "set_thread_num", "get_thread_num",
+    "set_output_handler", "set_progress_handler", "get_gslib_property",
+]
+
+
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL (geo_bsd) not available")
 class TestAllNamesPresent:
     """B-08: every name in __all__ must resolve at the package top level."""
@@ -40,30 +62,34 @@ class TestAllNamesPresent:
         assert not missing, (
             f"top-level export missing for __all__ names: {missing}"
         )
+        # F-611: the parametrized list below is a frozen pin. Pin it to the
+        # live surface in BOTH directions so a new public name cannot slip
+        # past the presence/behaviour gate unnoticed, and a rename fails for
+        # the right reason.
+        assert set(PINNED_PUBLIC_NAMES) == set(names), (
+            f"frozen public-surface pin drifted from __all__: "
+            f"only-in-pin={sorted(set(PINNED_PUBLIC_NAMES) - set(names))}, "
+            f"only-in-__all__={sorted(set(names) - set(PINNED_PUBLIC_NAMES))}"
+        )
 
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "ordinary_kriging", "simple_kriging", "lvm_kriging",
-            "indicator_kriging", "median_ik", "simple_cokriging_markI",
-            "simple_cokriging_markII", "simple_kriging_weights",
-            "sgs_simulation", "sis_simulation", "gtsim_2ind",
-            "get_kriging_stats", "calc_cdf",
-            "ContProperty", "IndProperty", "CovarianceModel", "SugarboxGrid",
-            "covariance", "CdfData", "SGSConfig", "SISConfig", "GTSIMConfig",
-            "variogram", "routines", "cvariogram", "validation",
-            "load_cont_property", "load_ind_property", "read_inc_file_float",
-            "read_inc_file_byte", "write_property", "write_gslib_property",
-            "calc_mean", "set_thread_num", "get_thread_num",
-            "set_output_handler", "set_progress_handler", "get_gslib_property",
-        ],
-    )
+    @pytest.mark.parametrize("name", PINNED_PUBLIC_NAMES)
     def test_name_in_all_and_resolvable(self, name):
-        """Every __all__ name must resolve via getattr (B-08). Note: the
-        cvariogram module is None when the optional C++ extension is not
-        built (documented fallback) — presence, not non-None, is the contract."""
+        """Every __all__ name must resolve to a LIVE object via getattr (B-08).
+
+        F-610: presence alone is not the contract — ``hasattr`` is True for a
+        re-export set to ``None``, so a silently dead top-level name passed.
+        The one exemption is the ``cvariogram`` module, which is documented as
+        ``None`` when the optional C++ extension is not built (see
+        ``__init__.py``), hence presence-only there.
+        """
         assert name in geo_bsd.__all__, f"{name} missing from __all__"
         assert hasattr(geo_bsd, name), f"geo_bsd.{name} missing at top level"
+        if name == "cvariogram":
+            return  # documented presence-only contract (optional extension)
+        assert getattr(geo_bsd, name) is not None, (
+            f"geo_bsd.{name} is a dead re-export (None) — the top-level name "
+            f"does not work"
+        )
 
     def test_all_matches_star_import_surface(self):
         """`from geo_bsd import *` must expose exactly the __all__ names."""

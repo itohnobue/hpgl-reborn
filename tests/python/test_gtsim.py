@@ -9,7 +9,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
     from geo_bsd.geo import ContProperty, SugarboxGrid
-    from geo_bsd.gtsim import pseudo_gaussian_transform, tk_calculation
+    from geo_bsd.gtsim import (
+        _norm_cdf,
+        _norm_ppf,
+        pseudo_gaussian_transform,
+        tk_calculation,
+    )
 except (ImportError, OSError):
     pass  # HPGL_AVAILABLE from conftest handles availability
 
@@ -169,9 +174,86 @@ class TestTkCalculation:
 
 
 @pytest.mark.hpgl
+class TestNormPpfAccuracy:
+    """G-61: pin the normal-quantile approximation's MEASURED accuracy.
+
+    ``_norm_ppf`` (``gtsim.py:45-79``) is the Abramowitz & Stegun 26.2.23
+    rational approximation. It used to be documented as
+    "Beasley-Springer-Moro … ~4.5e-5", which is false by 10x: re-measured
+    against a 50-digit mpmath reference over p in [1e-15, 1-1e-15], the max
+    absolute error is **4.442946e-04 at p=0.358**, and the Φ(Φ⁻¹(p)) round-trip
+    error is **1.668618e-04 at p=0.37**. The docstring now states those figures;
+    these tests keep them true, so an accuracy claim cannot drift away from the
+    arithmetic again. A 4.5e-5 bound — the old claim — fails on every case below
+    by an order of magnitude.
+    """
+
+    # (p, Φ⁻¹(p)) — reference quantiles evaluated at 50-digit precision
+    # (mpmath, dps=50), rounded to double. Φ⁻¹(0.05) = -1.6448536269514722 and
+    # Φ⁻¹(0.99) = 2.3263478740408408 are the textbook constants, which is an
+    # independent check that the literals are the TRUE quantiles and not this
+    # implementation's own output.
+    CASES = [
+        (1e-06, -4.753424308822899),
+        (0.01, -2.326347874040841),
+        (0.05, -1.6448536269514726),
+        (0.25, -0.6744897501960817),
+        (0.358, -0.36380985902969576),  # worst measured point
+        (0.5, 0.0),
+        (0.642, 0.36380985902969576),
+        (0.75, 0.6744897501960817),
+        (0.95, 1.6448536269514722),
+        (0.99, 2.3263478740408408),
+        (1.0 - 1e-06, 4.753424308817087),
+    ]
+
+    def test_norm_ppf_absolute_accuracy(self):
+        """Max abs error over the pinned grid is 4.4429e-4 — bound 1e-3.
+
+        The bound keeps ~2.2x headroom over the measured error (so it is not
+        brittle to a platform's ``log``/``sqrt`` last-bit differences) while
+        still failing on the documented-but-false 4.5e-5 claim and on any
+        regression to a cruder approximation.
+        """
+        for p, expected in self.CASES:
+            got = float(_norm_ppf(np.array([p]))[0])
+            assert abs(got - expected) < 1e-3, (
+                f"_norm_ppf({p!r}) = {got!r}, true quantile {expected!r}: "
+                f"abs error {abs(got - expected):.3e} exceeds the measured "
+                f"accuracy 4.4429e-4 (bound 1e-3)"
+            )
+
+    def test_norm_cdf_roundtrip_accuracy(self):
+        """Φ(Φ⁻¹(p)) reproduces p to 1.6686e-4 — bound 1e-3.
+
+        The round-trip is the property ``tk_calculation``/the F-02 threshold
+        mapping rely on (``gtsim.py:421-422``): a quantile error that the
+        inverse-CDF mapping does not cancel would move the data-space threshold.
+        """
+        ps = np.array([p for p, _ in self.CASES])
+        roundtrip = np.asarray(_norm_cdf(_norm_ppf(ps)), dtype="float64")
+        err = np.abs(roundtrip - ps)
+        worst = int(np.argmax(err))
+        assert err[worst] < 1e-3, (
+            f"Φ(Φ⁻¹(p)) round-trip error {err[worst]:.3e} at p={ps[worst]!r} "
+            f"exceeds the measured 1.6686e-4 (bound 1e-3)"
+        )
+
+
+@pytest.mark.hpgl
 class TestPseudoGaussianTransform:
+    """The transform draws from ITS OWN engine, never the process-global RNG.
+
+    G-58: this class used to open five tests with ``np.random.seed(42)``. Those
+    calls were inert — ``pseudo_gaussian_transform`` takes an optional ``rng``
+    and, when none is passed, constructs ``np.random.RandomState(0)``
+    (``gtsim.py:22-27``), so the global seed could not influence the result and
+    the assertions could not distinguish the default engine from any other.
+    The seeds are removed; ``test_default_engine_golden_output`` pins the
+    default engine's actual values instead.
+    """
+
     def test_binary_zeros_transformed(self):
-        np.random.seed(42)
         prop = _make_cont_prop(10, values=[0.0] * 10)
         pk_prop = _make_cont_prop(10, values=[0.5] * 10)
         result = pseudo_gaussian_transform(prop, pk_prop)
@@ -180,7 +262,6 @@ class TestPseudoGaussianTransform:
             assert 0.0 <= v < 0.5
 
     def test_binary_ones_transformed(self):
-        np.random.seed(42)
         prop = _make_cont_prop(10, values=[1.0] * 10)
         pk_prop = _make_cont_prop(10, values=[0.5] * 10)
         result = pseudo_gaussian_transform(prop, pk_prop)
@@ -189,7 +270,6 @@ class TestPseudoGaussianTransform:
             assert 0.5 <= v <= 1.0
 
     def test_mixed_binary(self):
-        np.random.seed(42)
         values = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
         prop = _make_cont_prop(8, values=values)
         pk_prop = _make_cont_prop(8, values=[0.5] * 8)
@@ -200,7 +280,6 @@ class TestPseudoGaussianTransform:
         assert np.all(result.data.flat[ones_mask] >= 0.5)
 
     def test_non_binary_values_unchanged(self):
-        np.random.seed(42)
         values = [0.3, 0.7, 0.4, 0.6]
         prop = _make_cont_prop(4, values=values)
         pk_prop = _make_cont_prop(4, values=[0.5] * 4)
@@ -209,12 +288,67 @@ class TestPseudoGaussianTransform:
         np.testing.assert_array_equal(result.data, original)
 
     def test_different_pk_thresholds(self):
-        np.random.seed(42)
         prop = _make_cont_prop(10, values=[0.0] * 10)
         pk_low = _make_cont_prop(10, values=[0.1] * 10)
         result = pseudo_gaussian_transform(prop, pk_low)
         for v in result.data.flat:
             assert 0.0 <= v < 0.1
+
+    def test_default_engine_golden_output(self):
+        """G-58: the DEFAULT engine's exact values are pinned.
+
+        ``pseudo_gaussian_transform(prop, pk)`` with no ``rng`` constructs
+        ``np.random.RandomState(0)`` (``gtsim.py:22-27``), so its output is a
+        fixed function of the fixture: ``uniform(0, pk)`` for every zero cell
+        and then ``uniform(pk, 1)`` for every one cell, in flat index order,
+        stored into ``prop.data`` (float32). Before this pin the class asserted
+        only range bounds and one input echo, so the default engine could be
+        re-seeded, switched to the process-global RNG, or bypassed entirely and
+        every assertion still passed.
+
+        The expected values are the actual float32 output of the default
+        engine, measured by probe on this fixture. They are checked under two
+        different process-global seeds (0 and 12345): the transform must not
+        read the global RNG, and a global-RNG fallback would change the values.
+        Mutation caught: any change to the default engine (seed removed →
+        unseeded global draws; seed changed → different stream; the transform
+        hard-coded to a constant) breaks the exact comparison.
+        """
+        values = [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]
+        golden = np.array(
+            [
+                0.274406760931015,
+                0.7118273973464966,
+                0.35759466886520386,
+                0.822947084903717,
+                0.3013816773891449,
+                0.7187936305999756,
+                0.2724415957927704,
+                0.945886492729187,
+            ],
+            dtype="float32",
+        )
+
+        saved_state = np.random.get_state()
+        for global_seed in (0, 12345):
+            # The global seed must be inert: the engine is private to the call.
+            np.random.seed(global_seed)
+            prop = _make_cont_prop(8, values=values)
+            pk_prop = _make_cont_prop(8, values=[0.5] * 8)
+            result = pseudo_gaussian_transform(prop, pk_prop)
+            np.testing.assert_array_equal(
+                result.data.ravel(order="K"),
+                golden,
+                err_msg=(
+                    "G-58: pseudo_gaussian_transform's default engine "
+                    f"(RandomState(0)) changed its output under global seed "
+                    f"{global_seed}"
+                ),
+            )
+
+        # Leave the process-global RNG as this test found it: the seeds above
+        # are this test's input, not a state change for later tests.
+        np.random.set_state(saved_state)
 
 
 @pytest.mark.hpgl
@@ -342,6 +476,189 @@ class TestGtsim2Ind:
         result1 = gtsim_2ind(grid, prop1, sk_params, do_sk=True, seed=42)
         result2 = gtsim_2ind(grid, prop2, sk_params, do_sk=True, seed=12345)
         assert not np.array_equal(result1.data, result2.data)
+
+    def test_gtsim_2ind_golden_seeded_chain(self):
+        """G-57: literal golden values for gtsim's seeded transform/threshold chain.
+
+        Every determinism block in the suite compares two runs made with the
+        SAME seed, so none of them can fail when the seed stops driving the
+        stream at all — both runs then agree on the wrong field. This pin fixes
+        literal values instead, for the stages ``gtsim_2ind`` owns in Python, in
+        the order it executes them:
+
+          1. seed -> engine: ``RandomState((seed ^ (seed >> 32)) & 0xFFFFFFFF)``
+             (``gtsim.py:361``, the width-preserving 64-bit fold). This test
+             performs that derivation itself, so what it pins is the transform's
+             values FOR that engine — not the fold: seed 42 folds to 42, which
+             is exactly what a 32-bit truncation yields too, so a changed fold
+             leaves this pin green. The fold's width preservation is pinned by
+             ``test_gtsim_2ind_seed_fold_is_width_preserving``, which observes
+             the engine ``gtsim_2ind`` builds for ``2**32 + 42`` (fold -> 43,
+             truncation -> 42),
+          2. ``pseudo_gaussian_transform`` over the internal working copies
+             (``gtsim.py:320-321``, ``:367-368``; the fixtures here are 1-D, so
+             the ``order="F"`` copies cannot change the draw order),
+          3. the threshold chain: ``tk_calculation`` (``gtsim.py:334``) then the
+             F-02/II-39 mapping into data space
+             ``cdf.inverse(Φ((tk - tk_mean)/tk_std_dev))`` (``gtsim.py:421-422``).
+
+        The expected values are the current output for this fixture, measured by
+        probe; a different seed changes all 50 transformed cells and the
+        threshold, so the pin discriminates any stream change.
+
+        Deliberately stops before the C++ SGS stage: F-388 (in flight in
+        ``path_random_generator.cpp``) gives the path engine its own seed_seq,
+        which re-permutes the node visiting order for a fixed seed. Any field
+        value measured before that rebuild is stale, so a pinned field would be
+        a permanently red oracle rather than a regression pin; everything above
+        is numpy/CDF-only and therefore rebuild-independent. The simulated
+        field stays covered by the differential and behavioural pins in this
+        class.
+        """
+        from geo_bsd.cdf import calc_cdf
+
+        _, prop = self._make_grid_prop()
+        rng = np.random.RandomState(123)
+        partial_mask = (rng.rand(prop.mask.size) < 0.7).astype("uint8")
+        prop.mask[:] = partial_mask
+
+        pk_prop = ContProperty(
+            np.full(prop.data.size, 0.5, dtype="float32"),
+            np.ones(prop.data.size, dtype="uint8"),
+        )
+
+        # 1. The seed->engine derivation gtsim_2ind performs (gtsim.py:361).
+        seed = 42
+        engine = np.random.RandomState((int(seed) ^ (int(seed) >> 32)) & 0xFFFFFFFF)
+        # 2. The internal working copies (gtsim.py:320-321, :367). tk_calculation
+        #    overwrites the probability data in place, and gtsim restores it
+        #    before the transform (gtsim.py:333-338).
+        prop_work = ContProperty(prop.data.copy(order="F"), prop.mask.copy(order="F"))
+        pk_work = ContProperty(pk_prop.data.copy(order="F"), pk_prop.mask.copy(order="F"))
+        original_pk = pk_work.data.copy(order="F")
+        threshold_normal = tk_calculation(pk_work, mean=0.0, std_dev=1.0).data.copy(
+            order="F"
+        )
+        pk_work.data = original_pk
+        transformed = pseudo_gaussian_transform(prop_work, pk_work, engine)
+
+        np.testing.assert_array_equal(
+            transformed.data.ravel(order="K")[:8],
+            np.array(
+                [
+                    0.18727006018161774,
+                    0.9828160405158997,
+                    0.9041986465454102,
+                    0.47535714507102966,
+                    0.36599695682525635,
+                    0.2993292510509491,
+                    0.07800932228565216,
+                    0.6523069143295288,
+                ],
+                dtype="float32",
+            ),
+            err_msg=(
+                "G-57: gtsim's seeded pseudo-Gaussian transform no longer "
+                "reproduces its golden values (seed 42) — the seed->engine "
+                "derivation or the transform's stream changed"
+            ),
+        )
+
+        # 3. F-02/II-39: the pk=0.5 normal-score threshold mapped into data space
+        #    through the same empirical CDF the SGS back-transform uses.
+        cdf_data = calc_cdf(transformed)
+        tk_std = (threshold_normal.ravel(order="K") - 0.0) / 1.0
+        tk_data = np.asarray(cdf_data.inverse(_norm_cdf(tk_std)), dtype="float64")
+        assert abs(float(tk_data.ravel()[0]) - 0.3733120624821078) < 1e-7, (
+            "G-57: the data-space threshold for pk=0.5 changed, got "
+            f"{float(tk_data.ravel()[0])!r}, golden 0.3733120624821078"
+        )
+
+    def test_gtsim_2ind_seed_fold_is_width_preserving(self, monkeypatch):
+        """G-27/G-57: the seed -> engine fold at ``gtsim.py:361`` keeps the
+        full 64-bit seed width instead of truncating it to the low 32 bits.
+
+        The golden-chain pin above derives ``RandomState(42)`` itself, and seed
+        42 cannot discriminate the fold: every mapping that sends 42 to 42 —
+        the fold, and equally the historical ``static_cast<uint32_t>``
+        truncation that made seeds 5 and 2**32+5 replay one stream — yields the
+        same engine. ``seed = 2**32 + 42`` does discriminate: the fold gives
+        ``(2**32 + 42) ^ 1 == 43``, a truncation gives 42.
+
+        The spy below observes the engine ``gtsim_2ind`` itself builds (the
+        third argument of its ``pseudo_gaussian_transform`` call at
+        ``gtsim.py:368``) instead of rebuilding it, so a changed fold — or a
+        dropped ``rng``, which would fall back to the default engine — fails
+        here. The ``folded != truncated`` guard keeps the pin from going
+        vacuous if the seed choice stops discriminating the two engines.
+        """
+        import geo_bsd.gtsim as gtsim_mod
+
+        seed = 2**32 + 42
+        folded_seed = (seed ^ (seed >> 32)) & 0xFFFFFFFF
+
+        grid, prop = self._make_grid_prop()
+        sk_params = self._make_sk_params()
+
+        captured = {}
+        real_transform = gtsim_mod.pseudo_gaussian_transform
+
+        def _spy(prop_arg, pk_arg, rng=None):
+            if "draws" not in captured and rng is not None:
+                captured["draws"] = rng.random_sample(2)
+            return real_transform(prop_arg, pk_arg, rng)
+
+        monkeypatch.setattr(gtsim_mod, "pseudo_gaussian_transform", _spy)
+        gtsim_2ind(grid, prop, sk_params, do_sk=True, seed=seed)
+
+        folded = np.random.RandomState(folded_seed).random_sample(2)
+        truncated = np.random.RandomState(seed & 0xFFFFFFFF).random_sample(2)
+        assert not np.array_equal(folded, truncated), (
+            f"seed {seed} no longer discriminates the fold from a truncation"
+        )
+        assert captured, "gtsim_2ind never called pseudo_gaussian_transform with an rng"
+        np.testing.assert_array_equal(
+            captured["draws"],
+            folded,
+            err_msg=(
+                "G-27: gtsim_2ind's seed -> engine fold changed — the engine it "
+                f"built for seed {seed} is not RandomState({folded_seed})"
+            ),
+        )
+
+    def test_gtsim_2ind_ignores_global_numpy_seed(self):
+        """G-57/G-58: ``seed`` drives the run, the process-global RNG does not.
+
+        The class used to bracket same-seed runs with ``np.random.seed(42)``,
+        which is inert: ``gtsim_2ind`` builds its own engines. This pins the
+        property behaviourally on the full pipeline — same ``seed``, two
+        DIFFERENT process-global numpy seeds, bit-identical facies fields. A
+        regression that reaches for ``np.random`` (or drops the seeded engine
+        for an unseeded default) breaks it.
+        """
+        grid, prop1 = self._make_grid_prop()
+        _, prop2 = self._make_grid_prop()
+        sk_params = self._make_sk_params()
+
+        rng = np.random.RandomState(123)
+        partial_mask = (rng.rand(prop1.mask.size) < 0.7).astype("uint8")
+        prop1.mask[:] = partial_mask
+        prop2.mask[:] = partial_mask
+
+        saved_state = np.random.get_state()
+        np.random.seed(1)
+        result1 = gtsim_2ind(grid, prop1, sk_params, do_sk=True, seed=42)
+        np.random.seed(987654321)
+        result2 = gtsim_2ind(grid, prop2, sk_params, do_sk=True, seed=42)
+        np.random.set_state(saved_state)
+        np.testing.assert_array_equal(
+            result1.data,
+            result2.data,
+            err_msg=(
+                "G-57: gtsim_2ind output changed with the process-global numpy "
+                "seed — the run must be driven by its seed argument only"
+            ),
+        )
 
     # =========================================================================
     # F-02 (HIGH): truncation must compare in the SAME space as the SGS output

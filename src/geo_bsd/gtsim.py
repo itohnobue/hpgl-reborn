@@ -12,6 +12,7 @@ from .cdf import calc_cdf
 from .config import GTSIMConfig
 from .geo import ContProperty, simple_kriging
 from .sgs import sgs_simulation
+from .validation import CriticalValidationError, GridValidator, ParameterValidator
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,9 @@ def pseudo_gaussian_transform(prop, pk_prop, rng=None):
 def _norm_ppf(p):
     """Inverse CDF (percent point function) for the standard normal distribution.
 
-    Uses the Beasley-Springer-Moro approximation, accurate to ~4.5e-5
-    for probabilities in [1e-15, 1-1e-15]. Vectorized over numpy arrays.
+    Uses the Abramowitz & Stegun 26.2.23 rational approximation, accurate to
+    ~4.4e-4 (max abs error measured 4.44e-4 at p=0.3577) for probabilities in
+    [1e-15, 1-1e-15]. Vectorized over numpy arrays.
 
     Parameters
     ----------
@@ -163,7 +165,12 @@ def gtsim_2ind(
     grid : Grid
         Simulation grid
     prop : ContProperty
-        Initial property (continuous values)
+        Initial property holding the hard facies. Informed cells must carry
+        ``0`` or ``1`` — the pseudo-Gaussian transform and the truncation are
+        defined for binary facies only, and any other informed value is
+        rejected with ``ValueError`` (a continuous field is not a 2-facies
+        model). Masked-out cells may hold any value (e.g. a sentinel such as
+        ``-99``); the simulation overwrites them.
     sk_params : dict
         Simple kriging parameters
     do_sk : bool, optional
@@ -183,7 +190,11 @@ def gtsim_2ind(
         Standard deviation for threshold calculation (default: 1.0)
         For standard normal distribution, use 1.0
     seed : int, optional
-        Seed for the random number generator (default: 3439275)
+        Seed for the random number generator (default: 3439275). The package's
+        full non-negative int64 seed range is accepted: the value drives the
+        engine (SGS) directly and is folded to the 32-bit word numpy's
+        ``RandomState`` requires for the pseudo-Gaussian transform, so a seed
+        recorded from ``sgs_simulation``/``sis_simulation`` replays here.
     config : GTSIMConfig or None, optional
         Pre-configured GTSIM parameters as a frozen dataclass.  When provided,
         its values override the corresponding keyword arguments above.
@@ -203,7 +214,8 @@ def gtsim_2ind(
         tk_mean = config.tk_mean
         tk_std_dev = config.tk_std_dev
         seed = config.seed
-    # prop must be continious!
+    # prop carries the hard facies (0/1 at informed cells) — see the gate
+    # after the pk_prop contract below.
 
     # 1. calculate pk_prop
     # check pk_prop, if presented, use it, if not - do SK
@@ -242,6 +254,49 @@ def gtsim_2ind(
     pk_flat = pk_prop.data.ravel(order="K")
     if np.any(~np.isfinite(pk_flat)):
         raise ValueError("gtsim_2ind: pk_prop.data contains NaN or Inf values")
+
+    # F-007: pk_prop is consumed pairwise with the grid by FLAT node index
+    # (pseudo_gaussian_transform pairs it with prop's flat mask, and the
+    # truncation indexes thresholds the same way), so its volume — and, for 3D
+    # data, its per-dimension shape — must match the grid. Without this
+    # contract an equal-volume but differently-shaped pk_prop completed
+    # silently with the thresholds landing on the wrong cells (measured: 4 of
+    # 50 cells flipped facies on a smooth probability gradient), while a
+    # wrong-VOLUME pk_prop died inside numpy with an opaque IndexError.
+    # Mirrors the sibling guards sgs.py:346-375 (LVM mean) and sis.py:305-344;
+    # a 1D flat probability vector of the grid volume stays legal.
+    GridValidator.validate_array_size(pk_prop.data, (grid.x, grid.y, grid.z))
+    if pk_prop.data.ndim not in (1, 3):
+        raise ValueError(
+            f"gtsim_2ind: pk_prop.data must be 1D flat (size "
+            f"{grid.x * grid.y * grid.z}) or 3D with shape "
+            f"({grid.x}, {grid.y}, {grid.z}), got {pk_prop.data.ndim}D "
+            f"shape {pk_prop.data.shape}"
+        )
+    if pk_prop.data.ndim == 3 and pk_prop.data.shape != (grid.x, grid.y, grid.z):
+        raise ValueError(
+            f"gtsim_2ind: pk_prop.data shape {pk_prop.data.shape} does not "
+            f"match grid dimensions ({grid.x}, {grid.y}, {grid.z})"
+        )
+
+    # G-26: prop must hold BINARY facies at informed cells. The algorithm is
+    # defined for 0/1 only: pseudo_gaussian_transform transforms exactly the
+    # cells equal to 0 or 1 and then silently clips everything else into
+    # [0, 1], so continuous input (the input the pre-fix docstring invited)
+    # saturated to a 100 % single-facies field with no exception and no
+    # warning (measured P(category 1) = 1.0000 for the data-unit values
+    # 12/27). Reject rather than silently degrade. Masked-out cells are
+    # exempt: they may hold a sentinel such as -99 and are overwritten by the
+    # simulation.
+    prop_gate_flat = prop.data.ravel(order="K")
+    informed_gate = prop.mask.ravel(order="K") != 0
+    non_binary = informed_gate & (prop_gate_flat != 0) & (prop_gate_flat != 1)
+    if np.any(non_binary):
+        raise ValueError(
+            f"gtsim_2ind: prop must hold binary facies (0 or 1) at informed "
+            f"cells, got {int(non_binary.sum())} informed cell(s) with other "
+            f"values (e.g. {float(prop_gate_flat[non_binary][0])!r})"
+        )
 
     # M-24 / F-M15 / 2-M-12: never mutate the caller's pk_prop object or its
     # data buffer. All downstream in-place transforms (the overshoot clamp,
@@ -287,7 +342,23 @@ def gtsim_2ind(
     # del(pk_prop)
 
     logger.info("Pseudo gaussian transforming...")
-    rng = np.random.RandomState(seed)
+    # G-27: GTSIM was the only simulation entry point with no seed gate, and
+    # np.random.RandomState cannot represent the package's int64 seed domain —
+    # it raised numpy's raw "Seed must be between 0 and 2**32 - 1" before any
+    # HPGL-side validation, naming neither GTSIM nor the accepted range.
+    # Validate through the package validator first (so a bool/negative/bad-type
+    # seed is reported against gtsim_2ind), then fold the full 64-bit seed into
+    # the 32-bit word RandomState requires — the same width-preserving split
+    # the C++ engine performs with std::seed_seq (bs_random_generator.cpp:9-21)
+    # — so a seed recorded from SGS/SIS/variogram replays here. The unfolded
+    # seed is still forwarded to sgs_simulation below.
+    try:
+        ParameterValidator.validate_seed(seed)
+    except CriticalValidationError as err:
+        raise CriticalValidationError(f"gtsim_2ind: {err.message}", "seed") from err
+    except TypeError as err:
+        raise TypeError(f"gtsim_2ind: {err}") from err
+    rng = np.random.RandomState((int(seed) ^ (int(seed) >> 32)) & 0xFFFFFFFF)
     # 2-M-12: transform an INTERNAL working copy of prop, never the caller's
     # prop object. Pre-fix, `prop.data = prop.data.copy()` REBOUND the
     # caller's attribute (mutating the caller's object) and the comment

@@ -2,15 +2,22 @@ import sys
 import os
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# F-355: the package lives in src/geo_bsd (readme.md:269-274), not at the
+# repository root — inserting '..' left `import geo_bsd` raising
+# ModuleNotFoundError before any script logic ran.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 from geo_bsd import load_cont_property
 
 # F-54: the sample data lives in tests/python/test_data/ — the old
 # relative paths ("test_data/...") resolved to nothing at repo root and
 # the workflow failed with CriticalValidationError. Derive the real path
-# from this script's location so it works regardless of the CWD.
+# from this script's location.
 # R-06: abspath removes the literal '..' component — PathValidator
 # rejects '..' before normalization (CriticalValidationError).
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+# F-362: the fixture path is absolute, so the load must be told which
+# directory contains it — PathValidator's default base is the process CWD
+# and rejects this path when the script is started from sample-scripts/.
 TEST_DATA_DIR = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'tests', 'python', 'test_data'
 ))
@@ -47,10 +54,21 @@ def ind_ver(prop, indicator):
 
 
 prop1 = load_cont_property(
-    os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_160_141_20.INC"), -99, (166, 141, 20)
+    os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_160_141_20.INC"), -99, (166, 141, 20),
+    basedir=REPO_ROOT,
 )
-prop2 = load_cont_property("results/GTSIM_TRUNC_RESULT.INC", -99, (166, 141, 20))
+# G-36: this harness validates the gtsimk.py producer's output, which now
+# writes its own name (gtsimk.py:280). The old shared path
+# results/GTSIM_TRUNC_RESULT.INC has no producer left — gtsimk_const_prob.py
+# writes results/GTSIM_CONSTPROB_TRUNC_RESULT.INC — so the consumer follows
+# the rename, keeping the verdict attributed to the gtsimk.py pipeline.
+prop2 = load_cont_property("results/GTSIM_TRUNC_RESULT_GTSIMK.INC", -99, (166, 141, 20))
 test_gtsim(prop1, prop2)
 ind_ver(prop2, 3)
 ind_ver(prop1, 3)
-input("Press Enter to continue...")
+# F-353: prompt only when a terminal is attached. The unconditional input()
+# raised EOFError (exit status 1) on non-interactive stdin (CI, nohup, ssh
+# without a pty) after the whole pipeline had already run, so a finished run
+# read as a failure; on an idle terminal it blocked indefinitely.
+if sys.stdin.isatty():
+    input("Press Enter to continue...")

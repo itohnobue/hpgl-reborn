@@ -221,7 +221,7 @@ inline bool lapack_spd_solve_1rhs(
 	//     near-null wild weights (E-H1 bypass, |X| ~ 1e4-1e5, dr ~ 1 →
 	//     bound 1e3) and the wild 1e12 probe (dr ≤ 1e6 → bound ≤ 1e9).
 	//     All-zero A_orig → degenerate → wild.
-	//     R3-02: the pre-filter is now AND-ed with a kriging-variance
+	//     R3-02: the pre-filter is OR-ed with a kriging-variance
 	//     (Schur) consistency check (B'X > A_orig[0]·(1 + 1e-8·size),
 	//     computed below) — same formula as gauss_solve's internal gate
 	//     (gauss_solver.cpp).  Rationale: the (1−ρ²)⁻¹ correlation
@@ -232,8 +232,10 @@ inline bool lapack_spd_solve_1rhs(
 	//     σK² = c − B'X ≥ 0).  Every ρ > 1/√2 ≈ 0.7071 corner has
 	//     B'X = ρ²σp²/(1−ρ²) > c → negative variance → invalid estimator
 	//     → rejected; the pinned wild class (B = [1,−1] → B'X = 2e12
-	//     > c = 1) is rejected too.  Fires only when the pre-filter
-	//     already fired (artificial-RHS pinned tests unaffected).
+	//     > c = 1) is rejected too.  F-288: the check runs independently
+	//     of the pre-filter (an invalid cross-covariance model breaks the
+	//     variance at ordinary weights, |X| ≈ 6), gated only on B being
+	//     covariance-shaped — see the precondition comment at the check.
 	//   - residual: ||A_orig·X − B||_inf vs sqrt(eps)·data_scale·size,
 	//     identical to gauss_solve's residual check (gauss_solver.cpp:96-121).
 	// A_orig holds the original matrix (unmodified on the dpotrs_ path),
@@ -270,7 +272,7 @@ inline bool lapack_spd_solve_1rhs(
 		// dynamic_range ~ 1 → bound 1e3) and the wild 1e12 probe
 		// (dynamic_range ≤ 1e6 → bound ≤ 1e9 < 1e12).  All entries of
 		// A_orig zero (scale_a_min == 0) → degenerate system → wild.
-		// R3-02: the pre-filter is now AND-ed with a kriging-variance
+		// R3-02: the pre-filter is OR-ed with a kriging-variance
 		// (Schur) consistency check — the pre-filter alone cannot
 		// separate the legal high-ρ cokriging corner from the pinned
 		// wild class (both are A ≈ [[1,1−ε],[1−ε,1]] with |X| ~
@@ -279,20 +281,22 @@ inline bool lapack_spd_solve_1rhs(
 		// CONSISTENCY of B with A: the kriging variance
 		// σK² = c − B'X (c = A_orig[0] = target variance = sill for
 		// SK/correlogram, σp² for cokriging) must be non-negative for a
-		// realizable estimator.  Flag wild only when the pre-filter
-		// fires AND B'X > c·(1 + 1e-8·size).  For the mark-II cokriging
-		// corner B'X = ρ²σp²/(1−ρ²) > c = σp² ⇔ ρ > 1/√2 ≈ 0.7071 —
-		// every ρ ≳ 0.9995 corner has NEGATIVE kriging variance
+		// realizable estimator.  F-288: the check is evaluated
+		// INDEPENDENTLY of the pre-filter (flag wild when
+		// B'X > c·(1 + 1e-8·size)), because an invalid cross-covariance
+		// model breaks the variance at ordinary weights — see the
+		// precondition comment inside the branch below.  For the mark-II
+		// cokriging corner B'X = ρ²σp²/(1−ρ²) > c = σp² ⇔ ρ > 1/√2 ≈
+		// 0.7071 — every ρ ≳ 0.9995 corner has NEGATIVE kriging variance
 		// (invalid cross-covariance model) and is rejected
 		// ratio-independently; the pinned wild class (B = [1,−1] on
 		// A = [[1,1−ε],[1−ε,1]] → B'X = 2e12 > c = 1) is rejected too.
-		// The second condition fires ONLY when the pre-filter already
-		// fired, so the artificial-RHS pinned tests (|X| ≤ 2 → pre-filter
-		// no-fire) are unaffected.  B is the ORIGINAL RHS here (unmodified
+		// B is the ORIGINAL RHS here (unmodified
 		// on the dpotrs_ path — copied to X before the solve) and A_orig
 		// is the unmodified original matrix; same formula as gauss_solve's
 		// internal gate (gauss_solver.cpp).
 		bool wild = false;
+		bool wild_variance = false; // F-288: the Schur arm fired (message text)
 		if (!std::isfinite(max_abs_weight))
 			wild = true;
 		else if (scale_a_min == 0.0)
@@ -301,33 +305,100 @@ inline bool lapack_spd_solve_1rhs(
 		{
 			const double dynamic_range =
 				std::min(std::max(std::sqrt(scale_a_max / scale_a_min), 1.0), 1e12);
-			if (max_abs_weight > 1e3 * dynamic_range)
+			// R2-01 magnitude pre-filter — a PRECONDITION, not a rejection on
+			// its own (a large |X| is legitimate for cross-scale systems). It
+			// keeps its pre-fix meaning as one half of the joint rule below.
+			const bool magnitude_fires = (max_abs_weight > 1e3 * dynamic_range);
+
+			// R4-01: the reference is the kriging TARGET variance.
+			// A_orig[0] is correct for SK (C(0)·sill) and cokriging
+			// (σp²) — but the σ-scaled correlogram path builds
+			// A[i][j] = C(h_ij)·σ_i·σ_j, so A[0][0] = C(0)·σ₀² is the
+			// FIRST datum's variance, and valid estimators with
+			// σc > σ0 were spuriously rejected.  The correlogram
+			// callers pass target_variance = C(0)·σc² (the true target
+			// variance, sill-scaled); default 0.0 keeps the A_orig[0]
+			// behavior for SK/cokriging.  Identical formula to
+			// gauss_solve's internal gate (gauss_solver.cpp).
+			const double reference_variance =
+				(target_variance > 0.0) ? target_variance : A_orig[0];
+
+			// Schur / kriging-variance consistency: σK² = c − B'X must be
+			// non-negative for a realizable estimator.
+			bool schur_fires = false;
+			if (size >= 2)
 			{
 				double bx = 0.0;
 				for (int i = 0; i < size; ++i)
 					bx += B[i] * X[i];
-				// R4-01: the reference is the kriging TARGET variance.
-				// A_orig[0] is correct for SK (C(0)·sill) and cokriging
-				// (σp²) — but the σ-scaled correlogram path builds
-				// A[i][j] = C(h_ij)·σ_i·σ_j, so A[0][0] = C(0)·σ₀² is the
-				// FIRST datum's variance, and valid estimators with
-				// σc > σ0 were spuriously rejected.  The correlogram
-				// callers pass target_variance = C(0)·σc² (the true target
-				// variance, sill-scaled); default 0.0 keeps the A_orig[0]
-				// behavior for SK/cokriging.  Identical formula to
-				// gauss_solve's internal gate (gauss_solver.cpp).
-				const double reference_variance =
-					(target_variance > 0.0) ? target_variance : A_orig[0];
-				if (bx > reference_variance * (1.0 + 1e-8 * size))
-					wild = true;
+				schur_fires = bx > reference_variance * (1.0 + 1e-8 * size);
+			}
+
+			// F-288: is B covariance-shaped towards the target? Cauchy–Schwarz
+			// gives |B[i]| <= sqrt(A_ii · c) for a covariance vector. This is
+			// the condition under which a variance violation is attributable to
+			// the MODEL rather than to a caller solving with a non-covariance
+			// RHS, so it is what lets the Schur check stand on its own.
+			bool covariance_rhs = (size >= 2) && (reference_variance > 0.0);
+			for (int i = 0; covariance_rhs && i < size; ++i)
+			{
+				const double a_ii = A_orig[static_cast<size_t>(i) * size + i];
+				if (!(a_ii > 0.0))
+					covariance_rhs = false;
+				else if (std::abs(B[i]) > std::sqrt(a_ii * reference_variance) * (1.0 + 1e-12))
+					covariance_rhs = false;
+			}
+
+			// F-288: the variance check is no longer reachable ONLY behind the
+			// magnitude pre-filter. Nested inside it (the pre-fix shape), the
+			// check ran only once |X| already exceeded 1e3·dynamic_range —
+			// while an invalid cross-covariance model produces a NEGATIVE
+			// kriging variance at ordinary weights. With equal sills
+			// dynamic_range is 1.046 (a flat ~1.05e3 bound), and the reproduced
+			// Mark II corner (primary range 1, secondary range 100, rho 0.999)
+			// solves to w = [-5.48, 6.00], B'X = 5.9963 > c = 1 → kriging
+			// variance −4.996 reported as KI_SUCCESS because the pre-filter
+			// never fired. dynamic_range growing as σp/σs is one instance of
+			// the gap, not its mechanism.
+			//
+			// The joint rule `schur && (magnitude || covariance-shaped)` keeps
+			// every pre-fix verdict: for a non-covariance RHS (e.g.
+			// B = A·[1,1,1] on a well-posed SPD A, where B'X = 25 > c = 4 is
+			// not an inconsistency) nothing changes unless |X| is also wild,
+			// which is exactly the pre-fix AND; and the pinned R4-01
+			// σc > σ0 rejection (magnitude fires, B is not σ-shaped against
+			// c = A_orig[0]) also keeps behaving as before.
+			if (schur_fires && (magnitude_fires || covariance_rhs))
+			{
+				wild = true;
+				// Keep the pre-fix diagnostic whenever the magnitude
+				// pre-filter also fired; the new message is for the class
+				// only the independent arm can catch.
+				wild_variance = !magnitude_fires;
 			}
 		}
 		if (wild)
 		{
 			char error_msg[256];
-			snprintf(error_msg, sizeof(error_msg),
-				"LAPACK Error in %s: solution magnitude |X|_inf = %.3g exceeds dynamic stability bound 1e3·sqrt(max|A|/min|A|) (near-singular system). Matrix size: %d",
-				label, max_abs_weight, size);
+			if (wild_variance)
+			{
+				// F-288: the Schur arm can now fire at ordinary weight
+				// magnitudes, so the magnitude wording above would be false.
+				double bx = 0.0;
+				for (int i = 0; i < size; ++i)
+					bx += B[i] * X[i];
+				const double reference_variance =
+					(target_variance > 0.0) ? target_variance : A_orig[0];
+				snprintf(error_msg, sizeof(error_msg),
+					"LAPACK Error in %s: negative kriging variance c - B'X = %.3g (c = %.3g, B'X = %.3g) — B is inconsistent with the covariance matrix (invalid cross-covariance model). Matrix size: %d",
+					label, reference_variance - bx, reference_variance, bx, size);
+			}
+			else
+			{
+				snprintf(error_msg, sizeof(error_msg),
+					"LAPACK Error in %s: solution magnitude |X|_inf = %.3g exceeds dynamic stability bound 1e3·sqrt(max|A|/min|A|) (near-singular system). Matrix size: %d",
+					label, max_abs_weight, size);
+			}
 			HPGL_LOG_STRING(error_msg);
 			return false;
 		}

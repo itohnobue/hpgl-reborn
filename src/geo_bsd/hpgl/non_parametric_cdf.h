@@ -2,6 +2,8 @@
 #define __NON_PARAMETRIC_CDF_H__6BBB60EA_BA86_4AE3_98FF_3B287C1D1522____
 
 #include "api.h"
+#include "hpgl_exception.h"
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -213,9 +215,86 @@ namespace hpgl
 		non_parametric_cdf_2_t(
 				const hpgl_non_parametric_cdf_t * cdf)
 			:m_values(cdf->m_values), m_probs(cdf->m_probs), m_size(cdf->m_size)
-		{}
+		{
+			// F-204: both SGS C++ entries (sequential_gaussian_simulation and
+			// _lvm) hand this class a raw C struct and then call
+			// std::lower_bound on the two arrays. The C API front door runs a
+			// content scan (api.cpp validate_cdf_content_or_throw) but a
+			// direct-C++ consumer bypasses it, so an unsorted range (undefined
+			// lower_bound -> silently wrong back-transform) or a NaN (poisons
+			// every simulated value) or a null inner array with m_size > 0
+			// (SIGSEGV) was accepted here. Validate once per construction, the
+			// way the sibling median_ik.cpp entry validates its marginals.
+			validate("non_parametric_cdf_2_t");
+		}
 
 		bool is_empty() const { return m_size <= 0; }
+
+		/// Content scan mirroring the C boundary's
+		/// validate_cdf_content_or_throw (api.cpp:317-358): finiteness and
+		/// non-decreasing order of m_values/m_probs, the [0, 1] probability
+		/// range (F-397's predicate), plus the null-inner-array check. The
+		/// length of the caller's buffers cannot be verified — the C struct
+		/// carries no length metadata — so an m_size that overstates the
+		/// allocation stays the C API's / caller's responsibility.
+		void validate(const char * context)
+		{
+			if (m_size <= 0)
+				return;
+			if (m_values == 0 || m_probs == 0)
+			{
+				std::ostringstream oss;
+				oss << context << ": cdf has m_size " << m_size
+				    << " but a null m_values/m_probs array";
+				throw hpgl_exception(context, oss.str());
+			}
+			for (long long i = 0; i < m_size; ++i)
+			{
+				if (!std::isfinite(static_cast<double>(m_values[i]))
+					|| !std::isfinite(static_cast<double>(m_probs[i])))
+				{
+					std::ostringstream oss;
+					oss << context << ": cdf values/probs[" << i
+					    << "] is not finite";
+					throw hpgl_exception(context, oss.str());
+				}
+				// F4 (F-397 twin): probability range — the C boundary enforces
+				// it (api.cpp:330-337) and cdf.py:50-53 rejects it, but this
+				// class documented the mirror and only scanned finite/sorted.
+				// An out-of-range prob survives lower_bound and saturates the
+				// normal-score draw, and on the SGS path the caller's buffer
+				// has already been forward-transformed in place by the time
+				// the harm shows.
+				if (m_probs[i] < 0.0f || m_probs[i] > 1.0f)
+				{
+					std::ostringstream oss;
+					oss << context << ": cdf m_probs[" << i << "]=" << m_probs[i]
+					    << " is outside [0, 1] (probabilities must be cumulative probabilities)";
+					throw hpgl_exception(context, oss.str());
+				}
+				if (i > 0)
+				{
+					if (m_values[i] < m_values[i - 1])
+					{
+						std::ostringstream oss;
+						oss << context << ": cdf m_values must be sorted "
+						    << "non-decreasing (values[" << (i - 1) << "]="
+						    << m_values[i - 1] << " > values[" << i << "]="
+						    << m_values[i] << ")";
+						throw hpgl_exception(context, oss.str());
+					}
+					if (m_probs[i] < m_probs[i - 1])
+					{
+						std::ostringstream oss;
+						oss << context << ": cdf m_probs must be sorted "
+						    << "non-decreasing (probs[" << (i - 1) << "]="
+						    << m_probs[i - 1] << " > probs[" << i << "]="
+						    << m_probs[i] << ")";
+						throw hpgl_exception(context, oss.str());
+					}
+				}
+			}
+		}
 
 		prob_t prob(cont_value_t value)
 		{

@@ -22,6 +22,12 @@ print("Loading data & initializing...")
 # Loading sample data from file
 n = 62
 l = 1000
+# F-090: cell size of the declustering used for the weighted correlation.
+# Lesson 4.2's first step (1_cell_declusterisation.py) uses dx=dy=10 for the
+# same 62 wells, so the declustered mean and this weighted correlation come
+# from two different declusterings; the shipped answer
+# Result/2/2_bootstrap.txt (weighted correlation 0.57062) is reproducible
+# only at dx=7/dy=8, the other file only at dx=dy=10.
 dx = 7
 dy = 8
 dz = 1
@@ -109,14 +115,17 @@ plt.figure()
 plt.hist(w_coef_rand, 50, density=True)
 plt.xlabel("Correlation coefficient")
 plt.ylabel("Frequency")
-plt.title("Bootstrapped correlation between porosity and collocated seismic")
+# F-105: the title names the array that is actually plotted (w_coef_rand is
+# the WEIGHTED bootstrap); it was previously the unweighted title, while the
+# unweighted figure below carried the weighted one.
+plt.title("Bootstrapped correlation between weighted porosity and collocated seismic")
 
 #Draw histogram "Bootstrapped correlation between porosity and collocated seismic"
 plt.figure()
 plt.hist(coef_rand, 50, density=True)
 plt.xlabel("Correlation coefficient")
 plt.ylabel("Frequency")
-plt.title("Bootstrapped correlation between weighted porosity and collocated seismic")
+plt.title("Bootstrapped correlation between porosity and collocated seismic")
 
 #Draw cross plot with seismic data
 plt.figure()

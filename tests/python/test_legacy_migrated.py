@@ -69,6 +69,41 @@ def _load_ind(name, indicators):
     return load_ind_property(str(TEST_DATA_DIR / name), -99, indicators, BIG_GRID)
 
 
+def _assert_written(result, prop):
+    """F-557: the result must have WRITTEN the previously-uninformed cells.
+
+    Every test in this file previously asserted only isinstance/size/NaN, so
+    two mutations shipped green: "return the input unchanged" (a pass-through)
+    and "fill with a constant". Both assertions below are shape-agnostic —
+    the loaded fixtures are 3D while the synthetic ones are flat, so compare
+    in F-order (the property layout).
+    """
+    uninformed = np.asarray(prop.mask).ravel(order="F") == 0
+    before = np.asarray(prop.data).ravel(order="F")[uninformed]
+    after = np.asarray(result.data).ravel(order="F")[uninformed]
+    assert np.any(after != before), (
+        "no previously-uninformed cell was written — result is a pass-through of the input"
+    )
+    assert float(np.std(after.astype("float64"))) > 0.0, (
+        "previously-uninformed cells were filled with a constant value"
+    )
+
+
+def _assert_valid_categories(result):
+    """F-557: indicator results must hold valid category codes.
+
+    IndProperty.data is uint8, so the existing NaN/Inf checks are structurally
+    unsatisfiable; every assertion in the file passed for an all-zero or
+    out-of-range output.
+    """
+    count = int(result.indicator_count)
+    values = np.asarray(result.data)
+    assert values.size > 0
+    assert np.all(values < count), (
+        f"indicator result holds categories outside [0, {count})"
+    )
+
+
 # ============================================================================
 # Tests Using Restored Data Files (from git history)
 # ============================================================================
@@ -104,6 +139,7 @@ def test_big_ok_kriging_legacy():
     assert not np.any(np.isnan(result.data.astype("float64")))
     # Some uninformed cells should now be informed
     assert np.sum(result.mask) > np.sum(prop_cont.mask)
+    _assert_written(result, prop_cont)
 
 
 @pytest.mark.hpgl
@@ -138,6 +174,8 @@ def test_big_sk_kriging_legacy():
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
     assert not np.any(np.isnan(result.data.astype("float64")))
+    assert np.sum(result.mask) > np.sum(prop_cont.mask)
+    _assert_written(result, prop_cont)
 
 
 @pytest.mark.hpgl
@@ -179,6 +217,8 @@ def test_big_lvm_kriging_legacy():
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
     assert not np.any(np.isnan(result.data.astype("float64")))
+    assert np.sum(result.mask) > np.sum(prop_cont.mask)
+    _assert_written(result, prop_cont)
 
 
 @pytest.mark.hpgl
@@ -219,6 +259,8 @@ def test_big_ik_legacy():
 
     assert isinstance(result, IndProperty)
     assert result.data.size == BIG_SIZE
+    assert np.sum(result.mask) > np.sum(ik_prop.mask)
+    _assert_valid_categories(result)
 
 
 @pytest.mark.hpgl
@@ -275,6 +317,8 @@ def test_big_multi_ik_legacy():
 
     assert isinstance(result, IndProperty)
     assert result.indicator_count == 4
+    assert np.sum(result.mask) > np.sum(prop.mask)
+    _assert_valid_categories(result)
 
 
 @pytest.mark.hpgl
@@ -314,6 +358,8 @@ def test_big_sgs_sk_legacy():
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
     assert not np.any(np.isnan(result.data.astype("float64")))
+    assert np.sum(result.mask) > np.sum(prop_cont.mask)
+    _assert_written(result, prop_cont)
 
 
 @pytest.mark.hpgl
@@ -357,6 +403,8 @@ def test_big_sis_legacy():
     assert isinstance(result, IndProperty)
     assert result.data.size == BIG_SIZE
     assert result.indicator_count == 2
+    assert np.sum(result.mask) > np.sum(ik_prop.mask)
+    _assert_valid_categories(result)
 
 
 @pytest.mark.hpgl
@@ -412,6 +460,8 @@ def test_simple_cokriging_mark1_legacy():
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
     assert not np.any(np.isnan(result.data.astype("float64")))
+    assert np.sum(result.mask) > np.sum(prop_cont.mask)
+    _assert_written(result, prop_cont)
 
 
 @pytest.mark.hpgl
@@ -471,6 +521,8 @@ def test_simple_cokriging_mark2_legacy():
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
     assert not np.any(np.isnan(result.data.astype("float64")))
+    assert np.sum(result.mask) > np.sum(prop_cont.mask)
+    _assert_written(result, prop_cont)
 
 
 @pytest.mark.hpgl
@@ -518,6 +570,8 @@ def test_sis_on_empty_data_legacy():
     assert isinstance(result, IndProperty)
     assert result.data.size == BIG_SIZE
     assert result.indicator_count == 2
+    assert np.sum(result.mask) > np.sum(prop.mask)
+    _assert_valid_categories(result)
 
 
 @pytest.mark.hpgl
@@ -564,6 +618,8 @@ def test_sgs_on_empty_data_legacy():
     assert isinstance(result, ContProperty)
     assert result.data.size == BIG_SIZE
     assert not np.any(np.isnan(result.data.astype("float64")))
+    assert np.sum(result.mask) > np.sum(prop.mask)
+    _assert_written(result, prop)
 
 
 # ============================================================================
@@ -615,6 +671,30 @@ class TestAnisotropicCovariance:
         # Check results are reasonable (not all zeros, no NaN)
         assert not np.all(result.data == 0)
         assert not np.any(np.isnan(result.data.astype("float64")))
+
+        # F-557: the test passed Angles=(40,50,90) but never asserted that the
+        # rotation contributed anything — a regression dropping the angles
+        # (rotating the ellipsoid to identity) was invisible. Identical
+        # ranges, mean and data with Angles=(0,0,0) must produce a DIFFERENT
+        # field; measured difference on the untouched kernel: max |Δ| ≈ 1.74.
+        isotropic_model = CovarianceModel(
+            type=covariance.exponential,
+            ranges=(20.0, 10.0, 5.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.0,
+        )
+        isotropic = simple_kriging(
+            prop=prop,
+            grid=grid,
+            radiuses=(100, 100, 100),
+            max_neighbours=12,
+            cov_model=isotropic_model,
+            mean=1.7,
+        )
+        assert not np.allclose(result.data, isotropic.data, rtol=0, atol=1e-6), (
+            "covariance Angles had no effect on the SK estimates"
+        )
 
 
 @pytest.mark.hpgl
@@ -677,6 +757,56 @@ class TestMultiCategoryIndicator:
 
         assert isinstance(result, IndProperty)
         assert result.indicator_count == 4
+        assert np.sum(result.mask) > np.sum(prop.mask)
+        _assert_valid_categories(result)
+
+
+@pytest.mark.hpgl
+@pytest.mark.legacy
+def test_sis_unconditional_follows_marginals():
+    """F-557: the requested marginals must drive the simulated categories.
+
+    None of the SIS tests in this file could detect a regression that ignored
+    `marginal_probs`: the multi-facies fixture requests [0.24, 0.235, 0.34,
+    0.18] against a uniform input prior, i.e. the no-op and the real kernel
+    produce indistinguishable proportions. With `max_neighbours=0` (the
+    documented "unconditional simulation" mode) every node takes the
+    marginal-probability draw, so the realized proportions follow the
+    request; flipping the request flips the result. Measured on the untouched
+    kernel: (0.9, 0.1) -> [0.908, 0.092], (0.1, 0.9) -> [0.178, 0.822]
+    (the 10% hard-data cells are all category 0 and stay category 0).
+    """
+    grid = SugarboxGrid(x=10, y=10, z=5)
+    np.random.seed(42)
+    data = np.zeros(500, dtype="uint8")
+    mask = np.zeros(500, dtype="uint8")
+    mask[::10] = 1  # 10% hard data, all category 0
+    prop = IndProperty(data, mask, 2)
+
+    ik_data = [
+        {
+            "cov_model": CovarianceModel(
+                type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=0.5, nugget=0.0
+            ),
+            "radiuses": (5, 5, 3),
+            "max_neighbours": 0,  # unconditional: every node uses the marginal
+        }
+        for _ in range(2)
+    ]
+
+    heavy_zero = sis_simulation(
+        prop=prop, grid=grid, data=ik_data, seed=3241347, marginal_probs=(0.9, 0.1)
+    )
+    heavy_one = sis_simulation(
+        prop=prop, grid=grid, data=ik_data, seed=3241347, marginal_probs=(0.1, 0.9)
+    )
+
+    zero_share = float(np.mean(np.asarray(heavy_zero.data) == 0))
+    one_share = float(np.mean(np.asarray(heavy_one.data) == 1))
+    assert zero_share > 0.8, f"marginal (0.9, 0.1) produced category 0 only {zero_share:.3f}"
+    assert one_share > 0.7, f"marginal (0.1, 0.9) produced category 1 only {one_share:.3f}"
+    _assert_valid_categories(heavy_zero)
+    _assert_valid_categories(heavy_one)
 
 
 @pytest.mark.hpgl

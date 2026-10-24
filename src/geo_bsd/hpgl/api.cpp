@@ -22,12 +22,39 @@
 
 
 
+/// F-191 (CONFIRMED MEDIUM): params->m_covariance_type is a plain C int,
+/// C-cast to the enum with no range check anywhere at the C boundary, and
+/// covariance_param_t::validate() (covariance_param.cpp) does not check it
+/// either. The rejection happens in cov_model_t::init_fun (cov_model.h:129-144)
+/// — for SGS that is AFTER the in-place forward CDF transform
+/// (sequential_gaussian_simulation.cpp:44) has rewritten the caller's
+/// conditioning buffer, so an out-of-range model destroys caller data on a
+/// run that then fails. Gate the range at the boundary, before any
+/// consumption or mutation.
+///
+/// Shared with api_helpers.cpp (SGS/SIS parameter initialisation, the SGS and
+/// per-category IK cast sites) through the declaration in api_helpers.hpp —
+/// it is deliberately NOT file-static so both boundary TUs run the same check
+/// with the same message.
+void validate_covariance_type_or_throw(int covariance_type, const char * context)
+{
+	if (covariance_type < static_cast<int>(hpgl::COV_SPHERICAL)
+			|| covariance_type > static_cast<int>(hpgl::COV_GAUSSIAN))
+	{
+		std::ostringstream oss;
+		oss << context << ": m_covariance_type " << covariance_type
+		    << " is not a valid covariance model (0 = spherical, 1 = exponential, 2 = gaussian)";
+		throw hpgl::hpgl_exception("C API", oss.str());
+	}
+}
+
 /// Initializes the common covariance fields shared by ok_params_t, sk_params_t,
 /// median_ik_params, etc. from a C API params struct pointer.
 /// Eliminates copy-pasted 7-line init blocks across 4 C API wrappers.
 template<typename CpT, typename ParamsT>
 static void init_cov_params_base(ParamsT & p, const CpT * params)
 {
+	validate_covariance_type_or_throw(params->m_covariance_type, "covariance parameters");
 	p.m_covariance_type = (hpgl::covariance_type_t) params->m_covariance_type;
 	p.set_ranges(
 			params->m_ranges[0],
@@ -127,12 +154,35 @@ static void validate_shape_dims_or_throw(hpgl_shape_t * shape, const char * cont
 /// lowered to 10000 — the NEIGHBOUR_WORK_CAP the lookup agents chose as
 /// the effective scan/result cap on both lookup paths
 /// (sugarbox_neighbour_lookup.h, sugarbox_indexed_neighbour_lookup.h),
-/// so no legal config is truncated by the new bound. The bound is also
+/// so the SCAN is never truncated by the new bound. The bound is also
 /// aligned with the internal cokriging system-size limit
 /// (simple_cokriging_markI.cpp build_system: ms > 10001 = cap + 1 for
 /// the secondary equation). PR-07: values above the solver's safe limit
 /// must be rejected with a clear error, not silently degraded.
-static const int MAX_NEIGHBOURS_UPPER_BOUND = 10000;
+/// H-03 (CONFIRMED MEDIUM): this constant bounds the SCAN (its correct
+/// unit), NOT the solve. The solve's per-thread workspace
+/// (weight_calc_workspace_t: A + A_backup = 16·n² bytes) is multiplied by
+/// the OpenMP thread count, so the admitted maximum is 16·n²·threads —
+/// ~12 GiB at n = 10000 on 8 cores, measured to grow with the thread
+/// count (224 MB at 1 thread to 934 MB at 8 for n = 2000). The second,
+/// work-unit gate below (KRIGING_SOLVE_WORKSPACE_BUDGET) rejects the
+/// configs whose workspace does not fit a stated budget.
+/// F-194: the value lives in api.h (HPGL_MAX_NEIGHBOURS_UPPER_BOUND) because
+/// the C++ entries in hpgl_core.h mirror this gate; this alias keeps the
+/// existing name and the single source of truth.
+static const int MAX_NEIGHBOURS_UPPER_BOUND = HPGL_MAX_NEIGHBOURS_UPPER_BOUND;
+
+/// H-03: memory budget for the per-thread kriging solve workspace, summed
+/// over the OpenMP threads that will each hold one copy. The model is
+/// weight_calc_workspace_t's two n² arrays (A and A_backup,
+/// my_kriging_weights.h:121-134) at 8 bytes per double, per thread. 2 GiB
+/// refuses the 12 GiB band the finding measured while leaving every shipped
+/// configuration untouched: the suite's largest executed kriging call is
+/// max_neighbours = 1000 (test_edge_cases.py:702) at ~16 MB per thread, and
+/// the Python layer warns above 1000 (validation.py:731-742). Measured
+/// residency runs up to ~2x this model at n = 2000, so the effective ceiling
+/// is ~2-4 GiB — an order of magnitude below the defect's band.
+static const double KRIGING_SOLVE_WORKSPACE_BUDGET = 2.0 * 1024.0 * 1024.0 * 1024.0;
 
 /// Hard upper bound on hpgl_non_parametric_cdf_t::m_size accepted by the C
 /// API. The kernel trusts m_size as the length of the m_values/m_probs
@@ -187,6 +237,33 @@ static void validate_kriging_max_neighbours_or_throw(int max_neighbours, const c
 		    << " exceeds maximum allowed (" << MAX_NEIGHBOURS_UPPER_BOUND << ")";
 		throw hpgl::hpgl_exception("C API", oss.str());
 	}
+	// H-03: the count cap above bounds the neighbour SCAN; the solve's
+	// memory is a different unit. Each OpenMP thread holds its own
+	// weight_calc_workspace_t (A + A_backup = 16·n² bytes), so residency is
+	// 16·n² · threads — the admitted maximum is ~12 GiB on 8 cores. Reject
+	// the configs that do not fit the budget; the bound is checked here so
+	// every kriging entry (OK/SK/LVM/IK/median-IK/cokriging) inherits it
+	// before any allocation. Simulation entries keep
+	// validate_max_neighbours_or_throw: their solve is serial (one copy).
+	{
+		const double n = static_cast<double>(max_neighbours);
+		int threads = hpgl::get_thread_num();
+		if (threads < 1)
+			threads = 1;
+		const double workspace_bytes = 16.0 * n * n * static_cast<double>(threads);
+		if (workspace_bytes > KRIGING_SOLVE_WORKSPACE_BUDGET)
+		{
+			std::ostringstream oss;
+			oss << context << ": m_max_neighbours " << max_neighbours
+			    << " with " << threads << " OpenMP threads implies "
+			    << workspace_bytes / (1024.0 * 1024.0 * 1024.0)
+			    << " GiB of kriging solve workspace per thread "
+			       "(A + A_backup, 16*n^2 bytes per thread), over the "
+			    << KRIGING_SOLVE_WORKSPACE_BUDGET / (1024.0 * 1024.0 * 1024.0)
+			    << " GiB budget; lower max_neighbours or the thread count";
+			throw hpgl::hpgl_exception("C API", oss.str());
+		}
+	}
 }
 
 // Defined in neighbourhood_param.cpp — rejects a zero-radius search
@@ -231,6 +308,12 @@ static void validate_simulation_mask_shape_or_throw(
 /// Python wrapper validates (cdf.py:50-53); the C boundary is the last
 /// line of defense. m_size > 0 and non-null m_values/m_probs must already
 /// be validated by the caller.
+/// F-397 (CONFIRMED MEDIUM): the finite/sorted scan above mirrored only
+/// part of the Python gate — cdf.py also bounds the probabilities to [0, 1].
+/// An out-of-range prob survives lower_bound and saturates the normal-score
+/// draw (probe: out 1.0-1.5 vs 1.0-4.0 for a valid CDF) with an empty error
+/// message, and on the SGS path the caller's buffer has already been
+/// forward-transformed in place.
 static void validate_cdf_content_or_throw(
 	const hpgl_non_parametric_cdf_t * cdf,
 	const char * context)
@@ -242,6 +325,14 @@ static void validate_cdf_content_or_throw(
 		{
 			std::ostringstream oss;
 			oss << context << ": cdf values/probs[" << i << "] is not finite";
+			throw hpgl::hpgl_exception("C API", oss.str());
+		}
+		// F-397: probability range (cdf.py:50-53's remaining predicate).
+		if (cdf->m_probs[i] < 0.0f || cdf->m_probs[i] > 1.0f)
+		{
+			std::ostringstream oss;
+			oss << context << ": cdf m_probs[" << i << "]=" << cdf->m_probs[i]
+			    << " is outside [0, 1] (probabilities must be cumulative probabilities)";
 			throw hpgl::hpgl_exception("C API", oss.str());
 		}
 		if (i > 0)
@@ -262,6 +353,38 @@ static void validate_cdf_content_or_throw(
 				    << " > probs[" << i << "]=" << cdf->m_probs[i] << ")";
 				throw hpgl::hpgl_exception("C API", oss.str());
 			}
+		}
+	}
+}
+
+/// F-397 (CONFIRMED MEDIUM): informed indicator CODES must be <
+/// indicator_count. The kernels build a per-category CDF from the raw byte
+/// data; a code >= indicator_count falls outside every category interval, so
+/// the indicator vector comes back all-zero and the run silently produces
+/// saturated/marginal output (probe: informed codes 3 and 200 accepted with
+/// an empty error message and the categorical output shifted 4/12/9 ->
+/// 4/13/6). The Python layer rejects the same array. Scan informed cells
+/// only — uninformed cells hold arbitrary sentinel bytes.
+static void validate_indicator_codes_or_throw(
+	const hpgl_ind_masked_array_t * data,
+	int indicator_count,
+	int size,
+	const char * context)
+{
+	const unsigned char * mask = data->m_mask;
+	for (int i = 0; i < size; ++i)
+	{
+		if (mask != nullptr && mask[i] == 0)
+			continue;   // uninformed: any sentinel byte is legal
+		const int code = static_cast<int>(data->m_data[i]);
+		if (code >= indicator_count)
+		{
+			std::ostringstream oss;
+			oss << context << ": indicator data[" << i << "] = " << code
+			    << " is not a valid category (indicator_count = "
+			    << indicator_count << ", valid codes are 0.."
+			    << (indicator_count - 1) << ")";
+			throw hpgl::hpgl_exception("C API", oss.str());
 		}
 	}
 }
@@ -310,6 +433,7 @@ static const hpgl_validation_registry_entry_t HPGL_VALIDATION_REGISTRY[] = {
 	{ "hpgl_get_api_validation_registry_name", "index bounds (see registry accessors)" },
 	{ "hpgl_get_api_validation_registry_validation", "index bounds (see registry accessors)" },
 	{ "hpgl_get_last_exception_message", "accessor — no user input" },
+	{ "hpgl_clear_last_exception_message", "accessor — no user input" },
 	{ "hpgl_set_output_handler", "handler pointer (null clears)" },
 	{ "hpgl_set_progress_handler", "handler pointer (null clears)" },
 	{ "hpgl_set_thread_num", "thread count (set_thread_num.cpp validates > 0)" },
@@ -385,14 +509,35 @@ HPGL_API char * hpgl_get_last_exception_message()
 	}
 }
 
+HPGL_API void hpgl_clear_last_exception_message()
+{
+	// F-182: the C entries that produce the message leave the slot untouched
+	// afterwards, and 11 of them return void, so this reset is their only
+	// way to distinguish "this call failed" from "a previous call failed".
+	// No try/catch: the only operation is assigning an empty string to the
+	// thread-local std::string (api_helpers.cpp:20-32), which cannot allocate
+	// — an empty assignment reuses the existing capacity.
+	hpgl::set_last_exception_message("");
+}
+
 HPGL_API int hpgl_set_thread_num(int n_threads)
 {
 	try
 	{
 		if (!hpgl::set_thread_num(n_threads))
 		{
+			// F-185: the inner call returns false for two distinct reasons —
+			// an invalid count, and a call made from inside an active
+			// parallel region (set_thread_num.cpp:30-32 vs :46-56, the latter
+			// the documented-legal "handler called back into the API" case).
+			// Reporting both as "invalid thread count" diagnosed a valid
+			// argument as invalid and hid the real constraint.
 			std::ostringstream oss;
-			oss << "hpgl_set_thread_num: invalid thread count " << n_threads;
+			if (n_threads > 0 && hpgl::in_parallel_region())
+				oss << "hpgl_set_thread_num: cannot set " << n_threads
+				    << " threads from inside a parallel region — call it before entering";
+			else
+				oss << "hpgl_set_thread_num: invalid thread count " << n_threads;
 			hpgl::set_last_exception_message(oss.str().c_str());
 			return -1;
 		}
@@ -783,6 +928,10 @@ HPGL_API void hpgl_ordinary_kriging(
 	using namespace hpgl;
 	// F-N2: zero thread-local stats before the call so a validation
 	// failure or stats-less path cannot leave stale stats observable.
+	// F-182: clear this thread's error slot first, so a message read after
+	// this call belongs to this call (the entry returns void — the message
+	// is its only failure channel).
+	hpgl_clear_last_exception_message();
 	reset_kriging_stats();
 	validate_pointer_or_throw(input_data, "input_data (ordinary_kriging)");
 	validate_pointer_or_throw(params, "params (ordinary_kriging)");
@@ -820,6 +969,22 @@ HPGL_API void hpgl_ordinary_kriging(
 	if (input_data->m_mask != nullptr && input_data->m_mask == output_data->m_mask)
 		throw hpgl_exception("hpgl_ordinary_kriging",
 			"input_data and output_data masks must not be the same buffer (aliased masks are unsupported)");
+
+	// F-187 (CONFIRMED MEDIUM): this is the only undefined_on_failure entry.
+	// Under that mode a cell with no neighbours / a singular system gets
+	// neither a value nor a mask write (cont_kriging.h failure arms), so a
+	// caller-reused output buffer whose mask was pre-set kept reporting the
+	// failing cells as informed estimates holding whatever the buffer held
+	// (0.0 in a zeroed buffer). Clearing the mask here — no allocation, and
+	// only for this entry, so SK/LVM/cokriging behaviour is untouched —
+	// makes the documented "mask 0 = uninformed" contract true by
+	// construction: the kernel's own set_at then marks exactly the cells it
+	// produced (copy-through + successful kriges).
+	if (output_data->m_mask != nullptr)
+	{
+		for (int i = 0; i < out_size; ++i)
+			output_data->m_mask[i] = 0;
+	}
 
 	cont_property_array_t in_prop(input_data->m_data, input_data->m_mask, in_size);
 	cont_property_array_t out_prop(output_data->m_data, output_data->m_mask, out_size);
@@ -885,6 +1050,8 @@ HPGL_API void hpgl_simple_kriging(
 	{
 	using namespace hpgl;
 	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	// F-182: clear this thread's error slot first (void entry — message-only).
+	hpgl_clear_last_exception_message();
 	reset_kriging_stats();
 	validate_pointer_or_throw(input_data, "input_data (simple_kriging)");
 	validate_pointer_or_throw(output_data, "output_data (simple_kriging)");
@@ -1068,6 +1235,8 @@ HPGL_API void hpgl_lvm_kriging(
 	{
 	using namespace hpgl;
 	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	// F-182: clear this thread's error slot first (void entry — message-only).
+	hpgl_clear_last_exception_message();
 	reset_kriging_stats();
 	validate_pointer_or_throw(input_data, "input_data (lvm_kriging)");
 	validate_pointer_or_throw(mean_data, "mean_data (lvm_kriging)");
@@ -1161,6 +1330,8 @@ hpgl_indicator_kriging(
 	{
 	using namespace hpgl;
 	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	// F-182: clear this thread's error slot first (void entry — message-only).
+	hpgl_clear_last_exception_message();
 	reset_kriging_stats();
 	validate_pointer_or_throw(in_data, "in_data (indicator_kriging)");
 	validate_pointer_or_throw(out_data, "out_data (indicator_kriging)");
@@ -1225,6 +1396,11 @@ hpgl_indicator_kriging(
 		throw hpgl_exception("hpgl_indicator_kriging",
 			"in_data and out_data masks must not be the same buffer (aliased masks are unsupported)");
 
+	// F-397: informed indicator codes must be valid categories — an
+	// out-of-range code makes the per-category indicator vector all-zero and
+	// the kernel silently returns a saturated/marginal estimate.
+	validate_indicator_codes_or_throw(in_data, indicator_count, size, "hpgl_indicator_kriging");
+
 	// PR-05 (F-34): reject a zero search radius on the indicator kriging
 	// path. An all-zero ellipsoid yields an empty neighbourhood and every
 	// node silently degrades to mean/noise fill. Each indicator category
@@ -1278,6 +1454,8 @@ hpgl_sgs_simulation(
 	{
 	using namespace hpgl;
 	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	// F-182: clear this thread's error slot first (void entry — message-only).
+	hpgl_clear_last_exception_message();
 	reset_kriging_stats();
 	validate_pointer_or_throw(data, "data (sgs_simulation)");
 	validate_pointer_or_throw(params, "params (sgs_simulation)");
@@ -1417,6 +1595,8 @@ HPGL_API void hpgl_sgs_lvm_simulation(
 	{
 	using namespace hpgl;
 	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	// F-182: clear this thread's error slot first (void entry — message-only).
+	hpgl_clear_last_exception_message();
 	reset_kriging_stats();
 	validate_pointer_or_throw(data, "data (sgs_lvm_simulation)");
 	validate_pointer_or_throw(params, "params (sgs_lvm_simulation)");
@@ -1567,6 +1747,8 @@ HPGL_API void hpgl_median_ik(
 	{
 	using namespace hpgl;
 	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	// F-182: clear this thread's error slot first (void entry — message-only).
+	hpgl_clear_last_exception_message();
 	reset_kriging_stats();
 	validate_pointer_or_throw(in_data, "in_data (median_ik)");
 	validate_pointer_or_throw(params, "params (median_ik)");
@@ -1682,6 +1864,8 @@ hpgl_sis_simulation(
 	{
 	using namespace hpgl;
 	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	// F-182: clear this thread's error slot first (void entry — message-only).
+	hpgl_clear_last_exception_message();
 	reset_kriging_stats();
 	validate_pointer_or_throw(data, "data (sis_simulation)");
 	validate_pointer_or_throw(params, "params (sis_simulation)");
@@ -1715,6 +1899,11 @@ hpgl_sis_simulation(
 	int size = get_shape_volume(&data->m_shape);
 	validate_shape_volume_or_throw(size, "sis_simulation");
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
+
+	// F-397: informed indicator codes must be valid categories (the SIS
+	// kernel samples from the per-category CDFs and cannot detect an
+	// out-of-range conditioning code).
+	validate_indicator_codes_or_throw(data, indicator_count, size, "hpgl_sis_simulation");
 
 	sugarbox_grid_t grid;
 	init_grid(grid, &data->m_shape);
@@ -1756,6 +1945,8 @@ hpgl_sis_simulation_lvm(
 	{
 	using namespace hpgl;
 	// F-N2: zero thread-local stats before the call (stale-stat promise).
+	// F-182: clear this thread's error slot first (void entry — message-only).
+	hpgl_clear_last_exception_message();
 	reset_kriging_stats();
 	validate_pointer_or_throw(data, "data (sis_simulation_lvm)");
 	validate_pointer_or_throw(params, "params (sis_simulation_lvm)");
@@ -1791,6 +1982,10 @@ hpgl_sis_simulation_lvm(
 		throw hpgl_exception("hpgl_sis_simulation_lvm", "Null data pointer in ind_masked_array");
 
 	indicator_property_array_t prop(data->m_data, data->m_mask, size, indicator_count);
+
+	// F-397: informed indicator codes must be valid categories (LVM SIS
+	// sibling of hpgl_sis_simulation).
+	validate_indicator_codes_or_throw(data, indicator_count, size, "hpgl_sis_simulation_lvm");
 
 	sugarbox_grid_t grid;
 	init_grid(grid, &data->m_shape);
@@ -1880,6 +2075,8 @@ hpgl_simple_cokriging_mark1(
 	{
 		using namespace hpgl;
 		// F-N2: zero thread-local stats before the call (stale-stat promise).
+		// F-182: clear this thread's error slot first (void entry — message-only).
+		hpgl_clear_last_exception_message();
 		reset_kriging_stats();
 		validate_pointer_or_throw(input_data, "input_data (cokriging_m1)");
 		validate_pointer_or_throw(secondary_data, "secondary_data (cokriging_m1)");
@@ -1972,6 +2169,10 @@ hpgl_simple_cokriging_mark1(
 		np.m_max_neighbours = params->m_max_neighbours;
 
 		covariance_param_t cp;
+		// F-191: same unvalidated C cast as init_cov_params_base — gate it
+		// (mark I is the one cokriging entry that does not go through the
+		// shared helper).
+		validate_covariance_type_or_throw(params->m_covariance_type, "hpgl_simple_cokriging_mark1");
 		cp.m_covariance_type = (covariance_type_t) params->m_covariance_type;
 		cp.set_sill(params->m_sill);
 		cp.set_nugget(params->m_nugget);
@@ -2042,6 +2243,8 @@ hpgl_simple_cokriging_mark2(
 	{
 		using namespace hpgl;
 		// F-N2: zero thread-local stats before the call (stale-stat promise).
+		// F-182: clear this thread's error slot first (void entry — message-only).
+		hpgl_clear_last_exception_message();
 		reset_kriging_stats();
 		validate_pointer_or_throw(primary_data, "primary_data (cokriging_m2)");
 		validate_pointer_or_throw(secondary_data, "secondary_data (cokriging_m2)");

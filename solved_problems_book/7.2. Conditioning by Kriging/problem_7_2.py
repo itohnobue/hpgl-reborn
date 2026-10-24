@@ -88,7 +88,11 @@ variogram2 = CovarianceModel(type=covariance.exponential, ranges=(5, 1, 1), sill
 # the raw tuple — the FFI layer asserts the CdfData type.
 sgs_params = {"cov_model": variogram2, "cdf_data": calc_cdf(prop1)}
 sgs_result = sgs_simulation(prop, grid, radiuses=(2, 1, 1), max_neighbours=2, seed=3244759, **sgs_params)
-print("SGS result:", sgs_result[0])
+# The library returns the result reshaped to the 3D grid (20, 1, 1); the
+# transect maths below is 1D, so keep a flat (20,) view. Mixing the (20, 1, 1)
+# field with the (20,) kriging vectors would broadcast to a (20, 1, 20) field.
+sgs_vec = np.ravel(sgs_result[0])
+print("SGS result:", sgs_vec)
 
 sgsed_harddata = np.array([])
 for i in range(i_max):
@@ -107,8 +111,12 @@ print("Simple Kriging result:", prop_result2[0])
 # Take the difference between the fields of SGS and second SK and the result to kriged field from first SK
 diff = np.array([])
 final_diff = np.array([])
-diff = prop_result2[0] - sgs_result[0]
-final_diff = diff + prop_result1[0]
+# F-035: the error field is SGS - SK2 (book step (d): "the difference between
+# the fields of SGS and second SK", i.e. U.C.Sim - zs*). The previous operand
+# order computed SK2 - SGS, the negation of the book's field, so every off-data
+# value of the conditional simulation was wrong in sign.
+diff = sgs_vec - np.ravel(prop_result2[0])
+final_diff = diff + np.ravel(prop_result1[0])
 print("Error Field:", diff)
 print("Cond.Sim:", final_diff)
 
@@ -116,7 +124,7 @@ print("Cond.Sim:", final_diff)
 plt.figure()
 plt.plot(x_coord, value, 'bo')
 p1 = plt.plot(x_val, prop_result1[0])
-p2 = plt.plot(x_val, sgs_result[0], '--')
+p2 = plt.plot(x_val, sgs_vec, '--')
 plt.legend((p1[0], p2[0]), ('z*(u)', 'U.C.Sim'), loc='upper left')
 plt.xlabel("Distance (m)")
 plt.ylabel("Value")
@@ -127,7 +135,7 @@ plt.axis([0.0, 30, -3.0, 2.0])
 plt.figure()
 plt.plot(x_coord, sgsed_harddata, 'bo')
 p1 = plt.plot(x_val, prop_result2[0])
-p2 = plt.plot(x_val, sgs_result[0], '--')
+p2 = plt.plot(x_val, sgs_vec, '--')
 p3 = plt.plot(x_val, diff, '-.')
 plt.legend((p1[0], p2[0], p3[0]), ('zs*(u)', 'U.C.Sim', 'Error Field'), loc='upper left')
 plt.xlabel("Distance (m)")
@@ -138,7 +146,7 @@ plt.axis([0.0, 30, -3.0, 2.0])
 plt.figure()
 plt.plot(x_coord, value, 'bo')
 p1 = plt.plot(x_val, prop_result1[0])
-p2 = plt.plot(x_val, sgs_result[0], '--')
+p2 = plt.plot(x_val, sgs_vec, '--')
 p3 = plt.plot(x_val, diff, '-.')
 p4 = plt.plot(x_val, final_diff, 'k')
 plt.legend((p1[0], p2[0], p3[0], p4[0]), ('z*(u)', 'U.C.Sim', 'Error Field', 'Cond.Sim'), loc='upper left')

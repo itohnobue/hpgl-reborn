@@ -9,11 +9,6 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
-import os
-
-os.environ["PATH"] = (
-    str(Path(__file__).parent.parent.parent / "src" / "geo_bsd") + ";" + os.environ.get("PATH", "")
-)
 
 try:
     from geo_bsd.geo import (

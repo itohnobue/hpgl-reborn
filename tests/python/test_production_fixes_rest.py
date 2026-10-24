@@ -28,6 +28,7 @@ Covers:
 - 2-M-3: CalcVariograms plumbs an optional seed to the seeded C++ kernel
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -70,6 +71,41 @@ def _pyproject_version():
         version = data.get("project", {}).get("version")
         if isinstance(version, str) and version:
             return version
+    return None
+
+
+def _readme_version():
+    """Return the (vX.Y.Z) stamp in readme.md's H1 title, or None.
+
+    F-312: readme.md is the wheel's long description (pyproject.toml
+    `readme`), so its title version is a shipped surface — but nothing
+    compared it to pyproject.toml's `[project] version`.
+    """
+    readme = Path(__file__).resolve().parent.parent.parent / "readme.md"
+    try:
+        title = readme.read_text(encoding="utf-8").splitlines()[0]
+    except (OSError, IndexError):
+        return None
+    match = re.search(r"\(v([0-9]+\.[0-9]+\.[0-9]+[^)]*)\)", title)
+    return match.group(1) if match else None
+
+
+def _changelog_version():
+    """Return the newest released version heading in CHANGELOG.md, or None.
+
+    F-312: a partial bump left the newest `## [X.Y.Z]` entry behind with
+    nothing to catch it. Unreleased-style headings (`## [Unreleased]`) carry
+    no version and are skipped by the version-shape filter.
+    """
+    changelog = Path(__file__).resolve().parent.parent.parent / "CHANGELOG.md"
+    try:
+        lines = changelog.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        match = re.match(r"^## \[([0-9]+\.[0-9]+\.[0-9]+[^\]]*)\]", line)
+        if match:
+            return match.group(1)
     return None
 
 
@@ -124,40 +160,107 @@ class TestVersionMetadata:
     def test_version_fallback_only_on_not_found(self, monkeypatch):
         """The installed-metadata lookup falls back to the source version
         when the package metadata cannot be found (or when running without a
-        source tree). The fallback literal must stay consistent with
-        pyproject.toml."""
+        source tree).
+
+        F-312: the fallback literal's consistency with pyproject.toml is
+        gated by test_version_fallback_matches_pyproject and
+        test_version_surfaces_match_pyproject, which compare it to
+        pyproject.toml instead of to itself.
+        """
         import importlib.metadata
 
         import geo_bsd
 
         expected = _pyproject_version()
-        if expected is not None:
-            # Source tree present: the metadata monkeypatch is never even
-            # consulted — __version__ is the source version regardless.
-            def _raise_not_found(name):
-                raise importlib.metadata.PackageNotFoundError(name)
+        if expected is None:
+            # F-312: with no source tree there is no version surface left to
+            # compare against. Pre-fix this branch assigned
+            # `expected = geo_bsd._VERSION_FALLBACK` and then asserted
+            # `__version__ == expected` — the implementation against its own
+            # constant (x == x), which is why a partial version bump stayed
+            # green. Skip rather than pass a comparison with no reference.
+            pytest.skip("pyproject.toml not reachable from source tree")
+        # Source tree present: the metadata monkeypatch is never even
+        # consulted — __version__ is the source version regardless.
 
-            monkeypatch.setattr(importlib.metadata, "version", _raise_not_found)
-            importlib.reload(geo_bsd)
-            assert geo_bsd.__version__ == expected
-        else:
-            # No source tree: the metadata lookup must run; a
-            # PackageNotFoundError falls back to the documented literal.
-            # N2-L19: derive from geo_bsd's single fallback constant
-            # (src/geo_bsd/__init__.py _VERSION_FALLBACK) so a version
-            # bump updates one place, not four hardcoded copies.
-            expected = geo_bsd._VERSION_FALLBACK
+        def _raise_not_found(name):
+            raise importlib.metadata.PackageNotFoundError(name)
 
-            def _raise_not_found(name):
-                raise importlib.metadata.PackageNotFoundError(name)
-
-            monkeypatch.setattr(importlib.metadata, "version", _raise_not_found)
-            importlib.reload(geo_bsd)
-            assert geo_bsd.__version__ == expected
+        monkeypatch.setattr(importlib.metadata, "version", _raise_not_found)
+        importlib.reload(geo_bsd)
+        assert geo_bsd.__version__ == expected
         # Restore the live lookup so subsequent tests see the metadata version.
         monkeypatch.undo()
         importlib.reload(geo_bsd)
         assert isinstance(geo_bsd.__version__, str) and geo_bsd.__version__
+
+    def test_version_fallback_matches_pyproject(self, monkeypatch):
+        """F-312: the PackageNotFoundError fallback literal is a version
+        surface and must equal pyproject.toml's version.
+
+        The fallback branch is unreachable in a source checkout (the source
+        tree always wins), so it is driven here: `_source_version()` is made
+        to see no pyproject.toml and the metadata lookup to raise. Pre-fix a
+        bump that missed src/geo_bsd/__init__.py:_VERSION_FALLBACK passed
+        every gate.
+        """
+        import importlib.metadata
+
+        import geo_bsd
+
+        expected = _pyproject_version()
+        if expected is None:
+            pytest.skip("pyproject.toml not reachable from source tree")
+
+        real_is_file = Path.is_file
+
+        def _raise_not_found(name):
+            raise importlib.metadata.PackageNotFoundError(name)
+
+        def _no_pyproject(self):
+            if self.name == "pyproject.toml":
+                return False
+            return real_is_file(self)
+
+        monkeypatch.setattr(importlib.metadata, "version", _raise_not_found)
+        monkeypatch.setattr(Path, "is_file", _no_pyproject)
+        importlib.reload(geo_bsd)
+        assert geo_bsd.__version__ == expected, (
+            f"the PackageNotFoundError fallback reports "
+            f"{geo_bsd.__version__!r}; it must equal pyproject.toml's version "
+            f"({expected!r}) — a stale _VERSION_FALLBACK must fail this gate "
+            f"(F-312)"
+        )
+        # Restore the live lookup so subsequent tests see the real state.
+        monkeypatch.undo()
+        importlib.reload(geo_bsd)
+        assert isinstance(geo_bsd.__version__, str) and geo_bsd.__version__
+
+    def test_version_surfaces_match_pyproject(self):
+        """F-312: every non-metadata version surface must equal
+        pyproject.toml's version.
+
+        Pre-fix nothing compared these to pyproject.toml: a bump that missed
+        _VERSION_FALLBACK, the readme.md title or the newest CHANGELOG.md
+        heading left the whole suite green.
+        """
+        import geo_bsd
+
+        expected = _pyproject_version()
+        if expected is None:
+            pytest.skip("pyproject.toml not reachable from source tree")
+        surfaces = {
+            "src/geo_bsd/__init__.py:_VERSION_FALLBACK": geo_bsd._VERSION_FALLBACK,
+            "readme.md (title)": _readme_version(),
+            "CHANGELOG.md (newest heading)": _changelog_version(),
+        }
+        mismatched = {
+            name: value for name, value in surfaces.items() if value != expected
+        }
+        assert not mismatched, (
+            f"version surface(s) disagree with pyproject.toml ({expected!r}): "
+            f"{mismatched} — bump every surface in the same change"
+        )
 
 
 # =============================================================================
@@ -527,7 +630,17 @@ class TestLoadGslibFileStreaming:
 
     def test_large_file_matches_reference(self, tmp_path):
         """2-M-10: a moderately large synthetic file must load with the same
-        output as the pre-fix list-of-lists conversion, without OOM."""
+        output as the pre-fix list-of-lists conversion, without OOM.
+
+        F-595: value equality alone cannot see the 2-M-10 regression —
+        reverting the streaming parse keeps every value identical while peak
+        memory grows 10-20x. The parse's peak TRACED memory is therefore also
+        asserted. Measured on this fixture (200x100x5 x4 props, 3.2 MB of
+        output): streaming peak 6.8 MB (2.1x the output), the pre-fix
+        list-of-lists accumulator 54.5 MB (17x the output).
+        """
+        import tracemalloc
+
         from geo_bsd.routines import LoadGslibFile
 
         nx, ny, nz = 200, 100, 5  # 100k cells
@@ -539,7 +652,21 @@ class TestLoadGslibFileStreaming:
         fpath = tmp_path / "large.gslib"
         self._write_gslib(fpath, num_props, ["P1", "P2", "P3", "P4"], data)
 
-        result = LoadGslibFile(str(fpath), property_size=(nx, ny, nz), basedir=str(tmp_path))
+        tracemalloc.start()
+        try:
+            result = LoadGslibFile(
+                str(fpath), property_size=(nx, ny, nz), basedir=str(tmp_path)
+            )
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        final_bytes = grid_size * num_props * 8  # the output arrays, nothing else
+        assert peak < 6 * final_bytes, (
+            f"2-M-10 regression: the parse peaked at {peak} B "
+            f"({peak / final_bytes:.1f}x the {final_bytes} B output); a streaming "
+            "parse stays under 6x, the pre-fix list-of-lists accumulator peaks at ~17x"
+        )
         assert set(result.keys()) == {"P1", "P2", "P3", "P4"}
         for j, name in enumerate(["P1", "P2", "P3", "P4"]):
             expected = data[:, j].reshape((nx, ny, nz), order="F")
@@ -1440,9 +1567,9 @@ class TestSampleScriptImports:
         silent source-string absence."""
         import numpy as _np
 
-        # The scripts seed the numpy global RNG at import time
-        # (np.random.seed(3439275)); save/restore so this test does not
-        # perturb later unseeded consumers.
+        # The scripts no longer touch the numpy global RNG at import (each
+        # keeps a private np.random.RandomState); save/restore around the
+        # imports anyway, as belt-and-braces.
         rng_state = _np.random.get_state()
         try:
             for name, modname in (
@@ -1508,12 +1635,51 @@ class TestSampleScriptImports:
     def test_gtsim_truncation_uses_elif(self):
         """II-43: the double-if truncation (all-facies-1 when tk <= 0) must
         be an if/elif. Static source guard — cannot be armed by individual
-        execution without a full-pipeline fixture (see T-28 note)."""
+        execution without a full-pipeline fixture (see T-28 note).
+
+        F-605/F-597: the previous form asserted `"        else:" in src`, which
+        matched the unrelated pk_prop type-check `else:` in gtsim.py and
+        therefore passed on the PRE-FIX source too
+        (`git show 828443e^:sample-scripts/gtsim.py` already had such a line).
+        The assertions below locate the truncation loop by AST and require the
+        `< tk_data` comparison to own an else-branch, with no independent
+        `>= tk_data` comparison in the loop.
+        """
+        import ast
+
         with open(REPO_ROOT / "sample-scripts/gtsim.py") as fh:
-            src = fh.read()
-        # After the first `if <` block there must be an `else:` (not a
-        # second independent `if >=`).
-        assert "        else:" in src
+            tree = ast.parse(fh.read())
+        loops = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.For)
+            and ast.unparse(node.iter) == "range(prop_sgs.data.size)"
+        ]
+        assert len(loops) == 1, f"expected one truncation loop, found {len(loops)}"
+
+        def _tk_comparisons(loop, op_type):
+            hits = []
+            for node in ast.walk(loop):
+                if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+                    continue
+                if any(isinstance(op, op_type) for op in node.test.ops) and any(
+                    "tk_data" in ast.unparse(c) for c in node.test.comparators
+                ):
+                    hits.append(node)
+            return hits
+
+        lt_ifs = _tk_comparisons(loops[0], ast.Lt)
+        assert len(lt_ifs) == 1, (
+            "truncation loop must compare the cell value < tk_data exactly once"
+        )
+        assert lt_ifs[0].orelse, (
+            "II-43 regression: the `< tk_data` branch has no `else:` — a second "
+            "independent `if >= tk_data` re-classifies the overwritten value "
+            "(all-facies-1 when tk <= 0)"
+        )
+        assert not _tk_comparisons(loops[0], ast.GtE) and not _tk_comparisons(
+            loops[0], ast.Gt
+        ), "II-43 regression: an independent `>= tk_data` comparison is back in the loop"
 
     def test_gtsim_pk_only_flow_validates_sgs_params(self):
         """III-20: the user-pk flow must not leave sgs_params=None (`**None`
@@ -1642,18 +1808,47 @@ class TestValidateEnvironmentPlatformTable:
 
 class TestVcxprojBlasLinkage:
     """II-21: hpgl.vcxproj must not silently link zero BLAS/LAPACK when
-    UseMKL=false (LNK2019 from the unconditional dpotrf_/dpotrs_ calls)."""
+    UseMKL=false (LNK2019 from the unconditional dpotrf_/dpotrs_ calls).
+
+    F-612: each assertion is scoped to the MSBuild element that owns the
+    behaviour — the previous bare-substring form stayed green when the whole
+    OpenBLAS group or the check target was deleted, because the file header
+    comment and the HpglCheckBlas error text also carry
+    `openblas.lib`/`LNK2019`.
+    """
 
     def test_honest_comment_and_openblas_hookup(self):
+        import re
+
         vcx = _read("src/msvc/hpgl.vcxproj")
-        assert "OpenBLASRoot" in vcx
-        assert "openblas.lib" in vcx
+        header = re.search(r"<!--([\s\S]*?)-->", vcx)
+        assert header and "OpenBLASRoot" in header.group(1), (
+            "II-21 regression: the vcxproj header no longer documents the "
+            "OpenBLAS option"
+        )
+        group = re.search(
+            r"<ItemDefinitionGroup[^>]*OpenBLASRoot\)'\s*!=\s*''[^>]*>([\s\S]*?)"
+            r"</ItemDefinitionGroup>",
+            vcx,
+        )
+        assert group, "II-21 regression: the OpenBLAS ItemDefinitionGroup is gone"
+        assert "<AdditionalDependencies>openblas.lib" in group.group(1), (
+            "II-21 regression: the OpenBLAS group no longer links openblas.lib"
+        )
 
     def test_clear_error_when_no_blas_configured(self):
+        import re
+
         vcx = _read("src/msvc/hpgl.vcxproj")
-        assert "HpglCheckBlas" in vcx
-        assert "BeforeTargets=\"Link\"" in vcx
-        assert "LNK2019" in vcx
+        target = re.search(
+            r'<Target\s+Name="HpglCheckBlas"\s+BeforeTargets="Link"[^>]*>([\s\S]*?)'
+            r"</Target>",
+            vcx,
+        )
+        assert target, "II-21 regression: the HpglCheckBlas link-time check is gone"
+        assert "LNK2019" in target.group(1), (
+            "II-21 regression: the HpglCheckBlas error no longer explains LNK2019"
+        )
 
 
 class TestWindowsMsvcPresetRelease:
@@ -1672,7 +1867,13 @@ class TestWindowsMsvcPresetRelease:
 class TestDeploymentTargetSingleSource:
     """II-24: the wheel verification gate must derive the deployment target
     from the wheel tag (accepting the documented CMAKE_OSX_DEPLOYMENT_TARGET
-    override), not reject anything but a hardcoded macosx_11_0."""
+    override), not reject anything but a hardcoded macosx_11_0.
+
+    F-612: the define assertion anchors on the real quoted cmake.args entry —
+    the previous `"CMAKE_OSX_DEPLOYMENT_TARGET" in pyproject` form stayed green
+    when the define was deleted, because the comment above it also spells the
+    name.
+    """
 
     def test_wheel_gate_derives_target_from_tag(self):
         sh = _read("build.sh")
@@ -1680,32 +1881,86 @@ class TestDeploymentTargetSingleSource:
         assert "macosx_11_0" not in sh
 
     def test_pyproject_documents_override(self):
+        import re
+
         pyproject = _read("pyproject.toml")
         assert "CMAKE_ARGS" in pyproject
-        assert "CMAKE_OSX_DEPLOYMENT_TARGET" in pyproject
+        assert re.search(
+            r'^\s*"-DCMAKE_OSX_DEPLOYMENT_TARGET=\d+(?:\.\d+)*",\s*$', pyproject, re.M
+        ), (
+            "II-24 regression: the cmake.args deployment-target define is gone "
+            "(only the documenting comment would match)"
+        )
 
 
 class TestCmakeWindowsDllDeploy:
     """II-25: CMake Windows builds must deploy DLLs to src/geo_bsd (the
     Python runtime location) and use a DEBUG_POSTFIX so Debug/Release DLLs
-    do not name-collide."""
+    do not name-collide.
+
+    F-612: the assertions are scoped to the hpgl_core target's own property
+    block and POST_BUILD command — the whole-file substring form stayed green
+    when the hpgl_core deploy block was deleted, because the hpgl_variogram
+    block carries all four strings too.
+    """
+
+    @staticmethod
+    def _post_build_command(cm, target):
+        """Text of `add_custom_command(TARGET <target> POST_BUILD ...)`."""
+        import re
+
+        start = re.search(
+            rf"add_custom_command\(\s*TARGET\s+{re.escape(target)}\s+POST_BUILD\b", cm
+        )
+        assert start, f"II-25 regression: no POST_BUILD deploy command for {target}"
+        end = re.search(r"\n[ \t]*\)[ \t]*\n", cm[start.end():])
+        assert end, f"unterminated POST_BUILD command for target {target}"
+        return cm[start.start(): start.end() + end.end()]
 
     def test_debug_postfix_and_post_build_copy(self):
+        import re
+
         cm = _read("CMakeLists.txt")
-        assert "DEBUG_POSTFIX" in cm
-        assert "POST_BUILD" in cm
-        assert "copy_if_different" in cm
-        assert "src/geo_bsd/" in cm
+        props = [
+            m.group(1)
+            for m in re.finditer(
+                r"set_target_properties\(\s*hpgl_core\s+PROPERTIES\b([\s\S]*?)\n\s*\)", cm
+            )
+        ]
+        assert any("DEBUG_POSTFIX" in p for p in props), (
+            "II-25 regression: hpgl_core has no DEBUG_POSTFIX (Debug/Release collide)"
+        )
+        core = self._post_build_command(cm, "hpgl_core")
+        assert "copy_if_different" in core, (
+            "II-25 regression: the hpgl_core deploy no longer copies the DLL"
+        )
+        assert '"${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/"' in core, (
+            "II-25 regression: the hpgl_core deploy no longer targets src/geo_bsd"
+        )
 
 
 class TestWheelSmokeVersionConsistency:
     """II-28 (build-side coordinate): the wheel smoke test must assert the
-    installed __version__ matches the wheel filename version."""
+    installed __version__ matches the wheel filename version.
+
+    F-612/F-597: the pin anchors on the COMPARISON inside the smoke command —
+    the previous `"__version__" in sh` / `"WHEEL_VERSION" in sh` form stayed
+    green when the `==` clause was deleted, because both substrings survive in
+    the II-28 comment and the WHEEL_VERSION assignment.
+    """
 
     def test_wheel_smoke_asserts_version(self):
+        import re
+
         sh = _read("build.sh")
-        assert "__version__" in sh
-        assert "WHEEL_VERSION" in sh
+        smoke = re.search(r'-c "([^"]*__version__[^"]*)"', sh)
+        assert smoke, "II-28 regression: the wheel smoke `python -c` command is gone"
+        assert re.search(
+            r"assert\s+geo_bsd\.__version__\s*==\s*'\$WHEEL_VERSION'", smoke.group(1)
+        ), (
+            "II-28 regression: the wheel smoke no longer compares "
+            "geo_bsd.__version__ against $WHEEL_VERSION"
+        )
 
 
 class TestPy39GrammarSmoke:
@@ -1919,9 +2174,29 @@ class TestPresetGeneratorCollision:
 
 class TestCtestPythonTargetConfig:
     """III-31: the CTest hpgl_python_tests target must mirror run_tests.py's
-    default marker selection (-m "not slow") and set a timeout."""
+    default marker selection (-m "not slow") and set a timeout.
+
+    F-597: the pins are anchored to the add_test command and the
+    set_tests_properties call — the bare `'"not slow"' in cm` form stayed green
+    when the flag was deleted from the COMMAND, because the III-31 comment keeps
+    the string, and `"TIMEOUT" in cm` is satisfied by every other test target.
+    """
 
     def test_ctest_python_target_excludes_slow_and_times_out(self):
+        import re
+
         cm = _read("tests/CMakeLists.txt")
-        assert '"not slow"' in cm
-        assert "TIMEOUT" in cm
+        add_test = re.search(
+            r"add_test\(\s*NAME\s+hpgl_python_tests\s+COMMAND\s+([^\n]*)", cm
+        )
+        assert add_test, "III-31 regression: the hpgl_python_tests add_test is gone"
+        assert re.search(r'-m\s+"not slow"', add_test.group(1)), (
+            "III-31 regression: the CTest python target no longer passes "
+            f"-m \"not slow\": {add_test.group(1)!r}"
+        )
+        timeout = re.search(
+            r"set_tests_properties\(\s*hpgl_python_tests\s+PROPERTIES\s+TIMEOUT\s+(\d+)\s*\)",
+            cm,
+        )
+        assert timeout, "III-31 regression: hpgl_python_tests has no TIMEOUT property"
+        assert int(timeout.group(1)) > 0

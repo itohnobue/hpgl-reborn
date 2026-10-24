@@ -5,6 +5,13 @@ struct hpgl_shape_t;
 struct hpgl_sgs_params_t;
 struct hpgl_ik_params_t;
 
+// F-191: covariance-model range gate shared by the C API boundary. Defined in
+// api.cpp so every entry that casts a C `int m_covariance_type` to
+// hpgl::covariance_type_t uses ONE predicate and one message text —
+// api.cpp (ok/sk/lvm/median-IK/cokriging parameters, mark-I cokriging) and
+// api_helpers.cpp (SGS parameters, per-category IK covariances, SIS parameters).
+void validate_covariance_type_or_throw(int covariance_type, const char * context);
+
 namespace hpgl
 {
 	class sugarbox_grid_t;

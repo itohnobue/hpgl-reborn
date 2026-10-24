@@ -113,25 +113,22 @@ _hpgl_call_lock = threading.RLock()
 # from being suppressed, while still suppressing stale errors within the
 # same call window.
 #
-# KNOWN LIMITATION — NO C++ CLEAR-ERROR API: The HPGL C++ shared library
-# stores the last exception message globally (thread_local) and does NOT
-# expose a C ABI ``hpgl_clear_last_exception_message()`` function. When the
-# pre-call snapshot accidentally matches a genuinely new error (same
-# message, C++ state not cleared), the error is suppressed. The sequence
-# counter mitigates this for consecutive calls but cannot help when a
-# fresh identical error arises after intervening calls that did NOT
-# change the C++ error state. A C++ clear-error API would be the correct
-# fix; without it, this is a documented limitation with an approximate
-# workaround.
+# F-182: the C ABI now exports ``hpgl_clear_last_exception_message()``
+# (api.h, api.cpp), which _clear_hpgl_error uses to consume the error after
+# every guard. The former workaround — calling the Itanium-mangled C++
+# ``hpgl::set_last_exception_message`` through ``_hpgl_so[...]`` — is kept
+# only as a fallback for libraries that predate the export: that symbol does
+# not exist at all under MSVC (the declaration carries no ``HPGL_API``), so
+# on Windows the clear silently no-opped and a second identical failure was
+# suppressed. Every compute entry also clears the slot on entry, so on a
+# fresh build the snapshot is empty and any message read after a call
+# belongs to that call.
 #
 # F-07: _check_hpgl_error CONSUMES the C++ error after each guard (raise or
-# suppress) by resetting it to empty via the exported C++ setter
-# (hpgl::set_last_exception_message, Itanium-mangled on macOS/Linux). This
-# makes the "stale" state self-cleaning: a second distinct call that FAILS
-# with the identical message raises (the pre-call snapshot is clean), while
-# a successful call never sees a stale error. Platforms where the setter is
-# not dynamically exported (e.g. Windows MSVC) fall back to the
-# snapshot/seq suppression (pre-fix behavior).
+# suppress) via that same clear entry. This makes the "stale" state
+# self-cleaning: a second distinct call that FAILS with the identical message
+# raises (the pre-call snapshot is clean), while a successful call never sees
+# a stale error.
 
 
 def _snapshot_hpgl_error():
@@ -232,16 +229,31 @@ def error_guard(context: str = ""):
 def _clear_hpgl_error() -> None:
     """Reset the C++ thread-local error after the guard consumes it (F-07).
 
-    The C ABI exposes only ``hpgl_get_last_exception_message`` (read); the
-    C++ ``hpgl::set_last_exception_message(const char*)`` symbol IS exported
-    with Itanium C++ mangling on macOS/Linux and is callable through ctypes.
+    F-182: uses the exported C entry ``hpgl_clear_last_exception_message``
+    (api.h, api.cpp), which is the stable, platform-independent way to clear
+    the slot — every C ABI build exports it, including MSVC.
+
+    Legacy fallback: libraries built before that export only expose the
+    Itanium-mangled C++ setter ``hpgl::set_last_exception_message(const
+    char*)``, which works on macOS/Linux and does not exist on MSVC. The
+    fallback keeps those stale binaries working; the freshness check
+    (hpgl_wrap._verify_library_freshness) reports the staleness separately.
+
     Consuming the error lets a later call start from a clean state: a second
     distinct call that fails with the IDENTICAL message raises (previously
     silently suppressed), while a successful call does not see a stale error.
-
-    Falls back to a no-op when the symbol is unavailable (e.g. Windows MSVC
-    builds) — the snapshot/seq logic then still suppresses the stale error.
+    If neither symbol is available the clear is a no-op and the snapshot/seq
+    logic still suppresses only the stale error.
     """
+    clear = getattr(_hpgl_so, "hpgl_clear_last_exception_message", None)
+    if clear is not None:
+        try:
+            clear.argtypes = []
+            clear.restype = None
+            clear()
+            return
+        except (AttributeError, KeyError, TypeError):
+            pass
     try:
         setter = _hpgl_so["_ZN4hpgl26set_last_exception_messageEPKc"]
         setter.argtypes = [C.c_char_p]
@@ -272,11 +284,23 @@ def checkFWA(a: numpy.ndarray) -> None:
 # FFI output-buffer contract (got-20260802015741 — recurring class: the
 # contiguity → size → writeability → full-init facets surface one per run).
 #
-# ONE shared helper enforces the complete contract on every FFI output
-# buffer, so a future call site cannot skip a facet the way sibling call
-# sites did across runs (F-06/F-08 contiguity → 2-M-15 size → III-39
-# writeability → III-40 full-init). Route ALL output-buffer validations
-# through require_output_buffer.
+# require_output_buffer enforces contiguity + exact size + writeability (and,
+# when a dtype is given, the element type) on the output buffers routed
+# through it — currently the three cvariogram output buffers (CalcVariograms,
+# CalcVariogramsFromPointSet, CStackLayers). It is NOT the only output guard in
+# the module: the kriging/simulation output buffers are guarded by the
+# ndpointer(..., flags=["F", "W", "A"]) argtypes in hpgl_wrap.py. Route a new
+# output-buffer validation through this helper instead of hand-rolling the
+# facets (F-06/F-08 contiguity → 2-M-15 size → III-39 writeability).
+#
+# Full-init (III-40) is a SEPARATE facet with its own helper pair below
+# (prefill_output_buffer + require_output_buffer_full_init). It applies only
+# where a kernel may leave top-tail cells unwritten. No production call site
+# needs the pair today: the one in-tree candidate (CStackLayers) pre-fills the
+# whole result buffer in C++ (stack_layers.h:106-112, see
+# cvariogram.py CStackLayers full-init comment). The pair is exercised only by
+# tests/python/test_ffi_buffer_contract.py; wire it at a call site if a kernel
+# ever stops pre-filling its output.
 # ============================================================================
 
 # Sentinel value the C++ kernels use to mark "cell not written" where a
@@ -290,11 +314,14 @@ def require_output_buffer(
     context: str,
     dtype: numpy.dtype | None = None,
 ) -> None:
-    """Enforce the complete FFI output-buffer contract on ``arr``.
+    """Enforce the FFI output-buffer contract on ``arr``.
 
-    The contract is: C-contiguous or F-contiguous layout (contiguity), exact
-    element count (size), writable memory (writeability), and — when
-    ``require_full_init`` is True — all cells finite (full initialization).
+    The contract enforced here is: C-contiguous or F-contiguous layout
+    (contiguity), exact element count (size), writable memory (writeability),
+    and — when ``dtype`` is given — the required element type.
+    Full initialization is NOT part of this helper: a kernel that may leave
+    top-tail cells unwritten is covered separately by
+    ``prefill_output_buffer`` + ``require_output_buffer_full_init``.
     Contiguity comes first: a strided view would be read/written by the C
     kernel as if it were flat, producing garbage or OOB access. Size second:
     the C kernel computes ``min(num_lags, result_length)``-style truncation
@@ -789,6 +816,13 @@ def create_nonparam_cdf(cdf_data):
 
     Extracts ``data_as()`` pointers from the CDF value/probability
     arrays and pins them via ``_array_refs``.
+
+    The paired-array contract (equal length, C-contiguous float32) is
+    re-validated here: ``CdfData.values`` / ``CdfData.probs`` are plain
+    public attributes with no setter, so a caller can rebind them to a
+    mismatched or strided array after construction, and the C++ side
+    indexes both buffers to ``size`` (derived from ``values``) verbatim —
+    an OOB read.
     """
     from .cdf import CdfData
 
@@ -797,6 +831,16 @@ def create_nonparam_cdf(cdf_data):
         raise TypeError(
             f"create_nonparam_cdf: expected CdfData, got {type(cdf_data).__name__}"
         )
+    if cd2.values.size != cd2.probs.size:
+        raise ValueError(
+            f"create_nonparam_cdf: values size {cd2.values.size} does not match "
+            f"probs size {cd2.probs.size}"
+        )
+    for name, arr in (("values", cd2.values), ("probs", cd2.probs)):
+        if arr.dtype != numpy.float32 or not arr.flags["C_CONTIGUOUS"]:
+            raise ValueError(
+                f"create_nonparam_cdf: {name} must be a C-contiguous float32 array"
+            )
     result = checked_create(
         hpgl_non_parametric_cdf_t,
         values=cd2.values.ctypes.data_as(C.POINTER(C.c_float)),

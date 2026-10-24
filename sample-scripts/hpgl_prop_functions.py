@@ -2,7 +2,10 @@ import sys
 import os
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# F-355: the package lives in src/geo_bsd (readme.md:269-274), not at the
+# repository root — inserting '..' left `import geo_bsd` raising
+# ModuleNotFoundError before any helper could be used.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 from geo_bsd import ContProperty, IndProperty
 
 

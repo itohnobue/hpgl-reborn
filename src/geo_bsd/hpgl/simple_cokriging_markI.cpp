@@ -357,6 +357,12 @@ static void process_node_loop(
 	unsigned long points_without_neighbours = 0;
 	unsigned long points_singularity = 0;
 	unsigned long points_processed = 0;
+	// G-03: nodes whose estimate needed the secondary (primary uninformed),
+	// and how many of those actually had an informed secondary. The gap
+	// between the two is the silent secondary drop F-22 documents per node;
+	// aggregated here it becomes one visible message per run.
+	unsigned long points_needing_secondary = 0;
+	unsigned long points_secondary_informed = 0;
 	double sum = 0;
 	// 2-M-9: one workspace for the whole loop — eliminates ~7 heap
 	// allocations per node. Parallelism is deliberately NOT added here:
@@ -401,6 +407,17 @@ static void process_node_loop(
 
 	for (node_index_t i = 0; i < data_size; ++i)
 	{
+		// G-02: honor progress-handler cancellation cooperatively — the
+		// cokriging family was the only consumer that never read
+		// report.cancelled() (next_lap() sets it when the handler returns
+		// non-zero), so a cancelled run still filled every cell: a probe
+		// measured 11 handler calls and 500/500 cells filled on a 10x10x5
+		// grid. Mirrors sequential_simulation.h's per-node read; the flag is
+		// a relaxed atomic load, the same cost class as the report.next_lap()
+		// already executed once per node.
+		if (report.cancelled())
+			break;
+
 		cont_value_t result = -500;
 		if (input_prop.is_informed(i))
 		{
@@ -413,7 +430,13 @@ static void process_node_loop(
 			// II-10: additionally require the secondary variance to be a
 			// strictly-positive finite value, else the secondary equation
 			// is dropped (primary-only kriging, GSLIB convention).
-			bool secondary_present = secondary_data.is_informed(i) && secondary_variance_valid;
+			const bool secondary_informed = secondary_data.is_informed(i);
+			bool secondary_present = secondary_informed && secondary_variance_valid;
+			// G-03: aggregate counters for the silent-degradation message
+			// emitted after the loop.
+			++points_needing_secondary;
+			if (secondary_informed)
+				++points_secondary_informed;
 			cont_value_t secondary_value = secondary_present
 				? secondary_data[i] : secondary_mean;
 			ki_result_t ki_result = calc_value(i, input_prop, secondary_value,
@@ -455,16 +478,41 @@ static void process_node_loop(
 	// m_speed_nps is set by the caller after report.stop() (the reporter
 	// needs m_end, which stop() records, to compute iterations_per_second).
 
+	// G-03: one message per run when the secondary never entered the system.
+	// An uninformed secondary mask makes every node primary-only, which is
+	// indistinguishable from a correct simple-kriging run in the output (a
+	// probe measured agreement with simple_kriging to 7.63e-06, versus a
+	// 17.7 maximum difference against a genuine secondary) and raises no
+	// failure counter, because every node still succeeds. Warning only on the
+	// TOTAL case keeps legal sparse-secondary runs quiet; the partial case is
+	// visible to the caller through its own mask. A cancelled run is skipped:
+	// its counters cover only the nodes reached before the break.
+	if (!report.cancelled() && points_needing_secondary > 0 && points_secondary_informed == 0)
+	{
+		LOGWARNING("cokriging: secondary data is uninformed at all "
+			+ std::to_string(points_needing_secondary)
+			+ " kriged nodes — the run is primary-only (equivalent to "
+			  "simple kriging).\n");
+	}
+
 	// F-19: emit failure signals on all cokriging failure paths (mirrors
 	// cont_kriging.h:234-241). Previously every failure silently degraded
 	// to the trivial mean fallback with no observability.
+	// F5 (the G-16 twin): the denominator must be the cells that were actually
+	// kriged, not the grid volume. Every uninformed cell increments exactly one
+	// of the three counters; informed cells are copied through and count
+	// nowhere (same shape as cont_kriging.h). With 990 of 1000 cells informed
+	// and every kriged cell failing, the grid-volume denominator printed "10
+	// (of 1000)" — 1 % — while the Python consumer's own warning says 100 %.
 	if (stats.m_points_singularity > 0 || stats.m_points_without_neighbours > 0)
 	{
+		const unsigned long kriged_cells = points_calculated
+			+ points_without_neighbours + points_singularity;
 		fprintf(stderr,
-			"HPGL: cokriging failures: %lu singularity, %lu no-neighbours (of %d total)\n",
+			"HPGL: cokriging failures: %lu singularity, %lu no-neighbours (of %lu kriged cells)\n",
 			stats.m_points_singularity,
 			stats.m_points_without_neighbours,
-			data_size);
+			kriged_cells);
 	}
 }
 
@@ -571,6 +619,20 @@ void simple_cokriging_markI(
 	report.stop();
 	stats.m_speed_nps = report.iterations_per_second();
 	set_kriging_stats(stats);
+
+	// F3 (F-379 shape): G-02 made the loop above stop promptly on cancel but
+	// left it falling through to the success path, so a cancelled run returned
+	// a partly stale property indistinguishable from a completed one — the C
+	// entry returns void and stop()'s notice goes to the output stream, which
+	// no caller treats as an outcome. Stop the reporter and publish the short
+	// counters first (stop() emits the F-184 "run cancelled" notice; the stats
+	// stay observable), then throw so the C ABI catch stores the message the
+	// FFI layer raises as a Python RuntimeError. The caller's buffer stays
+	// partially written — unavoidable, it is the working buffer — but it can
+	// no longer be mistaken for a finished run.
+	if (report.cancelled())
+		throw hpgl_exception("simple_cokriging_markI",
+			"cancelled by progress handler; the output property is only partially simulated");
 }
 
 void simple_cokriging_markII(
@@ -667,6 +729,13 @@ void simple_cokriging_markII(
 	report.stop();
 	stats.m_speed_nps = report.iterations_per_second();
 	set_kriging_stats(stats);
+
+	// F3 (F-379 shape): mark II shares process_node_loop, so it truncates on
+	// cancellation exactly like mark I — fail observably instead of returning
+	// the partly stale property as success (see the mark I site above).
+	if (report.cancelled())
+		throw hpgl_exception("simple_cokriging_markII",
+			"cancelled by progress handler; the output property is only partially simulated");
 }
 
 }

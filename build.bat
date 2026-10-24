@@ -23,9 +23,14 @@ if /i "%~1"=="--platform" (
     shift
     goto :parse_args
 )
-echo WARNING: Unknown argument: %~1
-shift
-goto :parse_args
+REM F-160: an unsupported argument is an ERROR, not a WARNING. This script
+REM builds only the MSBuild vcxproj pair; a caller asking for --wheel or
+REM --preset used to get a warning, a vcxproj build, and exit 0 -- no
+REM requested artifact, reported as success. Mirrors build.sh:64-67 (F-32).
+echo ERROR: Unknown argument: %~1
+echo Supported: --config Debug or Release, --platform Win32 or x64
+endlocal
+exit /b 1
 :args_done
 
 REM Validate --config
@@ -162,8 +167,12 @@ if /i "%BUILD_CONFIG%"=="Debug" (
         set /p CONFIRM="Continue with Debug build and overwrite runtime DLLs? [y/N]: "
         if /i not "!CONFIRM!"=="y" (
             echo Build cancelled.
+            REM F-161: a declined confirmation is NOT a success. With CI unset
+            REM and stdin not a tty, set /p returns an empty answer, so an
+            REM unattended caller landed here; exit 0 told it the build ran
+            REM while the previous DLLs were still in src\geo_bsd\.
             endlocal
-            exit /b 0
+            exit /b 1
         )
         echo.
     )
@@ -228,6 +237,10 @@ REM exporting hpgl_get_kriging_stats (stale builds report False — I2-47).
 REM The _cvariogram module is loaded and its error-clear symbol checked too
 REM (2-M-22: the old gate never loaded _cvariogram, so a broken variogram
 REM module passed). A failed smoke test FAILS the build (exit /b 1).
+REM F-162: stdout/stderr are NOT redirected on the invocation below -- its
+REM assertion text ('stale library loaded (_HAS_KRIGING_STATS=False)', '... missing
+REM cvar_clear_last_error') is the only evidence that distinguishes a stale or
+REM ABI-mismatched DLL from a missing dependency (build.sh keeps the same text).
 REM Python resolution (2-M-22): prefer uv (project standard), then the repo
 REM venv, then PATH python — previously the gate was uv-only and silently
 REM no-oped on machines without uv.
@@ -245,12 +258,13 @@ if not defined PYTHON_CMD (
     endlocal
     exit /b 1
 )
-%PYTHON_CMD% -c "import sys; sys.path.insert(0, r'%~dp0src'); from geo_bsd import hpgl_wrap; assert hpgl_wrap._HAS_KRIGING_STATS, 'stale library loaded (_HAS_KRIGING_STATS=False)'; print('  hpgl shared library loaded successfully'); from geo_bsd import cvariogram; assert hasattr(cvariogram.cvar, 'cvar_clear_last_error'), '_cvariogram missing cvar_clear_last_error (stale build)'; print('  _cvariogram shared library loaded successfully')" >nul 2>&1
+%PYTHON_CMD% -c "import sys; sys.path.insert(0, r'%~dp0src'); from geo_bsd import hpgl_wrap; assert hpgl_wrap._HAS_KRIGING_STATS, 'stale library loaded (_HAS_KRIGING_STATS=False)'; print('  hpgl shared library loaded successfully'); from geo_bsd import cvariogram; assert hasattr(cvariogram.cvar, 'cvar_clear_last_error'), '_cvariogram missing cvar_clear_last_error (stale build)'; print('  _cvariogram shared library loaded successfully')"
 if !ERRORLEVEL! EQU 0 (
     echo   Smoke test: PASSED
 ) else (
-    echo   ERROR: Smoke test failed -- library may not load at runtime.
-    echo   Check that Python dependencies are installed and MKL DLLs are in PATH.
+    echo   ERROR: Smoke test failed -- see the assertion/traceback above.
+    echo   A missing dependency, a stale library in src\geo_bsd, or a partially
+    echo   installed artifact all land here; the message names which one.
     if not defined CI pause
     endlocal
     exit /b 1

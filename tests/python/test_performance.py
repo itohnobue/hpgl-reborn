@@ -1,12 +1,17 @@
 """
 Performance benchmarking tests for HPGL
 
-Each test records baseline timings on first run and detects regressions
-by comparing against historical baselines. A regression is flagged when
-a test exceeds its baseline by a configurable margin (default: 3x baseline
-or slower than the hard floor, whichever is smaller).
+Each test records a baseline timing on its first run and compares later runs
+against it: a run fails when it exceeds the test's hard floor, or — once a
+stored baseline of at least MIN_BASELINE_FOR_REGRESSION exists — when it
+exceeds baseline * REGRESSION_FACTOR. Baselines under 5 ms are treated as
+floor-only because their measurement noise exceeds the 3x headroom.
 
-Baselines are stored in .benchmarks/ and can be reset by deleting that directory.
+Baselines are stored in .benchmarks/ and that directory is deleted before
+every perf-inclusive run (project policy, AGENTS.md), so a run normally has no
+baseline and enforces the hard floor only; the 3x comparison is live only when
+a baseline survives from an earlier run in the same checkout. Every
+measurement is a single wall-clock sample of one run, not a median.
 """
 
 import json
@@ -164,6 +169,10 @@ class TestPerformance:
         grid = SugarboxGrid(x=10, y=10, z=5)
         data = np.random.rand(500).astype("float32") * 100
         mask = np.ones(500, dtype="uint8")
+        # F-559: arm the fixture. An all-informed mask leaves SGS nothing to
+        # simulate (sequential_simulation.h:246,310-314), so the timing
+        # measured an allocation-only no-op instead of the simulation loop.
+        mask[::10] = 0
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
             type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
@@ -209,12 +218,15 @@ class TestPerformance:
         grid = SugarboxGrid(x=20, y=20, z=10)
         data = np.random.rand(4000).astype("float32") * 100
         mask = np.ones(4000, dtype="uint8")
+        # F-559: arm the fixture — with every cell informed, cont_kriging.h:171
+        # copies the input through without entering the per-node kriging loop,
+        # so this comparison measured a no-op at every neighbour count.
+        mask[::10] = 0
         prop = ContProperty(data, mask)
         cov_model = CovarianceModel(
             type=covariance.spherical, ranges=(5.0, 5.0, 3.0), sill=1.0, nugget=0.1
         )
 
-        timings = {}
         for max_neighbours in [4, 8, 12, 16]:
             start = time.time()
             _ = ordinary_kriging(
@@ -225,12 +237,13 @@ class TestPerformance:
                 cov_model=cov_model,
             )
             elapsed = time.time() - start
-            timings[max_neighbours] = elapsed
             print(f"OK with {max_neighbours} neighbours: {elapsed:.3f}s")
-            # Each run should complete within hard floor
-            assert elapsed < 5.0, (
-                f"Kriging with {max_neighbours} neighbours took too long: {elapsed:.3f}s"
-            )
+            # F-560: the docstring promised the baseline comparison, but the old
+            # `assert elapsed < 5.0` implemented only the floor. Route each
+            # sample through _benchmark so the 3x check actually exists.
+            assert _benchmark(
+                f"ok_neighbour_count_{max_neighbours}", elapsed, hard_floor=5.0
+            ), f"Kriging with {max_neighbours} neighbours took too long: {elapsed:.3f}s"
 
     def test_covariance_type_performance(self):
         """Test performance of different covariance types.
@@ -240,9 +253,10 @@ class TestPerformance:
         grid = SugarboxGrid(x=15, y=15, z=8)
         data = np.random.rand(1800).astype("float32") * 100
         mask = np.ones(1800, dtype="uint8")
+        # F-559: arm the fixture (see test_neighbour_count_performance_impact).
+        mask[::10] = 0
         prop = ContProperty(data, mask)
 
-        timings = {}
         for cov_type, cov_name in [
             (covariance.spherical, "spherical"),
             (covariance.exponential, "exponential"),
@@ -255,12 +269,12 @@ class TestPerformance:
                 prop=prop, grid=grid, radiuses=(5, 5, 3), max_neighbours=12, cov_model=cov_model
             )
             elapsed = time.time() - start
-            timings[cov_name] = elapsed
             print(f"OK with {cov_name}: {elapsed:.3f}s")
-
-        # All should complete within hard floor
-        for cov_name, elapsed in timings.items():
-            assert elapsed < 30.0, f"{cov_name} took too long: {elapsed:.3f}s"
+            # F-560: the promised baseline comparison is performed here through
+            # _benchmark; the 30 s per-type floor it replaces is the hard floor.
+            assert _benchmark(
+                f"ok_cov_type_{cov_name}", elapsed, hard_floor=30.0
+            ), f"{cov_name} took too long: {elapsed:.3f}s"
 
 
 @pytest.mark.hpgl

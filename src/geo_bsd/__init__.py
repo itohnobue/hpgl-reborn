@@ -119,7 +119,7 @@ _source_version_value = _source_version()
 # version bump touches one place instead of the three hardcoded copies
 # below (previously "2.0.5" appeared in the ImportError fallback, the
 # warning text, and the PackageNotFoundError fallback independently).
-_VERSION_FALLBACK = "2.0.6"
+_VERSION_FALLBACK = "2.1.0"
 
 try:
     from importlib.metadata import PackageNotFoundError  # noqa: E402

@@ -1,13 +1,19 @@
 [build-system]
 requires = [
-    "scikit-build-core>=0.9.0",
+    # F-077: >=1.0.0 is the first backend line whose sdist settings accept
+    # `inclusion-mode = "explicit"` (0.10.0 does not know the option at all and
+    # exits 7 under `strict-config`; 0.12.2 types it as
+    # Literal["classic","default","manual"] and rejects the value). The old
+    # >=0.9.0 floor advertised 0.9-0.12 as compatible when they hard-fail this
+    # file.
+    "scikit-build-core>=1.0.0",
     "numpy>=1.24",
 ]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "hpgl"
-version = "2.0.6"
+version = "2.1.0"
 description = "High Performance Geostatistics Library - Modern C++ with Python bindings"
 readme = "readme.md"
 requires-python = ">=3.9"
@@ -54,18 +60,27 @@ classifiers = [
 
 dependencies = [
     "numpy>=2.0,<3.0",
-    # E-M29: the shipped solved_problems_book scripts import matplotlib
-    # (17 files) and scipy (3 files); numpy-only runtime deps made fresh
-    # installs unable to run the book examples.
-    # R-25: floors are set at the numpy-2.0 compatibility minimums
-    # (matplotlib 3.8.4, scipy 1.13.0 — the first releases declaring
-    # numpy-2 support), so the declared metadata is internally consistent
-    # with the numpy>=2.0,<3.0 pin above.
+]
+
+[project.optional-dependencies]
+# Book/sample-script dependencies (F-087/F-333). Neither package is imported by
+# the shipped `geo_bsd` package (matplotlib/scipy → 0 hits under src/ and
+# tests/); the scripts that do import them live in `solved_problems_book/` and
+# `sample-scripts/`, which nothing installs: the wheel never carries them and
+# they are sdist-only content (the sdist `include` list below ships them because
+# the tests it also ships read them). They were therefore hard install
+# requirements for code that is not installed, and a stale comment claimed those
+# directories were "shipped" in the wheel. A wheel install has no book scripts to
+# run at all (the E-M29 failure mode cannot recur from a wheel); a source
+# checkout or an unpacked sdist runs them with `--extra book`.
+# R-25: floors are set at the numpy-2.0 compatibility minimums (matplotlib
+# 3.8.4, scipy 1.13.0 — the first releases declaring numpy-2 support), so the
+# declared metadata stays internally consistent with the numpy>=2.0,<3.0 pin.
+book = [
     "matplotlib>=3.8.4",
     "scipy>=1.13",
 ]
 
-[project.optional-dependencies]
 # Development dependencies
 dev = [
     "pytest>=7.0",
@@ -92,6 +107,15 @@ docs = [
     "myst-parser>=2.0",
 ]
 
+# Wheel/release tooling (F-335): `build.sh --wheel` runs `python -m build` and,
+# on macOS, `python -m delocate.delocate_wheel`, but neither package is in any
+# extra and neither is in uv.lock — so the documented `uv sync --extra test`
+# setup followed by `./build.sh --wheel` failed with "No module named build".
+release = [
+    "build>=1.0",
+    "delocate>=0.13; sys_platform == 'darwin'",
+]
+
 # All development dependencies
 all = [
     "hpgl[dev,test,docs]",
@@ -115,6 +139,14 @@ cmake.version = ">=3.20"
 # CMake configuration
 cmake.args = [
     "-DHPGL_BUILD_PYTHON=ON",
+    # G-35: pin the optional variogram extension ON. `build-dir` below is
+    # persistent and shared across local CPythons, and `option()` never
+    # overrides a cached value — one earlier configure of the same
+    # build/{wheel_tag} tree with HPGL_BUILD_VARIOGRAM=OFF produced a wheel
+    # with no `_cvariogram`, which installs, imports with a single log warning
+    # and sets `geo_bsd.cvariogram = None` (every fast-variogram call then
+    # raises AttributeError).
+    "-DHPGL_BUILD_VARIOGRAM=ON",
     "-DHPGL_USE_OPENMP=ON",
     "-DHPGL_USE_MKL=OFF",
     # H-3: pin the macOS deployment target at the CMake level. scikit-build-core
@@ -184,6 +216,15 @@ include = [
     "src/",
     "cmake/",
     "tests/",
+    # The sdist ships `tests/`, and non-slow default-suite tests read these two
+    # repository trees unguarded (test_production_fixes_rest.py:1556-1557,
+    # :1650-1711; test_production_fixes_geo.py:1128, :1197-1198, :1276,
+    # :1339-1340), so without them the readme's own default-suite command fails
+    # from an unpacked sdist with FileNotFoundError. They stay wheel-exempt and
+    # uninstalled (see the `book` extra note above): shipping them as sdist
+    # source content installs nothing and adds no runtime dependency.
+    "sample-scripts/",
+    "solved_problems_book/",
 ]
 
 # Exclude these files from source distribution
@@ -221,7 +262,7 @@ skip = "*-win32 *-manylinux_i686 pp*"
 # The wheel installs the source package as `geo_bsd` (importable top-level
 # package) — the distribution name is `hpgl`, so `importlib.metadata.version`
 # still resolves it (I2-07: align with the actual import name).
-test-command = "python -c \"import geo_bsd; v = geo_bsd.__version__; assert v, 'no version'; assert hasattr(geo_bsd, 'simple_kriging'), 'API missing'; print(f'geo_bsd {v} OK')\""
+test-command = "python -c \"import geo_bsd; v = geo_bsd.__version__; assert v, 'no version'; assert hasattr(geo_bsd, 'simple_kriging'), 'API missing'; assert geo_bsd.cvariogram is not None, 'cvariogram extension missing'; print(f'geo_bsd {v} OK')\""
 
 # Environment variables
 environment = { CMAKE_BUILD_PARALLEL_LEVEL = "4" }
@@ -329,7 +370,10 @@ ignore = [
 "tests/**/*.py" = ["S101"]  # assert allowed in tests
 
 [tool.ruff.lint.isort]
-known-first-party = ["hpgl", "geo"]
+# G-40: the importable first-party package is `geo_bsd` (src/geo_bsd). `hpgl`
+# is the distribution name and `geo` is the pre-2.0 package name; neither is an
+# importable module, so the previous list classified nothing.
+known-first-party = ["geo_bsd"]
 
 [tool.black]
 line-length = 100
@@ -339,7 +383,7 @@ include = '\.pyi?$'
 [tool.isort]
 profile = "black"
 line_length = 100
-known_first_party = ["hpgl", "geo"]
+known_first_party = ["geo_bsd"]
 
 [tool.bandit]
 exclude_dirs = ["build", "dist", ".git", ".venv", "__pycache__", "legacy_documentation"]

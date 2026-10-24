@@ -34,7 +34,8 @@ class SGSConfig:
         Kriging method: ``"sk"`` for Simple Kriging or ``"ok"`` for
         Ordinary Kriging.  Default: ``"sk"``.
     seed : int
-        Seed for the random number generator.  Must be non-negative.
+        Seed for the random number generator.  Must be in the int64 range
+        ``0 .. 2**63 - 1`` (the width of the C ABI field, F-017).
         Default: ``0``.
     min_neighbours : int
         Minimum number of neighbours required for kriging.
@@ -81,6 +82,14 @@ class SGSConfig:
         if self.seed < 0:
             raise ValueError(
                 f"SGSConfig: seed must be non-negative, got {self.seed}"
+            )
+        # F-017: the same int64 upper bound validate_seed enforces — the seed
+        # becomes a C.c_int64 struct field (hpgl_wrap.py:131, api.h:96) and
+        # ctypes wraps anything larger modulo 2**64.
+        if self.seed > ValidationConstants.MAX_SEED:
+            raise ValueError(
+                f"SGSConfig: seed must not exceed {ValidationConstants.MAX_SEED} "
+                f"(the int64 range of the C ABI), got {self.seed}"
             )
 
         # -- min_neighbours --
@@ -178,7 +187,8 @@ class SISConfig:
     Parameters
     ----------
     seed : int
-        Seed for the random number generator.  Must be non-negative.
+        Seed for the random number generator.  Must be in the int64 range
+        ``0 .. 2**63 - 1`` (the width of the C ABI field, F-017).
         Default: ``0``.
     max_neighbours : int
         Maximum number of neighbour points to use for kriging.
@@ -218,6 +228,13 @@ class SISConfig:
         if self.seed < 0:
             raise ValueError(
                 f"SISConfig: seed must be non-negative, got {self.seed}"
+            )
+        # F-017: same int64 upper bound as validate_seed (the seed becomes the
+        # C.c_int64 `seed` argument of hpgl_sis_simulation / the _lvm variant).
+        if self.seed > ValidationConstants.MAX_SEED:
+            raise ValueError(
+                f"SISConfig: seed must not exceed {ValidationConstants.MAX_SEED} "
+                f"(the int64 range of the C ABI), got {self.seed}"
             )
 
         # -- max_neighbours --
@@ -325,7 +342,8 @@ class GTSIMConfig:
         threshold calculation.  Must be positive.
         Default: ``1.0``.
     seed : int
-        Seed for the random number generator.  Must be non-negative.
+        Seed for the random number generator.  Must be in the int64 range
+        ``0 .. 2**63 - 1`` (the width of the C ABI field, F-017).
         Default: ``3439275``.
     """
 
@@ -371,4 +389,12 @@ class GTSIMConfig:
         if self.seed < 0:
             raise ValueError(
                 f"GTSIMConfig: seed must be non-negative, got {self.seed}"
+            )
+        # F-017: same int64 upper bound as validate_seed — gtsim folds the seed
+        # into a 32-bit RandomState value AND forwards it to sgs_simulation,
+        # whose params struct carries it as int64 (api.h:96).
+        if self.seed > ValidationConstants.MAX_SEED:
+            raise ValueError(
+                f"GTSIMConfig: seed must not exceed {ValidationConstants.MAX_SEED} "
+                f"(the int64 range of the C ABI), got {self.seed}"
             )

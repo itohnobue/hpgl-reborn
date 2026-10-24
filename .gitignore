@@ -97,3 +97,8 @@ test_*.log
 
 # Local planning artifacts (working documents — not part of the repo)
 plans/
+
+# Sample-script runtime outputs (CWD-relative writes — never tracked; see
+# sample-scripts/README.md and the gtsim* writers)
+results/
+*.out.INC

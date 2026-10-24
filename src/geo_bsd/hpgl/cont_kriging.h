@@ -8,6 +8,7 @@
 #include "output.h"
 #include <exception>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #ifdef _OPENMP
 #include <omp.h>
@@ -44,6 +45,29 @@ namespace hpgl
 		mean_on_failure, //!< Put the mean value
 		undefined_on_failure //!< Leave node undefined
 	};
+
+	namespace detail
+	{
+		// G-01 (CONFIRMED HIGH): the progress flush must be serialized — the
+		// reporter's m_counter is a plain long (progress_reporter.h:12), so
+		// dropping the lock would introduce a lost update. But the unnamed
+		// OpenMP critical it used to use is ONE program-global lock shared by
+		// every kernel, and next_lap() invokes the user progress handler
+		// (progress_reporter.cpp:72 -> output.cpp:136-141) while it is held.
+		// A handler that re-enters a kriging call on the same thread — the
+		// pattern the Python layer blesses (geo.py:2714-2721, RLock at
+		// ffi_adapter.py:97-107) — then deadlocked against its own thread
+		// (reproduced live, exit 97, at the default and at
+		// OMP_NUM_THREADS=1). A recursive mutex keeps the flush mutually
+		// exclusive across threads while letting the owning thread re-enter
+		// from a handler instead of blocking on itself. Function-local static
+		// in an inline function: one instance per program, C++11 §6.7/4.
+		inline std::recursive_mutex & progress_flush_mutex()
+		{
+			static std::recursive_mutex m;
+			return m;
+		}
+	}
 
 	/*! 
  	*  Generic kriging alghorithm for continuous data. Uses OpenMP.
@@ -101,6 +125,15 @@ namespace hpgl
 		// written because the Python wrapper rejects NaN output with
 		// RuntimeError, and the tests expect graceful completion for
 		// sparse/empty data (cells left uninformed, not NaN).
+		// F-187: "mask=0" is only true if the OUTPUT MASK started at 0 — the
+		// two failure arms below (KI_NO_NEIGHBOURS, KI_SINGULARITY) write
+		// neither value nor mask, so a caller-reused buffer whose mask was
+		// pre-set kept reporting the failing cells as informed estimates
+		// holding stale data. The C ABI entry that can reach these arms
+		// (hpgl_ordinary_kriging, the only undefined_on_failure path) now
+		// clears the whole output mask before calling this kernel, so this
+		// branch needs no per-cell write and the contract holds by
+		// construction.
 
 		unsigned long points_calculated = 0;
 		unsigned long points_without_neighbours = 0;
@@ -153,6 +186,12 @@ namespace hpgl
 {
 		// Per-thread workspace: pre-allocates vectors once, reused across
 		// all node iterations via resize() (allocation-free after first use).
+		// H-03: this workspace holds A and A_backup at n² doubles each
+		// (my_kriging_weights.h:121-134), i.e. 16·n² bytes PER THREAD, and
+		// it lives inside the parallel region — so residency is
+		// 16·n² × threads and the neighbour COUNT alone does not bound it.
+		// The C-boundary gate that keeps this product inside a memory budget
+		// is validate_kriging_max_neighbours_or_throw (api.cpp:216-255).
 		kriging_ws_t<value_t, coord_t> ws;
 		int local_lap_count = 0;
 		#pragma omp for schedule(dynamic) reduction(+: points_calculated) reduction(+: points_without_neighbours) reduction(+: points_singularity) reduction(+: points_processed) reduction(+: sum) 
@@ -210,10 +249,12 @@ namespace hpgl
 			local_lap_count++;
 			if (local_lap_count >= LP_BATCH_SIZE)
 			{
-				#pragma omp critical
-				{
-					report.next_lap(local_lap_count);
-				}
+				// G-01: re-entrant progress lock (see
+				// detail::progress_flush_mutex). The handler runs inside
+				// next_lap(), so the lock must be held and must let the same
+				// thread re-enter; lock_guard releases it on an exception.
+				std::lock_guard<std::recursive_mutex> progress_lock(detail::progress_flush_mutex());
+				report.next_lap(local_lap_count);
 				local_lap_count = 0;
 				if (report.cancelled()) {
 					// M-5: set the cooperative stop flag instead of
@@ -245,10 +286,9 @@ namespace hpgl
 		// Flush remaining laps for this thread
 		if (local_lap_count > 0)
 		{
-			#pragma omp critical
-			{
-				report.next_lap(local_lap_count);
-			}
+			// G-01: re-entrant progress lock (see progress_flush_mutex).
+			std::lock_guard<std::recursive_mutex> progress_lock(detail::progress_flush_mutex());
+			report.next_lap(local_lap_count);
 		}
 		// NOTE: No #pragma omp cancel for here — the for-loop worksharing
 		// construct has already ended, and OMP §2.17.1 requires the cancel
@@ -285,13 +325,23 @@ namespace hpgl
 		// Report kriging failures to stderr so they are visible even when
 		// HPGL_LOG_ON is not defined. The Python wrapper reads stats for
 		// error propagation; this provides a human-readable warning as well.
+		// G-16 (LOW): the failures must be reported against the cells that
+		// were actually kriged (every uninformed cell increments exactly one
+		// of the three counters; informed cells are copied through and count
+		// nowhere), not against the whole grid. With 990 of 1000 cells
+		// informed and every kriged cell failing, the grid-size denominator
+		// printed "10 (of 1000)" — 1% — while geo.py:1719-1727 warns about
+		// "10 of 10" — 100%. The Python consumer already uses
+		// grid volume − informed; this makes both layers agree.
 		if (stats.m_points_singularity > 0 || stats.m_points_without_neighbours > 0)
 		{
+			const unsigned long kriged_cells = points_calculated
+				+ points_without_neighbours + points_singularity;
 			fprintf(stderr,
-				"HPGL: kriging failures: %lu singularity, %lu no-neighbours (of %lu total)\n",
+				"HPGL: kriging failures: %lu singularity, %lu no-neighbours (of %lu kriged cells)\n",
 				stats.m_points_singularity,
 				stats.m_points_without_neighbours,
-				static_cast<unsigned long>(idx_end));
+				kriged_cells);
 		}
 
 		{

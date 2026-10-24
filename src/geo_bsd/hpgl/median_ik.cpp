@@ -2,6 +2,7 @@
 #include "median_ik.h"
 
 #include "covariance_field.h"
+#include "precalculated_covariance.h"
 #include "progress_reporter.h"
 #include "my_kriging_weights.h"
 #include "kriging_interpolation.h"
@@ -12,7 +13,14 @@
 #include "kriging_stats.h"
 #include "cdf_utils.h"
 #include "api.h"
+// G-01: the progress flush below uses detail::progress_flush_mutex(), whose
+// single program-wide definition lives in cont_kriging.h. Including the
+// definition site (rather than restating the helper here) keeps ONE mutex for
+// every kernel — the property that lets a progress handler re-enter ANY
+// kriging kernel from the same thread without a lock-order inversion.
+#include "cont_kriging.h"
 #include <exception>
+#include <mutex>
 
 // OpenBLAS thread-control API — file-scope declarations so the in-function
 // branch compiles on Apple Clang too (extern "C" inside function bodies is
@@ -78,14 +86,54 @@ void median_ik_for_two_indicators(
 
 
 	size_t prop_size = input_property.size();
+
+	// F4 (F-397 twin): informed indicator CODES must be 0 or 1. The kernel
+	// reads every code through indicator_array_adapter_t(&input_property, 1),
+	// which maps any code != 1 to category 0, so a code of 5 is silently
+	// kriged as a 0 — the harm F-397 measured. The C boundary gates this for
+	// indicator kriging / SIS / SIS-LVM (api.cpp validate_indicator_codes_or_
+	// throw) but hpgl_median_ik has no such gate, and this C++ entry is
+	// directly callable (hpgl_core.h is installed): gating here is the single
+	// chokepoint for both callers, the same shape as the F-194 mirrors. Median
+	// IK is binary by definition — choose_indicator returns 0/1 and
+	// hpgl_median_ik rejects any indicator_count other than 2 — so the valid
+	// codes are exactly 0 and 1. Informed cells only: uninformed cells hold
+	// arbitrary sentinel bytes.
+	for (node_index_t i = 0; i < prop_size; ++i)
+	{
+		if (!input_property.is_informed(i))
+			continue;
+		if (input_property[i] > 1)
+		{
+			std::ostringstream oss;
+			oss << "indicator data[" << i << "] = "
+			    << static_cast<int>(input_property[i])
+			    << " is not a valid category (median IK is binary: valid codes are 0..1)";
+			throw hpgl_exception("median_ik_for_two_indicators", oss.str());
+		}
+	}
 	
-	covariance_field_t cov_field(params.m_radiuses, cov_model_t(params));
+	// H-02: build the sibling table type (precalculated_covariances_t) instead
+	// of covariance_field_t. covariance_field_t materialises the same box TWICE
+	// — it fills its own m_data table AND a sorted m_vectors offset list that
+	// nothing reads (vectors() has exactly one hit in the tree: its own
+	// definition; the indexed lookup below rebuilds the list through
+	// calc_cov_field), and it fills m_data with push_back (no reserve: 1.35x
+	// capacity at r=231). This was the only production construction of
+	// covariance_field_t. precalculated_covariances_t is the pattern every
+	// other kriging kernel uses: same table values (C(0, offset) over the same
+	// threshold), no dead offset list, resize() instead of push_back, and the
+	// same F-21/PR-06 exact-model fallback beyond the box
+	// (precalculated_covariance.h:96-104 vs covariance_field.h:282-287), so the
+	// exact-beyond-box covariance semantics pinned by
+	// tests/cpp/test_hpgl_core.cpp:1064-1085 are preserved.
+	precalculated_covariances_t cov_field(cov_model_t(params), params.m_radiuses);
 
 	std::vector<node_index_t> indices;
 
 	indicator_array_adapter_t prop_adapter(&input_property, 1);
 
-	typedef indexed_neighbour_lookup_t<grid_t, covariance_field_t> nl_t;
+	typedef indexed_neighbour_lookup_t<grid_t, precalculated_covariances_t> nl_t;
 
 	nl_t nl(&grid, &cov_field, params);
 
@@ -207,10 +255,12 @@ void median_ik_for_two_indicators(
 			local_lap_count++;
 			if (local_lap_count >= LP_BATCH_SIZE)
 			{
-				#pragma omp critical
-				{
-					report.next_lap(local_lap_count);
-				}
+				// G-01: re-entrant progress lock (detail::progress_flush_mutex,
+				// shared with every other kernel). The user handler runs inside
+				// next_lap(), so the lock must be held and must let the same
+				// thread re-enter; lock_guard releases it on an exception.
+				std::lock_guard<std::recursive_mutex> progress_lock(detail::progress_flush_mutex());
+				report.next_lap(local_lap_count);
 				local_lap_count = 0;
 				if (report.cancelled()) {
 					// M-5: set the cooperative stop flag instead of
@@ -238,10 +288,9 @@ void median_ik_for_two_indicators(
 		// Flush remaining laps for this thread
 		if (local_lap_count > 0)
 		{
-			#pragma omp critical
-			{
-				report.next_lap(local_lap_count);
-			}
+			// G-01: re-entrant progress lock (see progress_flush_mutex).
+			std::lock_guard<std::recursive_mutex> progress_lock(detail::progress_flush_mutex());
+			report.next_lap(local_lap_count);
 		}
 		// NOTE: No #pragma omp cancel for here — the for-loop worksharing
 		// construct has already ended, and OMP §2.17.1 requires the cancel

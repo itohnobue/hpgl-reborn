@@ -60,6 +60,10 @@ void init_grid(hpgl::sugarbox_grid_t & grid, hpgl_shape_t * shape)
 void init_sgs_params(hpgl_sgs_params_t * params, hpgl::sgs_params_t * params2)
 {
 	sgs_params_t & sgs_p = *params2;
+	// F-191: gate the covariance-model range before the cast — the rejection
+	// previously happened in cov_model_t::init_fun, i.e. after the SGS entry
+	// had already transformed the caller's conditioning buffer in place.
+	validate_covariance_type_or_throw(params->m_covariance_type, "init_sgs_params");
 	sgs_p.m_covariance_type = (covariance_type_t) params->m_covariance_type;
 	sgs_p.set_ranges(
 			params->m_ranges[0],
@@ -135,6 +139,13 @@ init_sis_params(
 	for (int i = 0; i < indicator_count; ++i)
 	{
 		hpgl_ik_params_t * p = &(params[i]);
+		// F-191: one gate per category covers BOTH casts of
+		// p->m_covariance_type in this loop body — the per-category
+		// covariance list pushed below and covariance_param_t::m_covariance_type
+		// (covariance_param_t::validate() does not range-check it). Same
+		// shared predicate as api.cpp, so the message matches every other
+		// boundary entry.
+		validate_covariance_type_or_throw(p->m_covariance_type, "init_sis_params");
 		ikp->m_covariances.push_back((covariance_type_t)p->m_covariance_type);
 		std::vector<range_t> ranges;
 		ranges.assign(p->m_ranges, p->m_ranges + 3);

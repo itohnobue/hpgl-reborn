@@ -31,7 +31,9 @@ namespace hpgl
 	/// concurrent calls to set_thread_num(). External sync required if called
 	/// from multiple threads. Undefined behavior if called within parallel region.
 	///
-	/// @param n_threads Number of threads (must be >= 0)
+	/// @param n_threads Number of threads (must be >= 1 and <= 1024; 0 and
+	/// negative values are rejected, as is a request above the supported
+	/// maximum — see MAX_OMP_THREADS in set_thread_num.cpp)
 	/// @return true if successful, false if n_threads is invalid
 	bool set_thread_num(int n_threads);
 

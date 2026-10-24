@@ -1223,15 +1223,20 @@ class TestGtsimkSiblingSgsParamsGuard:
             )
 
     def test_gtsimk_const_prob_user_pk_flow_raises_clean_value_error(
-        self, monkeypatch
+        self, monkeypatch, tmp_path
     ):
         gtsimk_cp = self._load_script(
             "gtsimk_const_prob.py", "sample_gtsimk_cp_r07"
         )
-        # The const-prob pseudo_gaussian_transform writes
-        # results/GTSIM_TRANSFORMED_PROP.INC to the CWD before the SGS step —
-        # redirect to a no-op so the test has no CWD side effects.
-        monkeypatch.setattr(gtsimk_cp, "write_property", lambda *a, **k: None)
+        # F-364: the const-prob pseudo_gaussian_transform now calls
+        # _ensure_output_dir() and writes its output CWD-relative as
+        # results/GTSIM_CONSTPROB_TRANSFORMED_PROP.INC before the SGS step
+        # raises the sgs_params error under test. Run in a temp CWD so the
+        # directory and the file land there, not in the repository tree, and
+        # assert the real writer ran instead of stubbing it away (a
+        # write_property monkeypatch suppressed the file but not the
+        # directory, so the test still littered the CWD).
+        monkeypatch.chdir(tmp_path)
         grid = SugarboxGrid(x=2, y=2, z=1)
         prop = ContProperty(
             np.array([0, 1, 2, 0], dtype="float32"), np.ones(4, dtype="uint8")
@@ -1240,6 +1245,9 @@ class TestGtsimkSiblingSgsParamsGuard:
             gtsimk_cp.gtsim_Kind_const_prop(
                 grid, prop, 3, sk_params=None, pk_prop=[0.3, 0.3], sgs_params=None
             )
+        assert (
+            tmp_path / "results" / "GTSIM_CONSTPROB_TRANSFORMED_PROP.INC"
+        ).is_file(), "F-364 output directory/file was not created"
 
 
 # =============================================================================

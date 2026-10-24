@@ -111,14 +111,24 @@ print(Variogram_ver)
 # dimensionally invalid and printed ~1.6e-14 instead of an O(sill)
 # variance (~10 for this porosity data).
 #
-# The modeled variogram below is the reference-faithful 5.3 vertical
-# model from 3d_variogram.py (Result/3d_variogram.txt): exponential,
-# sill 11, range 35 m.
+# F-119: the block volume variance must use the chapter's 3-D model, not the
+# vertical variogram alone. 5.3 models one exponential structure (sill 11)
+# with per-direction ranges — 4000 m horizontal (azim 320), 5000 m
+# horizontal (azim 230) and 35 m vertical (3d_variogram.py:34-43).
+# Applying the 35 m vertical range to the full Euclidean 3-D distance between
+# block discretisation points (the previous code) discards the horizontal
+# continuity and over-states the volume variance by +21 % on the
+# 454x456x186 m block and by up to +84 % on the finest one. The kernel below
+# is the anisotropic form of that model: horizontal range 4000 m (the shorter
+# of the two horizontal ranges), vertical range 35 m.
 sill = 11.0
-var_range = 35.0
+var_range_hor = 4000.0
+var_range_ver = 35.0
 
-def exp_variogram(h):
-	return sill * (1.0 - np.exp(-3.0 * h / var_range))
+def exp_variogram(dx, dy, dz):
+	hn = np.sqrt((dx / var_range_hor) ** 2 + (dy / var_range_hor) ** 2
+		+ (dz / var_range_ver) ** 2)
+	return sill * (1.0 - np.exp(-3.0 * hn))
 
 def gammabar_volume(block_nx, block_ny, block_nz, disc=5):
 	"""GSLIB gammabar: average gamma over all pairs of points of the
@@ -130,8 +140,8 @@ def gammabar_volume(block_nx, block_ny, block_nz, disc=5):
 	N = len(pts)
 	gb = 0.0
 	for i in range(N):
-		h = np.sqrt(((pts - pts[i]) ** 2).sum(axis=1))
-		gb += np.sum(exp_variogram(h))
+		gb += np.sum(exp_variogram(pts[:, 0] - pts[i, 0],
+			pts[:, 1] - pts[i, 1], pts[:, 2] - pts[i, 2]))
 	return gb / (N * N)
 
 gammab = gammabar_volume(nx, ny, nz)

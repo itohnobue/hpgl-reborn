@@ -176,6 +176,12 @@ struct hpgl_kriging_stats_t
 // path that hardcodes its own window is a fresh drift instance.
 #define HPGL_GSLIB_SENTINEL_WINDOW 1.0e21
 
+// Hard upper bound on the neighbour count a kriging entry accepts
+// (api.cpp's validate_kriging_max_neighbours_or_throw). Published here
+// because the C++ entries in hpgl_core.h mirror the same gate (F-194) and a
+// second copy of the number would drift from this one.
+#define HPGL_MAX_NEIGHBOURS_UPPER_BOUND 10000
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -203,11 +209,30 @@ HPGL_API const char * hpgl_get_api_validation_registry_name(int index);
 /// Validation summary of the entry point at registry ``index`` (0-based).
 HPGL_API const char * hpgl_get_api_validation_registry_validation(int index);
 
-// NOTE: Global error state is protected by internal mutex + thread_local
-// caching (see api_helpers.cpp). Python ctypes caller snapshots the message
-// immediately after each C call to avoid races between threads.
+// NOTE: Global error state is thread_local (api_helpers.cpp:20-31: one
+// last_exception_message per thread, no shared global and no mutex). Each
+// thread therefore sees only its own last message; a caller that stores an
+// error on one thread and reads it on another gets an empty string. Python
+// ctypes callers snapshot the message on the same thread immediately after
+// each C call.
 HPGL_API char * 
 hpgl_get_last_exception_message();
+
+/// F-182: clears this thread's last-exception message.
+///
+/// The compute entries (ordinary/simple/lvm kriging, indicator kriging,
+/// median IK, SGS, SGS-LVM, SIS, SIS-LVM, cokriging mark I/II) return
+/// ``void``, so the stored message is their only failure channel. Without a
+/// reset a caller cannot tell a fresh failure from the previous call's
+/// message: the Python guard's pre-call snapshot then matches a second,
+/// genuinely distinct failure with the identical text and suppresses it.
+/// Each compute entry also clears the slot on entry, so a message read after
+/// a call is always that call's; this entry lets an external caller clear it
+/// explicitly (and is what the Python FFI layer uses to consume an error).
+///
+/// Thread-local, like the getter: it clears only the calling thread's slot.
+HPGL_API void
+hpgl_clear_last_exception_message();
 
 HPGL_API void 
 hpgl_set_output_handler(int (*handler)(char * str, void * param), void * param);
@@ -298,8 +323,9 @@ hpgl_simple_kriging_weights(
 		int neighbours_count,
 		hpgl_cov_params_t * params,
 		float * weights);
-// NOTE: neighbours_count must be in [0, 100000] — values above
-// MAX_NEIGHBOURS_UPPER_BOUND are rejected with a stored error and -1 return
+// NOTE: neighbours_count must be in [0, 10000] — values above
+// MAX_NEIGHBOURS_UPPER_BOUND (api.cpp:165, value 10000) are rejected with a
+// stored error and -1 return
 // (2-M-2: the gate bounds the neighbour-array dereference loop and the
 // O(count²) covariance system, preventing heap OOB reads and OOM for
 // pathologically large counts). The caller (Python ctypes wrapper)

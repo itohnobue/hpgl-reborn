@@ -29,13 +29,27 @@ def w_idw(Grid, PointSet, c, nx, ny, nz):
 					widw[q] = widw[q] + ww_idw[q]
 	return widw
 
+# F-094: the kriging-declustering covariance range is a MODELING CHOICE, not a
+# measured property: with the model held fixed, per-datum weights change 2-4x
+# between ranges 100 and 1000 (datum 2: 0.536 -> 0.192 -> 0.147; datum 3:
+# 1.025 -> 0.397 -> 0.261) and the heaviest datum changes identity. 300 is not
+# derived from the data (the nearest-neighbour spacings are 25-124, median 49)
+# and no variogram fitted in the lesson is consulted — it is stated here as a
+# named constant so the printed weights are reproducible and the choice is
+# visible at the point of use.
+KRIGING_RANGE = 300.0
+
 # Kriging declustering: for every grid-cell centre, compute the simple kriging
 # weights of all data points at that centre (geo_bsd.simple_kriging_weights) and
 # accumulate them. A data point that kriges many cells (or kriges cells with
 # large weights) receives a large total weight — its "influence" over the
-# domain. The covariance model defaults to a spherical-scale range covering
-# the data spacing; weights are standardized by the caller (stand_weight).
-def w_kriging(Grid, PointSet, ranges=(300, 300, 300)):
+# domain. The covariance model is geo_bsd's default (exponential, sill 1,
+# nugget 0) with every range set to KRIGING_RANGE — see the constant above for
+# how strongly that choice moves the published weights. Weights are
+# standardized by the caller (stand_weight).
+def w_kriging(Grid, PointSet, ranges=None):
+	if ranges is None:
+		ranges = (KRIGING_RANGE, KRIGING_RANGE, KRIGING_RANGE)
 	wsk = np.zeros(len(PointSet[0]), dtype=float)
 	for i in range(Grid.i_max):
 		for j in range(Grid.j_max):
@@ -46,9 +60,11 @@ def w_kriging(Grid, PointSet, ranges=(300, 300, 300)):
 	return wsk
 
 # Polygonal declustering: partition the plane into Voronoi cells (one per data
-# point); a point's declustering weight is the area of its cell, clipped to a
-# finite region around the data (unbounded hull cells are closed with a large
-# radius box). Weights are standardized by the caller (stand_weight).
+# point); a point's declustering weight is the area of its cell. Cells on the
+# hull are unbounded, so their area depends on the closure radius
+# (voronoi_finite_polygons_2d closes them at a data-extent box): hull weights
+# are closure-dependent by construction, interior weights are not. Weights are
+# standardized by the caller (stand_weight).
 def w_polygonal(PointSet, radius=None):
 	points = np.column_stack((PointSet[0], PointSet[1]))
 	vor = Voronoi(points)
@@ -68,8 +84,16 @@ def voronoi_finite_polygons_2d(vor, radius=None):
 	new_vertices = vor.vertices.tolist()
 	center = vor.points.mean(axis=0)
 	if radius is None:
-		# np.ptp (not the removed ndarray.ptp method) — numpy >= 2.0
-		radius = np.ptp(vor.points).max() * 2
+		# F-089: close the unbounded hull cells at the DATA EXTENT — the largest
+		# per-axis span of the point set (558 units for the 3.3 data). The
+		# previous formula, np.ptp(vor.points).max() * 2, is the GLOBAL ptp over
+		# both axes (max(all) - min(all) = 20953 here, then doubled to 41906 --
+		# np.ptp with axis=None returns a scalar, so .max() never selected an
+		# axis): 7 of the 14 cells are unbounded, their areas scaled with that
+		# ~75x-too-large clip and 7 of the standardised weights came out 0.000.
+		# Hull-cell areas stay closure-dependent by construction; this only
+		# makes the closure data-scaled and explicit.
+		radius = float(np.ptp(vor.points, axis=0).max())
 	# Construct a map containing all ridges for a given point
 	all_ridges = {}
 	for (p1, p2), (v1, v2) in zip(vor.ridge_points, vor.ridge_vertices):

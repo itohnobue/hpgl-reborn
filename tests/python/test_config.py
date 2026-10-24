@@ -89,6 +89,17 @@ class TestSGSConfig:
         cfg = SGSConfig(seed=np.int32(5))
         assert cfg.seed == 5
 
+    def test_numpy_integer_neighbours_accepted(self):
+        """F-462 (F-08): numpy integers must be accepted by BOTH neighbour gates.
+
+        config.py:87 and :99 list ``(int, numpy.integer)``. No test fed a numpy
+        integer to a neighbour field (grep: ``min_neighbours=np.`` /
+        ``max_neighbours=np.`` → 0 matches in tests/), so dropping
+        ``numpy.integer`` from those tuples kept the whole suite green.
+        """
+        assert SGSConfig(min_neighbours=np.int64(4)).min_neighbours == 4
+        assert SGSConfig(max_neighbours=np.int64(20)).max_neighbours == 20
+
     # ---- min_neighbours ----
 
     def test_negative_min_neighbours_raises(self):
@@ -236,6 +247,14 @@ class TestSISConfig:
         """M-20: max_neighbours == the C++ hard limit (10000) is accepted."""
         cfg = SISConfig(max_neighbours=10000)
         assert cfg.max_neighbours == 10000
+
+    def test_numpy_integer_max_neighbours_accepted(self):
+        """F-462 (F-08): numpy integer accepted by the SIS neighbour gate.
+
+        config.py:224 lists ``(int, numpy.integer)``; no test fed a numpy
+        integer here, so reverting F-08 stayed green.
+        """
+        assert SISConfig(max_neighbours=np.int64(20)).max_neighbours == 20
 
     # ---- radiuses NaN/Inf (F-02) ----
 

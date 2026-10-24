@@ -4,6 +4,18 @@
 #include <cmath>
 #include "api.h"
 
+// G-05: total-work cap for stack_layers. The per-layer loop rewrites the whole
+// deposit (or erosion) column for every layer, so the real cost is
+// layers_count * nx*ny*nz full-column writes — and NOTHING else bounds it: the
+// thickness guards are per-value magnitude tests (±1e9 passes), memory does not
+// bound it (the result is one cube; the layers are per-layer 2-D arrays), and
+// cvariogram.py has caps for lags/point-set/ellipsoid only (no stack cap). A
+// legal 1e6-layer stack over a 1e7-cell cube therefore reaches ~1e13 writes
+// (~2.8-5.6 h), uninterruptible inside the ctypes call. Same doctrine and
+// calibration as the module's MAX_TOTAL_GRID_WORK / MAX_TOTAL_PAIR_LAG_WORK
+// (variograms.cpp: bounds the work product, ~17 min at 1e9 units/s).
+static const double MAX_TOTAL_STACK_WORK = 1e12;
+
 // F-08: stack_layers indexes each layer's flat buffer with a map_index built
 // from the layer's own strides. Non-contiguous (sliced/strided) views produce
 // strides larger than the layer's x/y dims, so map_index can exceed nx*ny and
@@ -87,6 +99,26 @@ void stack_layers(
 			cvar_set_last_error("stack_layers: layer arrays must be C-contiguous with matching x/y shape");
 			std::cerr << "[HPGL ERROR] stack_layers: layer " << layer
 			          << " is not C-contiguous or has a mismatched shape" << std::endl;
+			return;
+		}
+	}
+
+	// G-05: reject an effectively-infinite stack before the loop starts.
+	// Every layer rewrites a full column, so the work is
+	// layers_count * nx*ny*nz; the one extra pass is the blank pre-fill below.
+	// Placed after the shape/contiguity validation (so nx/ny/nz and the layer
+	// list are trustworthy) and before any allocation or write.
+	{
+		const double grid_volume = static_cast<double>(nx) * static_cast<double>(ny)
+			* static_cast<double>(nz);
+		const double total_work = grid_volume * static_cast<double>(thick_layers.size() + 1);
+		if (total_work > MAX_TOTAL_STACK_WORK)
+		{
+			cvar_set_last_error("stack_layers: total stack work (layers x cells) exceeds the work cap");
+			std::cerr << "[HPGL ERROR] stack_layers: total stack work "
+			          << total_work << " (layers " << thick_layers.size()
+			          << " x cells " << grid_volume
+			          << ") exceeds the cap " << MAX_TOTAL_STACK_WORK << std::endl;
 			return;
 		}
 	}

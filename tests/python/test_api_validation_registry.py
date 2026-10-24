@@ -1,13 +1,16 @@
-"""C-API validation registry completeness test (pat-20260802223236).
+"""C-API validation registry completeness gate (pat-20260802223236).
 
-The C-API validation-gap class recurs because each new ``hpgl_*`` entry
-point that fails to mirror the Python wrapper's validation is a fresh
-instance. The structural fix is a registry table (api.cpp
-HPGL_VALIDATION_REGISTRY) every entry point registers into, PLUS a generated
-completeness test that walks the library's exported ``hpgl_*`` symbols and
-the api.h declarations and fails when any entry point is missing a registry
-row. This makes forgetting the mirror-validation *detectable* at test time
-instead of silently recurring.
+What this file enforces (and only this): every ``hpgl_*`` entry point declared
+in api.h / exported by the library has exactly one registry row in api.cpp's
+HPGL_VALIDATION_REGISTRY, and every row carries a summary that (a) is not
+empty and (b) names at least one recognised validation facet.
+
+What it does NOT enforce: whether a summary is *true*. The summary is free
+text in api.cpp, so a row that claims a validation the entry point does not
+perform cannot be detected from the text alone (F-444; two such rows existed
+at api.cpp:433 and :440 — see the finding, owned by the C++ source, not by
+this test). The registry therefore guarantees bookkeeping, not behavioural
+mirror-validation; behaviour is covered by the per-entry tests.
 
 These tests are mechanical — they do not judge validation quality. They
 verify the pairing (exported symbol ↔ registry row) that a new entry point
@@ -33,6 +36,50 @@ except (ImportError, OSError):
 _API_H_PATH = (
     Path(__file__).parent.parent.parent / "src" / "geo_bsd" / "hpgl" / "api.h"
 )
+
+
+# F-444: recognised validation facets. A registry summary is free text, so the
+# gate cannot verify that a claim is true; it CAN refuse a row whose summary
+# names no validation facet at all — the ``{"hpgl_new_entry", "x"}`` row that
+# satisfied the previous non-empty-string check. Extend this map when a new
+# entry point introduces a genuinely new facet.
+_VALIDATION_FACETS = {
+    "pointers": r"\bpointers?\b",
+    "nullability": r"\bnon-null\b|\bnull\b",
+    "size": r"\bsize\b",
+    "shape": r"\bshape\b|\bdims\b",
+    "volume": r"\bvolume\b",
+    "count": r"\bcount\b",
+    "finiteness": r"\bfinite\b",
+    "radius": r"\bradius\b",
+    "bounds": r"\bbounds?\b",
+    "accessor": r"\baccessor\b",
+    "params": r"\bparams\b",
+    "mask": r"\bmask\b",
+    "remap": r"\bremap\b",
+    "values": r"\bundefined_value\b|\bvalues\b",
+    "mean": r"\bmeans?\b",
+    "probability": r"\bmarginal_probs\b|\bprobs\b",
+    "neighbours": r"\bmax_neighbours\b|\bneighbours_count\b",
+    "indicator": r"\bindicator_count\b",
+    "kriging-kind": r"\bkriging_kind\b",
+    "cdf": r"\bcdf\b",
+    "equality": r"\bequal\b|\bequality\b|\bmatch\b",
+    "thread": r"\bthread\b",
+    "handler": r"\bhandler\b",
+    "variance": r"\bvariance\b",
+    "weights": r"\bweights2?\b",
+    "coverage": r"\bcoverage\b",
+}
+
+
+def _named_facets(summary: str) -> list[str]:
+    """Validation facets a registry summary names (F-444 gate unit)."""
+    return [
+        name
+        for name, pattern in _VALIDATION_FACETS.items()
+        if re.search(pattern, summary, re.IGNORECASE)
+    ]
 
 
 def _api_h_hpgl_symbols() -> set[str]:
@@ -169,10 +216,27 @@ class TestApiValidationRegistry:
         )
 
     def test_registry_summaries_are_nonempty(self):
-        """Every row must carry a validation summary (not an empty string)."""
+        """Every row must carry a summary that names a validation facet.
+
+        F-444: a non-empty-string check alone accepts any placeholder (the row
+        ``{"hpgl_new_entry", "x"}`` passed all four tests), so a new entry
+        point could claim validation it does not perform and nothing turned
+        red. Each summary must now name at least one facet from
+        ``_VALIDATION_FACETS`` — still bookkeeping, not a truth check (the
+        text cannot be verified against the code mechanically), but a row with
+        no validation content fails.
+        """
         registry = _registry_symbols()
         empty = [name for name, summary in registry.items() if not summary.strip()]
         assert not empty, (
             f"Registry rows with empty validation summaries: {empty}. "
             "Every entry point must document what it validates."
+        )
+        faceless = sorted(
+            name for name, summary in registry.items() if not _named_facets(summary)
+        )
+        assert not faceless, (
+            f"Registry rows whose summary names no recognised validation "
+            f"facet: {faceless}. Say what the entry point validates — one of "
+            f"{sorted(_VALIDATION_FACETS)} — instead of a placeholder string."
         )

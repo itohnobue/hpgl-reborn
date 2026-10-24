@@ -172,6 +172,11 @@ class TestGridEdgeCases:
         size = x * y * z
         data = np.arange(size, dtype="float32")
         mask = np.ones(size, dtype="uint8")
+        # F-493: arm the fixture. An all-ones mask makes the F-order selection
+        # below select every cell, so the assertion collapsed to "every output
+        # mask cell is 1" and a storage-order regression could not fail it.
+        mask[::7] = 0
+        informed = mask == 1
         prop = ContProperty(data, mask)
         prop.fix_shape(grid)  # IMPORTANT: Reshape 1D data to match grid
         cov_model = CovarianceModel(
@@ -191,10 +196,14 @@ class TestGridEdgeCases:
         )
 
         assert result.data.shape == (x, y, z)
-        # H-12: original informed cells must stay informed (data is arange,
-        # so a wrong-value storage-order regression would also be detectable
-        # here — mask preservation is the discriminator).
-        assert np.all(result.mask.flatten(order="F")[mask == 1] == 1)
+        # H-12: original informed cells must stay informed AND keep their
+        # values in F order. The masks above are partially uninformed, and the
+        # non-cubic shapes make a C-order write/read permute the arange values,
+        # so the value check is the discriminator the mask check alone is not.
+        assert np.all(result.mask.flatten(order="F")[informed] == 1)
+        np.testing.assert_allclose(
+            result.data.ravel(order="F")[informed], data[informed], rtol=1e-6, atol=0.0
+        )
 
 
 # =============================================================================
@@ -1053,6 +1062,11 @@ class TestSimulationEdgeCases:
         data = np.random.rand(125).astype("float32") * 100
         mask = np.ones(125, dtype="uint8")
         mask[::2] = 0  # Half uninformed
+        # F-502: the C++ set_at marks every simulated node informed, so
+        # result.mask is all-ones after the run — the uninformed sample must
+        # come from this pre-simulation snapshot, not from result.mask (which
+        # made the selection empty and silently fell back to "all cells").
+        input_mask = mask.copy()
         prop = ContProperty(data, mask)
 
         cdf_data = CdfData(
@@ -1086,7 +1100,11 @@ class TestSimulationEdgeCases:
         # Verify output values fall within the CDF range and reflect CDF-random behavior.
         cdf_min = float(cdf_data.values[0])
         cdf_max = float(cdf_data.values[-1])
-        uninformed = result.data[result.mask == 0] if np.any(result.mask == 0) else result.data
+        uninformed = result.data.ravel(order="F")[input_mask == 0]
+        assert uninformed.size > 1, (
+            "Zero-radius run sampled no uninformed cells — the selection is "
+            "empty, so the assertions below would be vacuous"
+        )
         assert np.all(uninformed >= cdf_min), (
             f"Simulation output below CDF min {cdf_min}"
         )
@@ -1095,10 +1113,9 @@ class TestSimulationEdgeCases:
         )
         # With zero radius, uninformed cells get random CDF draws — verify
         # they are not all identical (which would indicate degenerate behavior).
-        if len(uninformed) > 1:
-            assert np.std(uninformed.astype("float64")) > 0.0, (
-                "Zero-radius simulation should produce varied CDF-random output"
-            )
+        assert np.std(uninformed.astype("float64")) > 0.0, (
+            "Zero-radius simulation should produce varied CDF-random output"
+        )
 
     def test_ik_with_indicator_count_1(self):
         """C009 — IK with indicator_count=1 (degenerate single-category case).

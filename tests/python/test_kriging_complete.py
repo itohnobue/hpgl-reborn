@@ -148,12 +148,24 @@ def mean_data_medium(krig_medium_grid):
 
 @pytest.fixture
 def secondary_property_medium(krig_medium_grid):
-    """Create secondary property for cokriging"""
+    """Create secondary property for cokriging.
+
+    G-50: the secondary is read ONLY at the nodes the kernel interpolates
+    (primary-uninformed cells) — ``simple_cokriging_markI.cpp:433-440`` sets
+    ``secondary_present = secondary_data.is_informed(i)`` there, and the
+    shared process_node_loop serves Mark II too. This fixture used to reuse
+    the primary's ``mask[::10] = 0``, so the secondary was masked at exactly
+    the 50 kriged nodes and every cokriging test ran primary-only (measured:
+    output equal to ``simple_kriging(mean=50.0)`` to 1.5e-05). It is now
+    fully informed, so a secondary datum exists wherever the kernel kriges.
+    The absent-secondary branch stays covered by
+    ``test_ck_markI_secondary_datum_changes_kriged_value`` (an all-masked
+    copy of this data) and by the empty/mismatched-secondary negative tests.
+    """
     np.random.seed(43)
     size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
     data = np.random.rand(size).astype("float32") * 80
     mask = np.ones(size, dtype="uint8")
-    mask[::10] = 0
     return ContProperty(data, mask)
 
 
@@ -166,6 +178,39 @@ def neighbor_points():
     n_y = np.random.rand(n).astype("float32") * 10
     n_z = np.random.rand(n).astype("float32") * 5
     return n_x, n_y, n_z
+
+
+# =============================================================================
+# Shared assertion helpers
+# =============================================================================
+
+
+def _kriged_cells(result, input_mask):
+    """Result values at the cells that were UNINFORMED in the input mask.
+
+    The continuous kernel copies informed cells through verbatim
+    (cont_kriging.h:241-244) and only interpolates the uninformed ones, so a
+    value assertion over the whole array is satisfied by the copy alone.
+
+    The selection MUST come from the ORIGINAL input mask: the C++ fill writes
+    ``mask = 1`` for every written node (property_array.h:57-70), so
+    ``result.mask`` is all-ones after any kriging call and selects nothing.
+    """
+    uninformed = np.asarray(input_mask) == 0
+    assert np.any(uninformed), (
+        "fixture has no uninformed cells — the kriged-cell assertion would be vacuous"
+    )
+    return result.data.astype("float64")[uninformed]
+
+
+def _assert_kriged_cells_not_all_zero(result, input_mask, context):
+    """F-582: the kriged (originally-uninformed) cells must not all be zero."""
+    kriged = _kriged_cells(result, input_mask)
+    assert np.all(np.isfinite(kriged)), f"{context}: non-finite value in a kriged cell"
+    assert np.any(kriged != 0.0), (
+        f"{context}: every kriged (originally-uninformed) cell came back 0.0 — "
+        "the kriging estimate was not written"
+    )
 
 
 # =============================================================================
@@ -215,6 +260,10 @@ class TestOrdinaryKriging:
             assert isinstance(result, ContProperty), f"Failed for {name}"
             assert not np.any(np.isnan(result.data))
             assert not np.any(np.isinf(result.data))
+            # G-54: `result.mask != 0` is EMPTY after a no-op kernel (the
+            # output mask starts zero-filled), and isfinite() over an empty
+            # selection is vacuously True — assert the write happened first.
+            assert np.count_nonzero(result.mask) > 0, f"no output written for {name}"
             assert np.all(np.isfinite(result.data[result.mask != 0]))
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
@@ -232,9 +281,12 @@ class TestOrdinaryKriging:
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype("float64")))
         assert not np.any(np.isinf(result.data.astype("float64")))
-        # F-122: guard against all-zero regression
-        assert not np.all(result.data == 0), (
-            f"OK with max_neighbours={max_neighbours}: result should not be all-zeros"
+        # F-122 / F-582: guard against the all-zero regression on the cells the
+        # kernel actually kriges (informed cells are copied through verbatim).
+        _assert_kriged_cells_not_all_zero(
+            result,
+            continuous_property_medium.mask,
+            f"OK with max_neighbours={max_neighbours}",
         )
 
     @pytest.mark.parametrize("radiuses", [(3, 3, 2), (5, 5, 3), (10, 10, 5), (15, 15, 8)])
@@ -252,9 +304,11 @@ class TestOrdinaryKriging:
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype("float64")))
         assert not np.any(np.isinf(result.data.astype("float64")))
-        # F-122: guard against all-zero regression
-        assert not np.all(result.data == 0), (
-            f"OK with radiuses={radiuses}: result should not be all-zeros"
+        # F-122 / F-582: guard against the all-zero regression on the kriged cells.
+        _assert_kriged_cells_not_all_zero(
+            result,
+            continuous_property_medium.mask,
+            f"OK with radiuses={radiuses}",
         )
 
     def test_ok_reproducibility(
@@ -298,6 +352,13 @@ class TestOrdinaryKriging:
         assert not np.any(np.isnan(result.data.astype("float64")))
         assert not np.any(np.isinf(result.data.astype("float64")))
 
+        # G-54: every other assertion here is passed by an all-zero output (0
+        # is inside [min-1, max+1] for this fixture), so assert the kernel
+        # actually wrote the kriged cells.
+        _assert_kriged_cells_not_all_zero(
+            result, continuous_property_medium.mask, "OK result validation"
+        )
+
         # Check results are within reasonable bounds.
         # OK is a convex combination (weights sum to 1), so estimates MUST
         # stay within [min, max] of input data. ±1.0 tolerance accounts for
@@ -321,8 +382,8 @@ class TestOrdinaryKriging:
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype("float64")))
         assert not np.any(np.isinf(result.data.astype("float64")))
-        # F-122: guard against all-zero regression
-        assert not np.all(result.data == 0), "OK small grid: result should not be all-zeros"
+        # F-122 / F-582: guard the kriged cells, not the copy-through cells.
+        _assert_kriged_cells_not_all_zero(result, continuous_property_small.mask, "OK small grid")
 
     def test_ok_with_nugget(self, continuous_property_medium, krig_medium_grid):
         """Test OK with various nugget values"""
@@ -345,17 +406,27 @@ class TestOrdinaryKriging:
             assert np.isfinite(result.data.astype("float64")).all()
 
     def test_ok_zero_nugget_exact_interpolation(self, krig_small_grid):
-        """C23: OK with zero nugget and colocated data must exactly reproduce data value.
+        """C23: OK with zero nugget reproduces the data exactly at informed cells.
 
         Ordinary Kriging with zero nugget is an exact interpolator:
         at an informed cell with a neighbor at the same location and weight=1,
         the estimate must equal the data value.
+
+        F-572: the fixture is PARTIALLY informed and the uninformed cells hold
+        the sentinel 0.0 in the input array. The kernel copies informed cells
+        through (cont_kriging.h:241-244) and interpolates only the uninformed
+        ones, so the kriged cells are distinguishable from the copy: every
+        interpolation of the positive datum field must land far above the 0.0
+        sentinel. An all-ones mask (the pre-fix fixture) kriged zero cells and
+        proved nothing about the interpolator.
         """
         np.random.seed(42)
         size = krig_small_grid.x * krig_small_grid.y * krig_small_grid.z
-        data = np.ones(size, dtype="float32") * 50.0
-        data[0] = 73.5  # Known value at first cell
+        data = np.zeros(size, dtype="float32")
         mask = np.ones(size, dtype="uint8")
+        mask[::10] = 0  # 20% uninformed -> the kernel must interpolate them
+        data[mask == 1] = 50.0
+        data[1] = 73.5  # Second known value, at an informed cell
         prop = ContProperty(data, mask)
 
         cov_model = CovarianceModel(
@@ -388,12 +459,26 @@ class TestOrdinaryKriging:
             err_msg="OK with zero nugget must exactly reproduce input data at informed cells",
         )
 
+        # The interpolated cells must actually be interpolated (never left at
+        # the 0.0 sentinel the input array carries there).
+        kriged = _kriged_cells(result, mask)
+        assert np.all(np.isfinite(kriged)), "non-finite value at a kriged cell"
+        assert np.all(kriged > 1.0), (
+            f"OK left a kriged cell at {kriged.min():.4f} — the cell was copied "
+            "through instead of interpolated (F-572)"
+        )
+
     def test_ok_colocated_estimate_equals_data(self, krig_small_grid):
         """C23: OK at colocated point with zero nugget spherical model: estimate = data.
 
         With a single informed point on a 2x2x1 grid and the kriging target at
         the same cell, the OK estimate must equal the data value since the
         weight on the only neighbor is 1.0.
+
+        F-572: index 0 is COPIED through (cont_kriging.h:241-244), so only the
+        uninformed cells exercise the interpolator. With a single datum and
+        zero nugget the OK estimate there is that datum (one neighbour, weight
+        1), which is asserted below.
         """
         data = np.array([42.0, 0.0, 0.0, 0.0], dtype="float32")
         mask = np.array([1, 0, 0, 0], dtype="uint8")
@@ -415,6 +500,120 @@ class TestOrdinaryKriging:
         # The colocated cell (index 0) must have estimate == data value
         assert abs(float(result.data[0]) - 42.0) < 1e-4, (
             f"Colocated OK estimate {result.data[0]} should equal data value 42.0"
+        )
+
+        # F-572: the KRIGED cells must equal the single datum too. A
+        # copy-through regression leaves them at the 0.0 sentinel and fails.
+        np.testing.assert_allclose(
+            _kriged_cells(result, mask),
+            42.0,
+            rtol=0,
+            atol=1e-4,
+            err_msg="OK with one datum and zero nugget must krige every cell to that datum",
+        )
+
+    def test_ok_symmetric_two_point_estimate_is_exact(self):
+        """F-572 / F-583: OK estimate is analytically exact on a symmetric layout.
+
+        Grid x=3 holds 10.0 at cell 0 and 30.0 at cell 2; cell 1 is uninformed
+        and equidistant from both data, so the OK system is symmetric: the two
+        weights are equal, they sum to 1, and the estimate is exactly
+        (10.0 + 30.0) / 2 = 20.0 — independent of the covariance type, its range
+        and the nugget.
+
+        This is the value-level OK oracle the file lacked: it reads a KRIGED
+        cell (cell 1 is interpolated, never copied through) and a regression in
+        the weight solve, in the sum-to-one constraint or in the Lagrange
+        correction moves the value.
+        """
+        grid = SugarboxGrid(x=3, y=1, z=1)
+        data = np.array([10.0, 0.0, 30.0], dtype="float32")
+        mask = np.array([1, 0, 1], dtype="uint8")
+        cov_model = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(5.0, 5.0, 3.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.0,
+        )
+
+        result = ordinary_kriging(
+            prop=ContProperty(data, mask),
+            grid=grid,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=cov_model,
+        )
+
+        np.testing.assert_allclose(
+            _kriged_cells(result, mask),
+            20.0,
+            rtol=0,
+            atol=1e-3,
+            err_msg=(
+                "symmetric two-point OK estimate must be the midpoint 20.0 — "
+                "weight solve or Lagrange correction regressed"
+            ),
+        )
+
+    def test_ok_kriged_cells_use_covariance(self, continuous_property_medium, krig_medium_grid):
+        """F-572: the KRIGED cells respond to the covariance range.
+
+        Every other OK value pin in this file reads informed cells, which
+        cont_kriging.h:241-244 copies through, so a covariance regression is
+        invisible to them. This test restricts every assertion to the
+        originally-uninformed cells and requires two different ranges to move
+        them.
+        """
+        np.random.seed(42)
+        cov_short = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(5.0, 5.0, 3.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.1,
+        )
+        cov_long = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(30.0, 30.0, 18.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.1,
+        )
+
+        result_short = ordinary_kriging(
+            prop=continuous_property_medium,
+            grid=krig_medium_grid,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=cov_short,
+        )
+        result_long = ordinary_kriging(
+            prop=continuous_property_medium,
+            grid=krig_medium_grid,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=cov_long,
+        )
+
+        kriged_short = _kriged_cells(result_short, continuous_property_medium.mask)
+        kriged_long = _kriged_cells(result_long, continuous_property_medium.mask)
+        assert np.all(np.isfinite(kriged_short))
+        assert np.all(np.isfinite(kriged_long))
+
+        # Anti-copy-through: the kriged cells must not reproduce the input
+        # array that sits in those slots.
+        input_at_kriged = continuous_property_medium.data.astype("float64")[
+            continuous_property_medium.mask == 0
+        ]
+        assert not np.allclose(kriged_short, input_at_kriged, rtol=1e-4, atol=1e-4), (
+            "kriged (originally-uninformed) cells repeat the input array — "
+            "the kernel copied instead of interpolating"
+        )
+
+        assert not np.allclose(kriged_short, kriged_long, rtol=1e-6, atol=1e-6), (
+            "covariance range 5 vs 30 left every kriged cell unchanged — the "
+            "covariance model does not reach the kriging solve"
         )
 
     # F-05: Kriging variance regression protection — indirect tests since
@@ -614,9 +813,10 @@ class TestOrdinaryKriging:
             )
             assert isinstance(result, ContProperty)
             assert np.all(np.isfinite(result.data.astype("float64")))
-            # Not all-zero (variance regression protection)
-            assert not np.all(result.data == 0), (
-                f"nugget={nugget}: kriging should not return all-zeros"
+            # Not all-zero (variance regression protection) — F-582: read the
+            # kriged cells, not the copied-through informed cells.
+            _assert_kriged_cells_not_all_zero(
+                result, continuous_property_medium.mask, f"nugget={nugget}"
             )
             results[nugget] = result.data.astype("float64")
 
@@ -639,12 +839,16 @@ class TestOrdinaryKriging:
         """F-36: OK result is reproducible and matches known reference values.
 
         Performs OK kriging with fixed seed/parameters and compares the first
-        few informed-cell estimates against hard-coded reference values.
-        This provides regression protection that isinstance-only tests miss:
-        a silent behavioral change in kriging weights or covariance would be
-        detected.
+        few INFORMED-cell values against hard-coded reference values.
 
-        The reference values are the first 5 estimates at cells informed in
+        Scope (F-581): the kernel copies informed cells through verbatim
+        (cont_kriging.h:241-244), so these reference values equal the fixture's
+        own input data — this test pins the copy-through branch and the fixture,
+        NOT the kriging mathematics. A change to the weights, the Lagrange
+        correction or the covariance model does not move them; that oracle is
+        test_ok_kriged_cells_use_covariance / test_ok_symmetric_two_point_estimate_is_exact.
+
+        The reference values are the first 5 values at cells informed in
         the ORIGINAL input mask (mask==1), captured from a verified v2.0.5
         run (seed=42, spherical covariance, medium grid). The test uses
         float32-compatible tolerance to avoid false positives from
@@ -661,7 +865,7 @@ class TestOrdinaryKriging:
 
         assert isinstance(result, ContProperty)
 
-        # Golden reference: first 5 informed-cell estimates from the
+        # Golden reference: first 5 informed-cell values from the
         # known-good run. The result mask is mutated to all-ones by the C++
         # fill, so the ORIGINAL input mask selects the truly informed cells.
         input_informed = continuous_property_medium.mask == 1
@@ -675,7 +879,17 @@ class TestOrdinaryKriging:
             golden,
             rtol=1e-3,
             atol=0.02,
-            err_msg="OK golden reference mismatch — kriging weights or covariance changed",
+            err_msg="OK golden reference mismatch — copy-through branch or fixture changed",
+        )
+
+        # F-572: the assertion above reads COPY-THROUGH cells. The cells the
+        # kernel actually interpolates must not simply repeat the input array.
+        uninformed = continuous_property_medium.mask == 0
+        kriged = result.data.astype("float64")[uninformed]
+        input_at_kriged = continuous_property_medium.data.astype("float64")[uninformed]
+        assert not np.allclose(kriged, input_at_kriged, rtol=1e-4, atol=1e-4), (
+            "kriged (originally-uninformed) cells repeat the input array — "
+            "the kernel copied instead of interpolating"
         )
 
 
@@ -703,8 +917,10 @@ class TestSimpleKriging:
 
         assert isinstance(result, ContProperty)
         assert result.data.shape == continuous_property_medium.data.shape
-        # F-122: guard against all-zero regression
-        assert not np.all(result.data == 0), "SK result should not be all-zeros"
+        # F-122 / F-582: guard the kriged cells, not the copy-through cells.
+        _assert_kriged_cells_not_all_zero(
+            result, continuous_property_medium.mask, "SK basic execution"
+        )
 
     def test_sk_all_covariance_types(self, continuous_property_medium, krig_medium_grid):
         """Test SK with all covariance types"""
@@ -745,9 +961,48 @@ class TestSimpleKriging:
         assert not np.any(np.isnan(result.data))
         assert not np.any(np.isinf(result.data))
         assert np.all(np.isfinite(result.data[result.mask != 0]))
-        # F-122: guard against all-zero regression
-        assert not np.all(result.data == 0), (
-            f"SK with max_neighbours={max_neighbours}: result should not be all-zeros"
+        # F-122 / F-582: guard the kriged cells, not the copy-through cells.
+        _assert_kriged_cells_not_all_zero(
+            result,
+            continuous_property_medium.mask,
+            f"SK with max_neighbours={max_neighbours}",
+        )
+
+    # F-575 / F-585: SK parameter-effect pin. The F-124 effect family covered
+    # OK only; SK's max_neighbours was swept but never asserted to have an
+    # effect on the result.
+    def test_sk_neighbor_count_affects_result(
+        self, continuous_property_medium, krig_medium_grid, covariance_spherical
+    ):
+        """F-575: SK max_neighbours=4 vs 16 changes the KRIGED cells.
+
+        Different neighbour counts change which data points influence the
+        estimate, so the kriged cells MUST differ — otherwise SK ignores the
+        parameter. Asserted on the originally-uninformed cells only: informed
+        cells are copied through and cannot move.
+        """
+        result4 = simple_kriging(
+            prop=continuous_property_medium,
+            grid=krig_medium_grid,
+            radiuses=(5, 5, 3),
+            max_neighbours=4,
+            cov_model=covariance_spherical,
+            mean=None,
+        )
+        result16 = simple_kriging(
+            prop=continuous_property_medium,
+            grid=krig_medium_grid,
+            radiuses=(5, 5, 3),
+            max_neighbours=16,
+            cov_model=covariance_spherical,
+            mean=None,
+        )
+
+        kriged4 = _kriged_cells(result4, continuous_property_medium.mask)
+        kriged16 = _kriged_cells(result16, continuous_property_medium.mask)
+        assert not np.allclose(kriged4, kriged16, rtol=1e-4, atol=1e-4), (
+            "SK max_neighbours=4 vs 16 left every kriged cell unchanged — "
+            "parameter effect unverified"
         )
 
     def test_sk_explicit_mean(
@@ -913,6 +1168,37 @@ class TestLVMKriging:
         assert not np.any(np.isnan(result.data.astype("float64")))
         assert not np.any(np.isinf(result.data.astype("float64")))
 
+    # F-575: LVM's parameter plumbing was swept but never asserted to matter.
+    def test_lvm_neighbor_count_affects_result(
+        self, continuous_property_medium, krig_medium_grid, mean_data_medium, covariance_spherical
+    ):
+        """F-575: LVM max_neighbours=4 vs 16 must move the KRIGED cells."""
+        result4 = lvm_kriging(
+            prop=continuous_property_medium,
+            grid=krig_medium_grid,
+            mean_data=mean_data_medium,
+            radiuses=(5, 5, 3),
+            max_neighbours=4,
+            cov_model=covariance_spherical,
+        )
+        result16 = lvm_kriging(
+            prop=continuous_property_medium,
+            grid=krig_medium_grid,
+            mean_data=mean_data_medium,
+            radiuses=(5, 5, 3),
+            max_neighbours=16,
+            cov_model=covariance_spherical,
+        )
+        assert not np.allclose(
+            _kriged_cells(result4, continuous_property_medium.mask),
+            _kriged_cells(result16, continuous_property_medium.mask),
+            rtol=1e-4,
+            atol=1e-4,
+        ), (
+            "LVM max_neighbours=4 vs 16 left every kriged cell unchanged — "
+            "parameter effect unverified"
+        )
+
     def test_lvm_reproducibility(
         self, continuous_property_medium, krig_medium_grid, mean_data_medium, covariance_spherical
     ):
@@ -955,6 +1241,75 @@ class TestLVMKriging:
 
         assert not np.any(np.isnan(result.data.astype("float64")))
         assert not np.any(np.isinf(result.data.astype("float64")))
+
+    # F-584: the local mean field is LVM's defining input and no test made it
+    # influence the output.
+    def test_lvm_mean_field_drives_estimate(
+        self, continuous_property_medium, krig_medium_grid, covariance_spherical
+    ):
+        """F-584: the LVM mean field must reach the estimate.
+
+        Two halves, both read assertion-relevant cells:
+
+        (a) an all-uninformed property takes the documented mean-fill on every
+            cell (cont_kriging no-neighbour branch), so the output must equal
+            the mean field exactly — here 10.0 then 60.0;
+        (b) on a sparse property, raising the mean field by +10 must move the
+            KRIGED cells.
+
+        A regression that drops the mean field from the C++ solve (LVM
+        degenerating to SK-with-mean-zero) passes the copy-through, uniform-data
+        and isinstance tests this file had, and fails both halves here.
+        """
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+
+        # (a) Empty property: the fill IS the mean field.
+        empty_prop = ContProperty(np.zeros(size, dtype="float32"), np.zeros(size, dtype="uint8"))
+        for level in (10.0, 60.0):
+            mean_data = np.full(size, level, dtype="float32")
+            result = lvm_kriging(
+                prop=empty_prop,
+                grid=krig_medium_grid,
+                mean_data=mean_data,
+                radiuses=(5, 5, 3),
+                max_neighbours=12,
+                cov_model=covariance_spherical,
+            )
+            np.testing.assert_allclose(
+                result.data.astype("float64"),
+                mean_data.astype("float64"),
+                rtol=0,
+                atol=1e-5,
+                err_msg=(
+                    f"LVM with no informed cell must fill every cell with the mean "
+                    f"field ({level}), got {np.unique(result.data)[:5]}"
+                ),
+            )
+
+        # (b) Sparse property: the mean gradient must move the kriged cells.
+        result_low = lvm_kriging(
+            prop=continuous_property_medium,
+            grid=krig_medium_grid,
+            mean_data=np.full(size, 10.0, dtype="float32"),
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=covariance_spherical,
+        )
+        result_high = lvm_kriging(
+            prop=continuous_property_medium,
+            grid=krig_medium_grid,
+            mean_data=np.full(size, 20.0, dtype="float32"),
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+            cov_model=covariance_spherical,
+        )
+        delta = _kriged_cells(result_high, continuous_property_medium.mask) - _kriged_cells(
+            result_low, continuous_property_medium.mask
+        )
+        assert np.any(np.abs(delta) > 1e-3), (
+            "LVM mean +10 left every kriged cell unchanged — the mean field does "
+            "not reach the estimate"
+        )
 
     def test_lvm_small_grid(self, continuous_property_small, krig_small_grid, covariance_spherical):
         """Test LVM kriging with small grid"""
@@ -1150,6 +1505,178 @@ class TestIndicatorKriging:
         # Check indicators are within valid range
         assert np.all(result.data < result.indicator_count)
 
+    # F-574 / F-583: the value-level IK oracle. The range check above is
+    # satisfiable by an all-zero (or any in-range) output, so a constant-category
+    # regression passed every IK test in this file.
+    def test_ik_uniform_category_is_reproduced(self, krig_medium_grid):
+        """F-574: a uniform indicator field must come back as that category.
+
+        Every datum is category k (k = 0, 1, 2), so every kriged cell must be
+        category k. A regression that returns a constant category — the exact
+        failure the `np.isnan(uint8)` checks could never catch — fails for two
+        of the three fixtures.
+        """
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        mask = np.ones(size, dtype="uint8")
+        ik_data = [
+            {
+                "cov_model": CovarianceModel(
+                    type=covariance.spherical,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1,
+                ),
+                "radiuses": (5, 5, 3),
+                "max_neighbours": 12,
+            }
+            for _ in range(3)
+        ]
+
+        for category in (0, 1, 2):
+            result = indicator_kriging(
+                prop=IndProperty(np.full(size, category, dtype="uint8"), mask.copy(), 3),
+                grid=krig_medium_grid,
+                data=ik_data,
+                marginal_probs=[0.3, 0.4, 0.3],
+            )
+            categories = np.unique(result.data)
+            assert np.all(result.data == category), (
+                f"uniform indicator field of category {category}: expected every cell "
+                f"in [{category}], got {categories.tolist()}"
+            )
+
+    # G-53: every IK test above builds N identical per-category dicts, so no
+    # test could observe the per-category dispatch — the only oracle was
+    # `data < indicator_count`.
+    def test_ik_per_category_parameters_reach_the_solve(
+        self, indicator_property_medium, krig_medium_grid
+    ):
+        """G-53: changing ONE category's parameters must move the output.
+
+        The per-category dicts are identical except for the knob under test, so
+        an implementation that shares one parameter set across categories — or
+        ignores marginal_probs — returns the base array unchanged. Measured on
+        this 500-cell fixture: category-2 ranges (5,5,3) -> (1,1,1) changes 3
+        cells (this is what distinguishes a per-category dispatch from a
+        category-0 profile broadcast to all), category-0 ranges changes 13
+        cells, and marginal_probs (0.3,0.4,0.3) -> (0.8,0.1,0.1) changes 4.
+
+        Catches: per-category covariance/range dispatch collapsed to one shared
+        set or to category 0's profile (0 differing cells for the category-2
+        assertion), and marginal_probs not reaching the per-category solve
+        (0 differing cells for the marginal assertion).
+        """
+
+        def entry():
+            return {
+                "cov_model": CovarianceModel(
+                    type=covariance.spherical,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1,
+                ),
+                "radiuses": (5, 5, 3),
+                "max_neighbours": 12,
+            }
+
+        def run(ik_data, marginal_probs):
+            return indicator_kriging(
+                prop=indicator_property_medium,
+                grid=krig_medium_grid,
+                data=ik_data,
+                marginal_probs=marginal_probs,
+            )
+
+        base = run([entry() for _ in range(3)], [0.3, 0.4, 0.3])
+
+        # Category 2, not category 0: a dispatch that broadcasts category 0's
+        # profile to every category leaves this variant identical to the base.
+        cat2_short_range = [entry() for _ in range(3)]
+        cat2_short_range[2]["cov_model"] = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(1.0, 1.0, 1.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.1,
+        )
+        cat2_changed = int(
+            np.count_nonzero(run(cat2_short_range, [0.3, 0.4, 0.3]).data != base.data)
+        )
+        assert cat2_changed > 0, (
+            "IK category-2 ranges (5,5,3) -> (1,1,1) left every cell on the same "
+            "category — category 2's covariance does not reach its own solve "
+            "(measured effect on this fixture: 3 of 500 cells). A dispatch that "
+            "applies category 0's parameter set to every category produces this."
+        )
+
+        cat0_short_range = [entry() for _ in range(3)]
+        cat0_short_range[0]["cov_model"] = CovarianceModel(
+            type=covariance.spherical,
+            ranges=(1.0, 1.0, 1.0),
+            angles=(0.0, 0.0, 0.0),
+            sill=1.0,
+            nugget=0.1,
+        )
+        ranges_changed = int(
+            np.count_nonzero(run(cat0_short_range, [0.3, 0.4, 0.3]).data != base.data)
+        )
+        assert ranges_changed > 0, (
+            "IK category-0 ranges (5,5,3) -> (1,1,1) left every cell on the same "
+            "category — the per-category covariance does not reach the solve "
+            "(measured effect on this fixture: 13 of 500 cells)"
+        )
+
+        marginal_changed = int(
+            np.count_nonzero(run([entry() for _ in range(3)], [0.8, 0.1, 0.1]).data != base.data)
+        )
+        assert marginal_changed > 0, (
+            "IK marginal_probs (0.3,0.4,0.3) -> (0.8,0.1,0.1) left every cell on the "
+            "same category — the marginals do not reach the per-category solve "
+            "(measured effect on this fixture: 4 of 500 cells)"
+        )
+
+    # F-575: the neighbour-count sweep above asserts only isinstance, so an IK
+    # kernel that ignored max_neighbours was green.
+    def test_ik_neighbor_count_affects_result(self, indicator_property_medium, krig_medium_grid):
+        """F-575: max_neighbours 2 vs 12 must move the IK categories.
+
+        Measured on this fixture: 12 of the 500 cells change. Catches a kernel
+        that drops the neighbourhood cap from the per-category solve (0
+        differing cells). The 0-difference result reported for the earlier
+        residual was a property of that report's own fixture shapes, not of
+        this fixture — see the report's Investigated-and-Rejected section.
+        """
+
+        def entry(max_neighbours):
+            return {
+                "cov_model": CovarianceModel(
+                    type=covariance.spherical,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1,
+                ),
+                "radiuses": (5, 5, 3),
+                "max_neighbours": max_neighbours,
+            }
+
+        def run(max_neighbours):
+            return indicator_kriging(
+                prop=indicator_property_medium,
+                grid=krig_medium_grid,
+                data=[entry(max_neighbours) for _ in range(3)],
+                marginal_probs=[0.3, 0.4, 0.3],
+            )
+
+        changed = int(np.count_nonzero(run(2).data != run(12).data))
+        assert changed > 0, (
+            "IK max_neighbours=2 vs 12 left every cell on the same category — the "
+            "neighbour cap does not reach the per-category solve "
+            "(measured effect on this fixture: 12 of 500 cells)"
+        )
+
     def test_ik_small_grid(self, indicator_property_small, krig_small_grid):
         """Test IK with small grid"""
         ik_data = []
@@ -1212,8 +1739,10 @@ class TestMedianIK:
         )
 
         assert isinstance(result, IndProperty)
-        assert not np.any(np.isnan(result.data.astype("float64")))
-        assert not np.any(np.isinf(result.data.astype("float64")))
+        # F-574: IndProperty.data is uint8 (geo.py:504), so a NaN/Inf check on
+        # it can never fail. Assert the satisfiable output contract instead.
+        assert result.data.dtype == np.uint8
+        assert np.all(result.data < result.indicator_count)
 
     def test_median_ik_all_covariance_types(self, indicator_property_2cat_medium, krig_medium_grid):
         """Test median IK with all covariance types"""
@@ -1239,7 +1768,9 @@ class TestMedianIK:
                 cov_model=cov_model,
             )
             assert isinstance(result, IndProperty), f"Failed for {name}"
-            assert not np.any(np.isnan(result.data.astype("float64")))
+            # F-574: uint8 data can never be NaN — assert the output contract.
+            assert result.data.dtype == np.uint8
+            assert np.all(result.data < result.indicator_count), f"invalid values for {name}"
 
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
     def test_median_ik_various_neighbor_counts(
@@ -1261,9 +1792,9 @@ class TestMedianIK:
             ),
         )
         assert isinstance(result, IndProperty)
-        assert not np.any(np.isnan(result.data.astype("float64")))
-        assert not np.any(np.isinf(result.data.astype("float64")))
-        assert np.all(np.isfinite(result.data.astype("float64")))
+        # F-574: uint8 data can never be NaN/Inf — assert the output contract.
+        assert result.data.dtype == np.uint8
+        assert np.all(result.data < result.indicator_count)
         assert result.data.shape == indicator_property_2cat_medium.data.shape
 
     def test_median_ik_reproducibility(self, indicator_property_2cat_medium, krig_medium_grid):
@@ -1318,8 +1849,9 @@ class TestMedianIK:
 
         # Check result shape
         assert result.data.shape == indicator_property_2cat_medium.data.shape
-        assert not np.any(np.isnan(result.data.astype("float64")))
-        assert not np.any(np.isinf(result.data.astype("float64")))
+        # F-574: uint8 data can never be NaN/Inf — assert the output contract.
+        assert result.data.dtype == np.uint8
+        assert np.all(result.data < result.indicator_count)
 
     def test_median_ik_small_grid(self, indicator_property_2cat_small, krig_small_grid):
         """Test median IK with small grid"""
@@ -1338,8 +1870,88 @@ class TestMedianIK:
             ),
         )
         assert isinstance(result, IndProperty)
-        assert not np.any(np.isnan(result.data.astype("float64")))
-        assert not np.any(np.isinf(result.data.astype("float64")))
+        # F-574: uint8 data can never be NaN/Inf — assert the output contract.
+        assert result.data.dtype == np.uint8
+        assert np.all(result.data < result.indicator_count)
+
+    # F-574 / F-583: value-level MIK oracle. `data < indicator_count` is
+    # satisfied by an all-zero array, so a constant-category regression was
+    # green across every MIK test above.
+    def test_median_ik_uniform_category_is_reproduced(self, krig_medium_grid):
+        """F-574: a uniform 2-category indicator field must come back as that category.
+
+        Every datum is category 0 (then 1), so every cell must be categorised
+        0 (then 1). A constant-category regression fails one of the two.
+        """
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        mask = np.ones(size, dtype="uint8")
+
+        for category in (0, 1):
+            result = median_ik(
+                prop=IndProperty(np.full(size, category, dtype="uint8"), mask.copy(), 2),
+                grid=krig_medium_grid,
+                marginal_probs=(0.5, 0.5),
+                radiuses=(5, 5, 3),
+                max_neighbours=12,
+                cov_model=CovarianceModel(
+                    type=covariance.spherical,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1,
+                ),
+            )
+            categories = np.unique(result.data)
+            assert np.all(result.data == category), (
+                f"uniform indicator field of category {category}: expected every cell "
+                f"in [{category}], got {categories.tolist()}"
+            )
+
+    # F-575 / F-585 residual: the MIK sweeps above assert isinstance and the
+    # value range only, so a kernel that ignored the neighbourhood or the
+    # covariance model was green. Measured on THIS fixture both levers move the
+    # categories (9 and 5 cells of 500), so the residual is pinnable here.
+    def test_median_ik_parameters_affect_result(
+        self, indicator_property_2cat_medium, krig_medium_grid
+    ):
+        """F-575/F-585: max_neighbours and covariance type must move MIK categories.
+
+        Measured on this fixture over 500 cells: max_neighbours 2 vs 12 changes
+        9 cells; spherical vs exponential at 12 neighbours changes 5 cells.
+        Catches: the neighbourhood cap or the covariance model dropped from the
+        median-IK solve (0 differing cells).
+        """
+
+        def run(max_neighbours=12, cov_type=covariance.spherical):
+            return median_ik(
+                prop=indicator_property_2cat_medium,
+                grid=krig_medium_grid,
+                marginal_probs=(0.5, 0.5),
+                radiuses=(5, 5, 3),
+                max_neighbours=max_neighbours,
+                cov_model=CovarianceModel(
+                    type=cov_type,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1,
+                ),
+            )
+
+        base = run()
+        neighbors_changed = int(np.count_nonzero(run(max_neighbours=2).data != base.data))
+        assert neighbors_changed > 0, (
+            "median_ik max_neighbours=2 vs 12 left every cell on the same category — "
+            "the neighbour cap does not reach the solve (measured: 9 of 500 cells)"
+        )
+
+        covariance_changed = int(
+            np.count_nonzero(run(cov_type=covariance.exponential).data != base.data)
+        )
+        assert covariance_changed > 0, (
+            "median_ik spherical vs exponential left every cell on the same category — "
+            "the covariance model does not reach the solve (measured: 5 of 500 cells)"
+        )
 
 
 # =============================================================================
@@ -1404,6 +2016,47 @@ class TestSimpleCokrigingMarkI:
             )
             assert isinstance(result, ContProperty), f"Failed for {name}"
 
+    # F-575 / F-585 (aggravated by G-50): the covariance type was swept here but
+    # never asserted to have an effect, and the shared secondary fixture is
+    # masked exactly where the primary fixture is, so every kriged node ran
+    # without a secondary datum. This test builds a FULLY informed secondary.
+    def test_ck_markI_covariance_type_affects_result(
+        self, continuous_property_medium, krig_medium_grid
+    ):
+        """F-575: spherical vs exponential must change the KRIGED cells (Mark I)."""
+        np.random.seed(43)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        secondary = ContProperty(
+            np.random.rand(size).astype("float32") * 80, np.ones(size, dtype="uint8")
+        )
+
+        def run(cov_type):
+            return simple_cokriging_markI(
+                prop=continuous_property_medium,
+                grid=krig_medium_grid,
+                radiuses=(5, 5, 3),
+                max_neighbours=12,
+                cov_model=CovarianceModel(
+                    type=cov_type,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1,
+                ),
+                secondary_data=secondary,
+                primary_mean=50.0,
+                secondary_mean=40.0,
+                secondary_variance=100.0,
+                correlation_coef=0.8,
+            )
+
+        kriged_sph = _kriged_cells(run(covariance.spherical), continuous_property_medium.mask)
+        kriged_exp = _kriged_cells(run(covariance.exponential), continuous_property_medium.mask)
+        assert not np.allclose(kriged_sph, kriged_exp, rtol=1e-4, atol=1e-4), (
+            "Mark I covariance type spherical vs exponential left every kriged cell "
+            "unchanged — the covariance model does not reach the cokriging solve"
+        )
+
     @pytest.mark.parametrize("correlation_coef", [0.2, 0.5, 0.8, 0.95])
     def test_ck_markI_various_correlations(
         self,
@@ -1453,6 +2106,99 @@ class TestSimpleCokrigingMarkI:
             cov_model=covariance_spherical,
         )
         assert isinstance(result, ContProperty)
+
+    # F-575 / F-585: the Mark I neighbour-count sweep asserted only isinstance.
+    def test_ck_markI_neighbor_count_affects_result(
+        self, continuous_property_medium, krig_medium_grid, covariance_spherical
+    ):
+        """F-575: Mark I max_neighbours=4 vs 16 must move the KRIGED cells.
+
+        The secondary fixture is fully informed (see
+        test_ck_markI_covariance_type_affects_result), so the secondary equation
+        is populated at every kriged node.
+        """
+        np.random.seed(43)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        secondary = ContProperty(
+            np.random.rand(size).astype("float32") * 80, np.ones(size, dtype="uint8")
+        )
+
+        def run(max_neighbours):
+            return simple_cokriging_markI(
+                prop=continuous_property_medium,
+                grid=krig_medium_grid,
+                radiuses=(5, 5, 3),
+                max_neighbours=max_neighbours,
+                cov_model=covariance_spherical,
+                secondary_data=secondary,
+                primary_mean=50.0,
+                secondary_mean=40.0,
+                secondary_variance=100.0,
+                correlation_coef=0.8,
+            )
+
+        assert not np.allclose(
+            _kriged_cells(run(4), continuous_property_medium.mask),
+            _kriged_cells(run(16), continuous_property_medium.mask),
+            rtol=1e-4,
+            atol=1e-4,
+        ), (
+            "Mark I max_neighbours=4 vs 16 left every kriged cell unchanged — "
+            "parameter effect unverified"
+        )
+
+    # G-50: the collocated secondary datum must change the estimate. With the
+    # shared fixture masked at the kriged nodes the secondary equation was never
+    # entered, so every Mark I test above reduced to plain SK.
+    def test_ck_markI_secondary_datum_changes_kriged_value(
+        self,
+        continuous_property_medium,
+        krig_medium_grid,
+        secondary_property_medium,
+        covariance_spherical,
+    ):
+        """G-50: masking the secondary must move the kriged cells by ~19 units.
+
+        The same secondary DATA is run twice and only its mask differs, so the
+        single variable is whether a secondary datum exists at the node the
+        kernel interpolates. Measured on this fixture at rho=0.8:
+        max|Delta| = 19.198 and mean|Delta| = 7.225 over the 50 kriged cells
+        (the s5 grid's 17.7-19.2 band). The 15-25 window pins that magnitude.
+
+        Catches: the secondary dropped from the kriging system (Delta == 0 —
+        the pre-fix fixture state) and an over-weighted secondary
+        (Delta >> 25).
+        """
+        masked_secondary = ContProperty(
+            secondary_property_medium.data.copy(),
+            np.zeros_like(secondary_property_medium.mask),
+        )
+
+        def kriged(secondary):
+            return _kriged_cells(
+                simple_cokriging_markI(
+                    prop=continuous_property_medium,
+                    grid=krig_medium_grid,
+                    secondary_data=secondary,
+                    primary_mean=50.0,
+                    secondary_mean=40.0,
+                    secondary_variance=100.0,
+                    correlation_coef=0.8,
+                    radiuses=(5, 5, 3),
+                    max_neighbours=12,
+                    cov_model=covariance_spherical,
+                ),
+                continuous_property_medium.mask,
+            )
+
+        with_secondary = kriged(secondary_property_medium)
+        without_secondary = kriged(masked_secondary)
+        max_delta = float(np.max(np.abs(with_secondary - without_secondary)))
+        assert 15.0 <= max_delta <= 25.0, (
+            f"Mark I: removing the secondary datum changed the kriged cells by "
+            f"{max_delta:.4f}; expected the measured ~19.2. A value near 0 means the "
+            f"secondary never entered the kriging system (the G-50 fixture blindness)"
+        )
 
     def test_ck_markI_reproducibility(
         self,
@@ -1637,6 +2383,148 @@ class TestSimpleCokrigingMarkII:
             )
             assert isinstance(result, ContProperty), f"Failed for {name}"
 
+    @staticmethod
+    def _markII_result(primary, grid, secondary, cov_type, correlation_coef):
+        """Run Mark II with one covariance type for both variables (F-585 helper)."""
+        return simple_cokriging_markII(
+            grid=grid,
+            primary_data={
+                "data": primary,
+                "mean": 50.0,
+                "cov_model": CovarianceModel(
+                    type=cov_type,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1,
+                ),
+            },
+            secondary_data={
+                "data": secondary,
+                "mean": 40.0,
+                "cov_model": CovarianceModel(
+                    type=cov_type,
+                    ranges=(5.0, 5.0, 3.0),
+                    angles=(0.0, 0.0, 0.0),
+                    sill=1.0,
+                    nugget=0.1,
+                ),
+            },
+            correlation_coef=correlation_coef,
+            radiuses=(5, 5, 3),
+            max_neighbours=12,
+        )
+
+    # F-585 (aggravated by G-50): the Mark II correlation sweep below asserted
+    # only isinstance/isfinite, and test_regression_v150.py:288-295 states the
+    # Mark II cross-covariance ratio path is NOT exercised there either. The
+    # secondary fixture here is fully informed, so a secondary datum exists at
+    # every primary-uninformed (kriged) node.
+    def test_ck_markII_correlation_affects_result(
+        self, continuous_property_medium, krig_medium_grid
+    ):
+        """F-585: Mark II correlation_coef 0.8 vs 0.2 must move the KRIGED cells."""
+        np.random.seed(43)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        secondary = ContProperty(
+            np.random.rand(size).astype("float32") * 80, np.ones(size, dtype="uint8")
+        )
+
+        kriged_high = _kriged_cells(
+            self._markII_result(
+                continuous_property_medium, krig_medium_grid, secondary, covariance.spherical, 0.8
+            ),
+            continuous_property_medium.mask,
+        )
+        kriged_low = _kriged_cells(
+            self._markII_result(
+                continuous_property_medium, krig_medium_grid, secondary, covariance.spherical, 0.2
+            ),
+            continuous_property_medium.mask,
+        )
+        assert not np.allclose(kriged_high, kriged_low, rtol=1e-4, atol=1e-4), (
+            "Mark II correlation_coef 0.8 vs 0.2 left every kriged cell unchanged — "
+            "the correlation coefficient does not reach the cokriging solve"
+        )
+
+    def test_ck_markII_covariance_type_affects_result(
+        self, continuous_property_medium, krig_medium_grid
+    ):
+        """F-585: Mark II spherical vs exponential must move the KRIGED cells."""
+        np.random.seed(43)
+        size = krig_medium_grid.x * krig_medium_grid.y * krig_medium_grid.z
+        secondary = ContProperty(
+            np.random.rand(size).astype("float32") * 80, np.ones(size, dtype="uint8")
+        )
+
+        kriged_sph = _kriged_cells(
+            self._markII_result(
+                continuous_property_medium, krig_medium_grid, secondary, covariance.spherical, 0.8
+            ),
+            continuous_property_medium.mask,
+        )
+        kriged_exp = _kriged_cells(
+            self._markII_result(
+                continuous_property_medium,
+                krig_medium_grid,
+                secondary,
+                covariance.exponential,
+                0.8,
+            ),
+            continuous_property_medium.mask,
+        )
+        assert not np.allclose(kriged_sph, kriged_exp, rtol=1e-4, atol=1e-4), (
+            "Mark II covariance type spherical vs exponential left every kriged cell "
+            "unchanged — the covariance model does not reach the cokriging solve"
+        )
+
+    # G-50: Mark II had no value coverage at all, and the secondary is only read
+    # at the kriged nodes (same process_node_loop as Mark I).
+    def test_ck_markII_secondary_datum_changes_kriged_value(
+        self, continuous_property_medium, krig_medium_grid, secondary_property_medium
+    ):
+        """G-50: masking the secondary must move the Mark II kriged cells by ~33 units.
+
+        Same secondary DATA, only the mask differs — so the single variable is
+        whether a secondary datum exists at the interpolated node. Measured on
+        this fixture at rho=0.8: max|Delta| = 32.910, mean|Delta| = 14.576 over
+        the 50 kriged cells; the 25-45 window pins that magnitude.
+
+        Catches: the secondary dropped from the Markov II system (Delta == 0)
+        and an over-weighted cross-covariance (Delta >> 45).
+        """
+        masked_secondary = ContProperty(
+            secondary_property_medium.data.copy(),
+            np.zeros_like(secondary_property_medium.mask),
+        )
+
+        with_secondary = _kriged_cells(
+            self._markII_result(
+                continuous_property_medium,
+                krig_medium_grid,
+                secondary_property_medium,
+                covariance.spherical,
+                0.8,
+            ),
+            continuous_property_medium.mask,
+        )
+        without_secondary = _kriged_cells(
+            self._markII_result(
+                continuous_property_medium,
+                krig_medium_grid,
+                masked_secondary,
+                covariance.spherical,
+                0.8,
+            ),
+            continuous_property_medium.mask,
+        )
+        max_delta = float(np.max(np.abs(with_secondary - without_secondary)))
+        assert 25.0 <= max_delta <= 45.0, (
+            f"Mark II: removing the secondary datum changed the kriged cells by "
+            f"{max_delta:.4f}; expected the measured ~32.9. A value near 0 means the "
+            f"secondary never entered the Markov II system (the G-50 fixture blindness)"
+        )
+
     @pytest.mark.parametrize("correlation_coef", [0.2, 0.5, 0.8, 0.95])
     def test_ck_markII_various_correlations(
         self,
@@ -1681,8 +2569,12 @@ class TestSimpleCokrigingMarkII:
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data))
         assert not np.any(np.isinf(result.data))
+        assert np.count_nonzero(result.mask) > 0, "Mark II wrote no output cells"
         assert np.all(np.isfinite(result.data[result.mask != 0]))
 
+    # G-54: this Mark II sweep selected by `result.mask != 0`, which is EMPTY
+    # after a no-op kernel — isfinite() over an empty selection is vacuously
+    # True — so the finiteness check alone could not see a write failure.
     @pytest.mark.parametrize("max_neighbours", [4, 8, 12, 16])
     def test_ck_markII_various_neighbor_counts(
         self,
@@ -1727,6 +2619,7 @@ class TestSimpleCokrigingMarkII:
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data))
         assert not np.any(np.isinf(result.data))
+        assert np.count_nonzero(result.mask) > 0, "Mark II wrote no output cells"
         assert np.all(np.isfinite(result.data[result.mask != 0]))
 
     def test_ck_markII_reproducibility(

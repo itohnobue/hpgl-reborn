@@ -19,6 +19,16 @@ else()
 endif()
 project(HPGL VERSION ${_hpgl_version} LANGUAGES CXX)
 
+# F-314: pyproject.toml is the declared single source of truth for the version,
+# but the configure step above reads it with file(STRINGS ...) without declaring
+# it as an input, so an incremental rebuild after a version bump never re-runs
+# the configure step and keeps the OLD PROJECT_VERSION (the generated
+# hpglConfigVersion.cmake then reports a stale PACKAGE_VERSION and
+# find_package(hpgl <new version>) fails). Register the file with the build
+# system so any change to it re-runs the configure step.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml")
+
 # ============================================================================
 # Project Configuration
 # ============================================================================
@@ -186,8 +196,16 @@ if(HPGL_USE_OPENMP)
         # newer min-OS than the dylib). Warn at configure time (the escalation
         # probe found NO macOS 15+ API usage in Homebrew's libomp — 0
         # weak_import — so the wheel still runs on macOS 11+, but the
-        # guarantee is fragile). The wheel verification gate additionally
-        # asserts LC_BUILD_VERSION on the shipped dylibs (build.sh).
+        # guarantee is fragile).
+        # F-079: this configure-time probe is the ONLY check in the pipeline
+        # that can see the members' min-OS. The wheel gate's LC_BUILD_VERSION
+        # check (build.sh) reads the LINK IMAGE only, whose minos the linker
+        # stamps from -platform_version — so it always equals the deployment
+        # target and can never fire for this defect class, no matter how the
+        # wheel is tagged. A mismatch reported below is therefore an accepted,
+        # recorded residual (the archive belongs to Homebrew, not this repo),
+        # not something a downstream gate can enforce; do not claim otherwise
+        # in the gate's comments.
         execute_process(
             COMMAND otool -l "${OpenMP_ROOT}/lib/libomp.a"
             OUTPUT_VARIABLE _hpgl_libomp_otool
@@ -376,6 +394,14 @@ add_library(hpgl::core ALIAS hpgl_core)
 # Ensure consistent output name across platforms (Python bindings expect "hpgl")
 set_target_properties(hpgl_core PROPERTIES
     OUTPUT_NAME "hpgl"
+    # F-080: hpgl::core is the target name this file's ALIAS (above) creates
+    # and the name cmake/hpglConfig.cmake.in documents ("Provides targets:
+    # hpgl::core"), but the export below only namespaced the TARGET name, so
+    # the installed package defined hpgl::hpgl_core and every consumer that
+    # linked the documented hpgl::core failed with "target was not found".
+    # EXPORT_NAME keeps the in-tree ALIAS valid and makes the installed export
+    # define the documented name.
+    EXPORT_NAME "core"
 )
 # Version the shared library for standalone installs (C++ consumers get the
 # SOVERSION symlink chain). Wheel builds (SKBUILD) skip VERSION/SOVERSION so
@@ -405,7 +431,23 @@ if(WIN32)
         PREFIX ""
         DEBUG_POSTFIX "_d"
     )
+    # G-32: purge every sibling name the Python loader accepts BEFORE the
+    # copy. The loader resolves hpgl.dll, hpgl.pyd, libhpgl.dll, then
+    # hpgl_d.dll (hpgl_wrap.py:336-346, first match wins), so a surviving
+    # previous-configuration or lib-prefixed DLL silently shadows the fresh
+    # build — the exact shadowing class build.sh:612-614 prunes on macOS.
+    # Alternating Release/Debug therefore left the developer running the
+    # previous engine with no error. Deleting the same-config name too is
+    # intentional: copy_if_different then always deploys the artifact this
+    # build just produced, so "the configuration being built is the only
+    # variant present" holds for every increment.
     add_custom_command(TARGET hpgl_core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/hpgl.dll"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/hpgl_d.dll"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/hpgl.pyd"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/libhpgl.dll"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/libhpgl_d.dll"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:hpgl_core>
             "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/"
@@ -539,7 +581,21 @@ if(HPGL_USE_OPENMP AND OpenMP_FOUND)
         # and link the archive directly so no libomp.dylib runtime dependency
         # is recorded — the wheel is relocatable without bundling or
         # install_name_tool repair.
-        target_compile_options(hpgl_core PUBLIC ${_hpgl_omp_flags})
+        # F-081: the flags must be build-interface-only, exactly like the
+        # include dir on the next line (R-22). PUBLIC alone put
+        # "INTERFACE_COMPILE_OPTIONS -Xclang;-fopenmp" into the installed
+        # hpglTargets.cmake, which defines _OPENMP in the CONSUMER's
+        # translation units and makes hpgl/cont_kriging.h include <omp.h> —
+        # while the matching include dir is build-interface-only and the
+        # package config skips find_dependency(OpenMP) for the static case, so
+        # the consumer cannot resolve it (and a GCC consumer fails on -Xclang
+        # itself). Wrapping each flag separately keeps this a real list item
+        # (a single $<BUILD_INTERFACE:...> around a ;-separated list would be
+        # split into two malformed arguments) and still applies the flags in
+        # the build tree, where omp.h is resolvable.
+        foreach(_hpgl_omp_flag IN LISTS _hpgl_omp_flags)
+            target_compile_options(hpgl_core PUBLIC $<BUILD_INTERFACE:${_hpgl_omp_flag}>)
+        endforeach()
         # R-22: wrap the Homebrew omp.h include dir in $<BUILD_INTERFACE:...>
         # ONLY — at install/export time it contributes nothing, so the
         # absolute build-machine path (/opt/homebrew/opt/libomp/include) no
@@ -595,6 +651,16 @@ if(HPGL_BUILD_VARIOGRAM)
             DEBUG_POSTFIX "_d"
         )
         add_custom_command(TARGET hpgl_variogram POST_BUILD
+            # G-32 (sibling): same sibling purge as hpgl_core — the loader
+            # accepts lib_cvariogram.dll and _cvariogram.dll, so a surviving
+            # previous-configuration or lib-prefixed copy shadows the fresh
+            # module (build.sh:634-636 prunes the same set on macOS).
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/_cvariogram.dll"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/_cvariogram_d.dll"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/_cvariogram.pyd"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/lib_cvariogram.dll"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/lib_cvariogram_d.dll"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:hpgl_variogram>
                 "${CMAKE_CURRENT_SOURCE_DIR}/src/geo_bsd/"
@@ -628,7 +694,12 @@ if(HPGL_BUILD_VARIOGRAM)
     # OpenMP::OpenMP_CXX propagates the compile flags; see hpgl_core block.
     if(HPGL_USE_OPENMP AND OpenMP_FOUND)
         if(_hpgl_omp_flags)
-            target_compile_options(hpgl_variogram PUBLIC ${_hpgl_omp_flags})
+            # F-081 (sibling): same build-interface-only wrap as hpgl_core —
+            # the flags and the include dir must be exported as a pair, and
+            # neither may leak past the build tree.
+            foreach(_hpgl_omp_flag IN LISTS _hpgl_omp_flags)
+                target_compile_options(hpgl_variogram PUBLIC $<BUILD_INTERFACE:${_hpgl_omp_flag}>)
+            endforeach()
             # R-22: same BUILD_INTERFACE-only wrap as hpgl_core — keeps the
             # Homebrew include dir out of any exported target (hpgl_variogram
             # is not exported today, but the defect class is the same).
@@ -701,7 +772,12 @@ install(DIRECTORY
 # Install Python wrapper scripts
 # NOTE: every module imported unconditionally by __init__.py / geo.py / sgs.py /
 # sis.py / gtsim.py MUST be listed here (config.py and ffi_adapter.py were
-# previously omitted — F-10: import hpgl failed with ModuleNotFoundError).
+# previously omitted — F-10: import hpgl failed with ModuleNotFoundError;
+# gslib_ref.py was then omitted the same way — F-076, imported by
+# routines.py:25 and geo.py:81 before any other work).
+# The build.sh wheel gate additionally asserts that every src/geo_bsd/*.py
+# module is present in the built wheel, so this list can no longer drift
+# silently into a shipped artifact.
 if(HPGL_BUILD_PYTHON)
     install(FILES
         src/geo_bsd/__init__.py
@@ -710,6 +786,7 @@ if(HPGL_BUILD_PYTHON)
         src/geo_bsd/cvariogram.py
         src/geo_bsd/ffi_adapter.py
         src/geo_bsd/geo.py
+        src/geo_bsd/gslib_ref.py
         src/geo_bsd/gtsim.py
         src/geo_bsd/hpgl_wrap.py
         src/geo_bsd/routines.py

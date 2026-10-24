@@ -188,6 +188,43 @@ class TestCalcCdfMultiValueTail:
         with pytest.raises(ValueError, match="NaN or Inf"):
             _make_prop([np.nan, 5.0, np.nan, 15.0], grid_shape=(2, 2, 1))
 
+    # ---- F-670: calc_cdf's own warn-and-filter branch (cdf.py:177-207) ----
+    # The two tests above exercise ContProperty.__init__, which rejects NaN
+    # before calc_cdf is ever called. The branch they appear to cover was
+    # therefore untested: it is reachable through the data SETTER, which has
+    # no isfinite check (geo.py:257-268) — the same injection pattern the
+    # suite already uses in test_production_fixes_geo.py.
+
+    def test_calc_cdf_filters_nan_informed_values(self):
+        """F-670: an injected NaN must warn + be filtered, not reach CdfData.
+
+        Pins two things a regression would lose: the warning (without it the
+        user sees a hard CdfData "values contain NaN or Inf" error) and the
+        post-filter `full_count` recomputation (cdf.py:201) — with the stale
+        count the tail would end at 0.75 instead of 1.0.
+        """
+        prop = _make_prop([1.0, 2.0, 3.0, 4.0], grid_shape=(2, 2, 1))
+        contaminated = prop.data.copy()
+        contaminated[1, 1, 0] = np.nan
+        prop.data = contaminated
+        with pytest.warns(UserWarning, match="Filtering them out"):
+            cdf = calc_cdf(prop)
+        np.testing.assert_array_equal(cdf.values, np.array([1.0, 2.0, 3.0], dtype="float32"))
+        np.testing.assert_allclose(cdf.probs[:2], [1 / 3, 2 / 3], rtol=1e-6)
+        assert cdf.probs[-1] < 1.0
+
+    def test_calc_cdf_all_informed_nan_after_filtering_raises(self):
+        """F-670 sibling branch (cdf.py:202-207): when filtering empties the
+        informed set the error must name the post-filter state, not be
+        swallowed into a CdfData error."""
+        prop = _make_prop([1.0, 2.0, 3.0, 4.0], grid_shape=(2, 2, 1))
+        contaminated = prop.data.copy()
+        contaminated[:] = np.nan
+        prop.data = contaminated
+        with pytest.warns(UserWarning, match="Filtering them out"):
+            with pytest.raises(ValueError, match="no informed values after filtering"):
+                calc_cdf(prop)
+
 
 @pytest.mark.hpgl
 class TestCdfDataCreation:

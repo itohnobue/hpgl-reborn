@@ -505,6 +505,42 @@ class TestCubeScanTotalWorkCap:
 
 
 # =============================================================================
+# F-658: F-N14 extent guard must ACCEPT an exact-extent template
+# =============================================================================
+
+
+@pytest.mark.skipif(not VARIOM_AVAILABLE, reason="variogram module not available")
+class TestCubeScanExactExtentGuard:
+    """F-658: the F-N14 guard is `max(abs(L)) > N` — an offset whose magnitude
+    EXACTLY equals the grid dimension is legal (empty-on-both-sides slices, a
+    zero-pair scan: see the comment at variogram.py:868-870). The existing
+    `test_exact_extent_still_works` never reaches that boundary (with
+    NumLags=3 on a 3-wide grid the largest offset is 2), so the natural
+    `>=` off-by-one regression would reject a legal template with the suite
+    green. This fixture reaches the boundary: NumLags=4 gives max|L| == 3.
+    """
+
+    def test_equal_extent_does_not_raise(self):
+        from geo_bsd.variogram import CubeScan
+
+        def count_fn(p1, p2, result, params):
+            if result is None:
+                return np.zeros(3, dtype=np.float64)
+            result[2] += 1
+            return result
+
+        ell = _make_ellipsoid(r1=100, r2=100, r3=100)
+        templ = _make_template(ell, num_lags=4, lag_width=1.0, lag_sep=1.0)
+        mask = np.ones((3, 3, 3), dtype="uint8")
+        res, lag_dist = CubeScan(templ, mask, count_fn, None)
+        assert res.shape == (4, 3)
+        assert np.all(np.isfinite(res))
+        assert len(lag_dist) == templ.NumLags
+        # The boundary lag is binned (not dropped) and the scan completes.
+        assert int(res[3, 2]) > 0, "lag at the exact grid extent must still be scanned"
+
+
+# =============================================================================
 # F-27: GridStyle work cap must bound the real per-pair cost
 # =============================================================================
 

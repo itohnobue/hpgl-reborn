@@ -5,6 +5,23 @@ Input Validation Framework for HPGL Python Interface
 Addresses vulnerability IV-001 (CVSS 7.5) - Insufficient Input Validation
 
 This module provides comprehensive input validation for all HPGL Python functions.
+
+Exception taxonomy (F-689): "wrong argument type" is signalled by two documented
+exception types, both part of the public contract:
+
+* ``TypeError`` from the dedicated type-checking helpers
+  (``validate_property_type``, ``validate_list_param``, ``validate_scalar_mean``,
+  ``validate_max_neighbors``, ``validate_seed``) and from the int gates in
+  ``validate_min_neighbors`` / ``validate_indicator_count``.
+* ``CriticalValidationError`` from the numeric validators
+  (``validate_radius``, ``validate_covariance_parameters``,
+  ``validate_probability``, ``validate_correlation_coef``,
+  ``validate_variance``), whose ``Raises:`` blocks document it.
+
+A caller that must catch a wrong-type error on a numeric parameter therefore has
+to catch ``ValidationError`` as well as ``TypeError``. Unifying the two families
+is a breaking public-API change (it rewrites documented ``Raises:`` contracts on
+both sides) and is deliberately not done here.
 """
 
 from __future__ import annotations
@@ -20,6 +37,15 @@ import numpy
 
 # Configure validation logger
 validation_logger = logging.getLogger("hpgl.validation")
+
+# F-698: ``os.O_NOFOLLOW`` is documented as Unix-only — the Windows ``os``
+# module has no such attribute, so the unguarded ``os.O_NOFOLLOW`` references in
+# the file-IO helpers below raised ``AttributeError`` before the file was
+# touched, taking every Python GSLIB load/save path down on a platform
+# pyproject.toml declares as supported. Resolve the flag ONCE with a 0 fallback;
+# on Windows the effective guards are the ``realpath`` containment check plus
+# ``O_EXCL`` on the temp file (residual noted in each helper's docstring).
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 # ============================================================================
@@ -42,13 +68,13 @@ class ValidationConstants:
 
     # Volume cap for the pure-Python moving-average path (F-M16). The
     # cubical-mask path is vectorized, but its mean-mask allocation is
-    # radius-driven ((2r)^3 cells); both the vectorized and per-cell loop
+    # radius-driven ((2r+1)^3 cells); both the vectorized and per-cell loop
     # paths share this bound to prevent a hang/OOM from oversized grids.
     MAX_MOVING_AVERAGE_VOLUME = 1000000
 
     # Work cap for the pure-Python moving-average per-cell (ellipse-mask)
     # path (F-30). The loop is O(N·V): every grid cell runs MeanCalc over
-    # a (2rx·2ry·2rz) window. MAX_MOVING_AVERAGE_VOLUME bounds the grid
+    # a (2rx+1)(2ry+1)(2rz+1) window. MAX_MOVING_AVERAGE_VOLUME bounds the grid
     # volume (memory) only; N × window_volume bounds the actual work.
     # 1e8 (~2.5 s worst case at measured pure-Python throughput) mirrors
     # the MAX_TOTAL_PAIR_LAG_WORK philosophy for the other pure-Python
@@ -73,6 +99,16 @@ class ValidationConstants:
     # Radius limits
     MIN_RADIUS = 0.0
     MAX_RADIUS = 1000000.0
+
+    # F-699: the C++ engine caps the covariance box at
+    # COVARIANCE_FIELD_VOLUME_CAP (covariance_field.h:140, 1e8 cells) and throws
+    # there for a larger box, while the Python boundary admitted any per-axis
+    # radius up to MAX_RADIUS — so inputs such as (232, 232, 232) passed
+    # validation and failed late as a RuntimeError instead of a clean
+    # CriticalValidationError. The cap applies to the VOLUME
+    # (2rx+1)(2ry+1)(2rz+1), never to a single axis: a per-axis bound would
+    # reject legal anisotropic radii such as (300, 10, 10) = 265,041 cells.
+    MAX_COVARIANCE_FIELD_VOLUME = 100000000
 
     # Positive minimum search radius for the kriging path (SK/LVM/etc.).
     # Radius 0 is still accepted globally (MIN_RADIUS=0.0) because the
@@ -110,6 +146,17 @@ class ValidationConstants:
 
     # Seed limits
     MIN_SEED = 0
+    # F-017: the seed crosses the C ABI as int64_t (api.h:96 for the SGS
+    # params struct, and `int64_t seed` in the hpgl_sis_simulation /
+    # hpgl_sis_simulation_lvm declarations; the ctypes side is ``C.c_int64``
+    # at hpgl_wrap.py:131 and :695/:705). Values above this bound are not
+    # representable: ctypes wraps them modulo 2**64, so 2**64+5 replays the
+    # stream of 5, and a value in (2**63, 2**64) arrives in C++ as a negative
+    # seed and is rejected with a message naming a seed the caller never
+    # passed. This is the ONE upper bound every Python seed gate shares.
+    # NOT applicable to the variogram seeded RNG, whose ABI field is uint64
+    # (cvariogram.py passes ``C.c_uint64``) — a different width.
+    MAX_SEED = 2**63 - 1
 
 
 # ============================================================================
@@ -137,11 +184,34 @@ class CriticalValidationError(ValidationError):
         super().__init__(message, parameter_name, "critical")
 
 
-class ValidationWarning(ValidationError):
-    """Validation warning that doesn't prevent operation"""
+class ValidationWarning(UserWarning):
+    """Validation warning that doesn't prevent operation (F-688/F-701).
+
+    Derives from ``UserWarning`` (a ``Warning`` subclass), not from
+    ``ValidationError``: ``warnings.warn`` requires its ``category`` argument to
+    be a ``Warning`` subclass, so the previous ``ValidationError`` base made this
+    class structurally incapable of ever being emitted as a warning while the
+    ``validate_max_neighbors`` docstring documented it as the raised type.
+    ``UserWarning`` (rather than bare ``Warning``) is the base so that existing
+    filters and assertions written for the category the code actually emitted
+    before this fix keep matching: ``warnings.warn`` with the default category
+    raises ``UserWarning``. ``ValidationError`` remains the hierarchy for RAISED
+    errors; this class is the warned category, and ``validate_max_neighbors``
+    now passes it to ``warnings.warn``.
+
+    ``severity`` / ``message`` / ``parameter_name`` are kept as public payload
+    attributes for callers (and tests) written against the former shape.
+    """
+
+    severity = "warning"
 
     def __init__(self, message: str, parameter_name: str = ""):
-        super().__init__(message, parameter_name, "warning")
+        self.message = message
+        self.parameter_name = parameter_name
+        if parameter_name:
+            super().__init__(f"{parameter_name}: {message}")
+        else:
+            super().__init__(message)
 
 
 # ============================================================================
@@ -160,7 +230,21 @@ class _PathValidatorMeta(type):
 
     @property
     def DEFAULT_BASE_DIR(cls) -> str:
-        return os.path.realpath(os.getcwd())
+        # G-21: os.getcwd() raises FileNotFoundError when the process cwd has
+        # been unlinked (and OSError for other lookup failures). Escaping as a
+        # bare FileNotFoundError from a path-validation property is
+        # indistinguishable from a missing data file, so translate it into the
+        # typed error the path API documents. There is no trustworthy base to
+        # fall back to: substituting "/" would silently widen the containment
+        # check that every caller depends on.
+        try:
+            return os.path.realpath(os.getcwd())
+        except OSError as e:
+            raise CriticalValidationError(
+                "Cannot resolve the default base directory: the process working "
+                "directory is unavailable",
+                "basedir",
+            ) from e
 
 
 class PathValidator(metaclass=_PathValidatorMeta):
@@ -192,6 +276,11 @@ class PathValidator(metaclass=_PathValidatorMeta):
             basedir: Optional base directory to restrict resolved paths within.
                      If provided, the resolved path must be a child of this directory.
 
+        The base directory is process-global: it is read from the cwd (or from
+        ``basedir``) at call time, so per-thread isolation requires absolute
+        filenames. One call resolves the base and the target from a SINGLE cwd
+        instant (G-13).
+
         Returns:
             Absolute, normalized path as string
 
@@ -216,6 +305,23 @@ class PathValidator(metaclass=_PathValidatorMeta):
                 f"Path traversal detected in filename: {filename}", "filename"
             )
 
+        # G-13: resolve the trusted base FIRST and anchor a relative filename to
+        # it, so ONE call reads the process cwd at one instant. Pre-fix the base
+        # (``DEFAULT_BASE_DIR`` → os.getcwd()) and the target
+        # (``Path.resolve`` → os.getcwd()) were read separately, so a concurrent
+        # os.chdir() could make them disagree: a spurious
+        # CriticalValidationError, or a silently mislocated write/read under a
+        # different directory with a success return. An explicit ``basedir`` did
+        # not mitigate it because only the target resolve consulted the cwd.
+        basedir_resolved = None
+        if basedir is not None:
+            basedir_resolved = pathlib.Path(basedir).resolve()
+            if not path.is_absolute():
+                # A relative name is resolved UNDER the trusted base, which is
+                # what the ``basedir`` contract says it is for; the pre-fix code
+                # resolved it against the cwd instead.
+                path = basedir_resolved / path
+
         # Resolve to absolute path and normalize (removes ../ segments)
         try:
             resolved_path = path.resolve(strict=must_exist)
@@ -230,8 +336,7 @@ class PathValidator(metaclass=_PathValidatorMeta):
 
         # If basedir is specified, verify the resolved path is within it.
         # This prevents symlink-based escapes (e.g., /tmp/link → /etc).
-        if basedir is not None:
-            basedir_resolved = pathlib.Path(basedir).resolve()
+        if basedir_resolved is not None:
             try:
                 resolved_path.relative_to(basedir_resolved)
             except ValueError as err:
@@ -320,6 +425,12 @@ class PathValidator(metaclass=_PathValidatorMeta):
         vulnerabilities. Returns a file object that must be closed by
         the caller (use as a context manager).
 
+        Platform residual (F-698): ``O_NOFOLLOW`` is Unix-only. Where the flag is
+        unavailable (Windows) it is omitted, so a symlink swapped in between
+        ``resolve()`` and ``open()`` is not blocked by the open itself — the
+        containment check still applies, and the descriptor is never created
+        outside it.
+
         Args:
             filename: The file path to validate and open for writing.
             basedir: Base directory for containment check (required).
@@ -335,8 +446,18 @@ class PathValidator(metaclass=_PathValidatorMeta):
         safe_path = PathValidator.validate_filepath_in_basedir(
             filename, basedir=basedir, must_exist=False
         )
-        fd = os.open(safe_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW)
-        return os.fdopen(fd, "w", encoding=encoding)
+        fd = os.open(safe_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_NOFOLLOW)
+        try:
+            return os.fdopen(fd, "w", encoding=encoding)
+        except BaseException:
+            # G-22: os.fdopen can fail after the descriptor exists (unknown
+            # encoding, MemoryError). Close it explicitly instead of relying on
+            # the interpreter's refcount cleanup.
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
 
     @staticmethod
     @contextmanager
@@ -370,6 +491,11 @@ class PathValidator(metaclass=_PathValidatorMeta):
         Raises:
             CriticalValidationError: If path is invalid or outside basedir.
             OSError: If the file cannot be opened or renamed.
+
+        Platform residual (F-698): ``O_NOFOLLOW`` is Unix-only and is omitted
+        where unavailable (Windows), so a symlink swapped in between
+        ``resolve()`` and ``open()`` is not blocked by the open itself; the
+        containment check and the ``O_EXCL`` temp creation still apply.
         """
         safe_path = PathValidator.validate_filepath_in_basedir(
             filename, basedir=basedir, must_exist=False
@@ -387,7 +513,7 @@ class PathValidator(metaclass=_PathValidatorMeta):
             try:
                 fd = os.open(
                     candidate,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW,
                     0o644,
                 )
                 tmp_path = candidate
@@ -398,7 +524,22 @@ class PathValidator(metaclass=_PathValidatorMeta):
             raise OSError(
                 f"Could not create a unique temporary file for {safe_path}"
             )
-        f = os.fdopen(fd, "w", encoding=encoding)
+        try:
+            f = os.fdopen(fd, "w", encoding=encoding)
+        except BaseException:
+            # G-22: os.fdopen can fail after the descriptor and the temp file
+            # exist. The cleanup handler below is armed only after fdopen
+            # succeeds, so without this the descriptor stays open and the temp
+            # file is left on disk.
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         try:
             yield f
             f.flush()
@@ -439,12 +580,26 @@ class PathValidator(metaclass=_PathValidatorMeta):
         Raises:
             CriticalValidationError: If path is invalid or outside basedir.
             OSError: If the file cannot be opened.
+
+        Platform residual (F-698): ``O_NOFOLLOW`` is Unix-only and is omitted
+        where unavailable (Windows), so a symlink swapped in between
+        ``resolve()`` and ``open()`` is not blocked by the open itself; the
+        containment check still applies.
         """
         safe_path = PathValidator.validate_filepath_in_basedir(
             filename, basedir=basedir, must_exist=True
         )
-        fd = os.open(safe_path, os.O_RDONLY | os.O_NOFOLLOW)
-        return os.fdopen(fd, "r", encoding=encoding)
+        fd = os.open(safe_path, os.O_RDONLY | _O_NOFOLLOW)
+        try:
+            return os.fdopen(fd, "r", encoding=encoding)
+        except BaseException:
+            # G-22: os.fdopen can fail after the descriptor exists (unknown
+            # encoding, MemoryError). Close it explicitly.
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
 
 # ============================================================================
 # Grid and Array Validation
@@ -637,6 +792,12 @@ class ParameterValidator:
         """
         Validates radius parameters.
 
+        The covariance-box volume a radius builds, ``(2rx+1)(2ry+1)(2rz+1)``,
+        must not exceed ``MAX_COVARIANCE_FIELD_VOLUME`` — the engine's
+        ``COVARIANCE_FIELD_VOLUME_CAP`` (covariance_field.h:140). The check is
+        on the volume, not on any single axis (F-699), so anisotropic radii
+        such as ``(300, 10, 10)`` stay legal.
+
         Args:
             radius: Single value or tuple of (rx, ry, rz)
             name: Parameter name for error messages
@@ -682,6 +843,24 @@ class ParameterValidator:
                     name,
                 )
 
+        # F-699: mirror the engine's covariance-box volume cap
+        # (covariance_field.h:140, COVARIANCE_FIELD_VOLUME_CAP = 1e8 cells;
+        # reached from every kriging/SGS/SGS-LVM/SIS covariance-box
+        # construction). Without it a legal-looking per-axis radius such as
+        # (232, 232, 232) passed Python and failed late as a RuntimeError from
+        # deep inside the FFI call. The predicate is the VOLUME, never a
+        # per-axis bound: (300, 10, 10) is 265,041 cells and is legal.
+        sx, sy, sz = (2 * int(v) + 1 for v in vals)
+        box_volume = sx * sy * sz
+        if box_volume > ValidationConstants.MAX_COVARIANCE_FIELD_VOLUME:
+            raise CriticalValidationError(
+                f"{name} = {tuple(int(v) for v in vals)} builds a covariance box "
+                f"of {box_volume} cells ((2x+1)(2y+1)(2z+1)), exceeding the "
+                f"maximum {ValidationConstants.MAX_COVARIANCE_FIELD_VOLUME} cells "
+                f"(aligned with the C++ engine limit); reduce the search radii",
+                name,
+            )
+
         return (int(vals[0]), int(vals[1]), int(vals[2]))
 
     @staticmethod
@@ -705,7 +884,14 @@ class ParameterValidator:
         Raises:
             TypeError: If max_neighbors is not an int (bool excluded).
             CriticalValidationError: If max_neighbors is invalid.
-            ValidationWarning: If max_neighbors is unusually large.
+
+        Warns:
+            ValidationWarning: If max_neighbors is unusually large (above
+                ``MAX_NEIGHBORS`` but within the hard engine limit). The
+                warning category is the exported ``ValidationWarning`` type, so
+                ``pytest.warns(ValidationWarning)`` or
+                ``warnings.filterwarnings("error", category=ValidationWarning)``
+                applies to it (F-688/F-701).
         """
         if not isinstance(max_neighbors, (int, numpy.integer)) or isinstance(max_neighbors, bool):
             raise TypeError(
@@ -740,6 +926,7 @@ class ParameterValidator:
             warnings.warn(
                 f"Max neighbors {max_neighbors} exceeds recommended maximum {ValidationConstants.MAX_NEIGHBORS}. "
                 "Performance may be degraded.",
+                ValidationWarning,
                 stacklevel=2,
             )
 
@@ -753,8 +940,30 @@ class ParameterValidator:
             max_neighbors: Maximum number of neighbors
 
         Raises:
+            TypeError: If ``min_neighbors`` or ``max_neighbors`` is not an int
+                (bool excluded). Pre-fix both comparisons ran on unchecked
+                values, so ``NaN``/``2.7`` passed and a string escaped as a raw
+                ``'>' not supported between instances of 'str' and 'int'``
+                naming no parameter (F-690); the value then failed three layers
+                down at the ctypes ``c_int`` struct assignment.
             CriticalValidationError: If min_neighbors is invalid
         """
+        # F-690: the family's type prelude, mirroring validate_max_neighbors,
+        # validate_seed and SGSConfig.__post_init__. 0 stays legal — the SGS
+        # entry documents it as the unconditioned-simulation mode.
+        if not isinstance(min_neighbors, (int, numpy.integer)) or isinstance(
+            min_neighbors, bool
+        ):
+            raise TypeError(
+                f"min_neighbors must be an int, got {type(min_neighbors).__name__}"
+            )
+        if not isinstance(max_neighbors, (int, numpy.integer)) or isinstance(
+            max_neighbors, bool
+        ):
+            raise TypeError(
+                f"max_neighbors must be an int, got {type(max_neighbors).__name__}"
+            )
+
         if min_neighbors > max_neighbors:
             raise CriticalValidationError(
                 f"Min neighbors {min_neighbors} exceeds max neighbors {max_neighbors}",
@@ -932,8 +1141,12 @@ class ParameterValidator:
         Raises:
             TypeError: If seed is not an integer.
             CriticalValidationError: If seed is negative (C++ contract requires
-                non-negative). Matches the documented contract in the sgs/sis
-                entry points and the sibling validators in this chain (2-M-11).
+                non-negative) or exceeds ``ValidationConstants.MAX_SEED`` —
+                the int64 width of the C ABI field (F-017). A larger value is
+                not representable: ctypes wraps it modulo 2**64, so two
+                distinct seeds silently replay one stream. Matches the
+                documented contract in the sgs/sis entry points and the
+                sibling validators in this chain (2-M-11).
         """
         if not isinstance(seed, (int, numpy.integer)) or isinstance(seed, bool):
             raise TypeError(
@@ -942,6 +1155,13 @@ class ParameterValidator:
         if seed < ValidationConstants.MIN_SEED:
             raise CriticalValidationError(
                 f"Seed value {seed} is negative (must be non-negative)",
+                "seed",
+            )
+        if seed > ValidationConstants.MAX_SEED:
+            raise CriticalValidationError(
+                f"Seed value {seed} exceeds the int64 range accepted by the C "
+                f"ABI (0..{ValidationConstants.MAX_SEED}); larger values wrap "
+                f"modulo 2**64 and replay another seed's random stream",
                 "seed",
             )
 
@@ -954,8 +1174,16 @@ class ParameterValidator:
             count: Number of indicators
 
         Raises:
+            TypeError: If ``count`` is not an int (bool excluded) — F-690, the
+                same missing gate as ``validate_min_neighbors``; pre-fix
+                ``NaN``/``2.5``/``True`` passed every comparison.
             CriticalValidationError: If count is invalid
         """
+        if not isinstance(count, (int, numpy.integer)) or isinstance(count, bool):
+            raise TypeError(
+                f"indicator_count must be an int, got {type(count).__name__}"
+            )
+
         if count <= 0:
             raise CriticalValidationError(
                 f"Indicator count must be positive, got {count}", "indicator_count"

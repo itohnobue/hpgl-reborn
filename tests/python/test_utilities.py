@@ -411,9 +411,19 @@ class TestUndefinedValueHandling:
     """Test undefined value handling in I/O operations"""
 
     def test_undefined_value_masking_continuous(self, tmp_path):
-        """Test that undefined values are correctly masked"""
+        """Test that undefined values are correctly masked.
+
+        F-253: ``write_property`` rejects a sentinel that collides with an
+        INFORMED cell (the writer emits the raw value for informed cells and
+        every reader re-masks by exact equality, so such a cell would come back
+        masked — silent round-trip loss). The two ``-99.0`` cells are therefore
+        marked uninformed here, which is what a real file with undefined cells
+        looks like: the sentinel round-trips through the writer's own
+        undefined-cell path.
+        """
         data = np.array([1.0, -99.0, 3.0, -99.0, 5.0], dtype="float32")
         mask = np.ones(5, dtype="uint8")
+        mask[1] = mask[3] = 0  # the sentinel cells are genuinely uninformed
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "undefined_test.inc")
@@ -423,6 +433,9 @@ class TestUndefinedValueHandling:
         loaded = load_cont_property(filename, -99.0, basedir=str(tmp_path))
 
         # Undefined values should be masked
+        np.testing.assert_array_equal(
+            loaded.mask.ravel(), np.array([1, 0, 1, 0, 1], dtype="uint8")
+        )
         assert loaded.mask[1] == 0
         assert loaded.mask[3] == 0
         assert loaded.mask[0] == 1
@@ -455,6 +468,14 @@ class TestAppendMask:
         assert prop.data[3] == pytest.approx(-99.0)
         # Unmasked values should remain
         assert prop.data[0] == pytest.approx(original_data[0])
+        # F-456: append_mask's second effect is the IN-PLACE mask append
+        # (`infs = prop[1]; infs &= mask` mutates prop._mask because the mask
+        # property returns the array itself). Asserting data alone let a
+        # local-copy refactor (`infs = prop[1] & mask`) pass while the
+        # property reported the newly-masked cells as informed.
+        np.testing.assert_array_equal(
+            prop.mask, np.array([1, 0, 1, 0, 1], dtype="uint8")
+        )
 
     def test_append_mask_all_zeros(self):
         """Test append_mask with all-zero mask"""
@@ -500,6 +521,32 @@ class TestAppendMask:
         # regression that leaves masked cells unchanged would pass the kept-cell
         # assertion above).
         assert prop.data[1, 0, 0] == pytest.approx(-99.0)
+        # F-456: the mask append itself is the other half of the contract
+        # (prop.mask must equal the AND of the original and the additional mask).
+        expected_mask = np.zeros((2, 2, 2), dtype="uint8")
+        expected_mask[0, 0, 0] = 1
+        np.testing.assert_array_equal(prop.mask, expected_mask)
+
+    def test_append_mask_ind_property(self):
+        """F-456: IndProperty goes through the uint8 branch — mask appended AND
+        masked cells set to the 255 sentinel.
+
+        No test constructed an IndProperty for append_mask before this one, so
+        the dtype-dispatch branch (geo.py:615-618) was unpinned.
+        """
+        data = np.array([0, 1, 2, 1], dtype="uint8")
+        mask = np.ones(4, dtype="uint8")
+        prop = IndProperty(data, mask, 3)
+
+        append_mask(prop, np.array([1, 0, 1, 0], dtype="uint8"))
+
+        np.testing.assert_array_equal(
+            prop.mask, np.array([1, 0, 1, 0], dtype="uint8")
+        )
+        # 255 (not -99, which wraps to 157 in uint8) is the masked-cell sentinel.
+        np.testing.assert_array_equal(
+            prop.data, np.array([0, 255, 2, 255], dtype="uint8")
+        )
 
 
 # =============================================================================
@@ -558,9 +605,16 @@ class TestEdgeCases:
     """Test edge cases and error handling"""
 
     def test_negative_values_in_data(self, tmp_path):
-        """Test handling of negative values"""
+        """Test handling of negative values.
+
+        F-253: the ``-99.0`` cell is marked uninformed (it equals the sentinel
+        this write uses). An informed cell holding the sentinel is rejected by
+        the collision guard, which exists because such a cell would read back
+        masked. The negatives under test are ``-1.0, -2.0, -3.0``, which must
+        survive the round trip unmasked.
+        """
         data = np.array([-1.0, -2.0, -3.0, -99.0], dtype="float32")
-        mask = np.ones(4, dtype="uint8")
+        mask = np.array([1, 1, 1, 0], dtype="uint8")
         prop = ContProperty(data, mask)
 
         filename = str(tmp_path / "negative.inc")
@@ -573,6 +627,11 @@ class TestEdgeCases:
         assert loaded.data[0] < 0
         assert loaded.data[1] < 0
         assert loaded.data[2] < 0
+        # ... and stay informed; only the sentinel cell comes back masked.
+        np.testing.assert_array_equal(
+            loaded.mask.ravel(), np.array([1, 1, 1, 0], dtype="uint8")
+        )
+
 
     def test_very_small_values(self, tmp_path):
         """Test handling of very small values"""

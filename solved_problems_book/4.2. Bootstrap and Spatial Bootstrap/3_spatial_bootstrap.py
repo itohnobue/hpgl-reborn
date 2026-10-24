@@ -132,6 +132,28 @@ for i in range(n):
 	z_mas = spatial_bootstrap(x_num, y_num, poro_values, l)
 	z_mean.append(calc_mean_array(z_mas))
 
+# F-104: report the statistics the lesson is about. 4.2's only published
+# number is the effective number of independent data n_eff (Eq. 4.2), which
+# the script never computed or printed (the histogram was its only output),
+# so the spread of the bootstrap mean could not be read off a run either.
+# Printed below: the mean and standard deviation of the spatial bootstrap
+# mean, and the variance-ratio equivalent sample size
+#     n_eff = Var(porosity) / Var(spatial bootstrap mean)
+# (equivalently n * Var(classical bootstrap mean) / Var(spatial bootstrap
+# mean), since the mean of n independent draws has variance
+# Var(porosity)/n). That is the standard definition of an effective sample
+# size — the number of independent data whose mean would have the observed
+# variance; the book's own derivation is not in the repo, so the value
+# printed is this definition's answer, computed from the run's own draws.
+z_mean_arr = np.asarray(z_mean, dtype=float)
+z_mean_mean = z_mean_arr.mean()
+z_mean_std = np.sqrt(calc_quadr_var(z_mean_arr, z_mean_mean))
+poro_var = calc_quadr_var(poro_values, poro_values.mean())
+print("Mean of the spatial bootstrap mean: ", z_mean_mean)
+print("Standard deviation of the spatial bootstrap mean: ", z_mean_std)
+print("Effective number of independent data "
+	"(Var(porosity) / Var(spatial bootstrap mean)): ", poro_var / z_mean_std ** 2)
+
 print("Done!")
 print("Drawing histogram...")
 

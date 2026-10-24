@@ -43,7 +43,11 @@ np.random.seed(12345)
 def npv_calculate(R, C, r, n):
 	npv = 0.0
 	for i in range(n):
-		npv = npv + ((R[i] - C[i]) / (1 + r)**i)
+		# F-034: year i is discounted i+1 periods, exactly as in the
+		# sibling 1_npv.py:47. The previous exponent `i` left year 1
+		# undiscounted, so this lesson's NPV distribution (and its
+		# P10/P50/P90) was shifted up against part (i) of the same problem.
+		npv = npv + ((R[i] - C[i]) / (1 + r)**(i+1))
 	return npv
 
 def mean_var_calculate(p, C, mean_R, var_R, mean_C, var_C, n):

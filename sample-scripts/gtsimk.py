@@ -4,7 +4,7 @@ import os
 import math
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from geo_bsd import (
     ContProperty, SugarboxGrid, CovarianceModel,
     simple_kriging, write_property,
@@ -18,12 +18,16 @@ from geo_bsd.sgs import sgs_simulation
 from geo_bsd.cdf import calc_cdf
 from gaussian_cdf import inverse_normal_score
 
-# E-M13: the pseudo-Gaussian transform below draws from the numpy global RNG
-# (np.random.uniform). sgs_simulation receives a fixed seed, but without
+# E-M13/F-366: the pseudo-Gaussian transform below draws a random value for
+# every hard-data cell. sgs_simulation receives a fixed seed, but without
 # seeding the transform draws the runs vary run-to-run (grep: 0 seed calls
-# across sample-scripts/src before this fix). Seed once at script start with
-# the SGS seed so the whole pipeline is reproducible.
-np.random.seed(3439275)
+# across sample-scripts/src before this fix). The E-M13 fix seeded the
+# process-global RNG at import (np.random.seed(3439275)); that made the
+# pipeline reproducible but also clobbered the caller's RNG state for the
+# rest of the process. Keep the SAME reproducible MT19937 stream in a private
+# generator instead — importing this module no longer touches np.random's
+# global state (same pattern as gtsim.py:27).
+_RNG = np.random.RandomState(3439275)
 
 
 def _norm_cdf(x):
@@ -77,13 +81,13 @@ def pseudo_gaussian_transform(prop, tk_prop, indicator):
             # constant marginal thresholds define proper per-category
             # intervals (sibling gtsimk_const_prob.py pattern).
             if val == 0:
-                result.data.flat[i] = np.random.uniform(
+                result.data.flat[i] = _RNG.uniform(
                     inverse_normal_score(0.0), tk_prop[val])
             elif val == (indicator - 1):
-                result.data.flat[i] = np.random.uniform(
+                result.data.flat[i] = _RNG.uniform(
                     tk_prop[val - 1], inverse_normal_score(1.0))
             else:
-                result.data.flat[i] = np.random.uniform(
+                result.data.flat[i] = _RNG.uniform(
                     tk_prop[val - 1], tk_prop[val])
     return result
 
@@ -117,6 +121,17 @@ def gtsim_Kind(grid, prop, indicator, sk_params=None, pk_prop=None, sgs_params=N
 
     # 1. calculate pk_prop
     print("Extracting probability information...")
+
+    # F-349: every producer here writes CWD-relative results/ paths, so the
+    # directory has to exist by the time this function writes its artifact —
+    # it is created immediately before that write (step 5), not here, so a run
+    # that aborts earlier (a validation error, the sgs_params guard) leaves no
+    # directory behind. Until this was fixed each producer reached its
+    # write_property call only AFTER the expensive SK/SGS work and then died
+    # with `RuntimeError: write_property failed: Can't open file
+    # 'GTSIM_TRUNC_RESULT.INC.tmp...'`, leaving the PREVIOUS run's artifact in
+    # place for the consumer (test_gtsimk1.py reads the fixed path and prints
+    # a verdict, so a dead producer still "passes").
 
     if pk_prop is None:
         print("User-defined probability properties NOT FOUND.")
@@ -259,7 +274,20 @@ def gtsim_Kind(grid, prop, indicator, sk_params=None, pk_prop=None, sgs_params=N
                 if k == (indicator - 2):
                     prop1.data.flat[i] = k + 1
 
-    write_property(prop1, "results/GTSIM_TRUNC_RESULT.INC", "TRUNC_RESULT_GT", -99)
+    # F-349: create the output directory immediately before the one write of
+    # this pipeline (see the step-1 note). Placing it here keeps a run that
+    # aborts earlier free of filesystem side effects.
+    os.makedirs("results", exist_ok=True)
+    # G-36: write this producer's artifact under its OWN name. The sibling
+    # gtsimk_const_prob.py wrote the same path with the same INC title
+    # ("TRUNC_RESULT_GT") from a materially different pipeline (constant
+    # marginal thresholds, `<` instead of `<=`), so a consumer reading the
+    # shared path printed a verdict for whichever producer ran last. Each
+    # producer now has a distinct name — this one writes
+    # GTSIM_TRUNC_RESULT_GTSIMK.INC, the sibling writes
+    # GTSIM_CONSTPROB_TRUNC_RESULT.INC — and the consumer test_gtsimk1.py
+    # reads THIS name, so its verdict stays attributed to this pipeline.
+    write_property(prop1, "results/GTSIM_TRUNC_RESULT_GTSIMK.INC", "TRUNC_RESULT_GTSIMK", -99)
     print("Done.")
     print("GTSIM: Finished.")
     return prop1

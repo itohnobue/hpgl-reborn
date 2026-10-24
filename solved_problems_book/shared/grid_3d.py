@@ -21,6 +21,15 @@ class Grid:
 		if (x <= self.x_max) and (y <= self.y_max) and (z <= self.z_max):
 			i = int((x - self.x0) / self.nx)
 			j = int((y - self.y0) / self.ny)
+			# F-036: the guards above are INCLUSIVE and int() truncates, so a
+			# point exactly on a top face yields the index max, one past the
+			# iterated range(0, max). gammabar.py:43 and test.py:27 build
+			# z_max == max(Z), so the datum at max(Z) silently fell out of
+			# every cell (get_sum_cell_value only accepts get_ijk matches).
+			# Clamp the top face into the LAST cell; interior indices are
+			# unchanged.
+			i = min(i, self.i_max - 1)
+			j = min(j, self.j_max - 1)
 			# F-08: with 2D data the scripts build the grid with nz == 0
 			# (array3 is all zeros, so (max-min)/dz == 0). Dividing by a
 			# zero nz gives int(0/0) = int(NaN) -> ValueError. Treat nz == 0
@@ -29,6 +38,7 @@ class Grid:
 				k = 0
 			else:
 				k = int((z - self.z0) / self.nz)
+				k = min(k, self.k_max - 1)
 			return i, j, k
 		else:
 			return -1, -1, -1

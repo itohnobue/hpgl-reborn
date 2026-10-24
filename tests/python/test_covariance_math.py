@@ -98,7 +98,7 @@ class TestSphericalCovariance:
         np.testing.assert_allclose(C, 0.0, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_sph_with_nugget_h0(self):
-        """SPH-5: sill=1.0, nugget=0.1, range=10.0, h=0 → C=1.0 (h<0.0001 guard)"""
+        """SPH-5: sill=1.0, nugget=0.1, range=10.0, h=0 → C=1.0 (h<=0 → sill)"""
         C = compute_covariance_from_sk_weight(
             1.0, 0.1, covariance.spherical, (10.0, 10.0, 10.0), 0.0
         )
@@ -112,11 +112,23 @@ class TestSphericalCovariance:
         np.testing.assert_allclose(C, 0.28125, rtol=COV_RTOL, atol=COV_ATOL)
 
     def test_sph_tiny_distance(self):
-        """SPH-10: sill=1.0, nugget=0.0, range=100.0, h=5e-5 → C=1.0 (h<0.0001 guard)"""
+        """SPH-10 (F-491): sill=1.0, nugget=0.4, range=100.0, h=5e-5.
+
+        A tiny POSITIVE distance is a real covariance point, not the origin:
+        C(h) = (sill-nugget) * (1 - 1.5x + 0.5x^3) with x = h/range = 5e-7,
+        i.e. 0.59999955. This fails in both directions that matter:
+          - the former range-relative band (h < 1e-5*ranges[0] → sill, removed
+            by F-199's zero-distance point test) answers 1.0;
+          - a nugget-blind near-zero threshold answers 1.0 as well.
+
+        The previous fixture (nugget=0.0) could distinguish neither: with no
+        nugget the formula value is 0.99999925, inside rtol=1e-5 of 1.0, and
+        h=5e-5 sat inside the old band's 1e-3 threshold anyway.
+        """
         C = compute_covariance_from_sk_weight(
-            1.0, 0.0, covariance.spherical, (100.0, 100.0, 100.0), 5e-5
+            1.0, 0.4, covariance.spherical, (100.0, 100.0, 100.0), 5e-5
         )
-        np.testing.assert_allclose(C, 1.0, rtol=COV_RTOL, atol=COV_ATOL)
+        np.testing.assert_allclose(C, 0.59999955, rtol=COV_RTOL, atol=COV_ATOL)
 
 
 # =============================================================================

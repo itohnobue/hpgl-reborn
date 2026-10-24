@@ -49,8 +49,15 @@ namespace hpgl
 	// R-15 cap bounds only the MAIN scan. The fallback is bounded here to
 	// the NEIGHBOUR_SCAN_WORK_CAP NEAREST lattice offsets: fallback_d2_cap()
 	// returns the largest squared distance whose in-box lattice count fits
-	// the cap (or -1 when the whole box fits — every reachable config keeps
-	// the exact E-M66 full-radius admission). The scan then skips offsets
+	// the cap, and -1 only when (2rx+1)(2ry+1)(2rz+1) <= NEIGHBOUR_SCAN_WORK_CAP
+	// (i.e. the box itself fits the budget). F-297: otherwise the fallback
+	// evaluates the nearest NEIGHBOUR_SCAN_WORK_CAP lattice offsets — a cap
+	// radius of ~28.8 cells for a cubic box, independent of the user's radius
+	// — and radius-bounded data beyond that sphere are NOT admitted. The box
+	// bound is COVARIANCE_FIELD_VOLUME_CAP = 1e8 cells (covariance_field.h),
+	// not 1e5, so boxes in (1e5, 1e8] are legal and are truncated; T-24
+	// (tests/cpp/test_hpgl_core.cpp, radius-30 / 226,981-cell box) pins that
+	// truncation. The scan then skips offsets
 	// beyond the cap with the same monotone layer/row/column break/continue
 	// used for the window-full pruning, so the evaluated set stays
 	// distance-ordered nearest-first (E2-141). A flat evaluation counter in
@@ -129,6 +136,25 @@ namespace hpgl
 	public:		
 		typedef sugarbox_location_t coord_t;
 		typedef sugarbox_grid_t grid_t;
+
+		// G-09 (CONFIRMED MEDIUM): read-only views of the two construction
+		// products the ndmin gate in sequential_simulation.h needs — the
+		// covariance-threshold offset list find() scans and the pure-nugget
+		// fallback distance bound. The gate used to rebuild both with a SECOND
+		// calc_cov_field + fallback_d2_cap over the same (covariances, radiuses)
+		// pair, paying another full-box covariance table transient (8 V at
+		// r = 231) and taking peak residency from 28 V to 40 V. Exposing the
+		// existing list lets the gate reference it instead of duplicating it.
+		// Both values are final after the constructor (find() only reads them).
+		const std::vector<sugarbox_vector_t> & offsets() const
+		{
+			return *m_vectors;
+		}
+
+		long long fallback_d2_cap_value() const
+		{
+			return m_fallback_d2_cap;
+		}
 
 		neighbour_lookup_t(
 				const sugarbox_grid_t * grid,				
@@ -294,9 +320,15 @@ namespace hpgl
 				// E2-141 farthest-first bias). Offsets beyond the cap are
 				// skipped with the same monotone layer/row/column
 				// break/continue as the window pruning, so the admitted
-				// set stays nearest-first; -1 (whole box fits the budget)
-				// keeps the exact E-M66 full-radius scan for every
-				// reachable config (box volume <= 1e5 cells).
+				// set stays nearest-first; -1 (whole box fits the budget,
+				// i.e. (2rx+1)(2ry+1)(2rz+1) <= NEIGHBOUR_SCAN_WORK_CAP)
+				// keeps the exact E-M66 full-radius scan. F-297: for a
+				// box above the budget the admitted region is the nearest
+				// ~28.8-cell sphere (cubic), NOT the user's radius — the
+				// box bound is the 1e8-cell covariance cap, not 1e5 cells,
+				// so this truncation is reachable from the public API
+				// (radius >= 23) and radius-bounded data outside the
+				// sphere are not admitted (T-24 pins it).
 				const int rx = static_cast<int>(m_radiuses[0]);
 				const int ry = static_cast<int>(m_radiuses[1]);
 				const int rz = static_cast<int>(m_radiuses[2]);

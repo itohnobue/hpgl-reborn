@@ -231,10 +231,30 @@ namespace hpgl
 			}
 		};
 
-		static void load_floats_into_vector(FILE * file, float * data, int size)
+		/// F-266: parse into float64 and classify IN THE SAME PASS.
+		/// Previously the token was parsed with "%f" (float32) and the mask
+		/// loop then widened that already-narrowed value and compared it with
+		/// the float64 sentinel window — so a token spelled with <= 8
+		/// significant digits ("1.0E+21", "-1.0E+21", ...) became
+		/// 1.0000000200408773e21 and was classified MISSING here while every
+		/// Python reader classifies the same token as DATA (gslib_ref.py
+		/// GSLIB_SENTINEL_WINDOW, strict > in float64). api.h:169-177 states
+		/// the contract the old code violated: an exact ±1.0e21 value is a
+		/// real (extreme) data value. Classifying the float64 token before the
+		/// float32 store matches the Python predicate exactly, including the
+		/// writer's own "%.9E" spelling of float32 1.0e21f, which stays > the
+		/// window and therefore stays masked.
+		static void load_floats_into_vector(
+				FILE * file,
+				float * data,
+				unsigned char * mask,
+				float undefined_value,
+				int size)
 		{
 			char buffer[256];
 			token_stream_t tokens(file);
+			const double sentinel_min = -static_cast<double>(HPGL_GSLIB_SENTINEL_WINDOW);
+			const double sentinel_max =  static_cast<double>(HPGL_GSLIB_SENTINEL_WINDOW);
 			int i = 0;
 			while (i < size)
 			{
@@ -246,7 +266,7 @@ namespace hpgl
 				if (strlen(buffer) >= 1 && buffer[0] == '/')
 					continue;
 
-				float value;
+				double value;
 				int consumed = 0;
 				// E-M73: full-token validation. A bare %f accepts numeric
 				// PREFIXES ("5/" -> 5.0, "1.5abc" -> 1.5) and reports
@@ -256,21 +276,50 @@ namespace hpgl
 				// how many characters were consumed; the whole token must
 				// be consumed (tokens from token_stream_t never contain
 				// whitespace, so trailing-space handling is unnecessary).
-				if (sscanf(buffer, "%f%n", &value, &consumed) != 1
+				if (sscanf(buffer, "%lf%n", &value, &consumed) != 1
 					|| consumed != static_cast<int>(strlen(buffer)))
 				{
 					std::ostringstream oss;
 					oss << "Error parsing '" << buffer << "' string.";
 					throw hpgl_exception("load_floats_into_vector", oss.str());
 				}
-				if (!std::isfinite(value))
+				// Non-finite token, or a finite float64 that does not fit the
+				// float32 storage. The second half preserves the pre-F-266
+				// behaviour for out-of-float32-range tokens, which are
+				// unparseable junk for this reader rather than data.
+				if (!std::isfinite(value)
+					|| !std::isfinite(static_cast<float>(value)))
 				{
 					std::ostringstream oss;
 					oss << "Non-finite float value (NaN or Inf) in '"
 					    << buffer << "' at position " << i;
 					throw hpgl_exception("load_floats_into_vector", oss.str());
 				}
-				data[i] = value;
+				data[i] = static_cast<float>(value);
+				if (mask != 0)
+				{
+					// GSLIB missing-value convention (F-M18): the exact
+					// undefined_value matches, and values outside the ±1.0e21
+					// window are missing. Strict inequality per the GSLIB
+					// convention ("less than -1.0e21 or greater than 1.0e21"),
+					// compared in float64 — the space the Python readers use
+					// (gslib_ref.py GSLIB_SENTINEL_WINDOW, api.h:169-177).
+					//
+					// The sentinel EQUALITY stays a float32 comparison, against
+					// the stored cell: the ABI parameter is `float
+					// undefined_value` (api.h:253) and the Python slow parser
+					// compares float32(token) with float32(undefined_value)
+					// (geo.py:130-153, _is_undefined_value, E2-06/R-06 parity).
+					// Comparing the float64 token against the widened float32
+					// sentinel misses the sentinel's own written tokens whenever
+					// it is not exactly representable in float32: the %.9E
+					// spelling of float32(-99.00005f) parses back to
+					// -99.00005341 in float64, which is != the widened
+					// -99.00005340576172, so the fast reader loaded sentinel
+					// cells as DATA while the slow parser masked them.
+					mask[i] = (data[i] == undefined_value
+						|| value < sentinel_min || value > sentinel_max) ? 0 : 1;
+				}
 				++i;
 			}
 			// I2-56: validate the token count matches `size`. The slow parser
@@ -356,50 +405,10 @@ namespace hpgl
 			std::string prop_name;
 			read_prop_name(file, prop_name);
 
-			load_floats_into_vector(file, data_buffer, size);
-
-			if (mask_buffer != 0)
-			{
-				// GSLIB missing-value convention (F-M18): values outside the
-				// ±1.0e21 window are treated as missing in addition to exact
-				// undefined_value matches. The Python slow parsers apply the
-				// same window (get_gslib_property / LoadGslibFile), so the fast
-				// reader must not load third-party sentinels as data. Strict
-				// inequality per the GSLIB convention ("less than -1.0e21 or
-				// greater than 1.0e21").
-				//
-				// P-01: the GSLIB window is a float64 contract shared with the
-				// Python readers (gslib_ref.py GSLIB_SENTINEL_WINDOW = 1.0e21,
-				// |v| > 1.0e21 strict). Comparing in float32 as before widened
-				// the window to float32(1.0e21) = 1.0000000200408773e21, so the
-				// writer's own %.9E output "1.000000020E+21" for the float32
-				// value 1.0e21f was classified DATA here but SENTINEL->NaN by
-				// every Python reader. Data is stored float32 (sscanf("%f")),
-				// so float32(±1.0e21) is genuinely out-of-window in float64
-				// space and must be masked, matching Python. Exact
-				// undefined_value equality below is unchanged: float -> double
-				// promotion is exact, so v == undefined_value still compares
-				// the original float32 bit patterns. The window constant is
-				// the shared GSLIB reference-fact table value (api.h
-				// HPGL_GSLIB_SENTINEL_WINDOW, got-20260802092630).
-				//
-				// Residual edge (accepted): a literal "1.0E+21" /
-				// "1.000000000E+21" token in a third-party hand-written file
-				// classifies DATA in Python (float64 exact 1.0e21 is not >
-				// 1.0e21) but SENTINEL here (sscanf("%f") rounds float64 1.0e21
-				// to float32 1.0000000200408773e21, which IS > 1.0e21). Such a
-				// token is unreachable from the HPGL writer (which emits
-				// "1.000000020E+21" for float32 1.0e21f), so it cannot affect
-				// project-produced files. Do NOT reintroduce a float32 window
-				// to "match" this literal — it would recreate the divergence.
-				const double sentinel_min = -static_cast<double>(HPGL_GSLIB_SENTINEL_WINDOW);
-				const double sentinel_max =  static_cast<double>(HPGL_GSLIB_SENTINEL_WINDOW);
-				for (int i = 0; i < size; ++i)
-				{
-					const double v = data_buffer[i];
-					mask_buffer[i] = (v == undefined_value || v < sentinel_min || v > sentinel_max) ? 0 : 1;
-				}
-			}
+			// F-266: the loader classifies each token against the GSLIB
+			// missing-value predicates while the token is still float64, so the
+			// mask below is no longer derived from the narrowed float32 store.
+			load_floats_into_vector(file, data_buffer, mask_buffer, undefined_value, size);
 		}
 		catch (...)
 		{

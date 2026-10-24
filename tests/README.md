@@ -5,18 +5,23 @@ This directory contains the comprehensive test suite for the HPGL (High Performa
 ## Quick Start
 
 ```bash
-# Run all tests
+# Run all tests (harness default: slow-marked tests stay deselected)
 python tests/run_tests.py all
 
-# Run with pytest directly
-pytest tests/python/ -v
+# Run with pytest directly — the equivalent operational default. The
+# -m "not slow" selection is mandatory: the 468K-cell fixture tests are
+# slow-marked and must not run unprompted (AGENTS.md resource policy).
+pytest tests/python/ -v -m "not slow"
 
 # Run specific test category
-pytest tests/python/test_kriging_complete.py -v
-pytest tests/python/test_simulation_complete.py -v
-pytest tests/python/test_numpy2_compat.py -v
-pytest tests/python/test_memory_leaks.py -v
-pytest tests/python/test_performance.py -v
+pytest tests/python/test_kriging_complete.py -v -m "not slow"
+pytest tests/python/test_simulation_complete.py -v -m "not slow"
+pytest tests/python/test_numpy2_compat.py -v -m "not slow"
+
+# The memory and performance categories are entirely slow-marked, so the
+# harness includes them explicitly; run them alone, never concurrently.
+python tests/run_tests.py memory
+python tests/run_tests.py performance
 ```
 
 ## Test Files
@@ -82,7 +87,7 @@ Before running tests, ensure:
 Run tests with coverage:
 
 ```bash
-pytest tests/python/ --cov=geo_bsd --cov-report=html
+pytest tests/python/ -m "not slow" --cov=geo_bsd --cov-report=html
 ```
 
 View coverage report:

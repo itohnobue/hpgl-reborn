@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 try:
-    from geo_bsd.cdf import CdfData
+    from geo_bsd.cdf import CdfData, calc_cdf
     from geo_bsd.geo import (
         ContProperty,
         CovarianceModel,
@@ -96,14 +96,18 @@ class TestSugarboxGrid:
         the size check (truncating) but stores the original float value.
         This is a documentation-code gap: the API docs say ``int`` but the
         implementation silently accepts ``float``.
+
+        The gap is pinned at its observable consequence — the C ABI shape
+        struct cannot represent non-integer dimensions — instead of pinning
+        the float value itself as the contract. Closing the gap (rejecting or
+        normalising non-integer dimensions in ``SugarboxGrid.__init__``)
+        replaces the second half of this test with the rejection assertion.
         """
+        from geo_bsd.ffi_adapter import _create_hpgl_shape
+
         grid = SugarboxGrid(x=10.5, y=20.7, z=5.3)
-        assert not isinstance(grid.x, int), "Float dimensions should be stored as-is"
-        assert not isinstance(grid.y, int)
-        assert not isinstance(grid.z, int)
-        assert grid.x == 10.5
-        assert grid.y == 20.7
-        assert grid.z == 5.3
+        with pytest.raises(TypeError, match="cannot be interpreted as an integer"):
+            _create_hpgl_shape((grid.x, grid.y, grid.z))
 
 
 @pytest.mark.hpgl
@@ -476,23 +480,43 @@ class TestCdfData:
         assert cdf.probs.size == 0
 
     def test_monotonically_increasing_probs(self):
-        """Test CDF probabilities are monotonically increasing"""
-        # This test verifies the property, not the constructor validation
-        # (the constructor doesn't validate this)
-        probs = np.array([0.1, 0.3, 0.6, 0.8, 1.0], dtype="float32")
-        values = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype="float32")
-        cdf = CdfData(values, probs)
+        """Non-monotonic probabilities are rejected by the constructor.
 
-        # Verify probabilities are sorted
+        ``CdfData.__init__`` (cdf.py:70-73) validates monotonicity, so the
+        assertion observes a production guard instead of restating the sorted
+        input it just passed in.
+        """
+        values = np.array([1.0, 2.0, 3.0], dtype="float32")
+        probs = np.array([0.1, 0.6, 0.3], dtype="float32")
+        with pytest.raises(ValueError, match="monotonically non-decreasing"):
+            CdfData(values, probs)
+
+    def test_calc_cdf_prob_ends_below_one(self):
+        """calc_cdf clamps the terminal probability strictly below 1.0 (F-04).
+
+        A p=1.0 tail feeds the SGS back-transform where the C++ inverse maps it
+        to the median, silently destroying the max datum — the producer clamps
+        to the largest float32 below 1.0 (nextafter).
+        """
+        data = np.array([1.0, 2.0, 3.0, 4.0], dtype="float32")
+        mask = np.ones(4, dtype="uint8")
+        cdf = calc_cdf(ContProperty(data, mask))
+
+        assert cdf.probs[-1] < 1.0
+        assert cdf.probs[-1] == np.nextafter(np.float32(1.0), np.float32(0.0))
         assert np.all(cdf.probs[:-1] <= cdf.probs[1:])
 
-    def test_prob_ends_at_one(self):
-        """Test that CDF probability ends at or near 1.0"""
-        values = [1.0, 2.0, 3.0]
-        probs = [0.5, 0.8, 1.0]  # Ends at 1.0
-        cdf = CdfData(values, probs)
+    def test_nan_values_raise(self):
+        """NaN/Inf values are rejected (cdf.py:50-53 — previously uncovered)."""
+        with pytest.raises(ValueError, match="values contain NaN or Inf"):
+            CdfData([float("nan")], [1.0])
 
-        assert abs(cdf.probs[-1] - 1.0) < 1e-6
+    def test_probs_out_of_range_raise(self):
+        """Probabilities outside [0, 1] are rejected (cdf.py:64-67)."""
+        with pytest.raises(ValueError, match=r"must be in \[0, 1\] range"):
+            CdfData([1.0], [1.5])
+        with pytest.raises(ValueError, match=r"must be in \[0, 1\] range"):
+            CdfData([1.0], [-0.1])
 
 
 @pytest.mark.hpgl

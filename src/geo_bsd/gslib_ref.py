@@ -2,13 +2,32 @@
 # Copyright (c) 2009, HPGL Team
 """GSLIB reference-fact table (got-20260802092630 — recurring class).
 
-The GSLIB contract facts below are the SINGLE source of truth for every
-HPGL path that reads, writes, or transforms GSLIB-format data. Each run in
-the v2.0.x series drifted on one facet (sentinel window, transform space,
-ndmin, ordrel, OK->SK downgrade) because the facts were duplicated as inline
-constants and comments across geo.py / routines.py / variogram.py /
-read_inc_file.cpp. A path may NOT rely on a different interpretation — if a
-new path needs a GSLIB contract fact, it MUST reference this table.
+The GSLIB contract facts below are the single written reference for the
+conventions every HPGL path that reads, writes, or transforms GSLIB-format
+data must follow. Each run in the v2.0.x series drifted on one facet
+(sentinel window, transform space, ndmin, ordrel, OK->SK downgrade) because
+the facts were duplicated as inline constants and comments across geo.py /
+routines.py / variogram.py / read_inc_file.cpp.
+
+Scope of enforcement, exactly:
+
+* Fact 1 (sentinel window) is LIVE. ``GSLIB_SENTINEL_WINDOW`` /
+  ``is_gslib_missing_sentinel`` are imported and used by geo.py (import block;
+  ``_load_prop_cont_slow``, ``get_gslib_property``) and routines.py (import
+  block; ``SaveGSLIBPointSet``, ``SaveGSLIBCubes``, ``LoadGslibFile``); the
+  C++ readers/writers share the same constant (``HPGL_GSLIB_SENTINEL_WINDOW``
+  in api.h, used by the read_inc_file sentinel-window comparison and by
+  property_writer).
+* Facts 2-5 (transform space, ndmin, OK->SK downgrade, ordrel) are
+  DOCUMENTATION MARKERS with no Python consumer yet — the live
+  implementations sit in sequential_gaussian_simulation.cpp / gtsim.py,
+  sequential_simulation.h, simple_cokriging_markI.cpp and
+  indicator_kriging.h. ``tests/python/test_gslib_ref.py`` pins their VALUES;
+  no code path enforces them.
+
+A path that needs one of these facts must still follow this table's stated
+convention, and must wire the consumer: the table is the contract, it does not
+(yet) enforce facts 2-5 by itself.
 
 Every fact is documented against the canonical GSLIB source convention.
 """
@@ -81,8 +100,24 @@ GSLIB_ORDREL_SPACE = "posterior-probability"
 # Helpers — the table facts as callable predicates (used by every boundary)
 # ============================================================================
 
+# G-10: element count per chunk for the sentinel scan. Chunking bounds the
+# scan's transient at O(chunk) — measured +4 MB above the returned mask on a
+# 40 M-cell float32 property — instead of ~4.25x the property size (full
+# float64 upcast + full ``abs`` temporary).
+_SENTINEL_CHUNK_ELEMENTS = 1 << 16
+
+
 def is_gslib_missing_sentinel(values: numpy.ndarray) -> numpy.ndarray:
     """Boolean mask of GSLIB missing-value sentinels (|v| > 1.0e21, strict).
+
+    The comparison runs in float64, matching the C++ readers/writers (the
+    shared ``HPGL_GSLIB_SENTINEL_WINDOW`` constant in api.h): float32 inputs
+    are promoted before the comparison, so a stored float32 1.0e21
+    (= 1.0000000200408773e21) IS a sentinel while the exact float64 1.0e21 is
+    not (the P-01 note in read_inc_file.cpp — a float32 window would diverge
+    from Python). The promotion happens per chunk, so the transient stays
+    bounded instead of allocating a full float64 copy plus a full ``abs``
+    temporary.
 
     Args:
         values: Float array of candidate values.
@@ -90,8 +125,26 @@ def is_gslib_missing_sentinel(values: numpy.ndarray) -> numpy.ndarray:
     Returns:
         Boolean array, True where the value is a GSLIB missing sentinel.
     """
-    arr = numpy.asarray(values, dtype=numpy.float64)
-    return numpy.abs(arr) > GSLIB_SENTINEL_WINDOW
+    arr = numpy.asarray(values)
+    if arr.size <= _SENTINEL_CHUNK_ELEMENTS:
+        return numpy.abs(numpy.asarray(arr, dtype=numpy.float64)) > GSLIB_SENTINEL_WINDOW
+    result = numpy.empty(arr.shape, dtype=bool)
+    flat = result.reshape(-1)
+    offset = 0
+    for chunk in numpy.nditer(
+        arr,
+        flags=["external_loop", "buffered", "refs_ok", "zerosize_ok"],
+        op_flags=[["readonly"]],
+        buffersize=_SENTINEL_CHUNK_ELEMENTS,
+        order="C",
+    ):
+        block = (
+            numpy.abs(numpy.asarray(chunk, dtype=numpy.float64))
+            > GSLIB_SENTINEL_WINDOW
+        )
+        flat[offset:offset + block.size] = block
+        offset += block.size
+    return result
 
 
 def is_gslib_sentinel(value: float) -> bool:

@@ -177,6 +177,20 @@ namespace hpgl
 		template<typename coord_t>
 		double operator()(const coord_t & c1, const coord_t & c2)const
 		{
+			// F-202: `ranges` is consumed in whatever unit the coordinate
+			// pair is expressed in, and the two consumers use different
+			// units:
+			//   - the grid algorithms pass CELL INDEX offsets
+			//     (precalculated_covariance.h / covariance_field.h evaluate
+			//     cov(coord_t(0,0,0), coord_t(x,y,z)) in integer loops), so a
+			//     model used on a grid interprets its ranges in CELLS;
+			//   - the point entries (simple_kriging.cpp / api.cpp) pass real
+			//     coordinates, so their ranges are in the caller's physical
+			//     units.
+			// A model fitted in physical units and passed to a grid
+			// algorithm is therefore read in cells (e.g. a 500 m range on a
+			// 25 m grid behaves as a 500-cell range). Stated here because
+			// this operator is the one place both conventions meet.
 			double v[3];
 			v[0] = c1[0] - c2[0];
 			v[1] = c1[1] - c2[1];
@@ -189,15 +203,26 @@ namespace hpgl
 		
 		double gaussian(double h)const
 		{
-			// Range-relative near-zero threshold: prevents unit-dependent
-			// nugget-blind zone at micro-scales and overflow at macro-scales.
-			// got-20260724074703: a comparison-only `h < near_zero` guard is
-			// NaN-bypassable (IEEE-754: NaN < x is false), so a NaN h flows
-			// into exp(-3*pow(NaN,2)) → NaN covariance. isfinite must be
-			// checked FIRST; the C API validates coordinate/mean finiteness
-			// at the boundary, but direct-C++ and FFI callers bypass it.
-			double near_zero = 1e-5 * m_params.m_ranges[0];
-			if (!std::isfinite(h) || h < near_zero)
+			// F-199: the nugget belongs to the POINT h == 0, not to a band.
+			// The former range-relative band (h < 1e-5 * ranges[0] -> sill)
+			// returned the FULL sill for every off-diagonal h inside the
+			// band: with ranges[0] >= 1e5 (legal, MAX_RANGE 1e10) the band is
+			// >= 1 coordinate unit, so 1-cell grid separations land inside it
+			// and the whole kriging matrix collapses to sill (measured pivot
+			// exactly 0.0 -> gauss_solve failure, weights O(1e15) for a
+			// non-unit sill) — the nugget, the term that makes such a system
+			// solvable, was discarded. The zero-distance answer must stay the
+			// sill: the LHS diagonal is fetched through this same kernel
+			// (my_kriging_weights.h), so answering sill - nugget at h == 0
+			// would re-create the singularity. h <= 0 also keeps the previous
+			// answer for negative h.
+			// got-20260724074703: a comparison-only guard is NaN-bypassable
+			// (IEEE-754: NaN < x is false), so a NaN h flows into
+			// exp(-3*pow(NaN,2)) -> NaN covariance. isfinite must be checked
+			// FIRST; the C API validates coordinate/mean finiteness at the
+			// boundary, but direct-C++ and FFI callers bypass it. The
+			// non-finite divergence policy (answer the sill) is unchanged.
+			if (!std::isfinite(h) || h <= 0.0)
 			{
 				return m_params.m_sill;
 			}
@@ -209,12 +234,10 @@ namespace hpgl
 
 		double exponential(double h)const
 		{
-			// Range-relative near-zero threshold: prevents unit-dependent
-			// nugget-blind zone at micro-scales and overflow at macro-scales.
-			// got-20260724074703: comparison-only guard is NaN-bypassable —
-			// isfinite first (see gaussian).
-			double near_zero = 1e-5 * m_params.m_ranges[0];
-			if(!std::isfinite(h) || h < near_zero)
+			// F-199: zero-distance point test, not a range-relative band —
+			// see gaussian for why the band collapsed the matrix.
+			// got-20260724074703: isfinite first (NaN bypasses comparisons).
+			if(!std::isfinite(h) || h <= 0.0)
 			{
 				return m_params.m_sill;
 			}
@@ -226,12 +249,10 @@ namespace hpgl
 
 		double spherical(double h)const
 		{
-			// Range-relative near-zero threshold: prevents unit-dependent
-			// nugget-blind zone at micro-scales and overflow at macro-scales.
-			// got-20260724074703: comparison-only guard is NaN-bypassable —
-			// isfinite first (see gaussian).
-			double near_zero = 1e-5 * m_params.m_ranges[0];
-			if(!std::isfinite(h) || h < near_zero)
+			// F-199: zero-distance point test, not a range-relative band —
+			// see gaussian for why the band collapsed the matrix.
+			// got-20260724074703: isfinite first (NaN bypasses comparisons).
+			if(!std::isfinite(h) || h <= 0.0)
 			{
 				return m_params.m_sill;
 			}

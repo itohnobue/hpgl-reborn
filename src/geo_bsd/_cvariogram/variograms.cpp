@@ -37,7 +37,13 @@ namespace {
     // MAX_NUM_LAGS (1e4) would permit up to 1e16 pair-lag operations — an
     // effectively-infinite loop. This cap rejects the product before the
     // loop starts. Mirrored in cvariogram.py (CalcVariogramsFromPointSet).
-    constexpr double MAX_TOTAL_PAIR_LAG_WORK = 1e12;
+    // F-217: calibrated DOWN from 1e12. The old value admitted a legal
+    // 1e6-point, 1-lag call (size^2 * 1 = 1e12, not > 1e12) and the kernel
+    // then ran ~1.9 h measured (6.88 ns per pair-lag unit — a blocking ctypes
+    // call that ignores Ctrl-C). 1e11 bounds the same call to ~11 min, which
+    // keeps the cap's stated purpose (no effectively-infinite run) while
+    // still admitting 316k points x 1 lag or 100k points x 10 lags.
+    constexpr double MAX_TOTAL_PAIR_LAG_WORK = 1e11;
     // F-M12: total-work cap for the grid path (calc_variograms). The F-38
     // MAX_WINDOW_VOLUME cap bounds only the number of window OFFSETS; the
     // inner loop then iterates ALL grid cells for every in-tunnel offset, so
@@ -45,6 +51,15 @@ namespace {
     // over a maximal grid (1e9 cells) would be 1e17 cell-offset iterations.
     // This cap rejects the product before the loop starts. Mirrored in
     // cvariogram.py (CalcVariograms).
+    // G-04: the base estimate omitted the per-pair lag-band factor that the
+    // point-set sibling already multiplies in (calc_variograms_from_point_set).
+    // Every in-tunnel pair is binned into floor(lag_width/lag_separation)
+    // bands (capped at lag_count; update_lags adds one count per band), so a
+    // legal template can cost up to ~1e3x the base estimate — measured: a
+    // 500^3 grid with lag_width/lag_separation ~1e4 runs 2.1e15 accumulations
+    // (~585 h at 1e9/s) while its base estimate (8.5e11) passes. The unit of
+    // this cap is therefore pair-band accumulations — the SAME unit and value
+    // as MAX_TOTAL_PAIR_LAG_WORK — not raw cell-offset iterations.
     constexpr double MAX_TOTAL_GRID_WORK = 1e12;
 
     /// Thread-safe error storage for the cvariogram module.
@@ -668,21 +683,45 @@ static void calc_variograms_impl(
 	// quantity is under its individual cap. Compute the grid volume in
 	// double (int dims can overflow: 1e7^3 = 1e21 > INT_MAX) and reject the
 	// product before the loop.
+	// G-04: and each passing pair is binned into up to
+	// floor(lag_width / lag_separation) lag bands (update_lags), so
+	// the accumulation count is the cell-offset work times that band factor.
+	// Omitting it lets a legal template exceed the cap's intended bound by up
+	// to the band factor (measured reachable at ~500^3). The factor is
+	// computed once (it is a template constant); lag_separation/lag_width are
+	// already validated finite and positive by validate_template(), and the
+	// factor is clamped to [1, lag_count] exactly like the sibling's
+	// lag_count multiplier.
 	double grid_volume =
 		static_cast<double>(data->m_data_shape[0]) *
 		static_cast<double>(data->m_data_shape[1]) *
 		static_cast<double>(data->m_data_shape[2]);
-	if (window_volume * grid_volume > MAX_TOTAL_GRID_WORK)
+	double band_factor = std::ceil(templ->m_lag_width / templ->m_lag_separation);
+	if (!(band_factor >= 1.0))
+		band_factor = 1.0;
+	if (lag_count > 0 && band_factor > static_cast<double>(lag_count))
+		band_factor = static_cast<double>(lag_count);
+	if (window_volume * grid_volume * band_factor > MAX_TOTAL_GRID_WORK)
 	{
-		cvar_set_last_error("calc_variograms: total work (window offsets x grid cells) exceeds maximum (1e12)");
+		cvar_set_last_error("calc_variograms: total work (window offsets x grid cells x lag bands) exceeds maximum (1e12)");
 		free(lag_stats);
 		lag_stats = nullptr;
 		return;
 	}
 
-	for (int i2 = (int)floor(window.m_min_i); i2 <= (int)ceil(window.m_max_i); ++i2)
-		for (int j2 = (int)floor(window.m_min_j); j2 <= (int)ceil(window.m_max_j); ++j2)
-			for (int k2 = (int)floor(window.m_min_k); k2 <= (int)ceil(window.m_max_k); ++k2)
+	// G-06: the offset loops below need the integer window bounds to decide
+	// whether a mirrored offset is reachable (see the mirror skip in the
+	// loop body), so they are computed once here.
+	const int win_i_min = (int)floor(window.m_min_i);
+	const int win_i_max = (int)ceil(window.m_max_i);
+	const int win_j_min = (int)floor(window.m_min_j);
+	const int win_j_max = (int)ceil(window.m_max_j);
+	const int win_k_min = (int)floor(window.m_min_k);
+	const int win_k_max = (int)ceil(window.m_max_k);
+
+	for (int i2 = win_i_min; i2 <= win_i_max; ++i2)
+		for (int j2 = win_j_min; j2 <= win_j_max; ++j2)
+			for (int k2 = win_k_min; k2 <= win_k_max; ++k2)
 			{
 				vector_t vec;
 				vec.m_data[0] = i2;
@@ -700,6 +739,34 @@ static void calc_variograms_impl(
 				// calc_variograms_from_point_set) — the grid kernel must
 				// mirror that skip so both paths agree on identical data.
 				if (i2 == 0 && j2 == 0 && k2 == 0)
+					continue;
+
+				// G-06: visit only ONE of the two mirrored offsets. is_in_tunnel
+				// is symmetric (:282-284 uses fabs), so a rotated template's
+				// axis-aligned window contains both an offset and its mirror
+				// whenever the mirror is also inside the box: the unordered
+				// cell pair is then visited twice and gets weight 2 in its
+				// band. Uniform doubling cancels in the sum/count/2
+				// normalisation below (numerator and denominator both
+				// double); MIXED doubling does not — measured +12.94 % and
+				// +16.65 % on mixed bands of rotated 10^3 templates against the
+				// unordered-pair semi-variogram, which is the module's stated
+				// parity contract (the E-M74 skip above, the E-M75 banding note
+				// in update_lags). Keep the half-space projection > 0.
+				// A projection of exactly 0 cannot occur for an in-tunnel
+				// offset: is_in_tunnel requires tol_distance * dist <=
+				// projection / R1 (:307) with tol_distance > 0, so a zero
+				// projection forces dist == 0, i.e. the offset is orthogonal to
+				// all three direction vectors — the zero offset, already
+				// skipped by E-M74. The half-space cut is therefore total.
+				// The test runs only when the mirror is inside the window; when
+				// it is not, this offset is the pair's only visit and must be
+				// kept (a negative-projection offset near the window edge whose
+				// mirror lies outside it still enumerates real cell pairs).
+				if (-i2 >= win_i_min && -i2 <= win_i_max &&
+				    -j2 >= win_j_min && -j2 <= win_j_max &&
+				    -k2 >= win_k_min && -k2 <= win_k_max &&
+				    dot_product(&vec, &(templ->m_ellipsoid.m_direction1)) < 0.0)
 					continue;
 
 				int64_t doffset = get_offset(&vec, data->m_data_strides);
@@ -875,7 +942,7 @@ void calc_variograms_from_point_set(
 			"[HPGL ERROR] calc_variograms_from_point_set: estimated pair-lag work %.3g exceeds maximum %.3g\n",
 			pair_lag_work, MAX_TOTAL_PAIR_LAG_WORK);
 		fflush(stderr);
-		cvar_set_last_error("calc_variograms_from_point_set: point-set pair-lag work exceeds maximum (1e12)");
+		cvar_set_last_error("calc_variograms_from_point_set: point-set pair-lag work exceeds maximum (1e11)");
 		return;
 	}
 

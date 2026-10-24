@@ -37,6 +37,28 @@ namespace hpgl
 
 	namespace detail
 	{
+		// G-07 (CONFIRMED MEDIUM): max_neighbours is a COUNT cap and, before
+		// this gate, the only bound on a per-node cost that is quadratic in
+		// memory (2·n² doubles of workspace) and cubic-to-quadratic in time
+		// (my_kriging_weights.h:284-312). The cap's admitted maximum
+		// (api.cpp:135 = 10000) is ~1.6 GB of workspace and seconds per node,
+		// i.e. a multi-day run on any real grid, and the whole band from
+		// n = 1000 upward is silent (the Python layer only warns ABOVE 1000,
+		// validation.py:731-742). This is the simulation path's pre-flight
+		// work bound, in work units, checked before the covariance table and
+		// the ordering path are built (E2-139 style: refuse, do not degrade).
+		//
+		// Calibration (adv-05 measurements on the shipped dylib): 7.79 ms per
+		// node at n = 1000, 90.9 ms at n = 3000, 405.3 ms at n = 5000. Taking
+		// the cubic model time ≈ N·n³·7.8e-12 s (conservative by ~2.4x at
+		// n = 5000), a budget of 1e15 corresponds to ≈ 2 h of estimated work:
+		// a 1000-node run at n = 10000 sits exactly on the boundary, and the
+		// multi-day band (N ≥ 1e4 at n = 10000, or N ≥ 1e5 at n = 3000) is
+		// refused. Every shipped simulation config (radius (5,5,3),
+		// max_neighbours 4-12, grids ≤ ~1e5 cells, tests/python) is ~7 orders
+		// of magnitude below the budget.
+		constexpr double SIMULATION_SOLVE_WORK_BUDGET = 1.0e15;
+
 		// E-M58/E-M84 (GSLIB ndmin semantics): count ORIGINAL conditioning
 		// data inside the FULL search volume, before/independent of the
 		// max_neighbours truncation. GSLIB sgsim srchsupr counts nclose over
@@ -220,6 +242,35 @@ namespace hpgl
 			throw hpgl_exception("do_sequential_gausian_simulation", oss.str());
 		}
 
+		// G-07: bound the run's ESTIMATED solve work before anything is
+		// allocated. max_neighbours is a count cap on a cubic per-node cost,
+		// so the admitted maximum is a multi-day run (see
+		// detail::SIMULATION_SOLVE_WORK_BUDGET). Throw here — the C API catch
+		// converts it to a clean error — rather than allocating the
+		// covariance table and the ordering path first.
+		{
+			const size_t work_cap = static_cast<size_t>(NEIGHBOUR_WORK_CAP);
+			const size_t capped_neighbours = params.m_max_neighbours < work_cap
+				? params.m_max_neighbours
+				: work_cap;
+			if (capped_neighbours > 0)
+			{
+				const double n = static_cast<double>(capped_neighbours);
+				const double estimated_work = static_cast<double>(property.size()) * n * n * n;
+				if (estimated_work > detail::SIMULATION_SOLVE_WORK_BUDGET)
+				{
+					std::ostringstream oss;
+					oss << "estimated kriging work exceeds the simulation budget: "
+					    << static_cast<unsigned long>(property.size()) << " nodes x "
+					    << static_cast<unsigned long>(capped_neighbours)
+					    << " neighbours (N*n^3 = " << estimated_work
+					    << " > " << detail::SIMULATION_SOLVE_WORK_BUDGET
+					    << "); lower max_neighbours or simulate fewer nodes";
+					throw hpgl_exception("do_sequential_gausian_simulation", oss.str());
+				}
+			}
+		}
+
 		mt_random_generator_t gen;
 		gen.seed(params.m_seed);
 		path_random_generator_t path_gen(property.size(), params.m_seed);
@@ -256,26 +307,22 @@ namespace hpgl
 			originally_informed[i] = property.is_informed(i) ? 1 : 0;
 
 		// R-17: the ndmin gate counts originals at the same
-		// covariance-threshold box offsets find() scans. Precompute that
-		// list once per simulation — the neighbour lookup constructor
-		// builds its own identical copy through the same calc_cov_field
-		// call with the same (pcov, params.m_radiuses). Built only when
-		// the gate is used (min_neighbours > 0); the default (0) pays
-		// nothing.
-		// R2-06/R2-07: also precompute the fallback distance bound the
-		// solve's find() uses (fallback_d2_cap over the same radiuses), so
-		// the gate's box branch evaluates exactly the region find()'s
-		// fallback would. Computed AFTER calc_cov_field (radii validated).
-		std::vector<sugarbox_vector_t> gate_candidates;
-		long long gate_fallback_d2_cap = -1;
-		if (params.m_min_neighbours > 0)
-		{
-			calc_cov_field<cov_t, sugarbox_location_t>(params.m_radiuses, pcov, gate_candidates);
-			gate_fallback_d2_cap = fallback_d2_cap(
-				static_cast<int>(params.m_radiuses[0]),
-				static_cast<int>(params.m_radiuses[1]),
-				static_cast<int>(params.m_radiuses[2]));
-		}
+		// covariance-threshold box offsets find() scans.
+		// G-09 (CONFIRMED MEDIUM): that list is NOT rebuilt here. The neighbour
+		// lookup constructed above already materialised it through the same
+		// calc_cov_field call (same cov_t table, same params.m_radiuses — the
+		// lookup ctor reads the very neighbourhood_param_t base of `params`) and
+		// already holds the same fallback_d2_cap value, so the gate references
+		// the lookup's copies. The previous duplicate construction paid a second
+		// full-box covariance table transient per simulation (8 V at r = 231) for
+		// a byte-identical list: peak residency 28 V -> 40 V (2.78 GB -> 3.97 GB
+		// at r = 231) and construction work x2.
+		// R2-06/R2-07: the referenced fallback distance bound is the one the
+		// solve's find() uses, so the gate's box branch still evaluates exactly
+		// the region find()'s fallback would. Binding a reference costs nothing,
+		// so the default (min_neighbours == 0) pays nothing either.
+		const std::vector<sugarbox_vector_t> & gate_candidates = neighbour_lookup.offsets();
+		const long long gate_fallback_d2_cap = neighbour_lookup.fallback_d2_cap_value();
 
 		node_index_t node;
 		kriging_ws_t<cont_value_t, sugarbox_location_t> ws;
@@ -395,6 +442,9 @@ namespace hpgl
 				: sample(gen, gaussian_cdf_t(fallback_mp[node], 1.0));
 			
 			property.set_at(node, value);
+			// F-018: normal-score space — the CDF back-transform runs after
+			// this function returns, so this accumulator (exported as
+			// stats.m_mean below) is NOT a data-space mean.
 			sum_simulated += value;
 			++nodes_simulated;
 			//neighbour_lookup.add_node(node);
@@ -416,22 +466,44 @@ namespace hpgl
 			// 2-M-33: divide by ALL simulated nodes (nodes_simulated), not
 			// the success-only points_calculated — sum_simulated includes
 			// failure-fallback draws.
+			// F-018: the value is in NORMAL-SCORE space, not data space.
+			// sum_simulated accumulates the draws made inside the sequential
+			// loop (see the `sum_simulated += value;` above) and the CDF back-transform
+			// (sequential_gaussian_simulation.cpp:156-167) runs only after
+			// this function returns. The C API exports the field under the
+			// bare key "mean", the same key the kriging entries fill with a
+			// data-space estimate mean, so a transformed SGS run reports a
+			// mean (≈0 for a centred normal-score transform) that cannot be
+			// compared with the output property or with a kriging mean. The
+			// project convention (gslib_ref.py:41-45) requires every
+			// transform to state the space its output lives in; splitting
+			// the key needs a new ABI field (api.h/kriging_stats.h) and is
+			// recorded for that owner — this annotation is the in-kernel half.
 			stats.m_mean = nodes_simulated > 0 ? sum_simulated / static_cast<double>(nodes_simulated) : 0;
 			stats.m_speed_nps = report.iterations_per_second();
 			set_kriging_stats(stats);
 		}
 		if (kriging_failures > 0)
 		{
-			fprintf(stderr,
-				"HPGL: SGS kriging failures: %lu nodes fell back to marginal mean (of %lu total, %lu skipped).\n",
-				kriging_failures, static_cast<unsigned long>(property.size()),
-				kriging_skipped);
+			// G-23: this aggregate guard must travel on the documented
+			// output channel (write() → registered output handler, stdout
+			// fallback), not raw stderr — a handler-based consumer never saw
+			// it. Sibling of the informational lines in this function.
+			std::ostringstream oss;
+			oss << "HPGL: SGS kriging failures: " << kriging_failures
+			    << " nodes fell back to marginal mean (of "
+			    << static_cast<unsigned long>(property.size()) << " total, "
+			    << kriging_skipped << " skipped).\n";
+			write(oss.str());
 		}
 		if (kriging_ndmin_skipped > 0)
 		{
-			fprintf(stderr,
-				"HPGL: SGS ndmin: %lu nodes left unsimulated (fewer than %d conditioning data).\n",
-				kriging_ndmin_skipped, params.m_min_neighbours);
+			// G-23: handler-visible (see the kriging-failures message above).
+			std::ostringstream oss;
+			oss << "HPGL: SGS ndmin: " << kriging_ndmin_skipped
+			    << " nodes left unsimulated (fewer than "
+			    << params.m_min_neighbours << " conditioning data).\n";
+			write(oss.str());
 		}
 		// E-M57: the no-output warning must count ndmin skips too —
 		// previously only kriging_skipped (informed/masked/bounds) was
@@ -442,12 +514,32 @@ namespace hpgl
 		// skipped + ndmin_skipped >= size.
 		if (kriging_skipped + kriging_ndmin_skipped >= static_cast<unsigned long>(property.size()))
 		{
-			fprintf(stderr,
-				"HPGL: SGS produced no output — all %lu nodes were either already informed, masked out, "
-				"or left unsimulated by the ndmin gate. Check that the output property grid contains "
-				"uninformed cells, the mask permits processing, and min_neighbours is not too high.\n",
-				static_cast<unsigned long>(property.size()));
+			// G-23: handler-visible (see the kriging-failures message above).
+			std::ostringstream oss;
+			oss << "HPGL: SGS produced no output — all "
+			    << static_cast<unsigned long>(property.size())
+			    << " nodes were either already informed, masked out, "
+			       "or left unsimulated by the ndmin gate. Check that the output property grid contains "
+			       "uninformed cells, the mask permits processing, and min_neighbours is not too high.\n";
+			write(oss.str());
 		}
+		// F-379 (CONFIRMED MEDIUM): a cancelled run used to fall through to
+		// the success path — the void C entry returned normally, the partial
+		// property was indistinguishable from a completed simulation, and the
+		// "Done. Average speed" line was still printed. Cancellation is a
+		// control-flow outcome, so it must reach the caller: throwing here
+		// makes the C API catch (api.cpp) report it via the last-exception
+		// message, which the FFI layer turns into a Python RuntimeError. The
+		// caller's buffer stays partially written (unavoidable — it is the
+		// working buffer), but it can no longer be mistaken for a finished
+		// run. Block direction: the loop still stops promptly on cancel
+		// (the `if (report.cancelled()) break;` above is unchanged). Liveness:
+		// the counters and warnings above still fire on non-cancelled runs —
+		// the throw is conditional on report.cancelled(), never inferred from
+		// a short counter.
+		if (report.cancelled())
+			throw hpgl_exception("sequential_gaussian_simulation",
+				"cancelled by progress handler; the output property is only partially simulated");
 		{
 			std::ostringstream oss;
 			oss << "Done. Average speed: " << report.iterations_per_second() << " point/sec.\n";
@@ -525,10 +617,14 @@ namespace hpgl
 		report.stop();
 		if (kriging_failures > 0)
 		{
-			fprintf(stderr,
-				"HPGL: SGS (in_points) kriging failures: %lu nodes fell back to marginal mean (of %lu total, %lu skipped).\n",
-				kriging_failures, static_cast<unsigned long>(points_indexes.size()),
-				kriging_skipped);
+			// G-23: documented output channel, not raw stderr (see
+			// do_sequential_gausian_simulation).
+			std::ostringstream oss;
+			oss << "HPGL: SGS (in_points) kriging failures: " << kriging_failures
+			    << " nodes fell back to marginal mean (of "
+			    << static_cast<unsigned long>(points_indexes.size()) << " total, "
+			    << kriging_skipped << " skipped).\n";
+			write(oss.str());
 		}
 		{
 			std::ostringstream oss;

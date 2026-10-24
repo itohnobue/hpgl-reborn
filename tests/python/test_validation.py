@@ -118,10 +118,10 @@ class TestPathValidator:
 
     def test_empty_filename_raises(self):
         """Empty filename raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Filename cannot be empty"):
             PathValidator.validate_filepath("")
 
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Filename cannot be empty"):
             PathValidator.validate_filepath(None)
 
     def test_valid_existing_file(self, tmp_path):
@@ -140,7 +140,7 @@ class TestPathValidator:
     def test_non_existent_file_with_must_exist_raises(self, tmp_path):
         """File that doesn't exist fails when must_exist=True."""
         f = tmp_path / "nonexistent.txt"
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="File does not exist"):
             PathValidator.validate_filepath(str(f), must_exist=True)
 
     def test_path_traversal_rejected(self):
@@ -273,18 +273,18 @@ class TestGridValidator:
 
     def test_negative_dimension_raises(self):
         """Negative dimension raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Grid X dimension"):
             GridValidator.validate_grid_dimensions(-1, 10, 5)
 
     def test_zero_dimension_raises(self):
         """Zero dimension raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Grid X dimension"):
             GridValidator.validate_grid_dimensions(0, 10, 5)
 
     def test_exceeds_max_dimension_raises(self):
         """Dimension > MAX_GRID_DIMENSION raises."""
         too_big = ValidationConstants.MAX_GRID_DIMENSION + 1
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Grid X dimension"):
             GridValidator.validate_grid_dimensions(too_big, 10, 5)
 
     def test_total_size_exceeds_max_grid_size_raises(self):
@@ -306,7 +306,7 @@ class TestGridValidator:
     def test_array_size_mismatch_raises(self):
         """Array size mismatch raises."""
         arr = np.zeros(10, dtype="float32")
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Array size 10 does not match grid size 9"):
             GridValidator.validate_array_size(arr, (3, 3, 1))  # 9 != 10
 
     def test_array_dtype_validation(self):
@@ -317,7 +317,7 @@ class TestGridValidator:
     def test_array_dtype_mismatch_raises(self):
         """Wrong array dtype raises error."""
         arr = np.zeros(10, dtype="float64")
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Array has dtype float64"):
             GridValidator.validate_array_dtype(arr, np.float32)
 
     # ---- Empty array edge cases (F-145) ----
@@ -325,7 +325,7 @@ class TestGridValidator:
     def test_empty_array_size_mismatch_raises(self):
         """Empty array with non-zero grid raises CriticalValidationError."""
         arr = np.array([], dtype="float32")
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Array size 0 does not match grid size 1"):
             GridValidator.validate_array_size(arr, (1, 1, 1))  # 0 != 1
 
     def test_empty_array_dtype_passes(self):
@@ -336,7 +336,7 @@ class TestGridValidator:
     def test_empty_array_dtype_mismatch_raises(self):
         """Empty array with wrong dtype raises error."""
         arr = np.array([], dtype="float64")
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Array has dtype float64"):
             GridValidator.validate_array_dtype(arr, np.float32)
 
     # ---- validate_coordinate_arrays (I2-F06) ----
@@ -401,40 +401,40 @@ class TestParameterValidator:
 
     def test_radius_nan_raises(self):
         """NaN radius raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="is NaN or infinite"):
             ParameterValidator.validate_radius(float("nan"))
 
     def test_radius_inf_raises(self):
         """Infinite radius raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="is NaN or infinite"):
             ParameterValidator.validate_radius(float("inf"))
 
     def test_negative_radius_raises(self):
         """Negative radius raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="is less than minimum"):
             ParameterValidator.validate_radius(-1.0)
 
     def test_radius_exceeds_max_raises(self):
         """Radius exceeding MAX_RADIUS raises."""
         too_big = ValidationConstants.MAX_RADIUS + 1.0
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="exceeds maximum"):
             ParameterValidator.validate_radius(too_big)
 
     # ---- Wrong-length radius tuple (F-147) ----
 
     def test_radius_wrong_length_2_elements_raises(self):
         """2-element radius tuple raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Radius must be a number or tuple of 3"):
             ParameterValidator.validate_radius((1.0, 2.0))
 
     def test_radius_wrong_length_4_elements_raises(self):
         """4-element radius tuple raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Radius must be a number or tuple of 3"):
             ParameterValidator.validate_radius((1.0, 2.0, 3.0, 4.0))
 
     def test_radius_wrong_type_raises(self):
         """String radius raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Radius must be a number or tuple of 3"):
             ParameterValidator.validate_radius("not_a_number")
 
     # ---- Max Neighbors ----
@@ -445,7 +445,7 @@ class TestParameterValidator:
 
     def test_max_neighbors_zero_raises(self):
         """max_neighbors=0 raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Max neighbors 0 is less than minimum 1"):
             ParameterValidator.validate_max_neighbors(0)
 
     def test_max_neighbors_exceeds_limit_raises_warning(self):
@@ -462,12 +462,12 @@ class TestParameterValidator:
 
     def test_min_exceeds_max_raises(self):
         """min_neighbors > max_neighbors raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Min neighbors 15 exceeds max neighbors 10"):
             ParameterValidator.validate_min_neighbors(15, 10)
 
     def test_min_neighbors_negative_raises(self):
         """Negative min_neighbors raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="is negative"):
             ParameterValidator.validate_min_neighbors(-1, 12)
 
     # ---- Covariance Parameters ----
@@ -480,12 +480,12 @@ class TestParameterValidator:
 
     def test_negative_sill_raises(self):
         """Negative sill raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Sill -1.0 is less than minimum"):
             ParameterValidator.validate_covariance_parameters(sill=-1.0, nugget=0.1)
 
     def test_zero_sill_raises(self):
         """Zero sill raises (MIN_SILL=1e-6). Sill must be >= 1e-6 for color schemes."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Sill 0.0 is less than minimum"):
             ParameterValidator.validate_covariance_parameters(sill=0.0, nugget=0.0)
 
     def test_nugget_exceeds_sill_raises(self):
@@ -499,33 +499,33 @@ class TestParameterValidator:
 
     def test_sill_nan_raises(self):
         """NaN sill raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Sill is NaN or infinite"):
             ParameterValidator.validate_covariance_parameters(sill=float("nan"), nugget=0.1)
 
     def test_negative_range_raises(self):
         """Negative range raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="must be > 0"):
             ParameterValidator.validate_covariance_parameters(
                 sill=1.0, nugget=0.1, ranges=(-5.0, 5.0, 3.0)
             )
 
     def test_ranges_wrong_length_raises(self):
         """Ranges with wrong length raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Ranges must have 3 values"):
             ParameterValidator.validate_covariance_parameters(
                 sill=1.0, nugget=0.1, ranges=(5.0, 5.0)
             )
 
     def test_angles_wrong_length_raises(self):
         """Angles with wrong length raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Angles must have 3 values"):
             ParameterValidator.validate_covariance_parameters(
                 sill=1.0, nugget=0.1, angles=(30.0, 0.0)
             )
 
     def test_angle_nan_raises(self):
         """NaN angle raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="is NaN or infinite"):
             ParameterValidator.validate_covariance_parameters(
                 sill=1.0, nugget=0.1, angles=(float("nan"), 0.0, 0.0)
             )
@@ -534,14 +534,14 @@ class TestParameterValidator:
 
     def test_inf_angle_raises(self):
         """Inf angle raises CriticalValidationError."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="is NaN or infinite"):
             ParameterValidator.validate_covariance_parameters(
                 sill=1.0, nugget=0.1, angles=(float("inf"), 0.0, 0.0)
             )
 
     def test_inf_nugget_raises(self):
         """Inf nugget raises (documented coverage of Inf path in covariance validation)."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Nugget is NaN or infinite"):
             ParameterValidator.validate_covariance_parameters(sill=1.0, nugget=float("inf"))
 
     # ---- Probability ----
@@ -552,12 +552,12 @@ class TestParameterValidator:
 
     def test_probability_out_of_range_raises(self):
         """Probability outside [0,1] raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="outside valid range"):
             ParameterValidator.validate_probability(1.5)
 
     def test_negative_probability_raises(self):
         """Negative probability raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="outside valid range"):
             ParameterValidator.validate_probability(-0.1)
 
     def test_probability_sum_valid(self):
@@ -566,7 +566,7 @@ class TestParameterValidator:
 
     def test_probability_sum_wrong_raises(self):
         """Probabilities not summing to 1.0 raise."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Probabilities sum to 1.5, expected 1.0"):
             ParameterValidator.validate_probability_sum([0.5, 0.5, 0.5])
 
     def test_probability_sum_within_tolerance_passes(self):
@@ -599,7 +599,7 @@ class TestParameterValidator:
 
     def test_indicator_count_zero_raises(self):
         """Zero indicator count raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="must be positive"):
             ParameterValidator.validate_indicator_count(0)
 
     def test_indicator_count_at_max_passes(self):
@@ -608,7 +608,7 @@ class TestParameterValidator:
 
     def test_indicator_count_at_max_plus_one_raises(self):
         """Indicator count at MAX_INDICATORS + 1 raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Indicator count 256 exceeds maximum 255"):
             ParameterValidator.validate_indicator_count(256)
 
     # ---- Correlation Coef ----
@@ -619,12 +619,12 @@ class TestParameterValidator:
 
     def test_correlation_coef_below_minus_one_raises(self):
         """Correlation < -1 raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="must be in \\[-1, 1\\] range"):
             ParameterValidator.validate_correlation_coef(-1.5)
 
     def test_correlation_coef_above_one_raises(self):
         """Correlation > 1 raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="must be in \\[-1, 1\\] range"):
             ParameterValidator.validate_correlation_coef(1.5)
 
     def test_correlation_coef_at_boundaries_passes(self):
@@ -634,7 +634,7 @@ class TestParameterValidator:
 
     def test_correlation_coef_nan_raises(self):
         """NaN correlation raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="must be finite"):
             ParameterValidator.validate_correlation_coef(float("nan"))
 
     # ---- Variance ----
@@ -645,7 +645,7 @@ class TestParameterValidator:
 
     def test_negative_variance_raises(self):
         """Negative variance raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="must be non-negative"):
             ParameterValidator.validate_variance(-1.0)
 
     def test_zero_variance_passes(self):
@@ -654,7 +654,7 @@ class TestParameterValidator:
 
     def test_variance_nan_raises(self):
         """NaN variance raises."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="must be finite"):
             ParameterValidator.validate_variance(float("nan"))
 
     @pytest.mark.parametrize("bad_var", [float("inf"), -float("inf")])
@@ -778,17 +778,23 @@ class TestValidationContext:
 
     def test_context_manager_strict(self):
         """Strict mode raises on first error."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Grid X dimension"):
             with ValidationContext(strict=True) as ctx:
                 ctx.validate_grid_dimensions(-1, 10, 5)
 
     def test_context_manager_non_strict_collects_errors(self):
-        """Non-strict mode collects all errors and raises on exit."""
-        with pytest.raises(CriticalValidationError):
-            with ValidationContext(strict=False) as ctx:
-                ctx.validate_grid_dimensions(-1, 10, 5)
-                # Should collect error without raising immediately
-                assert len(ctx.errors) >= 1
+        """Non-strict mode collects all errors and raises on exit.
+
+        F-455: the collection assertions must run OUTSIDE any ``pytest.raises``
+        block — otherwise a regression that makes non-strict mode raise at the
+        call is masked by the same expected exception.
+        """
+        ctx = ValidationContext(strict=False)
+        ctx.validate_grid_dimensions(-1, 10, 5)  # must not raise here
+        assert len(ctx.errors) == 1
+        assert ctx.errors[0].parameter_name == "grid_x"
+        with pytest.raises(CriticalValidationError, match="Validation failed with 1 error"):
+            ctx.__exit__(None, None, None)
 
     def test_context_manager_no_errors_passes(self):
         """Context manager with no errors exits cleanly."""
@@ -843,7 +849,7 @@ class TestDecorators:
 
         # Invalid grid (negative dimension): decorator raises
         invalid_grid = FakeGrid(-1, 10, 5)
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Grid X dimension"):
             dummy_func(grid=invalid_grid)
 
     def test_validate_file_params_decorator_none_skip(self):
@@ -876,7 +882,7 @@ class TestDecorators:
         def dummy_func(filename=None, **kwargs):
             return filename
 
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="File does not exist"):
             dummy_func(filename=str(nonexistent))
 
     def test_validate_kriging_params_decorator_applies(self):
@@ -904,11 +910,11 @@ class TestDecorators:
         assert c is cov
 
         # Invalid radius (negative): decorator raises
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="is less than minimum"):
             dummy_func(radiuses=(-1, 5, 3), max_neighbours=12)
 
         # Invalid max_neighbours (0): decorator raises
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Max neighbors 0 is less than minimum 1"):
             dummy_func(max_neighbours=0)
 
     def test_validate_simulation_params_decorator_applies(self):
@@ -941,7 +947,7 @@ class TestDecorators:
         validate_simulation_params(min_neighbours=4, max_neighbours=12)
 
         # min_neighbours > default max (12) should raise
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="Min neighbors 20 exceeds max neighbors 12"):
             validate_simulation_params(min_neighbours=20)
 
     def test_validate_simulation_params_direct_call_default_max(self):
@@ -961,7 +967,7 @@ class TestDecorators:
 
     def test_validate_kriging_params_direct_call_invalid_radius(self):
         """validate_kriging_params direct mode raises on invalid radius."""
-        with pytest.raises(CriticalValidationError):
+        with pytest.raises(CriticalValidationError, match="is less than minimum"):
             validate_kriging_params(radiuses=(-1, 5, 3), max_neighbours=12)
 
 

@@ -1,15 +1,24 @@
 """
 Regression tests for v1.5.0 algorithmic bug fixes (CHANGELOG.md:56-62).
 
-Each test targets a specific bug that was fixed. If the bug were reintroduced,
-the corresponding test would FAIL.
+Only (a) below is pinned here by a discriminating test. The other four fix
+families are either not assertable from Python or not exercised in this file —
+the per-class NOTE blocks say which. Do not read this file as coverage for
+(b)-(e).
 
-Tests cover:
-  a) Covariance C(0) includes nugget contribution
-  b) OK kriging variance is positive (no sign error)
-  c) Correlogram weights are correct (no inversion)
-  d) Cokriging Mark II cross-covariance ratio is correct
-  e) SGS normalization coefficient is correct
+Fix families and their status here:
+  a) Covariance C(0) includes nugget contribution — PINNED
+     (TestCovarianceNuggetAtZeroLag).
+  b) OK kriging variance is positive (no sign error) — NOT pinned here: the
+     Python API does not expose the kriging variance
+     (see TestOKKrigingVarianceSign).
+  c) Correlogram weights are correct (no inversion) — NOT pinned here: the
+     correlogram path is SIS/LVM ``use_correlogram``, which nothing below
+     calls (see TestCorrelogramWeights).
+  d) Cokriging Mark II cross-covariance ratio is correct — NOT pinned here:
+     every test below calls ``simple_cokriging_markI``
+     (see TestCokrigingCrossCovarianceRatio).
+  e) SGS normalization coefficient is correct — NOT covered by this file.
 """
 
 import sys

@@ -47,7 +47,10 @@ class TestF07ErrorGuardConsecutiveIdenticalFailures:
     def _make_clearing_mock(self):
         """Mock that emulates a C++ library which honours the error-clear
         consumed by _clear_hpgl_error after each guard (the fixed ffi_adapter
-        resets hpgl::set_last_exception_message).  The test sets
+        resets the error slot through the exported C entry
+        ``hpgl_clear_last_exception_message``, or the legacy mangled
+        ``hpgl::set_last_exception_message`` setter when that entry is absent —
+        both are wired below to the same fake).  The test sets
         ``state['err']`` between snapshot and check to simulate the C++ call
         failing."""
         state = {"err": None}
@@ -66,6 +69,17 @@ class TestF07ErrorGuardConsecutiveIdenticalFailures:
         mock_so = mock.MagicMock()
         mock_so.hpgl_get_last_exception_message.side_effect = fake_get
         mock_so.__getitem__.side_effect = fake_getitem
+        # F-182: the production clear now goes through the exported C entry
+        # ``hpgl_clear_last_exception_message`` BEFORE the legacy mangled-setter
+        # fallback (ffi_adapter.py:_clear_hpgl_error). A bare ``MagicMock``
+        # auto-creates that attribute, so ``getattr(..., None)`` returned a
+        # mock, its call silently no-opped and ``state["err"]`` was never
+        # reset — the two guards below then read one continuous error window
+        # and the second identical failure was suppressed (the stale pin this
+        # test used to be). Wire the auto-created attribute to the same fake
+        # clear the mangled setter uses, so the mock honours the contract the
+        # production code relies on.
+        mock_so.hpgl_clear_last_exception_message.side_effect = lambda: fake_clear(b"")
         return mock_so, state
 
     def test_two_consecutive_identical_failures_both_raise(self):

@@ -2,7 +2,10 @@ import sys
 import os
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# F-355: the package lives in src/geo_bsd (readme.md:269-274), not at the
+# repository root — inserting '..' left `import geo_bsd` raising
+# ModuleNotFoundError before any script logic ran.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 from geo_bsd import (
     SugarboxGrid, CovarianceModel, covariance,
     load_cont_property, write_property, calc_mean,
@@ -11,9 +14,13 @@ from geo_bsd import (
 from gtsim import gtsim_2ind
 
 # F-54: sample data lives in tests/python/test_data/ — derive the real
-# path from this script's location (works regardless of CWD).
+# path from this script's location.
 # R-06: abspath removes the literal '..' component — PathValidator
 # rejects '..' before normalization (CriticalValidationError).
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+# F-362: the fixture path is absolute, so the load must be told which
+# directory contains it — PathValidator's default base is the process CWD
+# and rejects this path when the script is started from sample-scripts/.
 TEST_DATA_DIR = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'tests', 'python', 'test_data'
 ))
@@ -24,7 +31,8 @@ if not os.path.exists("results/"):
 # gtsim test
 time1 = time.time()
 prop = load_cont_property(
-    os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_160_141_20.INC"), -99, (166, 141, 20)
+    os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_160_141_20.INC"), -99, (166, 141, 20),
+    basedir=REPO_ROOT,
 )
 grid = SugarboxGrid(166, 141, 20)
 
@@ -49,7 +57,8 @@ write_property(result, "results/GTSIM_BIG_SOFT_RESULT.INC", "GTSIM", -99)
 print("Checking result...")
 print("Hard data saving test...")
 prop_init = load_cont_property(
-    os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_160_141_20.INC"), -99, (166, 141, 20)
+    os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_160_141_20.INC"), -99, (166, 141, 20),
+    basedir=REPO_ROOT,
 )
 
 errors_hard = 0

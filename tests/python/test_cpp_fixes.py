@@ -1,17 +1,32 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2009, HPGL Team
-"""Targeted Python-side tests exercising C++ fix paths through the HPGL FFI.
+"""Targeted Python-side tests for C++ fix paths reached through the HPGL FFI.
 
-Tests coverage for C++ fixes from F7-06:
+Coverage per fix, with the LAYER each test actually pins (F-642/F-652: the
+previous header claimed every item "must fail if the corresponding C++ fix is
+reverted", which is false for five of the six — the negative-path tests stop at
+a Python gate that runs BEFORE the FFI call):
 - F-39 / I2-F09: NaN probability detection in sample() (seq_indicator_simulation)
-- F-67: correlation_coef range check [-1, 1] (simple_cokriging)
-- F-41: n_threads=0 check (set_thread_num)
-- F-60 / F-61: Kriging failure tracking via get_kriging_stats()
-- F-46: range-relative threshold in cov_model.h (exercised via kriging operations)
-- F-42: OpenMP cancel fix in indicator_kriging / median_ik (exercised via kriging)
+  — pins the PYTHON per-cell sum check ("deviates from 1.0", sis.py); the C++
+  sample() guard is pinned by test_sample_nan_guard in tests/cpp/test_hpgl_core.cpp.
+- F-67: correlation_coef range check [-1, 1] (simple_cokriging) — pins the
+  PYTHON gate (ParameterValidator.validate_correlation_coef, called from both
+  cokriging wrappers in geo.py); the C++ range clause is pinned by
+  test_cokriging_direct_cpp_rejects_nonfinite_params in tests/cpp/test_hpgl_core.cpp.
+- F-41: n_threads=0 check (set_thread_num) — pins the PYTHON gate
+  ("num must be at least 1", geo.py set_thread_num); no test at any layer calls
+  the C++ setter with an invalid count (grep "set_thread_num" tests/cpp/ -> 0 hits).
+- F-60 / F-61: Kriging failure tracking via get_kriging_stats() — reads
+  counters PRODUCED IN C++ and does fail when the C++ population is reverted.
+- F-46: range-relative threshold in cov_model.h — NOT pinned here (F-641/F-655):
+  the guarded branch needs h < 1e-5*ranges[0] while the minimum non-zero
+  normalized h on an integer lattice is 1.0, so these tests pin completion only.
+- F-42: OpenMP cancel fix in indicator_kriging / median_ik — the completion test
+  cannot reach the cancel branch (75 cells < LP_BATCH_SIZE=1000, no handler
+  installed); test_median_ik_cancel_stops_loop pins it (F-640).
 
-These tests exercise C++ code paths through the Python FFI layer.
-They verify fix behavior and must fail if the corresponding C++ fix is reverted.
+A test in this file proves the corresponding C++ fix is reverted only where the
+line above names the C++ layer as the pinned layer.
 """
 
 import sys
@@ -118,7 +133,13 @@ def sis_data_3ind():
 
 @pytest.mark.hpgl
 class TestThreadNumValidation:
-    """Tests for n_threads=0 check (C++ fix F-41, Python validation layer)."""
+    """Tests for n_threads=0 check (C++ fix F-41, Python validation layer).
+
+    F-642: the negative-path tests pin the PYTHON gate only (geo.py's
+    set_thread_num raises "num must be at least 1" before call_set_thread_num),
+    so a regression of the C++ guard (set_thread_num.cpp set_thread_num) would
+    not be seen here — nothing calls that guard with an invalid count today.
+    """
 
     def test_set_thread_num_zero_raises_valueerror(self):
         """n_threads=0 must raise ValueError (Python gate prevents invalid C++ call)."""
@@ -135,11 +156,21 @@ class TestThreadNumValidation:
             set_thread_num(-1)
 
     def test_set_thread_num_one_succeeds(self):
-        """n_threads=1 must succeed (exercises C++ set_thread_num path)."""
+        """n_threads=1 must succeed (exercises C++ set_thread_num path).
+
+        F-644: set_thread_num sets the process-global OpenMP ICV (set_thread_num.cpp
+        :15-17, :50) and conftest.py clears handlers only, so the previous count
+        MUST be restored — otherwise every later test in this pytest process runs
+        single-threaded (save/restore pattern: test_callback_lifecycle.py:157-169).
+        """
         from geo_bsd.geo import get_thread_num, set_thread_num
 
-        set_thread_num(1)
-        assert get_thread_num() >= 1
+        saved_threads = get_thread_num()
+        try:
+            set_thread_num(1)
+            assert get_thread_num() >= 1
+        finally:
+            set_thread_num(saved_threads)
 
 
 # ==============================================================================
@@ -149,7 +180,16 @@ class TestThreadNumValidation:
 
 @pytest.mark.hpgl
 class TestCorrelationCoefValidation:
-    """Tests for correlation_coef range check (C++ fix F-67, Python gate)."""
+    """Tests for correlation_coef range check (C++ fix F-67, Python gate).
+
+    F-642: these pin the PYTHON gate ParameterValidator.validate_correlation_coef
+    (validation.py, called from both cokriging wrappers in geo.py) which runs
+    before the FFI call, so a C++-side regression of the range clause
+    (simple_cokriging_markI.cpp, "correlation_coef must be finite and in
+    [-1, 1]") would not be seen here — that clause is pinned by
+    test_cokriging_direct_cpp_rejects_nonfinite_params in
+    tests/cpp/test_hpgl_core.cpp.
+    """
 
     def test_correlation_coef_above_one_rejected_markI(self, small_cont_prop, small_grid, sample_cov_model):
         """correlation_coef > 1 must be caught (simple_cokriging_markI)."""
@@ -305,6 +345,10 @@ class TestSISNanProbabilityDetection:
     The Python LVM path validates marginal_probs for NaN via numpy.isfinite()
     before calling C++ (sis.py:344-348). The C++ fix (F-39/I2-F09) is a
     defense-in-depth layer that detects NaN in sample() if it reaches C++.
+
+    F-652: the NaN tests below pin the PYTHON layer (the per-cell sum check in
+    sis.py raises first for NaN input); the C++ sample() guard is pinned by
+    test_sample_nan_guard in tests/cpp/test_hpgl_core.cpp.
 
     We test:
       1. Python validates NaN and rejects it (gatekeeping layer works)
@@ -591,24 +635,30 @@ class TestKrigingFailureTracking:
 
 @pytest.mark.hpgl
 class TestCovModelRangeThreshold:
-    """Exercises the C++ cov_model range-relative threshold fix (F-46).
+    """Pins that kriging COMPLETES with both covariance models (finish + finite
+    output + nonzero stats). It does NOT pin the F-46 range-relative threshold.
 
-    The fix ensures the range-relative threshold in cov_model.h prevents
-    division by zero or degenerate behavior. We test that kriging with
-    valid model parameters completes successfully AND produces finite
-    output with nonzero kriging stats — a threshold regression that
-    silently mean-fills or emits NaN/Inf now fails the hardened asserts.
+    F-641/F-655: the guarded branch is `h < 1e-5 * ranges[0]` (cov_model.h:199
+    gaussian, :216 exponential) while h is the anisotropy-normalized distance —
+    1.0 or more for any distinct pair on an integer lattice. With ranges
+    (3, 3, 2) the threshold is 3e-5 and the smallest non-zero h is 1.0, so the
+    branch is unreachable; reverting F-46 to the hardcoded `h < 1e-4` changes
+    nothing these tests can see (both thresholds are pure sill-return for
+    h >= 1). The discriminating pin needs a direct `cov_model_t(h)` call with
+    h inside the band, which only the C++ layer has
+    (the `hpgl::cov_model_t` direct-evaluation pattern already used in
+    tests/cpp/test_hpgl_core.cpp).
     """
 
     def test_kriging_with_exponential_model_completes(
         self, small_cont_prop, small_grid
     ):
-        """Kriging with exponential covariance model exercises range-relative threshold.
+        """Kriging with exponential covariance model completes.
 
-        Hardened (L-25): assert finite output + nonzero kriging stats — a
-        silent mean-fill regression on the F-46 threshold would produce
-        finite-but-degenerate results that the old isinstance+size-only
-        checks could not detect.
+        Completion pin only — the F-46 threshold branch is unreachable at this
+        fixture's scale (see the class docstring, F-641/F-655). The L-25
+        hardening (finite output + nonzero stats) catches a mean-fill or NaN/Inf
+        regression on the completion path, not a threshold regression.
         """
         from geo_bsd.geo import ordinary_kriging
         from geo_bsd.hpgl_wrap import _HAS_KRIGING_STATS, get_kriging_stats
@@ -641,10 +691,10 @@ class TestCovModelRangeThreshold:
     def test_kriging_with_gaussian_model_completes(
         self, small_cont_prop, small_grid
     ):
-        """Kriging with Gaussian covariance model exercises range-relative threshold.
+        """Kriging with Gaussian covariance model completes.
 
-        Hardened (L-25): assert finite output + nonzero kriging stats (see
-        the exponential sibling).
+        Completion pin only — the F-46 threshold branch is unreachable at this
+        fixture's scale (see the class docstring, F-641/F-655).
         """
         from geo_bsd.geo import ordinary_kriging
         from geo_bsd.hpgl_wrap import _HAS_KRIGING_STATS, get_kriging_stats
@@ -682,16 +732,29 @@ class TestCovModelRangeThreshold:
 
 @pytest.mark.hpgl
 class TestOpenMPCancelFix:
-    """Exercises the C++ OpenMP cancel fix (F-42) in median_ik.
+    """Pins the C++ OpenMP cancel fix (F-42) in median_ik.
 
-    The fix correctly handles OpenMP cancellation in indicator kriging loops.
     median_ik is the direct Python entry to the fixed C++ path (the
     2-category indicator_kriging wrapper redirects to median_ik internally).
-    No C++-layer OpenMP-cancel test exists, so this is the sole guard.
+
+    F-652: the only cancel test in the C++ suite
+    (test_user_cancellation_stops_kriging_loop, tests/cpp/test_hpgl_core.cpp)
+    targets hpgl_ordinary_kriging — neither median IK nor indicator kriging has
+    one — so the pins for that path live here:
+    test_median_ik_cancel_stops_loop exercises the cancel branch, and
+    test_median_ik_completes asserts every cell received an output category
+    (a dropped-iteration regression leaves the mask at 0).
     """
 
     def test_median_ik_completes(self, small_grid, sample_cov_model):
-        """Median IK exercises the OpenMP cancel path in C++."""
+        """A non-cancelled run must set every cell's output category.
+
+        F-654: `isinstance` + `data.size == 75` hold even when iterations are
+        dropped — median_ik prefills the output property with 0 (data and mask,
+        geo.py _empty_clone) and 0 is a legal category value. `set_at` writes
+        the mask for every processed node (property_array.h), so asserting the
+        mask is fully set is the assertion that flips.
+        """
         from geo_bsd.geo import median_ik
 
         # Create 2-category indicator property
@@ -711,6 +774,61 @@ class TestOpenMPCancelFix:
         )
         assert isinstance(result, IndProperty)
         assert result.data.size == 75
+        assert int(np.count_nonzero(result.mask)) == size, (
+            f"F-42/F-654 regression: only {int(np.count_nonzero(result.mask))} of "
+            f"{size} cells received an output category (dropped iterations)"
+        )
+
+    def test_median_ik_cancel_stops_loop(self, sample_cov_model):
+        """A cancelling progress handler must stop the loop early (F-640).
+
+        The cancel branch is only reached when a thread accumulates
+        LP_BATCH_SIZE = 1000 laps AND the handler may be invoked, which
+        handler_invocation_allowed() (output.cpp) permits on the OpenMP master
+        thread only. Pinning 1 thread and using 11x10x10 = 1100 cells
+        therefore reaches the poll (cell 1000) deterministically; the default
+        thread count would leave the master below 1000 laps. Skipped cells keep
+        the mask prefill of 0, so the mask count is the observable that flips
+        against a reverted cancel construct (which lets the loop finish).
+        """
+        from geo_bsd.geo import (
+            get_thread_num,
+            median_ik,
+            set_progress_handler,
+            set_thread_num,
+        )
+
+        nx, ny, nz = 11, 10, 10
+        size = nx * ny * nz  # 1100 > LP_BATCH_SIZE (median_ik.cpp)
+        grid = SugarboxGrid(x=nx, y=ny, z=nz)
+        data = np.random.RandomState(46).randint(0, 2, size, dtype="uint8")
+        prop2 = IndProperty(data, np.ones(size, dtype="uint8"), 2)
+
+        saved_threads = get_thread_num()
+        set_thread_num(1)
+        set_progress_handler(lambda stage, percent, param: 1, None)
+        try:
+            result = median_ik(
+                prop=prop2,
+                grid=grid,
+                marginal_probs=(0.5, 0.5),
+                radiuses=(3, 3, 2),
+                max_neighbours=8,
+                cov_model=sample_cov_model,
+            )
+        finally:
+            # MUST restore — a lingering cancelling handler aborts every later
+            # simulation in this process (cross-test pollution).
+            set_progress_handler(None, None)
+            set_thread_num(saved_threads)
+
+        processed = int(np.count_nonzero(result.mask))
+        assert isinstance(result, IndProperty)
+        assert result.data.size == size
+        assert processed < size, (
+            f"F-42 regression: the cancelling handler did not stop the loop — "
+            f"all {processed} of {size} cells were processed"
+        )
 
 
 # ==============================================================================

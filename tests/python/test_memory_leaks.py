@@ -10,8 +10,13 @@ To detect C++ memory leaks, run with:
     - AddressSanitizer (Linux/macOS): compile HPGL with -fsanitize=address
     - Dr. Memory (Windows)
 
-The 10MB threshold is intentionally generous to avoid false positives
-from Python's memory fragmentation, reference cycles, and GC timing.
+Each gate below derives its budget from the fixture it measures instead of
+using a fixed 10MB: the budget is three results' worth of the loop's own
+payload, so a loop that retained EVERY result fails the gate while allocator
+residue still passes (measured on an untouched run: 2-4 KB of residue against
+a 200 KB / 18 KB / 536 KB total-leak volume for the kriging, SGS and array
+fixtures respectively). A fixed 10MB threshold was 50-1000x above those
+volumes, i.e. a 100% leak of every iteration could not fail it.
 """
 
 import gc
@@ -76,9 +81,15 @@ class TestMemoryLeaks:
             top_stats = snapshot2.compare_to(snapshot1, "lineno")
             total_increase = sum(stat.size_diff for stat in top_stats)
 
-            # Allow some increase but not excessive (>10MB)
-            assert total_increase < 10 * 1024 * 1024, (
-                f"Memory leak detected: {total_increase / 1024 / 1024:.2f} MB"
+            # F-553: budget derived from the fixture, not a magic constant.
+            # One result is 4,000 float32 cells (16,000 B) + a 4,000-cell
+            # uint8 mask (4,000 B) = 20,000 B, so retaining all 10 results
+            # leaks ~200 KB. Allow 3 results' worth (60,000 B): a full leak
+            # fails, while the measured untouched-run residue is ~3.5 KB.
+            leak_budget = 3 * 4000 * (4 + 1)
+            assert total_increase < leak_budget, (
+                f"Memory leak detected: {total_increase} B retained; budget is "
+                f"{leak_budget} B (3 kriging results' worth)"
             )
 
             tracemalloc.stop()
@@ -125,9 +136,13 @@ class TestMemoryLeaks:
             top_stats = snapshot2.compare_to(snapshot1, "lineno")
             total_increase = sum(stat.size_diff for stat in top_stats)
 
-            # Allow some increase but not excessive
-            assert total_increase < 10 * 1024 * 1024, (
-                f"Memory leak detected: {total_increase / 1024 / 1024:.2f} MB"
+            # F-553: 500-cell result = 2,000 B data + 500 B mask = 2,500 B;
+            # all 5 results would leak ~18 KB. Budget 3 results' worth
+            # (7,500 B) vs ~2.4 KB measured residue on an untouched run.
+            leak_budget = 3 * 500 * (4 + 1)
+            assert total_increase < leak_budget, (
+                f"Memory leak detected: {total_increase} B retained; budget is "
+                f"{leak_budget} B (3 simulation results' worth)"
             )
 
             tracemalloc.stop()
@@ -155,9 +170,13 @@ class TestMemoryLeaks:
             top_stats = snapshot2.compare_to(snapshot1, "lineno")
             total_increase = sum(stat.size_diff for stat in top_stats)
 
-            # Repeated create/delete should not cause significant leaks
-            assert total_increase < 10 * 1024 * 1024, (
-                f"Array reference leak detected: {total_increase / 1024 / 1024:.2f} MB"
+            # F-553: 100 iterations x (1,000 float32 + 1,000-cell uint8) =
+            # 100 x 5,000 B = ~536 KB if every property were retained. Budget
+            # 3 results' worth (15,000 B) vs ~2.3 KB measured residue.
+            leak_budget = 3 * 1000 * (4 + 1)
+            assert total_increase < leak_budget, (
+                f"Array reference leak detected: {total_increase} B retained; "
+                f"budget is {leak_budget} B (3 properties' worth)"
             )
             tracemalloc.stop()
         except ImportError:

@@ -21,7 +21,6 @@ Categories:
     memory        - Memory leak tests
     performance   - Performance benchmarks
     integration   - Integration workflow tests
-    unit          - Tests marked with @pytest.mark.unit
     slow          - Tests marked with @pytest.mark.slow
 
 Options:
@@ -56,6 +55,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -302,6 +302,19 @@ def build_pytest_args(
     return args
 
 
+def all_tests_skipped(output: str) -> bool:
+    """True when pytest reported skipped tests and zero passed tests (F-547).
+
+    pytest exits 0 when every collected test is skipped — e.g. the native
+    library fails to load, so ``tests/python/conftest.py`` skips every
+    ``hpgl``-marked test. Without this gate the runner prints
+    ``[SUCCESS] … tests passed`` for a run that executed nothing.
+    """
+    return bool(re.search(r"\b\d+ skipped\b", output)) and not re.search(
+        r"\b\d+ passed\b", output
+    )
+
+
 def print_header(text: str) -> None:
     """Print a formatted header."""
     width = 70
@@ -312,7 +325,7 @@ def print_header(text: str) -> None:
     print()
 
 
-def print_summary(test_type: str, result: subprocess.CompletedProcess[bytes]) -> None:
+def print_summary(test_type: str, result: subprocess.CompletedProcess[str]) -> None:
     """Print test execution summary."""
     width = 70
 
@@ -415,11 +428,37 @@ def run_tests(
 
     # Run tests
     project_root = get_project_root()
-    result = subprocess.run(
+    # F-547: pytest's stdout is piped so the summary line can be inspected for
+    # an executed-test count. Every line is replayed to stdout as it arrives,
+    # so console output and progress stay live; stderr is inherited unchanged.
+    proc = subprocess.Popen(
         pytest_args,
         cwd=project_root,
-        capture_output=False,
+        stdout=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        bufsize=1,
     )
+    captured: list[str] = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        captured.append(line)
+        sys.stdout.write(line)
+    sys.stdout.flush()
+    proc.wait()
+    result = subprocess.CompletedProcess(pytest_args, proc.returncode, "".join(captured), "")
+
+    # F-547: a run where every collected test was skipped exits 0 and would
+    # otherwise be reported as [SUCCESS] although nothing executed. Checked
+    # before print_summary so the runner never prints a success verdict for a
+    # run that executed nothing.
+    if result.returncode == 0 and all_tests_skipped(result.stdout):
+        print_color(
+            " [FAILED] no tests executed (all collected tests were skipped) ".center(70, "="),
+            Colors.FAIL + Colors.BOLD,
+        )
+        print()
+        return 1
 
     # Print summary
     print_summary(test_type, result)

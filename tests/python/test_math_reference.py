@@ -544,17 +544,25 @@ class TestMeanCalcBoundary:
         Uses ellipsoid mask with radii (2, 2, 1).
         All mask cells are informed.
 
-        Interior point (2,2,1): window cube[0:4,0:4,0:2], mask fully present.
-        Ellipsoid selects 12 cells with X values
-        {0:1, 1:3, 2:5, 3:3} → analytical mean = 22/12 ≈ 1.8333.
+        F-003: the MeanCalc window is the full symmetric box [i-R, i+R] — 2R+1
+        cells per axis, the width of the mask built by GetEllipseMask. The
+        pre-fix window was 2R wide, which selected fewer cells than the mask
+        holds; the counts below are the re-derived 2R+1 geometry (15 and 11,
+        was 12 and 8).
 
-        Boundary point (0,2,1): left edge, window cube[0:2,0:4,0:2] clipped,
+        Interior point (2,2,1): window cube[0:5,0:5,0:3], mask fully present.
+        Ellipsoid selects 15 cells with X values
+        {0:1, 1:3, 2:7, 3:3, 4:1} → analytical mean = 30/15 = 2.0.
+
+        Boundary point (0,2,1): left edge, window cube[0:3,0:5,0:3] clipped,
         mask correctly shifted to keep centre aligned with data point.
-        Ellipsoid selects 8 cells: {0:5, 1:3} → analytical mean = 3/8 = 0.375.
+        Ellipsoid selects 11 cells: {0:7, 1:3, 2:1} → analytical mean = 5/11
+        ≈ 0.454545 (float32 0.45454547).
 
         With uniform data (all 100.0) both would give the same result
         regardless of mask alignment, making the E01 mask-alignment bug
-        invisible. Non-uniform data exposes any misalignment.
+        invisible. Non-uniform data exposes any misalignment: an unshifted
+        mask slice would select 17/11 ≈ 1.545 instead of 5/11.
         """
         nx, ny, nz = 5, 5, 3
         # Non-uniform data: gradient along X
@@ -568,13 +576,13 @@ class TestMeanCalcBoundary:
         interior = MeanCalc(cube, mask, radii, emask, (2, 2, 1), -999.0)
         boundary = MeanCalc(cube, mask, radii, emask, (0, 2, 1), -999.0)
 
-        # Interior: 12 cells — one i=0, three i=1, five i=2, three i=3
-        np.testing.assert_allclose(interior, 22.0 / 12.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)
+        # Interior: 15 cells — one i=0, three i=1, seven i=2, three i=3, one i=4
+        np.testing.assert_allclose(interior, 30.0 / 15.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)
 
-        # Boundary: correct mask alignment — five i=0, three i=1
-        # With E01 misalignment bug present the mask slice would be
-        # [0:2, ...] (one i=0, three i=1) giving 0.75 instead of 0.375.
-        np.testing.assert_allclose(boundary, 3.0 / 8.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)
+        # Boundary: correct mask alignment — seven i=0, three i=1, one i=2
+        # With the E01 misalignment bug present the unshifted mask slice would
+        # select 17/11 ≈ 1.545 instead of 5/11 ≈ 0.4545.
+        np.testing.assert_allclose(boundary, 5.0 / 11.0, rtol=WEIGHT_RTOL, atol=WEIGHT_ATOL)
 
     def test_e05_single_cell_grid(self):
         """E01-T5: Single-cell grid — works with any radius size."""

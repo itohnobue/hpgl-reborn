@@ -3,7 +3,10 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# F-355: the package lives in src/geo_bsd (readme.md:269-274), not at the
+# repository root — inserting '..' left `import geo_bsd` raising
+# ModuleNotFoundError before any script logic ran.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 from geo_bsd import (
     SugarboxGrid, CovarianceModel, covariance,
     load_cont_property, write_property,
@@ -13,9 +16,13 @@ from geo_bsd.cdf import calc_cdf
 from python_property import load_property_python
 
 # F-54: sample data lives in tests/python/test_data/ — derive the real
-# path from this script's location (works regardless of CWD).
+# path from this script's location.
 # R-06: abspath removes the literal '..' component — PathValidator
 # rejects '..' before normalization (CriticalValidationError).
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+# F-362: the fixture path is absolute, so the load must be told which
+# directory contains it — PathValidator's default base is the process CWD
+# and rejects this path when the script is started from sample-scripts/.
 TEST_DATA_DIR = os.path.abspath(os.path.join(
     os.path.dirname(__file__), '..', 'tests', 'python', 'test_data'
 ))
@@ -37,7 +44,8 @@ def mean_calc_hist(x, y, z, n, prop):
     # repo's continuous sample property (many unique values → a proper
     # multi-point empirical CDF, the library transform's intended input).
     prop = load_cont_property(
-        os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_CON_160_141_20.INC"), -99, (x, y, z)
+        os.path.join(TEST_DATA_DIR, "BIG_SOFT_DATA_CON_160_141_20.INC"), -99, (x, y, z),
+        basedir=REPO_ROOT,
     )
     print("Done.\n")
 
@@ -49,6 +57,12 @@ def mean_calc_hist(x, y, z, n, prop):
 
     ntg1 = np.empty(n)
     cdf = calc_cdf(prop)
+    # F-350 residual: this output was a CWD-relative INC name with no
+    # directory, so every run littered the working tree with an untracked
+    # RSGS.INC that nothing cleans up and nothing ignores. Write it into a
+    # results/ directory created on demand, as sk_test.py does.
+    results_dir = "results"
+    os.makedirs(results_dir, exist_ok=True)
     for c in range(n):
         print("Done.\n")
         sgs_result_prop = sgs_simulation(
@@ -58,8 +72,8 @@ def mean_calc_hist(x, y, z, n, prop):
             max_neighbours=12,
             cov_model=cov,
         )
-        write_property(sgs_result_prop, "RSGS.INC", "SGS_PROP", -99)
-        values_result = load_property_python(x, y, z, "RSGS.INC", True)
+        write_property(sgs_result_prop, os.path.join(results_dir, "RSGS.INC"), "SGS_PROP", -99)
+        values_result = load_property_python(x, y, z, os.path.join(results_dir, "RSGS.INC"), True)
 
         all_r = 0.0
         numb = 0.0

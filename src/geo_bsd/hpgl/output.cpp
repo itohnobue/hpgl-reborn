@@ -2,6 +2,7 @@
 #include "api.h"
 #include <string>
 #include <mutex>
+#include <vector>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -56,6 +57,32 @@ static bool handler_invocation_allowed()
 	return true;
 #endif
 }
+
+// H-04: a percentage crossing consumed by a worker thread is DEFERRED, not
+// dropped. progress_reporter_t::next_lap advances one shared counter inside
+// each kernel's critical and calls update_progress on every m_delta-th lap, so
+// whichever thread wins the critical consumes the crossing. Under F-M22 a
+// worker cannot invoke the handler and the pre-fix code just printed to stdout
+// and returned 0 — the crossing was gone. Measured effect: 11 delivered events
+// at 1 thread, 6 at 2, 3-4 at 4 and 1-3 at 8, i.e. the documented cancel
+// contract ("return non-zero to cancel") got 1-3 decision points instead of 10
+// at the default thread count. Keeping the F-M22 rule, each deferred crossing
+// is queued here and drained on the next invocation the master thread is
+// allowed to make, so every crossing reaches the handler exactly once (delayed
+// by at most one crossing) and a cancel still sets m_cancelled through the
+// call's return value. A queue rather than a single slot is required for that
+// claim: between two master-thread crossings several workers can consume
+// crossings, and a one-slot deferral would keep only the last of them.
+// Both the store (worker) and the drain (master) run under s_handler_mutex and
+// s_progress_pair_mutex, so no extra synchronisation is needed.
+struct pending_progress_t {
+	int percentage;
+	std::string stage;
+};
+static std::vector<pending_progress_t> s_pending_progress;
+// Crossings per run are ~10 (m_delta = iterations/10, so at most 19 for a grid
+// of <= 19 cells); the bound only guards against an unexpected caller loop.
+static const size_t MAX_PENDING_PROGRESS = 64;
 
 
 namespace hpgl
@@ -135,13 +162,48 @@ namespace hpgl
 		// the main thread waits at the OpenMP barrier (empirically reproduced).
 		if (s_progress_pair.handler && handler_invocation_allowed())
 		{
+			// H-04: a run starts at percentage 0 — any crossing still queued
+			// from an earlier (aborted) run is stale and must not be delivered
+			// into this one's first event.
+			if (percentage == 0)
+				s_pending_progress.clear();
+			// H-04: deliver the crossings workers consumed first, then this
+			// one, so the handler sees every percentage exactly once and in
+			// order. A non-zero return from any invocation cancels.
+			int deferred_rc = 0;
+			for (size_t i = 0; i < s_pending_progress.size(); ++i)
+			{
+				t_in_handler = true;
+				const int queued_rc = s_progress_pair.handler(
+					const_cast<char*>(s_pending_progress[i].stage.c_str()),
+					s_pending_progress[i].percentage,
+					s_progress_pair.param);
+				t_in_handler = false;
+				if (queued_rc != 0 && deferred_rc == 0)
+					deferred_rc = queued_rc;
+			}
+			s_pending_progress.clear();
 			t_in_handler = true;
 			int rc = s_progress_pair.handler(const_cast<char*>(stage), percentage, s_progress_pair.param);
 			t_in_handler = false;
-			return rc;
+			return (rc != 0) ? rc : deferred_rc;
 		}
 		else
 		{
+			// H-04: a worker-thread crossing with a handler installed is
+			// queued for the next master-thread invocation instead of being
+			// lost; the default stream still gets it so a console observer
+			// sees the same progress as before.
+			if (s_progress_pair.handler)
+			{
+				if (s_pending_progress.size() >= MAX_PENDING_PROGRESS)
+					s_pending_progress.erase(s_pending_progress.begin());
+				pending_progress_t queued;
+				queued.percentage = percentage;
+				if (stage != nullptr)
+					queued.stage = stage;
+				s_pending_progress.push_back(queued);
+			}
 			if (percentage == 0)
 			{
 				std::cout << stage << ": ";

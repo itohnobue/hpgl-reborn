@@ -159,12 +159,16 @@ class TestParametrizedOrdinaryKriging:
         ("exponential", covariance.exponential),
     ])
     def test_ok_convexity_bounds(self, cov_name, cov_type):
-        """OK: output at informed cells bounded by input data range.
+        """OK: the KRIGED cells stay within the input data range.
 
         Ordinary Kriging weights sum to 1.0 (convexity constraint). For
         covariance types that produce non-negative weights (spherical,
-        exponential), the estimate at every informed cell is a weighted
-        average of input data and is bounded by [min(data), max(data)].
+        exponential), every estimate is a weighted average of input data and is
+        bounded by [min(data), max(data)].
+
+        The bound is checked on the cells the kernel actually interpolates
+        (originally-uninformed cells): the informed cells are copied through
+        verbatim (cont_kriging.h:241-244), so bounding them proves nothing.
 
         NOTE: Gaussian covariance can produce negative kriging weights
         (extrapolation) even though weights sum to 1.0, so the convexity
@@ -187,19 +191,26 @@ class TestParametrizedOrdinaryKriging:
         data_min = float(np.min(informed_input))
         data_max = float(np.max(informed_input))
 
-        informed_output = result.data[result.mask == 1]
-        if len(informed_output) > 0:
-            out_min = float(np.min(informed_output))
-            out_max = float(np.max(informed_output))
+        # G-54: the old selector was `result.mask == 1`. The output mask starts
+        # zero-filled and the C++ fill marks only written nodes informed, so a
+        # no-op kernel leaves that selection EMPTY and the `if len(...) > 0`
+        # guard then skipped BOTH bounds checks — the no-op passed. Select the
+        # kriged cells from the ORIGINAL input mask and require them to exist.
+        kriged_output = result.data.astype("float64")[prop.mask == 0]
+        assert kriged_output.size > 0, (
+            "fixture has no uninformed cells — the convexity bound would be vacuous"
+        )
+        out_min = float(np.min(kriged_output))
+        out_max = float(np.max(kriged_output))
 
-            assert out_min >= data_min - 1e-4, (
-                f"OK output below input minimum for {cov_name}: "
-                f"min_output={out_min:.6f} < min_input={data_min:.6f}"
-            )
-            assert out_max <= data_max + 1e-4, (
-                f"OK output above input maximum for {cov_name}: "
-                f"max_output={out_max:.6f} > max_input={data_max:.6f}"
-            )
+        assert out_min >= data_min - 1e-4, (
+            f"OK output below input minimum for {cov_name}: "
+            f"min_output={out_min:.6f} < min_input={data_min:.6f}"
+        )
+        assert out_max <= data_max + 1e-4, (
+            f"OK output above input maximum for {cov_name}: "
+            f"max_output={out_max:.6f} > max_input={data_max:.6f}"
+        )
 
 
 # =============================================================================
@@ -270,8 +281,10 @@ class TestParametrizedMedianIK:
 
         assert isinstance(result, IndProperty), f"Failed for {cov_name}"
         assert result.indicator_count == 2
-        assert not np.any(np.isnan(result.data.astype("float64"))), f"NaN in {cov_name}"
-        assert not np.any(np.isinf(result.data.astype("float64"))), f"Inf in {cov_name}"
+        # F-574: IndProperty.data is uint8 (geo.py:504), so isnan/isinf on a
+        # float64 view of it are constants — they can never fail. Assert the
+        # satisfiable output contract (dtype + category range) instead.
+        assert result.data.dtype == np.uint8, f"Wrong dtype for {cov_name}"
         assert np.all(result.data < result.indicator_count), f"Out-of-range in {cov_name}"
 
 
@@ -558,7 +571,13 @@ class TestKrigingEdgeCases:
         )
 
     def test_lvm_empty_no_informed(self):
-        """LVM: zero informed points — no crash, valid output."""
+        """LVM: zero informed points — mean_on_failure contract (mask==1,
+        data == the local mean), mirroring the SK/D-73 pin above.
+
+        F-576: the sibling SK test pins the fallback values while this one
+        asserted only the type, so an LVM regression that left cells
+        undefined (the OK behaviour: mask 0, data untouched) stayed green.
+        """
         grid = SugarboxGrid(x=5, y=5, z=2)
         data = np.random.rand(50).astype("float32") * 100
         mask = np.zeros(50, dtype="uint8")
@@ -569,21 +588,48 @@ class TestKrigingEdgeCases:
         result = lvm_kriging(prop, grid, mean_data, (3, 3, 2), 8, cov_model)
 
         assert isinstance(result, ContProperty)
+        # lvm_kriging.cpp:33-35 passes mean_on_failure into cont_kriging,
+        # whose no-neighbour branch calls set_at(idx, means[idx]).
+        assert np.all(result.mask == 1), "LVM mean_on_failure should mark all cells informed"
+        np.testing.assert_allclose(
+            result.data.astype("float64").ravel(order="F"),
+            mean_data.astype("float64"),
+            atol=1e-5,
+            err_msg="LVM mean_on_failure should fill each cell with the local mean",
+        )
 
     def test_mik_empty_no_informed(self):
-        """M-IK: zero informed points — no crash, valid output."""
+        """M-IK: zero informed points — marginal substitution picks the most
+        probable category.
+
+        F-576: asserted only the type before. The marginals are deliberately
+        untied (0.3, 0.7) so the expected category is the documented
+        substitution result rather than a tie-break side effect; a fallback
+        that left cells undefined (category 0 anywhere) fails.
+        """
         grid = SugarboxGrid(x=5, y=5, z=2)
         data = np.zeros(50, dtype="uint8")
         mask = np.zeros(50, dtype="uint8")
         prop = IndProperty(data, mask, 2)
         cov_model = _make_cov(covariance.spherical)
 
-        result = median_ik(prop, grid, (0.5, 0.5), (3, 3, 2), 8, cov_model)
+        result = median_ik(prop, grid, (0.3, 0.7), (3, 3, 2), 8, cov_model)
 
         assert isinstance(result, IndProperty)
+        # median_ik.cpp:179-183 substitutes the marginal before
+        # choose_indicator; the median of the (0.3, 0.7) marginal is
+        # category 1.
+        assert np.all(result.mask == 1), "M-IK fallback should mark all cells informed"
+        assert np.all(result.data == 1), "M-IK fallback should pick the most probable category"
 
     def test_ik_empty_no_informed(self):
-        """IK: zero informed points — no crash, valid output."""
+        """IK: zero informed points — marginal-probability substitution picks
+        the most probable category.
+
+        F-576: asserted only the type before; indicator_kriging.h:356
+        sanitises every probability with the marginal before writing the
+        category, and nothing pinned that substitution.
+        """
         grid = SugarboxGrid(x=5, y=5, z=2)
         data = np.zeros(50, dtype="uint8")
         mask = np.zeros(50, dtype="uint8")
@@ -594,41 +640,79 @@ class TestKrigingEdgeCases:
         result = indicator_kriging(prop, grid, ik_data, [0.3, 0.4, 0.3])
 
         assert isinstance(result, IndProperty)
+        assert np.all(result.mask == 1), "IK fallback should mark all cells informed"
+        assert np.all(result.data == 1), (
+            "IK fallback should substitute the most probable marginal category (0.4)"
+        )
 
     # ---- Single-point grid tests ----
 
     def test_sk_single_point(self):
-        """SK: (1,1,1) grid — returns valid result."""
-        grid = SugarboxGrid(x=1, y=1, z=1)
-        data = np.array([42.0], dtype="float32")
-        mask = np.array([1], dtype="uint8")
+        """SK: one informed datum — copy-through at the datum, estimate at the kriged cell.
+
+        F-572: a (1,1,1) grid whose only cell is informed is pure copy-through
+        (cont_kriging.h:241-244), so the old assertion pinned no kriging
+        mathematics. The grid now carries one UNINFORMED cell as well: the
+        datum is still copied through verbatim, and the kriged cell must land
+        strictly between the explicit mean (30.0) and the datum (42.0). That is
+        the simple-kriging BLUP for a single neighbour whose covariance is
+        strictly between 0 and C(0), so it holds for any covariance type/range
+        with 0 < h < range (measured 38.448 = 30.0 + 0.704 * 12.0 here).
+
+        Catches: a kernel that copies the input array through instead of
+        kriging (999.0), a zero-filled output (0.0), and a mean-only output
+        that never uses the datum (30.0).
+        """
+        grid = SugarboxGrid(x=2, y=1, z=1)
+        data = np.array([42.0, 999.0], dtype="float32")
+        mask = np.array([1, 0], dtype="uint8")
         prop = ContProperty(data, mask)
-        cov_model = _make_cov(covariance.spherical, ranges=(1.0, 1.0, 1.0), nugget=0.0)
+        cov_model = _make_cov(covariance.spherical, ranges=(5.0, 5.0, 5.0), nugget=0.0)
 
-        result = simple_kriging(prop, grid, (1, 1, 1), 1, cov_model, mean=None)
+        result = simple_kriging(prop, grid, (2, 1, 1), 2, cov_model, mean=30.0)
 
-        assert result.data.size == 1
-        assert abs(float(result.data.flat[0]) - 42.0) < 0.1
+        assert result.data.size == 2
+        assert abs(float(result.data[0]) - 42.0) < 1e-5, (
+            f"SK must copy the informed cell through verbatim, got {float(result.data[0])!r}"
+        )
+        kriged = float(result.data[1])
+        assert 30.0 < kriged < 42.0, (
+            f"SK estimate at the uninformed cell is {kriged!r}; with one datum of 42.0 "
+            f"and mean=30.0 the BLUP must be strictly between them (a copy-through "
+            f"gives 999.0, a zero fill gives 0.0, a mean-only estimate gives 30.0)"
+        )
 
     def test_lvm_single_point(self):
-        """LVM: (1,1,1) grid — estimate copies through the informed value.
+        """LVM: one informed datum — copy-through at the datum, local-mean estimate.
 
-        A single informed cell at the only grid cell is copied through
-        (cont_kriging.h copy-through branch) — estimate must equal the data
-        value (D-77/V-12, mirrors the OK/SK single-point value asserts).
+        F-572: the old (1,1,1) all-informed fixture was pure copy-through. With
+        one uninformed cell and a constant local mean field (30.0), the LVM
+        estimate is the local mean plus the residual weight times the residual
+        (42.0 - 30.0), i.e. strictly between 30.0 and 42.0 (measured 38.448 —
+        the same 0.704 weight the SK sibling gets).
+
+        Catches: a copy-through of the input array (999.0), a zero fill (0.0),
+        and an estimate that ignores the datum (30.0).
         """
-        grid = SugarboxGrid(x=1, y=1, z=1)
-        data = np.array([42.0], dtype="float32")
-        mask = np.array([1], dtype="uint8")
+        grid = SugarboxGrid(x=2, y=1, z=1)
+        data = np.array([42.0, 999.0], dtype="float32")
+        mask = np.array([1, 0], dtype="uint8")
         prop = ContProperty(data, mask)
-        mean_data = np.array([50.0], dtype="float32")
-        cov_model = _make_cov(covariance.spherical, ranges=(1.0, 1.0, 1.0), nugget=0.0)
+        mean_data = np.full(2, 30.0, dtype="float32")
+        cov_model = _make_cov(covariance.spherical, ranges=(5.0, 5.0, 5.0), nugget=0.0)
 
-        result = lvm_kriging(prop, grid, mean_data, (1, 1, 1), 1, cov_model)
+        result = lvm_kriging(prop, grid, mean_data, (2, 1, 1), 2, cov_model)
 
-        assert result.data.size == 1
-        assert abs(float(result.data.flat[0]) - 42.0) < 0.1, (
-            f"LVM single-point estimate {result.data.flat[0]} should equal 42.0"
+        assert result.data.size == 2
+        assert abs(float(result.data[0]) - 42.0) < 1e-5, (
+            f"LVM must copy the informed cell through verbatim, got {float(result.data[0])!r}"
+        )
+        kriged = float(result.data[1])
+        assert 30.0 < kriged < 42.0, (
+            f"LVM estimate at the uninformed cell is {kriged!r}; with one datum of 42.0 "
+            f"and a constant mean field of 30.0 it must be strictly between them "
+            f"(a copy-through gives 999.0, a zero fill gives 0.0, a mean-only "
+            f"estimate gives 30.0)"
         )
 
     # ---- Uniform data (zero variance) tests ----
@@ -713,7 +797,14 @@ class TestKrigingEdgeCases:
         assert np.all(result.mask == 1)
 
     def test_sk_fully_informed_100_percent(self):
-        """SK: 100% informed — valid output, no NaN/Inf."""
+        """SK: 100% informed — copy-through, all cells stay informed.
+
+        F-576: asserted only finiteness while the OK sibling pins the mask.
+        With a fully informed input and zero nugget the kernel never kriges
+        (cont_kriging.h:243 copies informed cells through), so the
+        result must equal the input exactly — a wrapper that reshapes,
+        permutes or zero-fills the output fails here.
+        """
         grid, prop = _make_cont_grid(5, 5, 3, informed_frac=1.0)
         cov_model = _make_cov(covariance.spherical, ranges=(5.0, 5.0, 3.0), nugget=0.0)
 
@@ -722,15 +813,26 @@ class TestKrigingEdgeCases:
         assert isinstance(result, ContProperty)
         assert not np.any(np.isnan(result.data.astype("float64")))
         assert not np.any(np.isinf(result.data.astype("float64")))
+        assert np.all(result.mask == 1), "a fully informed input must stay fully informed"
+        np.testing.assert_allclose(
+            result.data.astype("float64").ravel(order="F"),
+            prop.data.astype("float64").ravel(order="F"),
+            atol=1e-5,
+            err_msg="fully informed SK must copy the input values through",
+        )
 
     # ---- Sill edge case: near-zero but not quite zero ----
 
     def test_ok_small_sill(self):
-        """OK: very small sill (0.01) but nugget=0 — valid output within input bounds.
+        """OK: very small sill (0.01) but nugget=0 — kriged estimates within input bounds.
 
-        F-11: added the convexity-bound assert — informed-cell estimates must
-        stay within [min, max] of the input (exact interpolation with zero
-        nugget), catching the wild-solution solver-gate regression class.
+        F-11: added the convexity-bound assert — estimates must stay within
+        [min, max] of the input (exact interpolation with zero nugget), catching
+        the wild-solution solver-gate regression class. G-54: the bound is
+        checked on the KRIGED cells selected from the ORIGINAL input mask; the
+        old `result.mask == 1` selection is empty for a no-op kernel (the C++
+        fill marks only written nodes) and the `if len(...) > 0` guard then
+        skipped both checks.
         """
         grid, prop = _make_cont_grid(5, 5, 3)
         cov_model = _make_cov(covariance.spherical, ranges=(5.0, 5.0, 3.0),
@@ -745,14 +847,16 @@ class TestKrigingEdgeCases:
         informed_input = prop.data[prop.mask == 1]
         data_min = float(np.min(informed_input))
         data_max = float(np.max(informed_input))
-        informed_output = result.data[result.mask == 1]
-        if len(informed_output) > 0:
-            assert float(np.min(informed_output)) >= data_min - 1e-4, (
-                "small-sill OK output below input minimum"
-            )
-            assert float(np.max(informed_output)) <= data_max + 1e-4, (
-                "small-sill OK output above input maximum"
-            )
+        kriged_output = result.data.astype("float64")[prop.mask == 0]
+        assert kriged_output.size > 0, (
+            "fixture has no uninformed cells — the small-sill bound would be vacuous"
+        )
+        assert float(np.min(kriged_output)) >= data_min - 1e-4, (
+            "small-sill OK output below input minimum"
+        )
+        assert float(np.max(kriged_output)) <= data_max + 1e-4, (
+            "small-sill OK output above input maximum"
+        )
 
     # ---- Negative parameter rejection tests ----
 

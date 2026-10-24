@@ -407,9 +407,12 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption, basedir=None):
         validate_property_name(Key, "SaveGSLIBPointSet")
 
     # Security: safe_atomic_open_write validates the path and opens atomically
-    # with O_NOFOLLOW to prevent TOCTOU symlink attacks. The basedir is
-    # the trusted base (DEFAULT_BASE_DIR unless overridden) — NOT derived
-    # from the filename's own directory, which would defeat containment.
+    # with O_NOFOLLOW where the platform provides it (Unix; on Windows the
+    # flag is omitted and containment + the O_EXCL temp creation still apply —
+    # see the helper's F-698 platform residual) to prevent TOCTOU symlink
+    # attacks. The basedir is the trusted base (DEFAULT_BASE_DIR unless
+    # overridden) — NOT derived from the filename's own directory, which
+    # would defeat containment.
     # Content is written to a uniquely-named temp file and atomically renamed
     # into place on clean exit, so a crash mid-write never truncates the
     # target (F-N18, matching the C++ writers' temp+rename pattern).
@@ -423,16 +426,21 @@ def SaveGSLIBPointSet(PointSet, FileName, Caption, basedir=None):
         f.write(str(len(PointSet)) + "\n")
 
         # 3. Properties names
-        for Key in PointSet.keys():
+        # G-30: canonical property order. Writing in dict insertion order made
+        # the file bytes depend on how the caller built the dict, so identical
+        # content produced different files (and unstable diffs). The GSLIB
+        # reader is name-keyed, so sorted order is semantically free.
+        Keys = sorted(PointSet.keys())
+        for Key in Keys:
             f.write(Key + "\n")
 
         MegaPointSet = zeros((int(lens[0]), 0))
-        for Key in PointSet.keys():
+        for Key in Keys:
             MegaPointSet = column_stack((MegaPointSet, PointSet[Key]))
         savetxt(f, MegaPointSet)
 
 
-def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g", basedir=None):
+def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%.9E", basedir=None):
     """Write 3D grid properties to a file in GSLIB format.
 
     Same header structure as ``SaveGSLIBPointSet``, but flattens 3D
@@ -448,7 +456,14 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g", basedir=None
     Caption : str
         One-line description written to the file header.
     Format : str, optional
-        NumPy ``savetxt`` format string (default ``"%g"``).
+        NumPy ``savetxt`` format string (default ``"%.9E"``). The
+        default is lossless for the library's float32 storage type — a
+        binary32 value needs 9 significant digits, and ``%g``'s 6
+        quantised every value on write (a real datum within ~5e-5 of the
+        caller's ``undefined_value`` serialised as the sentinel itself and
+        re-masked on load). It matches the C++ writer's ``%.9E``
+        (property_writer.cpp:121) and ``SaveGSLIBPointSet``'s numpy
+        default ``%.18e``.
     basedir : str or pathlib.Path, optional
         Trusted base directory for path containment. Defaults to
         ``PathValidator.DEFAULT_BASE_DIR`` (the process working
@@ -543,9 +558,12 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g", basedir=None
         validate_property_name(Key, "SaveGSLIBCubes")
 
     # Security: safe_atomic_open_write validates the path and opens atomically
-    # with O_NOFOLLOW to prevent TOCTOU symlink attacks. The basedir is
-    # the trusted base (DEFAULT_BASE_DIR unless overridden) — NOT derived
-    # from the filename's own directory, which would defeat containment.
+    # with O_NOFOLLOW where the platform provides it (Unix; on Windows the
+    # flag is omitted and containment + the O_EXCL temp creation still apply —
+    # see the helper's F-698 platform residual) to prevent TOCTOU symlink
+    # attacks. The basedir is the trusted base (DEFAULT_BASE_DIR unless
+    # overridden) — NOT derived from the filename's own directory, which
+    # would defeat containment.
     # Content is written to a uniquely-named temp file and atomically renamed
     # into place on clean exit, so a crash mid-write never truncates the
     # target (F-N18, matching the C++ writers' temp+rename pattern).
@@ -559,11 +577,14 @@ def SaveGSLIBCubes(CubesDictionary, FileName, Caption, Format="%g", basedir=None
         f.write(str(len(CubesDictionary)) + "\n")
 
         # 3. Properties names
-        for Key in CubesDictionary.keys():
+        # G-30: canonical property order (see SaveGSLIBPointSet) — header names
+        # and data columns are emitted in sorted name order, not dict order.
+        Keys = sorted(CubesDictionary.keys())
+        for Key in Keys:
             f.write(Key + "\n")
 
         MegaCube = zeros((int(lens[0]), 0))
-        for Key in CubesDictionary.keys():
+        for Key in Keys:
             MegaCube = column_stack((MegaCube, CubesDictionary[Key].copy().swapaxes(0, 2).flat))
         savetxt(f, MegaCube, Format)
 
@@ -575,7 +596,7 @@ def GetCubicalMask(Radiuses):
             f"GetCubicalMask: radius components must be positive, "
             f"got ({rx}, {ry}, {rz})"
         )
-    MeanMask = ones((rx * 2, ry * 2, rz * 2), dtype=uint8)
+    MeanMask = ones((rx * 2 + 1, ry * 2 + 1, rz * 2 + 1), dtype=uint8)
     MeanMask = require(MeanMask, requirements="F")
     return MeanMask
 
@@ -589,12 +610,12 @@ def GetEllipseMask(Radiuses):
         )
     x0, y0, z0 = rx, ry, rz
 
-    a, b, c = mgrid[0 : rx * 2, 0 : ry * 2, 0 : rz * 2]
+    a, b, c = mgrid[0 : rx * 2 + 1, 0 : ry * 2 + 1, 0 : rz * 2 + 1]
     ellipsoid_eq = (
         (a - x0) ** 2 / (rx**2) + (b - y0) ** 2 / (ry**2) + (c - z0) ** 2 / (rz**2)
     ) <= 1
 
-    MeanMask = zeros((rx * 2, ry * 2, rz * 2), dtype=uint8)
+    MeanMask = zeros((rx * 2 + 1, ry * 2 + 1, rz * 2 + 1), dtype=uint8)
     MeanMask = require(MeanMask, requirements="F")
     MeanMask[ellipsoid_eq] = 1
     return MeanMask
@@ -602,14 +623,21 @@ def GetEllipseMask(Radiuses):
 
 def MeanCalc(Cube, Mask, Radiuses, MeanMask, coords, undefined_value):
     i, j, k = coords
+    # F-003: the window is the FULL symmetric box [i-R, i+R], so the upper
+    # bound is inclusive (+1 in the slice stop) and covers 2R+1 cells — the
+    # width of the mean mask built by GetCubicalMask/GetEllipseMask, whose
+    # offset mapping is mask index R+d. Pre-fix the stop was i+R (a 2R
+    # window) while the mask still indexed R+d, so the kernel covered
+    # [i-R, i+R-1]: a half-cell shift toward the negative axes that lost the
+    # +x/+y/+z neighbours (R=1 yielded a 4-cell cross instead of 7 cells).
     imin = i - Radiuses[0]
-    imax = i + Radiuses[0]
+    imax = i + Radiuses[0] + 1
 
     jmin = j - Radiuses[1]
-    jmax = j + Radiuses[1]
+    jmax = j + Radiuses[1] + 1
 
     kmin = k - Radiuses[2]
-    kmax = k + Radiuses[2]
+    kmax = k + Radiuses[2] + 1
 
     if imin < 0:
         imin = 0
@@ -675,9 +703,10 @@ def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
     # validation at all (0/negative radiuses produced empty-dim masks or raw
     # numpy errors), and an unbounded radius (r=1e6 is within MAX_RADIUS)
     # previously attempted a (2e6)^3 = 8e18-byte mask allocation before the
-    # volume cap could fire. The mask is (2rx·2ry·2rz) cells, so a radius
-    # larger than the grid in any axis would only allocate unused memory —
-    # reject it here with a clear error.
+    # volume cap could fire. The mask is (2rx+1)(2ry+1)(2rz+1) cells (F-003:
+    # the full symmetric window), so a radius larger than the grid in any
+    # axis would only allocate unused memory — reject it here with a clear
+    # error.
     Radiuses = ParameterValidator.validate_radius(Radiuses, "Radiuses")
     rx, ry, rz = Radiuses
     if rx <= 0 or ry <= 0 or rz <= 0:
@@ -720,14 +749,14 @@ def MovingAverage3D(cube_mask, Radiuses, undefined_value, MaskCalcFunction):
 
     # F-30: work-based cap on the per-cell ellipse path. The grid-volume
     # cap above bounds MEMORY only; this loop is O(N·V) — every one of the
-    # N grid cells runs MeanCalc over a (2rx·2ry·2rz) mean-mask window,
-    # ~10 numpy ops per window cell. With the volume cap at 1e6 and a
+    # N grid cells runs MeanCalc over a (2rx+1)(2ry+1)(2rz+1) mean-mask
+    # window, ~10 numpy ops per window cell. With the volume cap at 1e6 and a
     # radius reaching the full grid, the worst case is ~8e12 numpy ops
     # (multi-hour hang; probe: r=2 → 12.5 s at cap, r=50 extrapolates to
     # ~54 h). The C++ kernel has no Python-scale cost problem (compiled);
     # this pure-Python path needs an explicit work bound. Reject the
     # product N × window_volume before the loop starts.
-    window_volume = (2 * rx) * (2 * ry) * (2 * rz)
+    window_volume = (2 * rx + 1) * (2 * ry + 1) * (2 * rz + 1)
     moving_average_work = volume * window_volume
     if moving_average_work > ValidationConstants.MAX_MOVING_AVERAGE_WORK:
         raise ValueError(
@@ -798,8 +827,13 @@ def _moving_average_cubical(Cube, Mask, Radiuses, undefined_value):
         )
 
     i, j, k = mgrid[0:nx, 0:ny, 0:nz]
-    cnt = _box(ci, i, i + 2 * rx, j, j + 2 * ry, k, k + 2 * rz)
-    sm = _box(cc, i, i + 2 * rx, j, j + 2 * ry, k, k + 2 * rz)
+    # F-003: the box is the full symmetric window [i-r, i+r], i.e. a half-open
+    # range of 2r+1 padded cells — matching MeanCalc's window and the 2R+1
+    # mean mask. The pre-fix `i + 2*rx` stop described the old 2R trailing
+    # window ([i-r, i+r-1]) and is what made this path disagree with a
+    # symmetric kernel.
+    cnt = _box(ci, i, i + 2 * rx + 1, j, j + 2 * ry + 1, k, k + 2 * rz + 1)
+    sm = _box(cc, i, i + 2 * rx + 1, j, j + 2 * ry + 1, k, k + 2 * rz + 1)
 
     out = numpy.full((nx, ny, nz), undefined_value, dtype=float64)
     out = where(cnt > 0, sm / where(cnt > 0, cnt, 1), undefined_value)
@@ -833,7 +867,11 @@ def LoadGslibFile(filename, property_size, basedir=None):
     -------
     dict
         Dictionary mapping property names to 3D numpy arrays with
-        shape ``property_size``.
+        shape ``property_size``. Values outside the GSLIB ±1.0e21
+        sentinel window (strict inequality) are missing sentinels and are
+        returned as ``numpy.nan`` — the caller receives no mask, so NaN is
+        this reader's missing-value marker (G-29: the conversion was
+        performed but undocumented).
 
     Raises
     ------
@@ -874,9 +912,11 @@ def LoadGslibFile(filename, property_size, basedir=None):
     list_prop = []
 
     # Security: safe_open_read validates the path and opens atomically
-    # with O_NOFOLLOW to prevent TOCTOU symlink attacks. The basedir is
-    # the trusted base (DEFAULT_BASE_DIR unless overridden) — NOT derived
-    # from the filename's own directory, which would defeat containment.
+    # with O_NOFOLLOW where the platform provides it (Unix; on Windows the
+    # flag is omitted — see the helper's F-698 platform residual) to prevent
+    # TOCTOU symlink attacks. The basedir is the trusted base
+    # (DEFAULT_BASE_DIR unless overridden) — NOT derived from the filename's
+    # own directory, which would defeat containment.
     if basedir is None:
         basedir = PathValidator.DEFAULT_BASE_DIR
     with PathValidator.safe_open_read(filename, basedir=basedir) as f:
@@ -892,12 +932,14 @@ def LoadGslibFile(filename, property_size, basedir=None):
         # Validate num_p against a reasonable upper bound to prevent
         # memory exhaustion from malicious GSLIB file headers.
         if num_p < 1:
-            raise ValueError(f"LoadGslibFile: num_p must be at least 1, got {num_p}")
+            raise ValueError(
+                f"LoadGslibFile: file '{filename}': num_p must be at least 1, got {num_p}"
+            )
         max_props = max(ValidationConstants.MAX_INDICATORS * 4, 1024)
         if num_p > max_props:
             raise ValueError(
-                f"LoadGslibFile: num_p {num_p} exceeds maximum allowed "
-                f"properties ({max_props}). File may be corrupted or malicious."
+                f"LoadGslibFile: file '{filename}': num_p {num_p} exceeds maximum "
+                f"allowed properties ({max_props}). File may be corrupted or malicious."
             )
 
         # F-31: reject duplicate property names. Duplicate names cause
@@ -909,8 +951,8 @@ def LoadGslibFile(filename, property_size, basedir=None):
             name = str(_read_bounded_line(f, "property name line").strip())
             if name in seen:
                 raise ValueError(
-                    f"LoadGslibFile: duplicate property name '{name}' in GSLIB header. "
-                    f"Each property name must be unique."
+                    f"LoadGslibFile: file '{filename}': duplicate property name "
+                    f"'{name}' in GSLIB header. Each property name must be unique."
                 )
             seen.add(name)
             list_prop.append(name)
@@ -924,9 +966,10 @@ def LoadGslibFile(filename, property_size, basedir=None):
         # a single MAX_GRID_SIZE property already permits.
         if grid_size * num_p > ValidationConstants.MAX_GSLIB_VALUES:
             raise ValueError(
-                f"LoadGslibFile: file would contain {grid_size * num_p} values "
-                f"(grid {property_size} x {num_p} properties), exceeding the "
-                f"maximum allowed {ValidationConstants.MAX_GSLIB_VALUES}. "
+                f"LoadGslibFile: file '{filename}': it would contain "
+                f"{grid_size * num_p} values (grid {property_size} x {num_p} "
+                f"properties), exceeding the maximum allowed "
+                f"{ValidationConstants.MAX_GSLIB_VALUES}. "
                 f"File may be corrupted or malicious."
             )
 
@@ -960,14 +1003,14 @@ def LoadGslibFile(filename, property_size, basedir=None):
                 row_count += 1
         if row_count > grid_size:
             raise RuntimeError(
-                f"LoadGslibFile: too many values for property '{list_prop[0]}'. "
-                f"Expected {grid_size} elements "
+                f"LoadGslibFile: file '{filename}': too many values for property "
+                f"'{list_prop[0]}'. Expected {grid_size} elements "
                 f"(grid {property_size}), got more."
             )
         if row_count != grid_size:
             raise RuntimeError(
-                f"LoadGslibFile: property '{list_prop[0]}' has {row_count} values, "
-                f"expected {grid_size} (grid {property_size}). "
+                f"LoadGslibFile: file '{filename}': property '{list_prop[0]}' has "
+                f"{row_count} values, expected {grid_size} (grid {property_size}). "
                 f"File may be truncated or corrupted."
             )
         f.seek(data_start)
@@ -1002,8 +1045,8 @@ def LoadGslibFile(filename, property_size, basedir=None):
                     in_token = True
             if token_count != num_p:
                 raise RuntimeError(
-                    f"LoadGslibFile: expected {num_p} values per data line, "
-                    f"got {token_count} tokens in line: {line.strip()!r}"
+                    f"LoadGslibFile: file '{filename}': expected {num_p} values per "
+                    f"data line, got {token_count} tokens in line: {line.strip()!r}"
                 )
             points = line.split()
             # Validate token count matches expected property count per line
@@ -1011,13 +1054,13 @@ def LoadGslibFile(filename, property_size, basedir=None):
             # but split() is the authoritative tokenization).
             if len(points) != num_p:
                 raise RuntimeError(
-                    f"LoadGslibFile: expected {num_p} values per data line, "
-                    f"got {len(points)} tokens in line: {line.strip()!r}"
+                    f"LoadGslibFile: file '{filename}': expected {num_p} values per "
+                    f"data line, got {len(points)} tokens in line: {line.strip()!r}"
                 )
             if row_idx >= grid_size:
                 raise RuntimeError(
-                    f"LoadGslibFile: too many values for property '{list_prop[0]}'. "
-                    f"Expected {grid_size} elements "
+                    f"LoadGslibFile: file '{filename}': too many values for property "
+                    f"'{list_prop[0]}'. Expected {grid_size} elements "
                     f"(grid {property_size}), got more."
                 )
             data[row_idx] = points
@@ -1030,8 +1073,9 @@ def LoadGslibFile(filename, property_size, basedir=None):
         for j, key in enumerate(list_prop):
             if not numpy.all(numpy.isfinite(data[:, j])):
                 raise ValueError(
-                    f"LoadGslibFile: property '{key}' contains non-finite "
-                    f"values (NaN or Inf). GSLIB format does not support non-finite values."
+                    f"LoadGslibFile: file '{filename}': property '{key}' contains "
+                    f"non-finite values (NaN or Inf). GSLIB format does not support "
+                    f"non-finite values."
                 )
 
         # F-M18: GSLIB missing-value trimming — finite values outside the

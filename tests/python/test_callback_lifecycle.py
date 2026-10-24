@@ -196,13 +196,40 @@ class TestHandlerClearedAfterUse:
 
     def test_handler_cleared_after_none_assignment(self):
         """Handler set to None clears the handler and internal state."""
+        from geo_bsd import geo
+
         # Set a handler (local helper — deliberately not named test_* so the
         # grep test count stays honest)
         def handler_fn(msg, param):
             return 1
 
         set_output_handler(handler_fn, "test")
+        # F-519/F-537: the set path must install the CFUNCTYPE trampoline and
+        # pin the param (geo.py:2745-2750). Without this half the test cannot
+        # tell a dropped install from a correct clear.
+        assert geo._h is not None, (
+            "set_output_handler(callable, param) did not install a handler"
+        )
+        assert geo._output_handler_param == "test", (
+            f"param not pinned: {geo._output_handler_param!r}"
+        )
+
         # Clear it
         set_output_handler(None, None)
-        # Setting to None again should not raise
+        # F-519/F-537: the cleared state IS observable (geo.py:2730-2741) —
+        # asserting it is what makes this test able to fail for the regression
+        # it claims to pin. Both the Python-side handler and the pinned param
+        # must be nulled, and the displaced pair must be deferred so a
+        # concurrent C++ invocation cannot call a freed trampoline.
+        assert geo._h is None, "set_output_handler(None, None) left geo._h installed"
+        assert geo._output_handler_param is None, (
+            f"set_output_handler(None, None) kept param {geo._output_handler_param!r}"
+        )
+        assert geo._old_handler_refs[-1][1] == "test", (
+            "the displaced handler/param pair was not deferred into "
+            "_old_handler_refs (use-after-free guard)"
+        )
+
+        # Setting to None again should not raise, and must stay cleared
         set_output_handler(None, None)
+        assert geo._h is None, "a repeated clear re-installed a handler"

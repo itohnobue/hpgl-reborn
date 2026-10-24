@@ -54,7 +54,15 @@ void fill_ellipsoid_directions(ellipsoid_t * ell, double azimuth, double dip, do
 		return;
 	}
 
-	double coef = 3.14159265358 / 180.0;
+	// F-054: full-precision pi, matching this repo's own convention
+	// (hpgl/cov_model.h:29). The previous 3.14159265358 carried a relative
+	// error of 3.12e-12, which at a 45-degree azimuth made
+	// cos(raz) - sin(raz) = +3.46e-12: the is_in_tunnel cone test then
+	// resolved exact-bisector ties by axis, so the C++ grid and point-set
+	// kernels binned a symmetric template's axis-0 offsets and dropped the
+	// mirrored axis-1 offsets, diverging from the Python twin
+	// (variogram.py, numpy.radians).
+	double coef = 3.141592653589793238462643383279502884 / 180.0;
 	double razimuth = azimuth * coef;
 	double rdip = dip * coef;
 	double rrot = rotation * coef;

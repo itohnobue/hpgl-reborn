@@ -64,9 +64,13 @@ counts = np.array([sum(1 for _, _, c in observations if c == cat) for cat in cat
 marginal_probs = counts / float(len(observations))
 print("Marginal probabilities:", dict(zip(categories, marginal_probs)))
 
-# Covariance model for the indicator kriging (spherical, range 2 cells,
-# unit sill — the indicator variograms are computed on 0/1 data)
-cov1 = CovarianceModel(type=covariance.spherical, ranges=(2, 2, 1), sill=1)
+# Covariance model for the indicator kriging (spherical, unit sill — the
+# indicator variograms are computed on 0/1 data). F-117: the range must
+# exceed the distance to the observations (the far corners are 2.83 cells
+# from the target); with the old range 2 / radius 2 every data-to-target
+# covariance was exactly 0, all five kriging weights were 0 and the
+# "conditional" ccdf collapsed to the marginal [0.2, 0.4, 0.4].
+cov1 = CovarianceModel(type=covariance.spherical, ranges=(5, 5, 1), sill=1)
 
 # Indicator kriging per category: krige the category indicator with the
 # marginal probability as the known mean.  The kriged indicator value at
@@ -81,7 +85,7 @@ for cat, p_k in zip(categories, marginal_probs):
         mask[i, j, 0] = 1
     prop = ContProperty(indicator, mask)
 
-    sk = simple_kriging(prop=prop, grid=grid, radiuses=(2, 2, 1),
+    sk = simple_kriging(prop=prop, grid=grid, radiuses=(5, 5, 1),
                         max_neighbours=8, cov_model=cov1, mean=float(p_k))
     prob_fields[cat] = sk[0]
     print(f"Conditional probability of rock type {cat} at target: {sk[0][target[0], target[1], 0]}")

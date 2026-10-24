@@ -316,9 +316,14 @@ class TestGetCubicalMask:
     """Tests for GetCubicalMask function."""
 
     def test_returns_correct_shape(self):
-        """GetCubicalMask returns a mask of (2*R1, 2*R2, 2*R3)."""
+        """GetCubicalMask returns a mask of (2*R1+1, 2*R2+1, 2*R3+1).
+
+        F-003: the window is the full symmetric box [i-R, i+R] per axis — 2R+1
+        cells, matching MeanCalc's inclusive bounds and the mask offset R+d
+        (was 2R per axis pre-fix).
+        """
         result = GetCubicalMask((3, 4, 5))
-        assert result.shape == (6, 8, 10)
+        assert result.shape == (7, 9, 11)
 
     def test_all_ones(self):
         """Cubical mask should be all ones."""
@@ -336,9 +341,15 @@ class TestGetEllipseMask:
     """Tests for GetEllipseMask function."""
 
     def test_returns_correct_shape(self):
-        """GetEllipseMask returns a mask of (2*R1, 2*R2, 2*R3)."""
+        """GetEllipseMask returns a mask of (2*R1+1, 2*R2+1, 2*R3+1).
+
+        F-003: same 2R+1 window as GetCubicalMask (was 2R per axis pre-fix).
+        The R=1 ellipsoid is the 7-cell cross (centre + 6 axis neighbours) in
+        a 3x3x3 box.
+        """
         result = GetEllipseMask((3, 4, 5))
-        assert result.shape == (6, 8, 10)
+        assert result.shape == (7, 9, 11)
+        assert int(GetEllipseMask((1, 1, 1)).sum()) == 7
 
     def test_center_is_one(self):
         """Center point of ellipse mask should be 1."""
@@ -598,3 +609,50 @@ class TestRoutinesIsfiniteGates:
         cube = np.array([1.0, 2.0, 3.0], dtype="float32").reshape((1, 3, 1))
         mask = np.ones((1, 3, 1), dtype="uint8")
         assert CalcMean(cube, mask) == pytest.approx(2.0)
+
+    # F-643: the same III-18 gate class exists on three further routines.py
+    # entry points — CalcMarginalProbsIndicator, CalcVPCsIndicator and
+    # MovingAverage3D. Only the CalcMean/CalcVPC pair above was pinned, so
+    # deleting any of the other three gates left the suite green and the
+    # E2-27 silent-wrong-statistics path (marginals deflated to 0.667)
+    # reachable again.
+
+    def test_calc_marginal_probs_indicator_nan_informed_raises(self):
+        """E2-27: NaN in an informed cell must raise, not deflate marginals."""
+        cube = np.array([0.0, np.nan, 1.0], dtype="float32").reshape((1, 3, 1))
+        mask = np.array([1, 1, 1], dtype="uint8").reshape((1, 3, 1))
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            CalcMarginalProbsIndicator(cube, mask, [0, 1])
+
+    def test_calc_marginal_probs_indicator_nan_masked_ok(self):
+        """NaN in a masked cell is excluded by definition and must not raise."""
+        cube = np.array([0.0, np.nan, 1.0], dtype="float32").reshape((1, 3, 1))
+        mask = np.array([1, 0, 1], dtype="uint8").reshape((1, 3, 1))
+        result = CalcMarginalProbsIndicator(cube, mask, [0, 1])
+        np.testing.assert_allclose(result, [0.5, 0.5])
+
+    def test_calc_vpcs_indicator_nan_informed_raises(self):
+        """E2-27 sibling: the per-layer proportion gate must fire too."""
+        cube = np.zeros((2, 2, 2), dtype="float32")
+        cube[0, 0, 0] = np.nan
+        mask = np.ones((2, 2, 2), dtype="uint8")
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            CalcVPCsIndicator(cube, mask, [0, 1], [0.5, 0.5])
+
+    def test_moving_average_nan_informed_raises(self):
+        """E-M5: a NaN informed cell must raise, not average into the output."""
+        cube = np.ones((3, 3, 1), dtype="float32")
+        cube[1, 1, 0] = np.nan
+        mask = np.ones((3, 3, 1), dtype="uint8")
+        with pytest.raises(ValueError, match="NaN or Inf"):
+            MovingAverage3D((cube, mask), (1, 1, 1), -999.0, GetCubicalMask)
+
+    def test_moving_average_nan_masked_ok(self):
+        """The gate is informed-only: a NaN in a masked cell must not raise
+        (a broadened `isfinite(Cube).all()` revert would break this)."""
+        cube = np.ones((3, 3, 1), dtype="float32")
+        cube[1, 1, 0] = np.nan
+        mask = np.ones((3, 3, 1), dtype="uint8")
+        mask[1, 1, 0] = 0
+        result = MovingAverage3D((cube, mask), (1, 1, 1), -999.0, GetCubicalMask)
+        np.testing.assert_allclose(result, np.ones((3, 3, 1), dtype="float32"))

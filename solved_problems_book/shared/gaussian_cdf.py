@@ -96,10 +96,18 @@ def cdf_transform(array_data, undefined_value):
     # normal score clamp +3.0, whose gaussian_cdf is only 0.99865 — the
     # back-transform then returns the 99.865th-percentile value, not the
     # max (empirical: 7.5-27.5% error at the max datum). Clamp the tail to
-    # the largest float64 strictly below 1.0 (nextafter) so the max datum
+    # the largest float32 strictly below 1.0 (nextafter) so the max datum
     # maps to a large-but-finite normal score and round-trips exactly
-    # (mirrors the library F-04 clamp at src/geo_bsd/cdf.py:218-226).
-    cum_probs[-1] = np.nextafter(1.0, 0.0)
+    # (mirrors the library F-04/F-M11 clamp at src/geo_bsd/cdf.py:218-226).
+    # F-040: the downcast must precede the clamp, exactly as in the core
+    # twin. Clamping the float64 accumulator left a tail of 1 - 1.1e-16,
+    # which inverse_normal_score turns into 8.21 for the top datum, while
+    # the core's 0.99999994 tail gives 5.29 — a ~3σ divergence on the datum
+    # the 7.3 SK/SGS examples condition on most strongly. The float32 array
+    # is what the transform stores and what back_cdf_transform interpolates
+    # on, so it is the array returned.
+    cum_probs = np.require(cum_probs, "float32")
+    cum_probs[-1] = np.nextafter(np.float32(1.0), np.float32(0.0))
     for i in range(array_copy.shape[0]):
         for j in range(array_copy.shape[1]):
             value = array_copy[i, j]

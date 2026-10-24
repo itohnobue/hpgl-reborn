@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cctype>
+#include <limits>
 
 #include "property_array.h"
 #include "property_writer.h"
@@ -22,6 +23,23 @@
 
 namespace hpgl
 {
+	// F-267: does an INFORMED continuous value collide with the missing marker?
+	// Every writer emits the marker token for uninformed cells and every reader
+	// re-masks by exact equality, so an informed datum equal to the marker
+	// round-trips as uninformed. write_value prints %.9E of a cont_value_t, so
+	// the readers' comparison is in float32 space and that is the collision
+	// test (a fractional marker that is not float-representable cannot collide).
+	// The marker arrives as a float at the C boundary; a direct C++ caller may
+	// pass a wider double, for which no float32 datum can collide and the
+	// narrowing cast would be undefined — the test is skipped there.
+	static bool informed_value_collides_with_marker(cont_value_t value, double undefined_value)
+	{
+		if (!std::isfinite(undefined_value)
+			|| std::fabs(undefined_value) > static_cast<double>(std::numeric_limits<cont_value_t>::max()))
+			return false;
+		return value == static_cast<cont_value_t>(undefined_value);
+	}
+
 	namespace {
 
 		/// Shared property-name validation contract (F-N16). Names written into
@@ -306,10 +324,25 @@ namespace hpgl
 				if (fprintf(f.get(), "%s\n", property_name) < 0)
 					throw hpgl_exception("write_property_cont", "Error writing property name.");
 
+				// F-267: an INFORMED cell whose value equals the missing marker
+				// would be written with the same token as an uninformed cell and
+				// read back as uninformed — see
+				// informed_value_collides_with_marker above.
 				for (int i = 0, end_i = property.size(); i < end_i; ++i)
 				{
 					if (property.is_informed(i))
-						write_value(f.get(), property.get_at(i));
+					{
+						const cont_value_t v = property.get_at(i);
+						if (informed_value_collides_with_marker(v, undefined_value))
+						{
+							std::ostringstream oss;
+							oss << "Informed value at index " << i << " equals the undefined_value "
+							    << undefined_value << "; it would be read back as uninformed."
+							    " Choose an undefined_value that no informed datum can take.";
+							throw hpgl_exception("write_property_cont", oss.str());
+						}
+						write_value(f.get(), v);
+					}
 					else
 						write_value(f.get(), undefined_value);
 				}
@@ -361,16 +394,40 @@ namespace hpgl
 				if (fprintf(f.get(), "%s\n", property_name) < 0)
 					throw hpgl_exception("write_property_ind", "Error writing property name.");
 
+				// F-267: the marker must not collide with any mapped category —
+				// an informed cell written as remap_table[val] == undefined_value
+				// reads back UNINFORMED (the readers re-mask by exact equality).
+				// The Python layer already refuses this collision; this closes the
+				// direct-C path with the same rule.
+				for (size_t r = 0; r < remap_table.size(); ++r)
+				{
+					if (remap_table[r] == undefined_value)
+					{
+						std::ostringstream oss;
+						oss << "undefined_value " << static_cast<int>(undefined_value)
+						    << " is also a mapped indicator value (category " << r
+						    << "); informed cells would be read back as uninformed.";
+						throw hpgl_exception("write_property_ind", oss.str());
+					}
+				}
+
 				for (int i = 0, end_i = property.size(); i < end_i; ++i)
 				{
 					if (property.is_informed(i))
 					{
 						indicator_value_t val = property.get_at(i);
-						// Bounds check: invalid data produces undefined_value instead of UB
+						// F-267: an out-of-range informed category used to be
+						// written as undefined_value, i.e. silently converted into
+						// an uninformed cell on round-trip. Refuse it instead.
 						if (static_cast<size_t>(val) >= remap_table.size())
-							write_value(f.get(), undefined_value);
-						else
-							write_value(f.get(), remap_table[val]);
+						{
+							std::ostringstream oss;
+							oss << "Informed indicator value " << static_cast<int>(val)
+							    << " at index " << i << " has no entry in the remap table (size "
+							    << remap_table.size() << "); it would be written as the undefined_value.";
+							throw hpgl_exception("write_property_ind", oss.str());
+						}
+						write_value(f.get(), remap_table[val]);
 					}
 					else
 						write_value(f.get(), undefined_value);
@@ -423,10 +480,23 @@ namespace hpgl
 				int var_num = 1;
 				write_header(f.get(), var_num, property_name);
 
+				// F-267: same informed-as-marker collision as
+				// write_property_cont — see informed_value_collides_with_marker.
 				for (int i = 0, end_i = property.size(); i < end_i; ++i)
 				{
 					if (property.is_informed(i))
-						write_value(f.get(), property.get_at(i));
+					{
+						const cont_value_t v = property.get_at(i);
+						if (informed_value_collides_with_marker(v, undefined_value))
+						{
+							std::ostringstream oss;
+							oss << "Informed value at index " << i << " equals the undefined_value "
+							    << undefined_value << "; it would be read back as uninformed."
+							    " Choose an undefined_value that no informed datum can take.";
+							throw hpgl_exception("write_gslib_property_cont_c", oss.str());
+						}
+						write_value(f.get(), v);
+					}
 					else
 						write_value(f.get(), undefined_value);
 				}
@@ -465,16 +535,35 @@ namespace hpgl
 				int var_num = 1;
 				write_header(f.get(), var_num, property_name);
 
+				// F-267: same two rules as write_property_ind — the marker must
+				// not be a mapped category, and an out-of-range informed category
+				// must not be silently emitted as the marker.
+				for (size_t r = 0; r < remap_table.size(); ++r)
+				{
+					if (remap_table[r] == undefined_value)
+					{
+						std::ostringstream oss;
+						oss << "undefined_value " << static_cast<int>(undefined_value)
+						    << " is also a mapped indicator value (category " << r
+						    << "); informed cells would be read back as uninformed.";
+						throw hpgl_exception("write_gslib_property_ind_c", oss.str());
+					}
+				}
+
 				for (int i = 0, end_i = property.size(); i < end_i; ++i)
 				{
 					if (property.is_informed(i))
 					{
 						indicator_value_t val = property.get_at(i);
-						// Bounds check: invalid data produces undefined_value instead of UB
 						if (static_cast<size_t>(val) >= remap_table.size())
-							write_value(f.get(), undefined_value);
-						else
-							write_value(f.get(), remap_table[val]);
+						{
+							std::ostringstream oss;
+							oss << "Informed indicator value " << static_cast<int>(val)
+							    << " at index " << i << " has no entry in the remap table (size "
+							    << remap_table.size() << "); it would be written as the undefined_value.";
+							throw hpgl_exception("write_gslib_property_ind_c", oss.str());
+						}
+						write_value(f.get(), remap_table[val]);
 					}
 					else
 						write_value(f.get(), undefined_value);

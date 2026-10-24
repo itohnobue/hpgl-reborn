@@ -464,7 +464,15 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     Returns
     -------
     Result : numpy.ndarray
-        Accumulated result array of shape ``(NumLags, NumValues)``.
+        Accumulated result array of shape ``(NumLags, W)``, where ``W`` is the
+        width of the callback's accumulator. The three shipped callbacks
+        (``CalcVariogramFunction``, ``CalcCovarianceFunction``,
+        ``CalcIndCorrelationFunction``) use ``W = 2*NumValues + 1`` for
+        ``NumValues`` property arrays: columns ``[0:NumValues]`` hold the
+        per-lag statistic, ``[NumValues:2*NumValues]`` the raw sums, and
+        ``[2*NumValues]`` the pair count — the only discriminator between an
+        empty lag (statistic 0, no pairs) and a zero statistic over real
+        pairs.
     LagDistance : numpy.ndarray
         Distance values for each lag center.
 
@@ -641,7 +649,15 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
     Returns
     -------
     Result : numpy.ndarray
-        Accumulated result array of shape ``(NumLags, NumValues)``.
+        Accumulated result array of shape ``(NumLags, W)``, where ``W`` is the
+        width of the callback's accumulator. The three shipped callbacks
+        (``CalcVariogramFunction``, ``CalcCovarianceFunction``,
+        ``CalcIndCorrelationFunction``) use ``W = 2*NumValues + 1`` for
+        ``NumValues`` property arrays: columns ``[0:NumValues]`` hold the
+        per-lag statistic, ``[NumValues:2*NumValues]`` the raw sums, and
+        ``[2*NumValues]`` the pair count — the only discriminator between an
+        empty lag (statistic 0, no pairs) and a zero statistic over real
+        pairs.
     LagDistance : numpy.ndarray
         Distance values for each lag center.
     """
@@ -821,7 +837,15 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
     Returns
     -------
     Result : numpy.ndarray
-        Accumulated result array of shape ``(NumLags, NumValues)``.
+        Accumulated result array of shape ``(NumLags, W)``, where ``W`` is the
+        width of the callback's accumulator. The three shipped callbacks
+        (``CalcVariogramFunction``, ``CalcCovarianceFunction``,
+        ``CalcIndCorrelationFunction``) use ``W = 2*NumValues + 1`` for
+        ``NumValues`` property arrays: columns ``[0:NumValues]`` hold the
+        per-lag statistic, ``[NumValues:2*NumValues]`` the raw sums, and
+        ``[2*NumValues]`` the pair count — the only discriminator between an
+        empty lag (statistic 0, no pairs) and a zero statistic over real
+        pairs.
     LagDistance : numpy.ndarray
         Distance values for each lag center.
     """
@@ -882,6 +906,14 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
         )
 
     if Function is not None:
+        # F-055: publish the informed-cell mask to the shared callbacks so
+        # their NaN/Inf gate validates only the cells this scan can read
+        # (see _check_finite_values). A copy keeps the caller's Params dict
+        # unmodified. Point-set scans publish no _Mask and keep the
+        # whole-array contract.
+        if isinstance(Params, dict):
+            Params = dict(Params)
+            Params["_Mask"] = Mask
         Result = Function(0, 0, None, Params)
         Result = reshape(Result, (1, len(Result)))
         Result = repeat(Result, VariogramSearchTemplate.NumLags, 0)
@@ -895,6 +927,23 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
         DJ = LJ[i]
         DK = LK[i]
         Lag = LagIndexes[i]
+
+        # F-001: skip the (0,0,0) lag offset. _CalcLagsAreas admits the zero
+        # vector (_IsInTunnel passes with S1=S2=S3=0), so it is emitted into
+        # every lag band that contains distance 0 (with the default
+        # FirstLagDistance=0 that is lag 0 for every legal LagWidth). With
+        # DI=DJ=DK=0 both mask slices below are the full array, so every
+        # informed cell is paired with ITSELF: a zero-variance self-pair that
+        # only enlarges the denominator (CalcVariogramFunction), inflates the
+        # pair-count slot, and contributes a non-zero term for the covariance
+        # and indicator-correlation callbacks. The C++ grid kernel skips the
+        # same offset (variograms.cpp:702-703) and both point-set twins skip
+        # the self-pair by index (variogram.py:567, :792); CubeScan was the
+        # only scan without the skip. Measured pre-fix dilution: lag 0
+        # -18.95% to -51.85% against CalcVariograms, indicator correlation
+        # +62.1%.
+        if DI == 0 and DJ == 0 and DK == 0:
+            continue
 
         Mask1 = Mask[
             max(0, 0 + DI) : min(NI, NI + DI),
@@ -959,17 +1008,39 @@ def CubeScan(VariogramSearchTemplate, Mask, Function, Params):
     return Result, LagDistance
 
 
+def _check_finite_values(Values, Params, FunctionName, Key):
+    """Reject NaN/Inf in the values a scan actually reads (F-055).
+
+    The three accumulation callbacks are shared by both scan families.
+    ``CubeScan`` only ever indexes cells whose mask is non-zero, so a
+    NaN/Inf in a masked-out cell is unreachable there — and the C++ twin
+    accepts exactly that dataset (``cvariogram.py`` documents the same
+    contract for ``CalcVariograms``). Validating the whole array made the
+    pure-Python grid path reject input its own C++ path reads happily.
+    ``CubeScan`` therefore publishes its mask as ``Params["_Mask"]`` and the
+    gate below checks the informed cells only. Point-set scans pass no mask
+    (their per-point value vectors are read in full), so they keep the
+    whole-array gate pinned by ``test_variogram.py``.
+    """
+    Mask = Params.get("_Mask") if isinstance(Params, dict) else None
+    for iv, arr in enumerate(Values):
+        if Mask is not None and getattr(arr, "shape", None) == Mask.shape:
+            checked = arr[Mask]
+        else:
+            checked = arr
+        if not numpy.all(numpy.isfinite(checked)):
+            raise ValueError(
+                f"{FunctionName}: {Key}[{iv}] contains NaN or Inf values"
+            )
+
+
 def CalcVariogramFunction(Point1, Point2, Result, Params):
     _verify_dict_keys(Params, ["HardData"], "Params")
     Values = Params["HardData"]
     NumValues = len(Values)
 
     # Validate that input data does not contain NaN/Inf values.
-    for iv, arr in enumerate(Values):
-        if not numpy.all(numpy.isfinite(arr)):
-            raise ValueError(
-                f"CalcVariogramFunction: HardData[{iv}] contains NaN or Inf values"
-            )
+    _check_finite_values(Values, Params, "CalcVariogramFunction", "HardData")
 
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float64)
@@ -1034,16 +1105,8 @@ def CalcCovarianceFunction(Point1, Point2, Result, Params):
     NumValues = len(Values)
 
     # Validate that input data does not contain NaN/Inf values.
-    for iv, arr in enumerate(Values):
-        if not numpy.all(numpy.isfinite(arr)):
-            raise ValueError(
-                f"CalcCovarianceFunction: HardData[{iv}] contains NaN or Inf values"
-            )
-    for iv, arr in enumerate(SoftData):
-        if not numpy.all(numpy.isfinite(arr)):
-            raise ValueError(
-                f"CalcCovarianceFunction: SoftData[{iv}] contains NaN or Inf values"
-            )
+    _check_finite_values(Values, Params, "CalcCovarianceFunction", "HardData")
+    _check_finite_values(SoftData, Params, "CalcCovarianceFunction", "SoftData")
 
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float64)
@@ -1105,16 +1168,8 @@ def CalcIndCorrelationFunction(Point1, Point2, Result, Params):
     NumValues = len(Values)
 
     # Validate that input data does not contain NaN/Inf values.
-    for iv, arr in enumerate(Values):
-        if not numpy.all(numpy.isfinite(arr)):
-            raise ValueError(
-                f"CalcIndCorrelationFunction: HardData[{iv}] contains NaN or Inf values"
-            )
-    for iv, arr in enumerate(SoftData):
-        if not numpy.all(numpy.isfinite(arr)):
-            raise ValueError(
-                f"CalcIndCorrelationFunction: SoftData[{iv}] contains NaN or Inf values"
-            )
+    _check_finite_values(Values, Params, "CalcIndCorrelationFunction", "HardData")
+    _check_finite_values(SoftData, Params, "CalcIndCorrelationFunction", "SoftData")
 
     if Result is None:
         Result = zeros(NumValues + NumValues + 1, dtype=float64)

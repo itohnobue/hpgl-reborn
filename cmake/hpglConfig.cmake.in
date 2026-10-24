@@ -14,8 +14,6 @@
 # with "Unknown CMake command find_dependency".
 include(CMakeFindDependencyMacro)
 
-include("${CMAKE_CURRENT_LIST_DIR}/hpglTargets.cmake")
-
 # BLAS/LAPACK: for non-MKL builds these are DYNAMIC PRIVATE link dependencies
 # of libhpgl — they are NOT embedded in the shared library (the old "already
 # embedded" comment was false for dynamic BLAS, 2-M-23). find_dependency
@@ -39,5 +37,15 @@ endif()
 if(@HPGL_USE_OPENMP@ AND @HPGL_OPENMP_BOOL@ AND NOT @HPGL_OPENMP_STATIC_BOOL@)
     find_dependency(OpenMP)
 endif()
+
+# G-38: the exported targets file is included LAST, after every dependency
+# check. find_dependency() ends processing of this config file with return()
+# when a dependency is missing, so including hpglTargets.cmake first left the
+# imported target undefined-but-consumable in the consumer's scope:
+# find_package(hpgl) reported hpgl_FOUND=FALSE while hpgl::core existed, and a
+# consumer gating on if(TARGET hpgl::core) failed later at link time instead of
+# here at configure time. check_required_components() was skipped on that path
+# for the same reason.
+include("${CMAKE_CURRENT_LIST_DIR}/hpglTargets.cmake")
 
 check_required_components(hpgl)

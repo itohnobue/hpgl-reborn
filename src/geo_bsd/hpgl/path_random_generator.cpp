@@ -1,12 +1,26 @@
 #include "stdafx.h"
 #include "path_random_generator.h"
-#include "bs_random_generator.h"
 #include "hpgl_exception.h"
 #include <algorithm>
+#include <cstdint>
+#include <random>
 #include <sstream>
 #include <utility>
 
 using namespace hpgl;
+
+// F-388: stream discriminant for the path engine's seed_seq. The Gaussian
+// deviates in both simulation drivers come from a mt_random_generator_t seeded
+// with the same int64_t (sequential_simulation.h:223-224,
+// sequential_indicator_simulation.cpp:62), so seeding THIS engine with the bare
+// seed replays the same stream: key[j] drew the same value as deviate[j], and
+// because the path is the sort order of those keys, each node's deviate became
+// a deterministic monotone function of its own key (a 2-node grid gave node 0
+// the lower deviate in 200/200 seeds — means 0.3348/0.6699 instead of 1/2).
+// Mixing a fixed constant into a seed_seq gives the path engine a distinct
+// state while keeping the permutation a pure, reproducible function of the
+// seed. Any non-zero constant works; "PATH" is used so the intent is legible.
+static const uint32_t PATH_STREAM_DISCRIMINANT = 0x50415448u;
 
 /// Fisher-Yates shuffle (sort-by-random-key variant).
 /// Assigns a uniform random double key to each index [0, size) and sorts
@@ -23,13 +37,22 @@ static void build_shuffled_path(std::vector<int> & path, int size, int64_t seed)
 		throw hpgl_exception("path_random_generator_t", oss.str());
 	}
 
-	mt_random_generator_t gen(seed);
+	// F-388: own stream — see PATH_STREAM_DISCRIMINANT above. Splitting the
+	// 64-bit seed into halves matches bs_random_generator.cpp's convention so
+	// no entropy is dropped, and the constant keeps the two engines apart.
+	std::seed_seq path_seq{
+		static_cast<uint32_t>(seed & 0xFFFFFFFFLL),
+		static_cast<uint32_t>((seed >> 32) & 0xFFFFFFFFLL),
+		PATH_STREAM_DISCRIMINANT
+	};
+	std::mt19937 path_gen(path_seq);
+	std::uniform_real_distribution<double> path_key(0.0, 1.0);
 	path.resize(size);
 
 	std::vector<std::pair<double, int> > pairs;
 	pairs.reserve(size);
 	for (int i = 0; i < size; ++i)
-		pairs.emplace_back(gen(), i);
+		pairs.emplace_back(path_key(path_gen), i);
 
 	std::sort(pairs.begin(), pairs.end());
 

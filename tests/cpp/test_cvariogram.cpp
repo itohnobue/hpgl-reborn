@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <vector>
 
 // Compile the cvariogram module sources directly into this test binary.
@@ -42,16 +43,25 @@ static const char *g_current_test = "";
         }                                                                      \
     } while (0)
 
+// F-471 (sibling of test_hpgl_core.cpp): NaN defeats a plain
+// `std::abs(_a - _b) > (eps)` test — every comparison with NaN is false, so a
+// NaN actual or expected value passed the assertion silently (NaN, and the pair
+// Inf/Inf, both reported zero failures; a finite/Inf pair was caught). The
+// negated form `!(_d <= eps)` is false for NaN too, so NaN now fails while
+// in-tolerance finite values still pass and out-of-tolerance finite values
+// still fail.
 #define CHECK_CLOSE(a, b, eps)                                                 \
     do {                                                                       \
         double _a = (a);                                                       \
         double _b = (b);                                                       \
-        if (std::abs(_a - _b) > (eps)) {                                       \
-            std::fprintf(stderr,                                                \
-                         "FAIL: %s:%d in %s: |%.15g - %.15g| > %.15g\n",       \
-                         __FILE__, __LINE__, g_current_test, _a, _b, (double)(eps)); \
+        double _d = std::abs(_a - _b);                                         \
+        if (!(_d <= (eps))) {                                                  \
+            std::fprintf(stderr,                                               \
+                         "FAIL: %s:%d in %s: |%.15g - %.15g| = %.15g > %.15g\n", \
+                         __FILE__, __LINE__, g_current_test, _a, _b, _d,       \
+                         (double)(eps));                                       \
             g_tests_failed++;                                                   \
-            return;                                                             \
+            return;                                                            \
         }                                                                      \
     } while (0)
 
@@ -96,6 +106,10 @@ static float_data_t make_result(int nx, int ny, int nz, float fill = 0.0f)
 
 // F-06: result x/y dims smaller than the layer-derived dims must be rejected
 // instead of writing out of bounds (pre-fix: heap OOB WRITE / SIGSEGV).
+// F-475: the pin asserts WHICH guard fired (message identity) and that the
+// write was PREVENTED (sentinel prefill untouched), not merely that some
+// error was recorded — any other guard, or a "warn and continue" weakening of
+// this one, satisfied the old presence-only assertion.
 void test_stack_layers_rejects_small_result_grid()
 {
     TEST("F-06: stack_layers rejects result smaller than layer");
@@ -103,14 +117,25 @@ void test_stack_layers_rejects_small_result_grid()
     std::vector<float_data_t> layers;
     layers.push_back(make_layer(10, 5, 1.0f));
     int markers[1] = {1};
-    float_data_t result = make_result(10, 4, 4);  // ny=5 layer vs ny=4 result
+    float_data_t result = make_result(10, 4, 4, -99.0f);  // ny=5 layer vs ny=4 result
     stack_layers(layers, markers, 4, 1.0f, -99, result);
-    CHECK(cvar_get_last_error() != nullptr);
-    CHECK(std::strlen(cvar_get_last_error()) > 0);
+    const char * msg = cvar_get_last_error();
+    CHECK(msg != nullptr);
+    CHECK(std::strstr(msg, "stack_layers: result array too small for layer shape") != nullptr);
+    bool untouched = true;
+    for (int i = 0; i < 10 * 4 * 4; ++i)
+    {
+        if (result.m_data[i] != -99.0f)
+        {
+            untouched = false;
+        }
+    }
+    CHECK(untouched);
 }
 
 // F-08: non-contiguous (sliced) layer arrays must be rejected instead of
 // writing out of bounds into cumulative_k (pre-fix: map_index up to 88 > 25).
+// F-475: message identity + sentinel-untouched (see the F-06 note).
 void test_stack_layers_rejects_non_contiguous_layer()
 {
     TEST("F-08: stack_layers rejects non-contiguous (sliced) layer");
@@ -130,9 +155,20 @@ void test_stack_layers_rejects_non_contiguous_layer()
     std::vector<float_data_t> layers;
     layers.push_back(sliced);
     int markers[1] = {1};
-    float_data_t result = make_result(5, 5, 4);
+    float_data_t result = make_result(5, 5, 4, -99.0f);
     stack_layers(layers, markers, 4, 1.0f, -99, result);
-    CHECK(std::strlen(cvar_get_last_error()) > 0);
+    const char * msg = cvar_get_last_error();
+    CHECK(msg != nullptr);
+    CHECK(std::strstr(msg, "stack_layers: layer arrays must be C-contiguous with matching x/y shape") != nullptr);
+    bool untouched = true;
+    for (int i = 0; i < 5 * 5 * 4; ++i)
+    {
+        if (result.m_data[i] != -99.0f)
+        {
+            untouched = false;
+        }
+    }
+    CHECK(untouched);
 }
 
 // F-39: an exact-integer deposit must occupy exactly one cell (pre-fix:
@@ -195,7 +231,11 @@ void test_stack_layers_rejects_nan_thickness()
     int markers[1] = {1};
     float_data_t result = make_result(5, 5, 4);
     stack_layers(layers, markers, 4, 1.0f, -99, result);
-    CHECK(std::strlen(cvar_get_last_error()) > 0);
+    // F-475: pin the guard, not just "an error happened" — the NaN and the
+    // huge-thickness case must both be caught by the I2-25 thickness gate.
+    const char * msg = cvar_get_last_error();
+    CHECK(msg != nullptr);
+    CHECK(std::strstr(msg, "stack_layers: layer thickness must be finite and within range") != nullptr);
 }
 
 void test_stack_layers_rejects_huge_thickness()
@@ -207,7 +247,10 @@ void test_stack_layers_rejects_huge_thickness()
     int markers[1] = {1};
     float_data_t result = make_result(1, 1, 4);
     stack_layers(layers, markers, 4, 1.0f, -99, result);
-    CHECK(std::strlen(cvar_get_last_error()) > 0);
+    // F-475: same I2-25 gate as the NaN case (1e10 > the 1e9-cell bound).
+    const char * msg = cvar_get_last_error();
+    CHECK(msg != nullptr);
+    CHECK(std::strstr(msg, "stack_layers: layer thickness must be finite and within range") != nullptr);
 }
 
 // F-37: cvar_clear_last_error must reset the module error so consecutive
@@ -260,7 +303,15 @@ void test_calc_variograms_rejects_oversized_window()
 
     float out[4] = {0, 0, 0, 0};
     calc_variograms(&templ, &data, out, 4, 100);
-    CHECK(std::strlen(cvar_get_last_error()) > 0);  // fails fast, no hang
+    // F-475: pin the work-cap family. Both capacity guards use the
+    // "... exceeds maximum ..." wording (variograms.cpp:672 search-window
+    // volume, :706 total work); the only other message with that wording is
+    // the point-set twin at :954, which the "calc_variograms:" prefix
+    // excludes (it says "calc_variograms_from_point_set:").
+    const char * msg = cvar_get_last_error();
+    CHECK(msg != nullptr);
+    CHECK(std::strstr(msg, "calc_variograms:") != nullptr);
+    CHECK(std::strstr(msg, "exceeds maximum") != nullptr);  // fails fast, no hang
 }
 
 // F-40: degenerate template (zero range) must set an error, not silently
@@ -755,27 +806,51 @@ void test_lag0_binning_grid_path()
 
 // ---- Main ----
 
+// F-473(c) (sibling of test_hpgl_core.cpp:3733-3749): an exception escaping a
+// test body — these cvariogram entry points really do throw on bad parameters —
+// used to reach main() uncaught, which is std::terminate: the "N run, M failed"
+// summary and every later test were lost. Report it as a test failure instead.
+// Every test body sets g_current_test through TEST() as its first statement, so
+// the message still names the failing test.
+static void run_test(void (*test_fn)())
+{
+    try
+    {
+        test_fn();
+    }
+    catch (const std::exception & ex)
+    {
+        std::fprintf(stderr, "FAIL: exception in %s: %s\n", g_current_test, ex.what());
+        g_tests_failed++;
+    }
+    catch (...)
+    {
+        std::fprintf(stderr, "FAIL: unknown exception in %s\n", g_current_test);
+        g_tests_failed++;
+    }
+}
+
 int main() {
-    test_stack_layers_rejects_small_result_grid();
-    test_stack_layers_rejects_non_contiguous_layer();
-    test_stack_layers_integer_deposit_fills_one_cell();
-    test_stack_layers_three_integer_deposits_three_cells();
-    test_stack_layers_rejects_nan_thickness();
-    test_stack_layers_rejects_huge_thickness();
-    test_cvar_clear_last_error_resets();
-    test_calc_variograms_rejects_oversized_window();
-    test_calc_variograms_rejects_zero_range();
-    test_is_in_tunnel_zero_range_sets_error();
-    test_search_template_window_includes_half_lag_width();
-    test_calc_variograms_seeded_reproducible();
-    test_calc_variograms_seeded_full_64bit_seed();
-    test_update_lags_no_fp_int_overflow_ub();
-    test_calc_variograms_rejects_null_member();
-    test_calc_variograms_rejects_bad_tol_distance();
-    test_stack_layers_result_fully_initialized();
-    test_lag0_binning_grid_path();
-    test_point_set_rejects_null_member();
-    test_point_set_rejects_oversized_work();
+    run_test(test_stack_layers_rejects_small_result_grid);
+    run_test(test_stack_layers_rejects_non_contiguous_layer);
+    run_test(test_stack_layers_integer_deposit_fills_one_cell);
+    run_test(test_stack_layers_three_integer_deposits_three_cells);
+    run_test(test_stack_layers_rejects_nan_thickness);
+    run_test(test_stack_layers_rejects_huge_thickness);
+    run_test(test_cvar_clear_last_error_resets);
+    run_test(test_calc_variograms_rejects_oversized_window);
+    run_test(test_calc_variograms_rejects_zero_range);
+    run_test(test_is_in_tunnel_zero_range_sets_error);
+    run_test(test_search_template_window_includes_half_lag_width);
+    run_test(test_calc_variograms_seeded_reproducible);
+    run_test(test_calc_variograms_seeded_full_64bit_seed);
+    run_test(test_update_lags_no_fp_int_overflow_ub);
+    run_test(test_calc_variograms_rejects_null_member);
+    run_test(test_calc_variograms_rejects_bad_tol_distance);
+    run_test(test_stack_layers_result_fully_initialized);
+    run_test(test_lag0_binning_grid_path);
+    run_test(test_point_set_rejects_null_member);
+    run_test(test_point_set_rejects_oversized_work);
 
     std::printf("C++ cvariogram tests: %d run, %d failed\n", g_tests_run, g_tests_failed);
     return g_tests_failed > 0 ? 1 : 0;

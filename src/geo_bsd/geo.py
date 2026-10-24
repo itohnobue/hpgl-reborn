@@ -215,6 +215,11 @@ _progress_handler_param = None
 # geo_bsd.geo._last_kriging_stats after a kriging call to detect partial
 # solver failure (e.g. points_without_neighbours > 0). Set to None if the
 # native library does not export hpgl_get_kriging_stats.
+# The two cokriging wrappers (simple_cokriging_markI/II) additionally add
+# ``points_needing_secondary`` / ``points_secondary_informed`` to the same
+# dict via ``_warn_all_secondary_uninformed`` (G-03). Those two keys are
+# PYTHON-derived from the primary/secondary masks (the C++ counters are
+# function-local), so they do not come from get_kriging_stats().
 _last_kriging_stats: dict | None = None
 # Deferred cache of old CFUNCTYPE handler+param references to prevent
 # use-after-free in concurrent kriging calls. Kriging/simulation FFI calls
@@ -490,6 +495,50 @@ class IndProperty:
             )
         self._mask = arr
 
+    @property
+    def indicator_count(self):
+        """Number of indicator categories."""
+        return self._indicator_count
+
+    @indicator_count.setter
+    def indicator_count(self, value):
+        # F-254: the only invariant-bearing field with no validating setter.
+        # A plain attribute let `p.indicator_count = 2` on a 3-category
+        # property defeat the binary-IK gate (median_ik then read category 2
+        # as category 0) and truncate the C++ remap table (informed cells
+        # written as ``undefined_value`` and read back masked). Mirror the
+        # data/mask setters: range-check the count, and re-check the
+        # informed-range invariant against the CURRENT arrays. The
+        # constructor's own checks are kept below; this gate is what makes
+        # the invariant survive later mutation.
+        if isinstance(value, (bool, numpy.bool_)) or not isinstance(
+            value, (int, numpy.integer)
+        ):
+            raise ValueError(
+                f"indicator_count must be an integer, got {type(value).__name__}"
+            )
+        count = int(value)
+        if not 1 <= count <= 255:
+            raise ValueError(
+                f"indicator_count must be 1-255, got {count}"
+            )
+        # The shape guard keeps a data/mask shape mismatch surfacing as the
+        # constructor's own ValueError instead of a numpy broadcast error.
+        if (
+            hasattr(self, "_data")
+            and hasattr(self, "_mask")
+            and self._data.shape == self._mask.shape
+            and numpy.sum(
+                numpy.bitwise_and((self._mask > 0), (self._data >= count))
+            )
+            > 0
+        ):
+            raise RuntimeError(
+                "Property contains some indicators outside of [0..%s] range."
+                % (count - 1)
+            )
+        self._indicator_count = count
+
     def __init__(self, data: numpy.ndarray, mask: numpy.ndarray, indicator_count: int):
         if not 1 <= indicator_count <= 255:
             raise ValueError(
@@ -503,15 +552,15 @@ class IndProperty:
         # and self.validate() below covers F/W/A checks.
         object.__setattr__(self, '_data', numpy.require(ndarray, "uint8", "F"))
         object.__setattr__(self, '_mask', numpy.require(mask_array, "uint8", "F"))
+        # F-254: the indicator_count setter owns both invariants (the 1..255
+        # range and "no informed cell >= count"), so the constructor's separate
+        # informed-range re-check became unreachable and was removed. The
+        # explicit range check above is kept because it fires before any array
+        # is touched; the setter repeats it with the same message.
         self.indicator_count = indicator_count
         if ndarray.shape != mask_array.shape:
             raise ValueError(
                 f"Data shape {ndarray.shape} does not match mask shape {mask_array.shape}"
-            )
-        if numpy.sum(numpy.bitwise_and((self.mask > 0), (self.data >= indicator_count))) > 0:
-            raise RuntimeError(
-                "Property contains some indicators outside of [0..%s] range."
-                % (indicator_count - 1)
             )
         self.validate()
 
@@ -658,7 +707,13 @@ class CovarianceModel:
         # (covariance_type_t: COV_SPHERICAL=0, COV_EXPONENTIAL=1,
         #  COV_GAUSSIAN=2). C++ init_fun() throws on unknown types;
         # validating in Python provides a clearer error earlier.
-        if type not in (0, 1, 2):
+        # F-447: `in` uses ==, so the membership test alone admitted bool:
+        # True == 1 passed and `type=True` silently selected the exponential
+        # model (end-to-end probe: output bit-identical to type=1 and
+        # different from type=0); numpy.bool_ passes the same way and then
+        # breaks in ctypes. Reject bools explicitly — the repo's established
+        # guard shape (config.py:77, validation.py:658).
+        if isinstance(type, (bool, numpy.bool_)) or type not in (0, 1, 2):
             raise validation.CriticalValidationError(
                 f"Covariance type must be 0 (spherical), 1 (exponential), "
                 f"or 2 (gaussian), got {type}",
@@ -726,10 +781,11 @@ def _load_prop_cont_slow(filename, undefined_value, basedir=None):
     skipped_count = 0
     element_count = 0
     # Security: uses safe_open_read() which validates the path and opens
-    # atomically with O_NOFOLLOW to prevent TOCTOU symlink attacks.
-    # The basedir is the trusted base (DEFAULT_BASE_DIR unless the caller
-    # supplies an explicit one) — NOT the filename's own directory, which
-    # would defeat symlink containment (F-28).
+    # atomically with O_NOFOLLOW where the platform provides it (Unix; on
+    # Windows the flag is omitted — see the helper's F-698 platform residual)
+    # to prevent TOCTOU symlink attacks. The basedir is the trusted base
+    # (DEFAULT_BASE_DIR unless the caller supplies an explicit one) — NOT the
+    # filename's own directory, which would defeat symlink containment (F-28).
     if basedir is None:
         basedir = PathValidator.DEFAULT_BASE_DIR
     with PathValidator.safe_open_read(filename, basedir=basedir) as f:
@@ -865,10 +921,11 @@ def _load_prop_ind_slow(filename, undefined_value, ind_values, basedir=None):
     element_count = 0
 
     # Security: uses safe_open_read() which validates the path and opens
-    # atomically with O_NOFOLLOW to prevent TOCTOU symlink attacks.
-    # The basedir is the trusted base (DEFAULT_BASE_DIR unless the caller
-    # supplies an explicit one) — NOT the filename's own directory, which
-    # would defeat symlink containment (F-28).
+    # atomically with O_NOFOLLOW where the platform provides it (Unix; on
+    # Windows the flag is omitted — see the helper's F-698 platform residual)
+    # to prevent TOCTOU symlink attacks. The basedir is the trusted base
+    # (DEFAULT_BASE_DIR unless the caller supplies an explicit one) — NOT the
+    # filename's own directory, which would defeat symlink containment (F-28).
     if basedir is None:
         basedir = PathValidator.DEFAULT_BASE_DIR
     with PathValidator.safe_open_read(filename, basedir=basedir) as f:
@@ -1044,6 +1101,11 @@ def write_property(
     ------
     RuntimeError
         If the C++ write operation fails.
+    ValueError
+        If ``prop_name`` violates the property-name contract, if the
+        indicator arguments are invalid for a byte property, or if
+        ``undefined_value`` collides with an informed cell's value
+        (which would read back as masked).
 
     See Also
     --------
@@ -1070,6 +1132,11 @@ def write_property(
     )
 
     if isinstance(prop, ContProperty):
+        # F-253: a sentinel that collides with an informed value makes that
+        # cell read back masked (silent round-trip data loss). Guarded for
+        # the byte branches by _validate_undefined_value_collision; the
+        # continuous branches had no equivalent.
+        _validate_cont_undefined_value_collision(prop, undefined_value, "write_property")
         marr = _create_hpgl_cont_masked_array(prop, None)
         # II-35: hold _hpgl_call_lock around the FFI call AND the error-message
         # read. The C++ writers set a process-global locale during the file
@@ -1110,7 +1177,14 @@ def write_property(
             rc = call_write_inc_file_byte(
                 marr,
                 safe_path.encode("utf-8"),
-                undefined_value,
+                # F-019: hpgl_write_inc_file_byte's undefined_value is `int`
+                # (hpgl_wrap.py:588, api.h:250-256) while the GSLIB twin takes
+                # `double`. The gate above deliberately accepts integral floats
+                # for both writers, so the raw value reached a c_int argtype
+                # here and raised ctypes.ArgumentError on 128.0. The gate has
+                # already proved integrality and [0, 255], so int() is total
+                # and cannot change a legal value.
+                int(undefined_value),
                 prop_name.encode("utf-8"),
                 ind_arr,
                 len(indicator_values),
@@ -1144,6 +1218,10 @@ def write_gslib_property(
     )
 
     if isinstance(prop, ContProperty):
+        # F-253: same sentinel/informed-value collision guard as write_property.
+        _validate_cont_undefined_value_collision(
+            prop, undefined_value, "write_gslib_property"
+        )
         # II-35: serialize the FFI call + error-message read (locale race).
         with _hpgl_call_lock:
             rc = call_write_gslib_cont_property(
@@ -1252,6 +1330,48 @@ def _validate_undefined_value_collision(undefined_value, indicator_values, func_
             f"indicator value; informed cells written with this value would be "
             f"read back as masked (silent round-trip data loss). Choose an "
             f"undefined_value that is not in indicator_values."
+        )
+
+
+def _validate_cont_undefined_value_collision(prop, undefined_value, func_name):
+    """Reject an undefined_value that collides with an informed cell (F-253).
+
+    The continuous writers emit the raw value for informed cells and
+    ``undefined_value`` for uninformed ones, and every reader re-masks by
+    EXACT float32 equality (``_is_undefined_value``, the C++ fast reader
+    read_inc_file.cpp:397-401). An informed cell whose value equals
+    the sentinel is therefore written as the sentinel and read back MASKED —
+    silent round-trip data loss. The byte siblings already guard this
+    (``_validate_undefined_value_collision``); the continuous branches did
+    not, and neither do the C++ writers they call (property_writer.cpp:
+    309-315, :426-431).
+
+    Comparison is in float32 space, the storage type of ``prop.data`` and the
+    parse type of the readers, so a sentinel that is not float32-representable
+    is compared the way the round trip actually behaves.
+
+    Args:
+        prop: The ``ContProperty`` about to be written.
+        undefined_value: The undefined sentinel for this write.
+        func_name: Caller name for error messages.
+
+    Raises:
+        ValueError: If any informed cell's stored value equals
+            ``float32(undefined_value)``.
+    """
+    informed = prop.mask != 0
+    if not numpy.any(informed):
+        return
+    with numpy.errstate(over="ignore", invalid="ignore"):
+        sentinel = numpy.float32(undefined_value)
+        collides = numpy.bitwise_and(informed, prop.data == sentinel)
+    if numpy.any(collides):
+        raise ValueError(
+            f"{func_name}: undefined_value {undefined_value!r} collides with "
+            f"{int(numpy.count_nonzero(collides))} informed cell(s); they would "
+            f"be written as the sentinel and read back masked (silent "
+            f"round-trip data loss). Choose an undefined_value that does not "
+            f"occur in the informed data."
         )
 
 
@@ -1725,6 +1845,74 @@ def _check_kriging_failure_stats(stats, expected_calculated, func_name):
             "marginal-probability substitution for SIS); stats=%s",
             func_name, missing, expected_calculated, stats,
         )
+
+
+def _count_secondary_informed(prop, secondary_data):
+    """Count the kriged nodes whose secondary is informed (G-03).
+
+    Mirrors the C++ aggregate counters in ``process_node_loop``
+    (simple_cokriging_markI.cpp:433-439): a node is kriged when the PRIMARY is
+    uninformed, and the secondary is informed there when its mask is non-zero
+    (``property_array.h:72-80`` — the same ``mask != 0`` predicate), so the two
+    sides describe the same cell set.
+
+    The two masks are paired in BUFFER order (``ravel(order="K")``), which is
+    the order the C++ kernels index (raw flat storage), so a 1D primary and a 3D
+    secondary — both legal for cokriging, which validates volume only — still
+    pair cell-for-cell. ``order="K"`` returns a view for these F-contiguous
+    masks; it is only read here, never written.
+    """
+    primary_uninformed = prop.mask.ravel(order="K") == 0
+    secondary_informed = secondary_data.mask.ravel(order="K") != 0
+    return int(numpy.count_nonzero(primary_uninformed & secondary_informed))
+
+
+def _warn_all_secondary_uninformed(expected_kriged, secondary_informed, func_name):
+    """G-03: surface a cokriging run that silently degraded to primary-only.
+
+    When the secondary property is uninformed at EVERY kriged node, cokriging
+    drops the secondary equation at every node (simple_cokriging_markI.cpp:426-441)
+    and produces ordinary simple-kriging output that is finite and
+    indistinguishable from a correct cokriging run: every node succeeds, so no
+    failure counter moves (a probe measured agreement with ``simple_kriging`` to
+    7.63e-06, versus 17.7 maximum difference against a genuine secondary). The
+    C++ side emits one aggregate message (simple_cokriging_markI.cpp:481-496),
+    but that lands on the C++ log channel; this is the Python-observable half
+    (``caplog``/log capture), the same shape as ``sgs.py:71-100``
+    (``_warn_all_ndmin_skipped``).
+
+    The two counts are also exposed on the documented inspection sentinel
+    (``geo_bsd.geo._last_kriging_stats``) — they are Python-derived from the
+    masks, NOT fields of the C++ ``kriging_stats_t``, so they are absent when
+    the native library does not export ``hpgl_get_kriging_stats``.
+
+    Args:
+        expected_kriged: Number of nodes the run had to krige (uninformed
+            primary cells) — the C++ ``points_needing_secondary``.
+        secondary_informed: How many of those nodes had an informed secondary —
+            the C++ ``points_secondary_informed``.
+        func_name: Name of the calling wrapper for messages.
+    """
+    global _last_kriging_stats
+    if expected_kriged <= 0:
+        return
+    if _last_kriging_stats is not None:
+        # Rebind a copy rather than mutating the dict in place: the sentinel is
+        # read by callers and, under a monkeypatched ``get_kriging_stats``, may
+        # be an object the caller owns.
+        _last_kriging_stats = dict(_last_kriging_stats)
+        _last_kriging_stats["points_needing_secondary"] = expected_kriged
+        _last_kriging_stats["points_secondary_informed"] = secondary_informed
+    if secondary_informed > 0:
+        return
+    logger.warning(
+        "%s: secondary data is uninformed at all %d kriged nodes — the run is "
+        "primary-only (equivalent to simple kriging). Output is finite and "
+        "carries no error signal; check the secondary property's mask. stats=%s",
+        func_name,
+        expected_kriged,
+        _last_kriging_stats,
+    )
 
 
 def _validate_prop_grid_shape(prop, grid, func_name):
@@ -2427,10 +2615,18 @@ def simple_cokriging_markI(
         correlation_coef=correlation_coef,
     )
     expected = grid.x * grid.y * grid.z - int(numpy.sum(prop.mask > 0))
+    # G-03: how many of those kriged nodes had an informed secondary. Derived
+    # from the masks because the C++ counters are function-local
+    # (simple_cokriging_markI.cpp:363-365) and kriging_stats_t is not mine to
+    # extend in this batch.
+    secondary_informed_nodes = _count_secondary_informed(prop, secondary_data)
     with _hpgl_call_lock:
         _reset_kriging_stats()
         call_simple_cokriging_mark1(inp, sec, params, outp)
         _finalize_kriging_stats(expected, "simple_cokriging_markI")
+        _warn_all_secondary_uninformed(
+            expected, secondary_informed_nodes, "simple_cokriging_markI"
+        )
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -2447,7 +2643,12 @@ def simple_cokriging_markII(
     GridValidator.validate_grid_dimensions(grid.x, grid.y, grid.z)
 
     # Validate radiuses and max_neighbours
-    ParameterValidator.validate_radius(
+    # F-247: keep the validated/normalised tuple. validate_radius returns
+    # (int, int, int) — floats are legal input by its contract — but the
+    # return was discarded and the raw argument went into _c_array(c_int, 3,
+    # ...), so a radius tuple the sibling markI accepts ((1.0, 1.0, 1.0))
+    # crashed here with a raw ctypes TypeError.
+    valid_radiuses = ParameterValidator.validate_radius(
         radiuses, "radiuses", min_radius=ValidationConstants.MIN_KRIGING_RADIUS
     )
     ParameterValidator.validate_max_neighbors(max_neighbours)
@@ -2521,7 +2722,7 @@ def simple_cokriging_markII(
             sill=scp.sill,
             nugget=scp.nugget,
         ),
-        radiuses=_c_array(c_int, 3, radiuses),
+        radiuses=_c_array(c_int, 3, valid_radiuses),
         max_neighbours=max_neighbours,
         primary_mean=primary_data["mean"],
         secondary_mean=secondary_data["mean"],
@@ -2530,10 +2731,18 @@ def simple_cokriging_markII(
     expected = grid.x * grid.y * grid.z - int(
         numpy.sum(primary_data["data"].mask > 0)
     )
+    # G-03: same Python-derived secondary-coverage count as markI — both marks
+    # run the C++ process_node_loop, whose aggregate message this mirrors.
+    secondary_informed_nodes = _count_secondary_informed(
+        primary_data["data"], secondary_data["data"]
+    )
     with _hpgl_call_lock:
         _reset_kriging_stats()
         call_simple_cokriging_mark2(inp, sec, params, outp)
         _finalize_kriging_stats(expected, "simple_cokriging_markII")
+        _warn_all_secondary_uninformed(
+            expected, secondary_informed_nodes, "simple_cokriging_markII"
+        )
 
     if not numpy.all(numpy.isfinite(out_prop.data)):
         raise RuntimeError(
@@ -2634,12 +2843,20 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
     prop_name : str
         Name of the property to extract.
     undefined_value : float
-        Value marking undefined/uninformed cells.
+        Value marking undefined/uninformed cells. Compared in float32 — the
+        storage/parse type of every reader — so a float64 array (the shape
+        ``LoadGslibFile`` returns) re-masks exactly as the C++ reader does.
+        NaN data cells are always masked: NaN is ``LoadGslibFile``'s
+        missing-value marker (it converts GSLIB sentinels to NaN), and a
+        NaN sentinel matches them as well.
 
     Returns
     -------
     tuple of (numpy.ndarray, numpy.ndarray)
         Property array and uint8 mask array where 1 = informed, 0 = masked.
+        A cell is masked when its value equals ``undefined_value`` (exact
+        float32 match), is NaN, or lies outside the GSLIB ±1.0e21 sentinel
+        window.
 
     Raises
     ------
@@ -2665,11 +2882,21 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
     # window (strict inequality per the GSLIB convention; see gslib_ref.py
     # reference-fact table, got-20260802092630) are missing sentinels in
     # addition to exact undefined_value matches, matching the C++ fast
-    # reader (read_inc_file.cpp:287-305). NaN sentinels are handled
-    # separately since NaN != NaN.
+    # reader (read_inc_file.cpp:287-305). NaN != NaN, so NaN cells need their
+    # own mask term in BOTH branches (F-240).
     out_of_window = is_gslib_missing_sentinel(prop)
+    # F-240: NaN is this library's own missing marker — LoadGslibFile
+    # converts every GSLIB sentinel to NaN (routines.py:1044-1045) and
+    # ContProperty rejects NaN as data. The finite-undefined_value branch
+    # below used to ignore NaN entirely (NaN == x is False and
+    # is_gslib_missing_sentinel excludes NaN), so 'informed' was reported for
+    # every sentinel cell of the documented producer (probe: mask [1,1,1,1]
+    # where [1,0,1,1] is correct). is_float guards integer-dtype dicts, which
+    # numpy.isnan rejects.
+    is_float = numpy.issubdtype(prop.dtype, numpy.floating)
+    nan_mask = numpy.isnan(prop) if is_float else False
     if numpy.isnan(undefined_value):
-        uninformed = numpy.isnan(prop) | out_of_window
+        uninformed = nan_mask | out_of_window
     else:
         # E2-06/R-06: exact float32 re-mask, mirroring the C++ fast reader
         # (read_inc_file.cpp:379 float32 ==). The %.9E writer
@@ -2677,10 +2904,22 @@ def get_gslib_property(prop_dict, prop_name, undefined_value):
         # sentinel cell written by HPGL always re-masks and near-sentinel
         # real data (e.g. -99.00005 vs -99.0) stays informed — the earlier
         # 1e-6 relative band over-masked the latter class (calibrated to
-        # the pre-fix %E-6 writer) and diverged from the C++ side. prop is
-        # already float32; the explicit conversion of undefined_value keeps
-        # the comparison in float32 arithmetic.
-        uninformed = (prop == numpy.float32(undefined_value)) | out_of_window
+        # the pre-fix %E-6 writer) and diverged from the C++ side.
+        # F-241: BOTH sides must be converted to float32. The canonical
+        # producer returns a float64 buffer (routines.py:975 parses file text
+        # into float64), so comparing it directly against a float32 scalar
+        # promotes to float64 and a sentinel that is not exactly
+        # float32-representable (-99.9, written as "-9.990000153E+01") never
+        # matches — the masked cell read back INFORMED carrying the sentinel
+        # magnitude. Casting prop down reproduces the readers' float32 ==.
+        # errstate: values beyond float32 range are out_of_window anyway, so
+        # the cast's overflow warning would be noise.
+        with numpy.errstate(over="ignore", invalid="ignore"):
+            uninformed = (
+                (numpy.asarray(prop, dtype=numpy.float32) == numpy.float32(undefined_value))
+                | nan_mask
+                | out_of_window
+            )
     informed_array = numpy.where(uninformed, 0, 1).astype(numpy.uint8)
     return (prop_dict[prop_name], informed_array)
 

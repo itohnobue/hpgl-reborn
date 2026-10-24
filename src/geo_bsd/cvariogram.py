@@ -32,16 +32,30 @@ _cvar_error_snapshot_lock = threading.Lock()
 # window at a time, mirroring geo.py's _hpgl_call_lock.
 _cvar_call_lock = threading.Lock()
 
-cvar.cvar_get_last_error.restype = C.c_char_p
-cvar.cvar_get_last_error.argtypes = []
+# F-064: every prototype dereference below raises AttributeError from
+# ctypes.CDLL.__getattr__ when the loaded _cvariogram binary lacks the
+# symbol (any build predating cvar_get_last_error, commit 22a6b2e). The
+# package-level handler (__init__.py:41-49) catches (ImportError, OSError)
+# only, so a bare AttributeError aborted `import geo_bsd` entirely instead
+# of the documented warn-and-continue freshness path
+# (hpgl_wrap._verify_library_freshness warns, never raises). Convert it to
+# ImportError so the existing handler degrades as documented.
+try:
+    cvar.cvar_get_last_error.restype = C.c_char_p
+    cvar.cvar_get_last_error.argtypes = []
 
-# PR-01: clear the process-global C++ error after the guard consumes it.
-# cvar_clear_last_error is exported by fresh builds only; the prototype is
-# guarded so a stale library (predating the symbol) still imports — the
-# freshness check (hpgl_wrap._EXPECTED_LIBRARY_SYMBOLS) warns on staleness.
-if hasattr(cvar, "cvar_clear_last_error"):
-    cvar.cvar_clear_last_error.restype = None
-    cvar.cvar_clear_last_error.argtypes = []
+    # PR-01: clear the process-global C++ error after the guard consumes it.
+    # cvar_clear_last_error is exported by fresh builds only; the prototype
+    # is guarded so a stale library (predating the symbol) still imports —
+    # the freshness check (hpgl_wrap._EXPECTED_LIBRARY_SYMBOLS) warns on
+    # staleness.
+    if hasattr(cvar, "cvar_clear_last_error"):
+        cvar.cvar_clear_last_error.restype = None
+        cvar.cvar_clear_last_error.argtypes = []
+except AttributeError as exc:
+    raise ImportError(
+        f"_cvariogram is missing required symbols (stale build?): {exc}"
+    ) from exc
 
 MAX_NUM_LAGS = 10000
 MAX_POINT_SET_SIZE = 1_000_000
@@ -256,41 +270,50 @@ class float_data_t(C.Structure):
     ]
 
 
-cvar.fill_ellipsoid_directions.restype = None
-cvar.fill_ellipsoid_directions.argtypes = [
-    C.POINTER(ellipsoid_t),
-    C.c_double,
-    C.c_double,
-    C.c_double,
-]
+# F-064: same AttributeError -> ImportError conversion as the cvar_get_last_error
+# block above — these four prototypes are the other unguarded module-level
+# dereferences (only cvar_clear_last_error and calc_variograms_seeded are
+# hasattr-guarded).
+try:
+    cvar.fill_ellipsoid_directions.restype = None
+    cvar.fill_ellipsoid_directions.argtypes = [
+        C.POINTER(ellipsoid_t),
+        C.c_double,
+        C.c_double,
+        C.c_double,
+    ]
 
-cvar.calc_variograms.restype = None
-cvar.calc_variograms.argtypes = [
-    C.POINTER(variogram_search_template_t),
-    C.POINTER(hard_data_t),
-    NC.ndpointer(dtype=numpy.float32, flags=["W"]),
-    C.c_int,
-    C.c_int,
-]
+    cvar.calc_variograms.restype = None
+    cvar.calc_variograms.argtypes = [
+        C.POINTER(variogram_search_template_t),
+        C.POINTER(hard_data_t),
+        NC.ndpointer(dtype=numpy.float32, flags=["W"]),
+        C.c_int,
+        C.c_int,
+    ]
 
-cvar.calc_variograms_from_point_set.restype = None
-cvar.calc_variograms_from_point_set.argtypes = [
-    C.POINTER(variogram_search_template_t),
-    C.POINTER(cont_point_set_t),
-    NC.ndpointer(dtype=numpy.float32, flags=["W"]),
-    C.c_int,
-]
+    cvar.calc_variograms_from_point_set.restype = None
+    cvar.calc_variograms_from_point_set.argtypes = [
+        C.POINTER(variogram_search_template_t),
+        C.POINTER(cont_point_set_t),
+        NC.ndpointer(dtype=numpy.float32, flags=["W"]),
+        C.c_int,
+    ]
 
-cvar.cvar_stack_layers.restype = None
-cvar.cvar_stack_layers.argtypes = [
-    C.POINTER(float_data_t),
-    C.POINTER(C.c_int),
-    C.c_int,
-    C.c_int,
-    C.c_float,
-    C.c_int,
-    C.POINTER(float_data_t),
-]
+    cvar.cvar_stack_layers.restype = None
+    cvar.cvar_stack_layers.argtypes = [
+        C.POINTER(float_data_t),
+        C.POINTER(C.c_int),
+        C.c_int,
+        C.c_int,
+        C.c_float,
+        C.c_int,
+        C.POINTER(float_data_t),
+    ]
+except AttributeError as exc:
+    raise ImportError(
+        f"_cvariogram is missing required symbols (stale build?): {exc}"
+    ) from exc
 
 
 def checked_create(T, **kargs):
@@ -329,6 +352,44 @@ def __strides(array):
         raise ValueError(
             f"__strides: unsupported ndim={ndim}. "
             f"Expected ndim=1 or ndim>=3 (all current callers use ndim=3)."
+        )
+
+
+# F-210: element strides, shape dims and the grid volume are stamped into the
+# C ABI's int[3] fields (api.h:76-91) and ctypes' C.c_int conversion TRUNCATES
+# silently instead of raising (measured: C.c_int(2147580964).value ==
+# -2147386332, no exception). The kernel then walks the buffer by those
+# strides (variograms.cpp:789-797 advances dpx by m_data_strides[0..2] and
+# reads dpx[doffset]), so a truncated stride leaves the allocation on the
+# second plane — ASan reports a BUS read at variograms.cpp:731 for shape
+# (2, 46342, 46342) — while the total-work cap admits the grid (4.3e9 cells x
+# 108 window offsets = 4.6e11 <= 1e12). The ABI fields are int by the time the
+# kernel sees them, so the truncation must be refused here.
+_INT32_MAX = int(numpy.iinfo(numpy.int32).max)
+
+
+def _require_int32_grid_metadata(array, context):
+    """Reject grid metadata the int[3] C ABI fields cannot carry (F-210).
+
+    Both the element strides and the grid volume must fit in a signed 32-bit
+    int. The check runs before the ctypes conversion, the only point where the
+    value still exists: after ``_c_array(C.c_int, ...)`` a truncated stride is
+    indistinguishable from a legal one. Negative strides are legal (the kernel
+    honours negative/zero-step views), so the stride test is on magnitude.
+
+    Raises:
+        ValueError: If a stride magnitude or the volume exceeds ``_INT32_MAX``.
+    """
+    strides = __strides(array)
+    volume = int(numpy.prod(array.shape, dtype=numpy.int64))
+    widest = max(abs(int(s)) for s in strides)
+    if widest > _INT32_MAX or volume > _INT32_MAX:
+        raise ValueError(
+            f"{context}: grid {array.shape} with element strides {strides} "
+            f"(volume {volume}) does not fit the C ABI's int32 stride/shape "
+            f"fields (limit {_INT32_MAX}); the scan walks the buffer by these "
+            f"strides, so a truncated stride reads outside it. Process the "
+            f"grid in tiles of at most {_INT32_MAX} cells."
         )
 
 
@@ -495,6 +556,15 @@ def _validate_template_not_degenerate(templ, context):
 def CalcVariograms(templ, hard_data, percent=100, seed=None):
     if templ.num_lags <= 0:
         raise ValueError("CalcVariograms: num_lags must be positive")
+    # G-19: the C ABI declares percent as C.c_int (arg 5 of
+    # calc_variograms.argtypes), so a non-integer (e.g. 100.0) passes the range
+    # check below and then dies inside ctypes with an ArgumentError naming
+    # neither the parameter nor the contract. Gate the type first, mirroring
+    # the seed gate below.
+    if not isinstance(percent, (int, numpy.integer)) or isinstance(percent, bool):
+        raise TypeError(
+            f"CalcVariograms: percent must be an int, got {type(percent).__name__}"
+        )
     if percent < 1 or percent > 100:
         raise ValueError(f"CalcVariograms: percent must be in [1, 100], got {percent}")
     # 2-M-3: optional RNG seed for the grid-path percent sampling. When
@@ -543,6 +613,12 @@ def CalcVariograms(templ, hard_data, percent=100, seed=None):
             f"CalcVariograms: hard_data[0].shape {hard_data[0].shape} does not match "
             f"hard_data[1].shape {hard_data[1].shape}"
         )
+    # F-210: both grids are stamped into int[3] shape/stride fields below
+    # (data_shape/mask_shape/data_strides/mask_strides). Reject metadata the
+    # int32 ABI cannot carry BEFORE the ctypes conversion truncates it — a
+    # truncated stride makes the kernel's pointer walk leave the allocation.
+    _require_int32_grid_metadata(hard_data[0], "CalcVariograms hard_data[0]")
+    _require_int32_grid_metadata(hard_data[1], "CalcVariograms hard_data[1]")
     # III-16: the C++ grid scan silently SKIPS non-finite informed values
     # (variograms.cpp:690,704 `if (!std::isfinite(v1)) continue;`), producing
     # a silently under-counted variogram, while the pure-Python path raises
@@ -741,7 +817,12 @@ def CalcVariogramsFromPointSet(templ, point_set, variogram):
     return (lags_borders, variogram)
 
 
-def _create_float_data(array):
+def _create_float_data(array, context="float_data_t"):
+    # F-210: the shape/stride int[3] fields below truncate silently beyond
+    # INT32_MAX (C.c_int(2147580964).value == -2147386332); stack_layers walks
+    # the layer and result buffers by those strides (stack_layers.h:94,110,
+    # 174,187), so the same guard as the grid path applies here.
+    _require_int32_grid_metadata(array, context)
     return checked_create(
         float_data_t,
         data=array.ctypes.data_as(C.POINTER(C.c_float)),
@@ -774,6 +855,14 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
         raise ValueError(
             f"CStackLayers: scalez ({scalez!r}) exceeds the float32 maximum "
             f"({numpy.finfo(numpy.float32).max}) representable by the C++ kernel"
+        )
+    # G-19: blank_value is a C.c_int in the ABI (arg 6 of
+    # cvar_stack_layers.argtypes) — reject a non-integer before ctypes turns it
+    # into an ArgumentError. The finiteness check stays for the accepted
+    # integer path (numpy.integer overflows included).
+    if not isinstance(blank_value, (int, numpy.integer)) or isinstance(blank_value, bool):
+        raise TypeError(
+            f"CStackLayers: blank_value must be an int, got {type(blank_value).__name__}"
         )
     if not numpy.isfinite(blank_value):
         raise ValueError(f"CStackLayers: blank_value must be finite, got {blank_value}")
@@ -838,6 +927,21 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
         else numpy.ascontiguousarray(layer)
         for layer in layers
     ]
+    # F-062: the C++ kernel pre-fills the WHOLE result buffer with
+    # blank_value before reading any layer (stack_layers.h:106-112), so a
+    # layer that aliases `result` is destroyed by the prefill and then read
+    # back as blank_value: the deposit is silently lost AND the caller's
+    # input array is overwritten, with no exception. The contiguity copies
+    # above do not break the aliasing of the common form (a C-contiguous
+    # `result[:, :, 0]` of an nz == 1 result passes through ascontiguousarray
+    # unchanged), so the identity check runs on the final list.
+    if any(numpy.shares_memory(layer, result) for layer in layers):
+        raise ValueError(
+            "CStackLayers: layers must not alias the result buffer (the "
+            "kernel pre-fills result with blank_value before reading the "
+            "layers, so an aliased layer would be destroyed); pass a copy "
+            "of the layer"
+        )
     # E2-16: the C++ kernel silently clips deposits at the grid boundary —
     # k_next = min(ceil(new_k), nz) (stack_layers.h:159-163). Warn when any
     # column's cumulative thickness (Σ thickness/scalez, accumulated in
@@ -870,9 +974,9 @@ def CStackLayers(layers, markers, nz, scalez, blank_value, result):
     require_output_buffer(result, result.size, "CStackLayers", numpy.dtype("float32"))
     layers2 = []
     for layer in layers:
-        layers2.append(_create_float_data(layer))
+        layers2.append(_create_float_data(layer, "CStackLayers layer"))
 
-    result2 = _create_float_data(result)
+    result2 = _create_float_data(result, "CStackLayers result")
     with _cvar_error_guard("CStackLayers"):
         cvar.cvar_stack_layers(
             _c_array(float_data_t, len(layers2), layers2),

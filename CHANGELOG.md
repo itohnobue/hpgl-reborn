@@ -2,6 +2,24 @@
 
 All notable changes to HPGL Reborn.
 
+## [2.1.0] — 2026-10
+
+### Fixed
+- **Production-check pass (212 adversarially-verified findings, 5 domains)** — 40 C++ core/variogram, 32 Python API/FFI, 25 build/packaging, 29 book/sample scripts, 86 tests. The production defects fixed, grouped by mechanism class:
+- **Progress/cancellation control signals (class: handler invoked under a global lock / cancel flag never read)** — the progress handler no longer runs while the one program-global OpenMP critical is held (a handler that re-entered a kriging call on the same thread deadlocked), the flush lock is re-entrant, and cokriging now reads the cancel result instead of simulating every node
+- **Cokriging secondary data (class: silent degradation / unreachable gate)** — an uninformed secondary datum is reported instead of silently degrading to primary-only kriging; the kriging-variance (Schur) consistency check no longer sits behind the weight-magnitude pre-filter, so a negative kriging variance from an invalid cross-covariance model is rejected instead of reported as success
+- **Variogram pair accounting (class: grid-vs-point-set divergence)** — `CubeScan` no longer pairs every informed cell with itself into lag 0 (−19% to −52% lag-0 dilution, +62% on indicator correlation), the C-extension ellipsoid uses full-precision π (at a 45° azimuth the cone test no longer accepted one axis of a symmetric template and rejected its mirror), and grid band weights no longer double-count unordered pairs in the bounding-box window
+- **Simulation (class: mutate-before-validate / wrong output channel)** — SGS and SGS-LVM validate the seed before the forward CDF transform, so a rejected seed no longer leaves the caller's conditioning data in normal-score space; SGS/SIS failure diagnostics now travel on the registered output handler instead of raw stderr
+- **Work and memory bounds (class: count caps that do not bound work)** — `CStackLayers` rejects a stack whose total column-rewrite work exceeds the module's work budget before allocating, SGS reuses its neighbour lookup's covariance list instead of building a second one, SIS rejects an aggregate per-category covariance budget that both documented layers previously admitted, and the GSLIB sentinel scan and `CdfData.inverse` are chunked instead of materializing full-array float64 / query-length temporaries
+- **Validation and file I/O (class: shared global state / missing platform guard)** — path validation no longer reads the process CWD twice per call (concurrent validations could raise spuriously or escape the base directory); `O_NOFOLLOW` is optional, so GSLIB save/load no longer raises `AttributeError` on Windows
+- **Sample scripts (class: wrong `sys.path`)** — 15 scripts add `src/` (the documented path) instead of the repository root
+- **Solved-problems book (class: helper and lesson drift)** — declustering sums the n nearest neighbours instead of the self-distance plus n−1, the kriging-declustering range is a stated constant instead of an unexplained default, the 7.2 SGS field is flattened once instead of broadcasting, and the committed `Result/` artifacts were regenerated from the fixed scripts
+
+### Changed
+- **Test suite** — stale pins re-pointed at documented current behaviour, non-discriminating tests repaired, and the version surfaces are now gated: `test_version_surfaces_match_pyproject` and `test_version_fallback_matches_pyproject` compare `_VERSION_FALLBACK`, the readme title and the newest CHANGELOG heading against `pyproject.toml`. Test functions 1,308 → 1,358; collected tests 1,494 → 1,545 (1,515 default + 30 `slow`)
+- **Packaging** — `scikit-build-core>=1.0.0` floor (the first line accepting `inclusion-mode = "explicit"`); matplotlib/scipy moved out of the runtime dependencies into a `book` extra, with a new `release` extra for `python -m build`/delocate; `-DHPGL_BUILD_VARIOGRAM=ON` pinned in `cmake.args` and asserted by the wheel `test-command`; `gslib_ref.py` added to the installed module list; `build.bat` exits non-zero on an unsupported argument and on a declined Debug overwrite, while `build.sh` rolls the installed runtime libraries back on any failed gate (G-31) and rejects a wheel whose dylib deployment target cannot be verified or exceeds the declared target (F-078/F-079)
+- **readme** — default-suite test command (`-m "not slow"`), test count, `CovarianceModel.ranges` default, macOS dylib naming and preset command, SciPy/Matplotlib requirements, and the file-error exception table
+
 ## [2.0.6] — 2026-08
 
 ### Changed

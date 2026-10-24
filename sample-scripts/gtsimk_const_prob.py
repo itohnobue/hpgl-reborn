@@ -4,7 +4,10 @@ import os
 import math
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# F-355: the package lives in src/geo_bsd (readme.md:269-274), not at the
+# repository root — inserting '..' left `import geo_bsd` raising
+# ModuleNotFoundError before any script logic ran.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 from geo_bsd import (
     SugarboxGrid, CovarianceModel,
     simple_kriging, write_property,
@@ -17,12 +20,16 @@ from geo_bsd.sgs import sgs_simulation
 from geo_bsd.cdf import calc_cdf
 from gaussian_cdf import inverse_normal_score
 
-# E-M13: the pseudo-Gaussian transform below draws from the numpy global RNG
-# (np.random.uniform). sgs_simulation receives a fixed seed, but without
+# E-M13/F-366: the pseudo-Gaussian transform below draws a random value for
+# every hard-data cell. sgs_simulation receives a fixed seed, but without
 # seeding the transform draws the runs vary run-to-run (grep: 0 seed calls
-# across sample-scripts/src before this fix). Seed once at script start with
-# the SGS seed so the whole pipeline is reproducible.
-np.random.seed(3439275)
+# across sample-scripts/src before this fix). The E-M13 fix seeded the
+# process-global RNG at import (np.random.seed(3439275)); that made the
+# pipeline reproducible but also clobbered the caller's RNG state for the
+# rest of the process. Keep the SAME reproducible MT19937 stream in a private
+# generator instead — importing this module no longer touches np.random's
+# global state (same pattern as gtsim.py:27).
+_RNG = np.random.RandomState(3439275)
 
 
 def _norm_cdf(x):
@@ -77,21 +84,37 @@ def tk_calculation(p):
     return inverse_normal_score(p)
 
 
+def _ensure_output_dir():
+    """Create the CWD-relative results/ directory this module writes into.
+
+    F-364: no sample script except gtsim_test.py ever created results/, so a
+    fresh checkout aborted mid-pipeline with
+    `open_tmp_file_checked: Can't open file '<target>.tmp.<pid>.0'` after the
+    expensive SK/SGS work. `exist_ok` makes the call idempotent and safe when
+    the drivers run back to back.
+    """
+    os.makedirs("results", exist_ok=True)
+
+
 def pseudo_gaussian_transform(prop_init, tk_prop, indicator):
     prop = _clone_prop(prop_init)
     for i in range(prop.data.size):
         if prop.mask.flat[i] > 0:
             val = int(prop.data.flat[i])
             if val == 0:
-                v = np.random.uniform(inverse_normal_score(0.0), tk_prop[val])
+                v = _RNG.uniform(inverse_normal_score(0.0), tk_prop[val])
                 prop.data.flat[i] = v
             elif val == (indicator - 1):
-                v = np.random.uniform(tk_prop[val - 1], inverse_normal_score(1.0))
+                v = _RNG.uniform(tk_prop[val - 1], inverse_normal_score(1.0))
                 prop.data.flat[i] = v
             else:
-                v = np.random.uniform(tk_prop[val - 1], tk_prop[val])
+                v = _RNG.uniform(tk_prop[val - 1], tk_prop[val])
                 prop.data.flat[i] = v
-    write_property(prop, "results/GTSIM_TRANSFORMED_PROP.INC", "TRANSPROP", -99)
+    # G-36/F-363: distinct artifact name per producer. This write used to
+    # share "results/GTSIM_TRANSFORMED_PROP.INC" with gtsim.py:102, so the
+    # file could not be attributed to either pipeline.
+    _ensure_output_dir()
+    write_property(prop, "results/GTSIM_CONSTPROB_TRANSFORMED_PROP.INC", "CONSTPROB_TRANSPROP", -99)
     return prop
 
 
@@ -229,6 +252,12 @@ def gtsim_Kind_const_prop(grid, prop, indicator, sk_params=None, pk_prop=None, s
                 if k == (indicator - 2):
                     prop1.data.flat[i] = k + 1
 
-    write_property(prop1, "results/GTSIM_TRUNC_RESULT.INC", "TRUNC_RESULT_GT", -99)
+    # G-36/F-363: distinct artifact name per producer. This write used to
+    # share "results/GTSIM_TRUNC_RESULT.INC" with gtsimk.py (whose output
+    # test_gtsimk1.py consumes), leaving no way to tell the two producers'
+    # results apart. Each producer now owns one name: this one writes
+    # GTSIM_CONSTPROB_TRUNC_RESULT.INC, gtsimk.py writes
+    # GTSIM_TRUNC_RESULT_GTSIMK.INC.
+    write_property(prop1, "results/GTSIM_CONSTPROB_TRUNC_RESULT.INC", "CONSTPROB_TRUNC_RESULT_GT", -99)
     print("Done.")
     print("GTSIM: Finished.")

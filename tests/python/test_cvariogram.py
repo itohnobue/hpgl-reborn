@@ -24,7 +24,11 @@ try:
     )
 
     CVAR_AVAILABLE = True
-except Exception:
+except (ImportError, OSError):
+    # F-518: only a genuinely absent/unloadable library may skip this module.
+    # A loaded library missing a symbol (e.g. cvar_get_last_error on a stale
+    # build) raises AttributeError at import — narrowing the guard turns that
+    # into a loud collection error instead of a silent 71-test skip.
     CVAR_AVAILABLE = False
 
 
@@ -60,7 +64,59 @@ class TestEllipsoid:
         d1_norm = sum(ell.ell.direction1.data[i] ** 2 for i in range(3)) ** 0.5
         assert abs(d1_norm - 1.0) < 1e-6
 
+    def test_directions_match_python_twin(self):
+        """G-52: the three direction VECTORS must equal the Python twin's values.
+
+        ``test_with_nonzero_angles`` pins only the unit length, which is
+        invariant under a wrong rotation: the F-054 π truncation moved every
+        component by up to 5.06e-12 while ``‖direction1‖`` stayed 1.0, so a grid
+        and a point-set kernel built on the same template binned different
+        offsets with the suite green. ``variogram.TVEllipsoid``
+        (``variogram.py:138-154``: ``numpy.radians`` + ``A @ B @ C``) is the
+        reference implementation this kernel mirrors, so the parity assertion is
+        against it rather than against hard-coded numbers.
+
+        Tolerance: 1e-13. Measured, the pre-fix (truncated π) split at these
+        angles is 5.056899e-12 — 50x above the bound, so the assertion fails on
+        the defect state — while the fixed arithmetic (full-precision π at
+        ``_cvariogram/ellipsoid.cpp:57``) leaves a residual of 1.11e-16, ~900x
+        below it. A tolerance at or above the old split (e.g. the 1e-4 used by
+        ``test_production_fixes_202.py:189-230``) cannot see either defect.
+        """
+        from geo_bsd.variogram import TVEllipsoid
+
+        ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=45, dip=30, rotation=60)
+        twin = TVEllipsoid(10, 5, 3, 45, 30, 60)
+
+        for name, got, want in (
+            ("direction1", ell.ell.direction1, twin.Direction1),
+            ("direction2", ell.ell.direction2, twin.Direction2),
+            ("direction3", ell.ell.direction3, twin.Direction3),
+        ):
+            cpp = np.array([got.data[i] for i in range(3)], dtype="float64")
+            np.testing.assert_allclose(
+                cpp,
+                np.asarray(want, dtype="float64"),
+                rtol=0,
+                atol=1e-13,
+                err_msg=(
+                    f"G-52: C++ {name}={cpp!r} diverges from the Python twin "
+                    f"{np.asarray(want, dtype='float64')!r} at az=45/dip=30/"
+                    "rot=60 beyond 1e-13 — the two ellipsoid implementations no "
+                    "longer agree on the same template"
+                ),
+            )
+
     def test_with_zero_r2_r3_no_crash(self):
+        """R2=R3=0 constructs: validation is deliberately deferred to call time.
+
+        The per-argument gate here rejects only negatives (``R < 0``); the
+        degenerate-template rejection (``R == 0`` / zero directions) lives in
+        ``_validate_template_not_degenerate`` and fires at
+        ``CalcVariograms``/``CalcVariogramsFromPointSet``. The twins differ on
+        placement only — no wrong result is reachable. This pin records the
+        documented INC/cvariogram deferral (G-18 contract decision).
+        """
         ell = Ellipsoid(R1=10, R2=0, R3=0, azimuth=0, dip=0, rotation=0)
         assert ell.ell.R2 == 0.0
         assert ell.ell.R3 == 0.0
@@ -293,10 +349,12 @@ class TestCalcVariograms:
         assert np.all(variogram >= 0.0), f"Variogram has negative values: {variogram}"
 
     def test_variogram_nugget_effect(self):
-        """C28: variogram at lag 0 must be ≤ variogram at lag 1.
+        """C28: the first populated lag carries the nugget-scale variance.
 
-        The first lag captures the nugget effect (short-scale variance).
-        For random data, γ(lag0) should be approximately the data variance.
+        For spatially uncorrelated random data the semivariance at the first
+        non-zero lag is of the order of the informed data variance (the
+        nugget). The zero-distance lag is the self-pair bin, so it cannot
+        exceed the first populated lag.
         """
         ell = Ellipsoid(R1=10, R2=5, R3=3, azimuth=0, dip=0, rotation=0)
         templ = VariogramSearchTemplate(
@@ -311,10 +369,20 @@ class TestCalcVariograms:
         lags, variogram = CalcVariograms(templ, hard_data, percent=100)
         # All γ(h) should be finite
         assert np.all(np.isfinite(variogram)), "Variogram contains Inf or NaN"
-        # For data with variance > 0, at least some γ(h) should be > 0
-        data_var = np.var(hard_data[0][hard_data[1] > 0].astype("float64"))
-        if data_var > 0:
-            assert np.any(variogram > 0), f"Variogram all zeros for data with variance {data_var}"
+        informed = hard_data[0][hard_data[1] > 0].astype("float64")
+        data_var = float(np.var(informed))
+        assert data_var > 0, "fixture must have a non-zero data variance"
+        # γ ≥ 0 everywhere and the zero-distance lag must not exceed the first
+        # populated lag (a lag-ordering regression moves the pair mass).
+        assert variogram[0] <= variogram[1], (
+            f"γ(lag0)={variogram[0]} exceeds γ(lag1)={variogram[1]}"
+        )
+        # Nugget magnitude: the first populated lag is within a factor of two
+        # of the informed data variance (measured 945.67 vs 861.50).
+        assert 0.5 * data_var <= variogram[1] <= 2.0 * data_var, (
+            f"γ(lag1)={variogram[1]} is not of the order of the data variance "
+            f"{data_var}"
+        )
 
     # --- C28: tol_distance boundary tests ---
 
@@ -688,7 +756,13 @@ class TestCalcVariogramsFromPointSetValidation:
 
 @pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
 class TestCStackLayersValidation:
-    """F-212: Validation guard tests for CStackLayers."""
+    """F-212: Validation guard tests for CStackLayers.
+
+    G-19: ``blank_value`` is a ``C.c_int`` in the ABI (``cvariogram.py:859-866``),
+    and that integer guard runs BEFORE the nz / markers / dtype / writeability
+    guards — so every test that must reach a later guard passes an int sentinel
+    (``-99``, never ``-99.0``), otherwise the TypeError short-circuits it.
+    """
 
     def _make_layer(self, nx=5, ny=5):
         np.random.seed(42)
@@ -702,14 +776,14 @@ class TestCStackLayersValidation:
         bad_layer = np.zeros((5, 5, 1), dtype="float64")
         result = self._make_result()
         with pytest.raises(TypeError, match="must be a float32"):
-            CStackLayers([bad_layer], [1], nz=5, scalez=1.0, blank_value=-99.0, result=result)
+            CStackLayers([bad_layer], [1], nz=5, scalez=1.0, blank_value=-99, result=result)
 
     def test_result_wrong_dtype_raises(self):
         """CStackLayers raises TypeError when result is not float32."""
         layer = self._make_layer()
         bad_result = np.zeros((5, 5, 10), dtype="float64")
         with pytest.raises(TypeError, match="must be a float32"):
-            CStackLayers([layer], [1], nz=5, scalez=1.0, blank_value=-99.0, result=bad_result)
+            CStackLayers([layer], [1], nz=5, scalez=1.0, blank_value=-99, result=bad_result)
 
     def test_non_finite_scalez_raises(self):
         """CStackLayers raises ValueError when scalez is not finite."""
@@ -726,10 +800,21 @@ class TestCStackLayersValidation:
             CStackLayers([layer], [1], nz=5, scalez=0.0, blank_value=-99.0, result=result)
 
     def test_non_finite_blank_value_raises(self):
-        """CStackLayers raises ValueError when blank_value is not finite."""
+        """CStackLayers rejects a non-finite blank_value — as a TYPE error.
+
+        G-19: blank_value is a ``C.c_int`` in the ABI, so the integer guard
+        (``cvariogram.py:863``) fires first and a float — NaN included — is
+        rejected as non-int. The ``blank_value must be finite`` ValueError
+        below it (``cvariogram.py:867``) is unreachable for the accepted type
+        set: every accepted ``int``/``numpy.integer`` is finite, and an int too
+        large for float64 makes ``numpy.isfinite`` itself raise TypeError
+        before that line. Finiteness is therefore no longer pinned here; what
+        survives is that a non-finite sentinel cannot slip through as a silent
+        cast.
+        """
         layer = self._make_layer()
         result = self._make_result()
-        with pytest.raises(ValueError, match="blank_value must be finite"):
+        with pytest.raises(TypeError, match="blank_value must be an int"):
             CStackLayers([layer], [1], nz=5, scalez=1.0, blank_value=float("nan"), result=result)
 
     def test_nz_exceeds_result_shape_raises(self):
@@ -737,14 +822,14 @@ class TestCStackLayersValidation:
         layer = self._make_layer()
         result = self._make_result(nz=3)
         with pytest.raises(ValueError, match="nz.*exceeds result"):
-            CStackLayers([layer], [1], nz=5, scalez=1.0, blank_value=-99.0, result=result)
+            CStackLayers([layer], [1], nz=5, scalez=1.0, blank_value=-99, result=result)
 
     def test_marker_count_mismatch_raises(self):
         """CStackLayers raises ValueError when len(markers) != len(layers)."""
         layer = self._make_layer()
         result = self._make_result()
         with pytest.raises(ValueError, match="len\\(markers\\).*must match.*len\\(layers\\)"):
-            CStackLayers([layer, layer], [1], nz=5, scalez=1.0, blank_value=-99.0, result=result)
+            CStackLayers([layer, layer], [1], nz=5, scalez=1.0, blank_value=-99, result=result)
 
     def test_layer_shape_mismatch_raises(self):
         """CStackLayers raises ValueError when layers have mismatched shapes."""
@@ -752,7 +837,7 @@ class TestCStackLayersValidation:
         l2 = self._make_layer(nx=6, ny=5)  # Different shape
         result = self._make_result()
         with pytest.raises(ValueError, match="does not match reference shape"):
-            CStackLayers([l1, l2], [1, 2], nz=5, scalez=1.0, blank_value=-99.0, result=result)
+            CStackLayers([l1, l2], [1, 2], nz=5, scalez=1.0, blank_value=-99, result=result)
 
 
 @pytest.mark.skipif(not CVAR_AVAILABLE, reason="cvariogram C library not available")
@@ -928,7 +1013,7 @@ class TestS8WriteabilityEnforcement:
         ro = np.zeros((5, 5, 10), dtype="float32")
         ro.setflags(write=False)
         with pytest.raises(ValueError, match="must be writable"):
-            CStackLayers([layer], [7], nz=5, scalez=1.0, blank_value=-99.0, result=ro)
+            CStackLayers([layer], [7], nz=5, scalez=1.0, blank_value=-99, result=ro)
 
     def test_writable_buffers_still_work(self):
         ps = _s8_point_set()

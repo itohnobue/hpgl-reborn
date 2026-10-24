@@ -10,12 +10,14 @@ provides the user-facing Python API.
 
    **Kriging variance is not exposed through the Python API.**
 
-   All HPGL C API wrappers use ``restype = None`` (void return).  The
-   C++ kriging functions write the kriging variance to an internal
-   field on the kriging output type, but the C API boundary does not
-   include a variance-returning function, and no Python wrapper
-   exposes kriging variance (see ``test_regression_v150.py:136-138``
-   for the self-documented gap).
+   13 of the 27 exports use ``restype = None`` (void return); the other 14
+   declare a non-void ``restype``: the C entry points that return a status
+   code (``c_int``, 10 exports), a string (``c_char_p``, 3 exports), or the
+   kriging-stats struct by value (1 export).  The C++ kriging functions
+   write the kriging variance to an internal field on the kriging output
+   type, but the C API boundary does not include a variance-returning
+   function, and no Python wrapper exposes kriging variance (see
+   ``test_regression_v150.py:136-138`` for the self-documented gap).
 
    If kriging variance access is needed from Python, the C API would
    need a new function (e.g. ``hpgl_get_kriging_variance``) that
@@ -235,13 +237,59 @@ _EXPECTED_LIBRARY_HASHES: dict[str, str] = {}
 # check (F-03) warns so a stale-lib shadow cannot pass silently. This is the
 # meaningful replacement for the empty-dict hash guard (which was a permanent
 # no-op).
+#
+# F-071: the list must cover EVERY hpgl_* symbol this module dereferences at
+# module scope (the ``_hpgl_so.<name>`` block below). Checking a single
+# symbol — and the one whose absence the module is built to tolerate, at that —
+# made the gate blind to a symbol-identical stale engine (live instance: an
+# engine stamped 2.0.5 loaded against a 2.0.6 package with zero diagnostics).
+# What remains open is artifact IDENTITY: nothing records the hash of the
+# validated build, so the ``_EXPECTED_LIBRARY_HASHES`` gate above is still a
+# no-op until the build publishes that manifest.
+_HPGL_FATAL_SYMBOLS: tuple[str, ...] = (
+    "hpgl_get_last_exception_message",
+    "hpgl_set_output_handler",
+    "hpgl_set_progress_handler",
+    "hpgl_ordinary_kriging",
+    "hpgl_simple_kriging",
+    "hpgl_lvm_kriging",
+    "hpgl_simple_kriging_weights",
+    "hpgl_sgs_simulation",
+    "hpgl_sgs_lvm_simulation",
+    "hpgl_median_ik",
+    "hpgl_indicator_kriging",
+    "hpgl_set_thread_num",
+    "hpgl_get_thread_num",
+    "hpgl_get_api_validation_registry_count",
+    "hpgl_get_api_validation_registry_name",
+    "hpgl_get_api_validation_registry_validation",
+    "hpgl_read_inc_file_float",
+    "hpgl_read_inc_file_byte",
+    "hpgl_write_inc_file_float",
+    "hpgl_write_inc_file_byte",
+    "hpgl_write_gslib_cont_property",
+    "hpgl_write_gslib_byte_property",
+    "hpgl_sis_simulation",
+    "hpgl_sis_simulation_lvm",
+    "hpgl_simple_cokriging_mark1",
+    "hpgl_simple_cokriging_mark2",
+    # Tolerated at import (guarded by try/except AttributeError below), but a
+    # library without it is still an older build — keep it in the gate.
+    "hpgl_get_kriging_stats",
+)
+
 _EXPECTED_LIBRARY_SYMBOLS: dict[str, tuple[str, ...]] = {
-    "hpgl": ("hpgl_get_kriging_stats",),
-    "hpgl_d": ("hpgl_get_kriging_stats",),
+    "hpgl": _HPGL_FATAL_SYMBOLS,
+    "hpgl_d": _HPGL_FATAL_SYMBOLS,
     "_cvariogram": (
         "cvar_get_last_error",
         "cvar_stack_layers",
         "cvar_clear_last_error",
+        # F-071 sibling sweep: the remaining fatal _cvariogram exports
+        # (cvariogram.py:259-293 dereferences them at module scope).
+        "fill_ellipsoid_directions",
+        "calc_variograms",
+        "calc_variograms_from_point_set",
     ),
 }
 
@@ -315,54 +363,83 @@ def _safe_load_library(lib_name: str, ref_file: str):
         )
 
     # Try each library path
+    load_failures: list[tuple[pathlib.Path, OSError]] = []
     for lib_path in lib_paths:
-        if lib_path.exists():
-            # Validate the resolved library path is within allowed directories
-            resolved_lib = lib_path.resolve()
-            # Ensure library is in the same directory tree as the reference file
-            try:
-                # Verify the library is in a subdirectory of ref_path.parent
-                resolved_lib.relative_to(lib_dir)
-                lib = _load_lib_func(str(resolved_lib))
-                _verify_library_hash(lib_name, resolved_lib)
-                _verify_library_freshness(lib_name, lib)
-                return lib
-            except ValueError as err:
-                # Library path escapes allowed directory
-                raise ValueError(
-                    f"Library path {resolved_lib} is outside allowed directory {lib_dir}"
-                ) from err
-            except OSError:
-                # Wrong architecture or incompatible library — try next path
-                continue
+        if not lib_path.exists():
+            continue
+        # Validate the resolved library path is within allowed directories
+        resolved_lib = lib_path.resolve()
+        # Ensure library is in the same directory tree as the reference file.
+        # The containment test runs BEFORE the load: a library opened and then
+        # rejected would stay mapped for the process lifetime (ctypes exposes
+        # no dlclose and no __del__), so nothing must be opened until its path
+        # is known safe (G-39).
+        try:
+            # Verify the library is in a subdirectory of ref_path.parent
+            resolved_lib.relative_to(lib_dir)
+        except ValueError as err:
+            # Library path escapes allowed directory
+            raise ValueError(
+                f"Library path {resolved_lib} is outside allowed directory {lib_dir}"
+            ) from err
+        try:
+            lib = _load_lib_func(str(resolved_lib))
+        except OSError as err:
+            # Wrong architecture or incompatible library — try next path.
+            # F-073: record the failure and log it. Falling through silently
+            # handed back the next candidate — on macOS the older `lib{name}`
+            # naming — so a corrupt or quarantined preferred binary made the
+            # process run the WRONG engine with no record of the downgrade.
+            load_failures.append((resolved_lib, err))
+            logger.warning(
+                "_safe_load_library: candidate %s exists but failed to load (%s); "
+                "trying the next candidate",
+                resolved_lib,
+                err,
+            )
+            continue
+        _verify_library_hash(lib_name, resolved_lib)
+        _verify_library_freshness(lib_name, lib)
+        return lib
 
     # If not found, try the original load_library behavior as fallback
     # but wrap it with additional validation
+    fallback_path = pathlib.Path(os.path.join(str(ref_path.parent), lib_name))
+    # G-39: same containment-before-load ordering as the candidate loop above.
     try:
-        lib = _load_lib_func(os.path.join(str(ref_path.parent), lib_name))
-        # Verify the loaded library path is safe
-        if hasattr(lib, "_name"):
-            loaded_path = pathlib.Path(lib._name)
-            # If the library name is relative, resolve relative to lib_dir
-            if not loaded_path.is_absolute():
-                loaded_path = lib_dir / loaded_path
-            if loaded_path.exists():
-                resolved = loaded_path.resolve()
-                try:
-                    resolved.relative_to(lib_dir)
-                except ValueError as err:
-                    raise ValueError(
-                        f"Loaded library {resolved} is outside allowed directory {lib_dir}"
-                    ) from err
-        _verify_library_hash(lib_name, pathlib.Path(os.path.join(str(ref_path.parent), lib_name)))
-        _verify_library_freshness(lib_name, lib)
-        return lib
-    except OSError as e:
-        # Library not found or cannot be loaded
-        lib_dirs_str = ", ".join(str(p.parent) for p in lib_paths)
+        fallback_resolved = fallback_path.resolve()
+        fallback_resolved.relative_to(lib_dir)
+    except ValueError as err:
+        raise ValueError(
+            f"Loaded library {fallback_resolved} is outside allowed directory {lib_dir}"
+        ) from err
+    except OSError as err:
         raise OSError(
-            f"Cannot load library '{lib_name}'. Searched in: {lib_dirs_str}. Original error: {e}"
-        ) from e
+            f"Cannot load library '{lib_name}': {fallback_path} cannot be resolved: {err}"
+        ) from err
+    try:
+        lib = _load_lib_func(str(fallback_path))
+    except OSError as fallback_err:
+        # F-072: report the candidate FILENAMES and their real per-candidate
+        # errors. The previous message listed the search directory once per
+        # candidate and reported only the extension-less fallback's dlopen
+        # error — a path no build step ever produces — so the actionable
+        # cause (wrong architecture, missing dependency, permission,
+        # quarantine) was discarded.
+        if load_failures:
+            details = "; ".join(f"{path.name}: {err}" for path, err in load_failures)
+        else:
+            details = "no candidate file exists"
+        candidates = ", ".join(path.name for path in lib_paths)
+        raise OSError(
+            f"Cannot load library '{lib_name}'. Candidates searched in {lib_dir}: "
+            f"{candidates}. Candidate errors — {details}. "
+            f"Extension-less fallback '{fallback_path.name}' also failed: {fallback_err}"
+        ) from fallback_err
+
+    _verify_library_hash(lib_name, fallback_path)
+    _verify_library_freshness(lib_name, lib)
+    return lib
 
 
 def _verify_library_hash(lib_name: str, lib_path: pathlib.Path) -> None:

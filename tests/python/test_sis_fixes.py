@@ -276,35 +276,43 @@ class TestSGSMinNeighboursFailureStats:
 #
 # Mirrors the E-M57 SGS analog (test_production_fixes_201.py:250-299). SIS has
 # no ndmin gate, so the P-02 guard has two independently-pinnable halves:
-#   1. C++ stderr guard (sequential_indicator_simulation.cpp:244-251) — the
-#      normal-flow primary. A run where EVERY node is skipped (fully-informed
-#      property) previously returned the unchanged input clone with no signal
-#      at all; now the kernel writes "HPGL: SIS produced no output ..." to
-#      stderr when kriging_skipped >= property.size().
-#   2. Python logger warning (_warn_all_skipped, sis.py:66-96) — reachable via
-#      the progress-handler-cancellation path (E-04, adversarially verified):
-#      the C++ loop breaks on reporter.cancelled() before any uninformed cell
-#      is processed, leaving all three outcome counters at zero while
-#      uninformed > 0 — the same all-skipped signature the C++ guard surfaces
-#      in normal flow. The Python analog therefore carries the cancelled-run
-#      signal and must not be removed as "dead code".
+#   1. C++ no-output guard (sequential_indicator_simulation.cpp, the
+#      kriging_skipped >= property.size() block) — the normal-flow primary. A
+#      run where EVERY node is skipped (fully-informed property) previously
+#      returned the unchanged input clone with no signal at all; now the kernel
+#      writes "HPGL: SIS produced no output ..." through hpgl::write() (G-23:
+#      the documented output channel — handler, std::cout fallback — not raw
+#      stderr).
+#   2. Python logger warning (_warn_all_skipped, sis.py:66-96) — reachable only
+#      on a NON-cancelled run whose outcome counters all stay zero while
+#      uninformed > 0. F-379 makes the cancelled run throw instead of reaching
+#      it, so the cancellation path is pinned by the raise itself (second test
+#      below) and this Python analog carries the non-cancelled all-skipped
+#      signal; it must not be removed as "dead code".
 # =============================================================================
 
 
 @pytest.mark.hpgl
 @pytest.mark.skipif(not HPGL_AVAILABLE, reason="HPGL (geo_bsd.geo) not available")
 class TestSISNoOutputGuard:
-    """A-N1: both halves of the P-02 SIS no-output guard emit a warning."""
+    """A-N1: the P-02 SIS no-output signal — C++ message plus the F-379 raise."""
 
     def test_fully_informed_run_emits_cpp_stderr_guard(self, capfd):
-        """C++ stderr guard: a fully-informed SIS run (every node skipped →
+        """C++ no-output guard: a fully-informed SIS run (every node skipped →
         kriging_skipped == property.size()) must emit "SIS produced no output".
 
+        G-23: the message goes to the documented output channel — the C++ site
+        calls ``hpgl::write()`` (sequential_indicator_simulation.cpp, the
+        no-output block), which routes to the registered output handler with a
+        ``std::cout`` fallback, NOT to stderr. The assertion therefore reads
+        ``captured.out`` (capfd captures fd 1, ``std::cout`` included); the
+        pre-G-23 stderr pin could not pass on the fixed tree. The test name
+        predates that channel move and is kept for traceability.
+
         Pre-P-02: the run returned the unchanged input clone with no signal
-        at all (the only stderr path required kriging_failures > 0). This pin
+        at all (the only message path required kriging_failures > 0). This pin
         is the normal-flow primary of the P-02 guard; a regression removing
-        the C++ block (sequential_indicator_simulation.cpp:244-251) passes
-        the suite silently without it.
+        the C++ block passes the suite silently without it.
         """
         from geo_bsd.sis import sis_simulation
 
@@ -327,29 +335,38 @@ class TestSISNoOutputGuard:
         )
 
         captured = capfd.readouterr()
-        assert "SIS produced no output" in captured.err, (
-            "P-02 C++ stderr guard did not fire on a fully-informed SIS run; "
-            f"stderr={captured.err!r}"
+        assert "SIS produced no output" in captured.out, (
+            "P-02 C++ no-output guard did not fire on a fully-informed SIS run; "
+            f"stdout={captured.out!r}"
         )
         # The output is the unchanged input clone (nothing was simulated).
         assert result.indicator_count == 2
         np.testing.assert_array_equal(result.data, prop.data)
 
-    def test_cancelled_progress_handler_fires_python_logger_warning(self, caplog):
-        """Python logger half (_warn_all_skipped): a cancelling progress
-        handler leaves every outcome counter at zero while uninformed > 0 →
-        the "no nodes were simulated" warning fires (E-04 reachable path).
+    def test_cancelled_progress_handler_fires_python_logger_warning(self):
+        """F-379: a cancelling progress handler makes SIS RAISE (contract pin).
 
-        E-04 (adversarially verified): the C++ SIS loop breaks on
-        reporter.cancelled() (sequential_indicator_simulation.cpp:89-96)
-        before any uninformed cell is processed, producing the all-zero
-        signature the _warn_all_skipped analog detects. This is the
-        cancellation-path counterpart of the normal-flow C++ stderr guard
-        above; removing the Python analog would silently lose the cancelled-run
-        signal.
+        Re-pinned from the pre-F-379 contract. Until F-379 the cancelled run
+        fell through to the success path: the C++ loop broke on
+        ``reporter.cancelled()`` and the wrapper then reached
+        ``_warn_all_skipped`` (the Python half of the P-02 signal), so this test
+        asserted the "no nodes were simulated" logger warning plus the
+        zero-attempt stats. F-379 makes cancellation a control-flow outcome:
+        ``sequential_indicator_simulation`` now throws after publishing the
+        stats and warnings (``throw hpgl_exception("do_sis", "cancelled by
+        progress handler; the output property is only partially simulated")``),
+        the C API records it, and the FFI guard turns it into a RuntimeError.
+        The wrapper therefore never returns a property and never reaches
+        ``_warn_all_skipped`` / ``_finalize_kriging_stats`` — the old
+        result / caplog / zero-stat assertions are unreachable, not stale
+        values, and the partially simulated buffer is an internal clone
+        (``__prepare_sis`` → ``_clone_prop``) the caller cannot inspect.
+
+        What this pin still guarantees, all measured: the raise carries the
+        F-379 message, the cancelling handler is actually invoked (the cancel
+        path ran, not an unrelated failure), and the CALLER's property is left
+        untouched by an aborted run.
         """
-        import logging
-
         import geo_bsd.geo as geo_mod
         from geo_bsd.sis import sis_simulation
 
@@ -360,6 +377,8 @@ class TestSISNoOutputGuard:
         mask[0] = 0  # 1 uninformed cell (not the seed-0 first path node, index 5)
         prop = IndProperty(data, mask, 2)
         prop.fix_shape(grid)
+        caller_data = prop.data.copy()
+        caller_mask = prop.mask.copy()
 
         cov_model = CovarianceModel(
             type=covariance.spherical, ranges=(1.0, 1.0, 1.0), sill=1.0, nugget=0.1
@@ -368,11 +387,19 @@ class TestSISNoOutputGuard:
 
         # Cancel on the first progress tick: the handler's non-zero return is
         # propagated by update_progress → progress_reporter_t::next_lap sets
-        # m_cancelled, and the SIS loop breaks before simulating any cell.
-        geo_mod.set_progress_handler(lambda stage, percent, param: 1, None)
+        # m_cancelled, and the SIS loop breaks before simulating the cell.
+        handler_calls = []
+
+        def cancel_handler(stage, percent, param):
+            handler_calls.append(percent)
+            return 1
+
+        geo_mod.set_progress_handler(cancel_handler, None)
         try:
-            with caplog.at_level(logging.WARNING, logger="geo_bsd.sis"):
-                result = sis_simulation(
+            with pytest.raises(
+                RuntimeError, match="cancelled by progress handler"
+            ):
+                sis_simulation(
                     prop=prop, grid=grid, data=sis_data,
                     seed=0, marginal_probs=[0.5, 0.5],
                 )
@@ -381,14 +408,12 @@ class TestSISNoOutputGuard:
             # later simulation in this process (cross-test pollution).
             geo_mod.set_progress_handler(None, None)
 
-        assert any(
-            "no nodes were simulated" in rec.message for rec in caplog.records
-        ), f"P-02 Python no-output warning did not fire: {[r.message for r in caplog.records]}"
-        # The zero-attempt signature: no kriging evaluation, no marginal
-        # substitution, no singular failure.
-        stats = geo_mod._last_kriging_stats or {}
-        assert stats.get("points_calculated", -1) == 0, f"stats={stats}"
-        assert stats.get("points_without_neighbours", -1) == 0, f"stats={stats}"
-        assert stats.get("points_singularity", -1) == 0, f"stats={stats}"
-        # Output stays finite (cancellation leaves the initial state).
-        assert np.all(np.isfinite(result.data))
+        # The cancel path really ran (the poll fired at least once) — this
+        # keeps the raise above from being satisfied by an unrelated failure.
+        assert handler_calls, "the progress handler was never invoked"
+        # Cancellation is reported, not written into the caller's property:
+        # the C++ kernel mutates an internal clone, so an aborted run must
+        # leave the input untouched rather than half-simulated.
+        np.testing.assert_array_equal(prop.data, caller_data)
+        np.testing.assert_array_equal(prop.mask, caller_mask)
+

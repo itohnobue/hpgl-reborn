@@ -19,7 +19,12 @@ from gslib import *
 def calculate_weights(points, x, n):
 	weights = np.zeros(x, dtype=float)
 	for i in range(x):
-		for j in range(n):
+		# F-092: the rows of the sorted distance matrix start with the
+		# point's own distance (0.0), so summing columns 0..n-1 summed the
+		# self-distance plus n-1 real neighbours while `n` is documented as
+		# "number of closest data". Sum the n nearest neighbours instead,
+		# skipping column 0.
+		for j in range(1, n + 1):
 			weights[i] = weights[i]+points[i, j]
 	return weights
 

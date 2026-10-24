@@ -171,6 +171,10 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
     # principal axis (projection 500 + lateral 500 -> Euclidean 707 -> next
     # lag). The pre-pruning band must use the same projection as the binning.
     D1 = VariogramSearchTemplate.Ellipsoid.Direction1
+    # F-031: the hemisphere pair cut below needs the secondary axes as well
+    # (tie-break for offsets perpendicular to Direction1).
+    D2 = VariogramSearchTemplate.Ellipsoid.Direction2
+    D3 = VariogramSearchTemplate.Ellipsoid.Direction3
     MinDistance = max(0, min(LagStart))
     MaxDistance = max(LagEnd)
 
@@ -222,6 +226,29 @@ def PointSetScanContStyle(VariogramSearchTemplate, PointSet, Function, Params):
         FIndex = FIndex[SelfPairFilter]
         FDistance = FDistance[SelfPairFilter]
 
+        # F-031: count each unordered pair ONCE by keeping only the offsets in
+        # the +Direction1 hemisphere, exactly as the core twin does
+        # (src/geo_bsd/variogram.py:597-606). The axis-aligned window above
+        # admits BOTH +v and -v for a reversed pair whenever the rotated
+        # ellipsoid reaches past the origin (the 5.2/5.3 horizontal templates,
+        # az 320/230, admit reversed pairs with projection <= 419 m), so lag 0-1
+        # counted those pairs twice while every other pair counted once —
+        # non-uniform pair weighting (measured on 5.2 hor1: lag-1 gamma 6.956
+        # instead of 7.190, 5-16% of the counted pairs double-counted across
+        # the four live templates). A zero offset is a DISTINCT coincident
+        # point (the true self-pair is already removed above), so admit it from
+        # exactly one endpoint via the canonical index tie-break.
+        Signed = FDX * D1[0] + FDY * D1[1] + FDZ * D1[2]
+        Signed2 = FDX * D2[0] + FDY * D2[1] + FDZ * D2[2]
+        Signed3 = FDX * D3[0] + FDY * D3[1] + FDZ * D3[2]
+        ZeroOffset = (FDX == 0) & (FDY == 0) & (FDZ == 0)
+        Hemisphere = (ZeroOffset & (FIndex > i)) | (Signed > 0) | (
+            (Signed == 0) & ((Signed2 > 0) | ((Signed2 == 0) & (Signed3 > 0)))
+        )
+        FDX, FDY, FDZ = FDX[Hemisphere], FDY[Hemisphere], FDZ[Hemisphere]
+        FIndex = FIndex[Hemisphere]
+        FDistance = FDistance[Hemisphere]
+
         Filter = _IsInTunnel(VariogramSearchTemplate, np.column_stack((FDX, FDY, FDZ)))
 
         FDX, FDY, FDZ = FDX[Filter], FDY[Filter], FDZ[Filter]
@@ -242,6 +269,9 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
     # exactly as the core twin (variogram.py:629-630) and the C++ point-set
     # kernel (variograms.cpp:905-912) use them.
     D1 = VariogramSearchTemplate.Ellipsoid.Direction1
+    # F-031: the hemisphere pair cut below needs the secondary axes as well.
+    D2 = VariogramSearchTemplate.Ellipsoid.Direction2
+    D3 = VariogramSearchTemplate.Ellipsoid.Direction3
     _, LagDistance, LagStart, LagEnd = _CalcLagDistances(VariogramSearchTemplate)
     IMin, IMax = min(LI), max(LI)
     JMin, JMax = min(LJ), max(LJ)
@@ -287,6 +317,21 @@ def PointSetScanGridStyle(VariogramSearchTemplate, PointSetXYZ, Function, Params
         Tunnel = _IsInTunnel(VariogramSearchTemplate, np.column_stack((FDI, FDJ, FDK)))
         FDI, FDJ, FDK = FDI[Tunnel], FDJ[Tunnel], FDK[Tunnel]
         FIndex = FIndex[Tunnel]
+        # F-031 (GridStyle twin of the ContStyle cut): keep only the offsets in
+        # the +Direction1 hemisphere so each unordered pair is counted once,
+        # matching the core twin (src/geo_bsd/variogram.py:757-765). The window
+        # filter above is axis-aligned and admits both +v and -v. No live
+        # caller exists today (the two book call sites are commented out), but
+        # the function is exported and would reproduce the ContStyle defect.
+        Signed = FDI * D1[0] + FDJ * D1[1] + FDK * D1[2]
+        Signed2 = FDI * D2[0] + FDJ * D2[1] + FDK * D2[2]
+        Signed3 = FDI * D3[0] + FDJ * D3[1] + FDK * D3[2]
+        ZeroOffset = (FDI == 0) & (FDJ == 0) & (FDK == 0)
+        Hemisphere = (ZeroOffset & (FIndex > i)) | (Signed > 0) | (
+            (Signed == 0) & ((Signed2 > 0) | ((Signed2 == 0) & (Signed3 > 0)))
+        )
+        FDI, FDJ, FDK = FDI[Hemisphere], FDJ[Hemisphere], FDK[Hemisphere]
+        FIndex = FIndex[Hemisphere]
         FDistance = np.abs(FDI * D1[0] + FDJ * D1[1] + FDK * D1[2])
         for j in range(len(FDI)):
             # M-21: skip the self-pair (j == i), mirroring the core twin

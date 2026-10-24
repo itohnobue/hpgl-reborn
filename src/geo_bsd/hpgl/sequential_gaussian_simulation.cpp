@@ -32,6 +32,52 @@ namespace hpgl
 			throw hpgl_exception("sequential_gaussian_simulation", oss.str());
 		}
 
+		// F-378: validate the seed BEFORE the in-place forward CDF transform
+		// below. The rejection itself lives in path_random_generator_t (a
+		// negative seed is not a valid mt19937 seed), but it fires inside
+		// do_sequential_gausian_simulation — after :45 has already rewritten
+		// every informed cell of the CALLER's buffer with its normal score and
+		// after the covariance/lookup construction. The throw then skips the
+		// back-transform at the end of this function, so the caller catches an
+		// exception but keeps a buffer full of normal scores instead of its
+		// conditioning data. Same mutation-before-validation ordering that
+		// E2-112 fixed for the radius guard; hoisting the check to the entry
+		// makes every failure path of this function non-mutating.
+		if (params.m_seed < 0)
+		{
+			std::ostringstream oss;
+			oss << "Seed value " << params.m_seed << " must be non-negative.";
+			throw hpgl_exception("sequential_gaussian_simulation", oss.str());
+		}
+
+		// F-194: mirror the C-API kriging_kind gate (api.cpp's init_sgs_params,
+		// via api_helpers.cpp:87-95) at the C++ entry. The branch selection
+		// below is `if (m_kriging_kind == KRIG_SIMPLE) ... else { /* OK */ }`,
+		// so every value outside the enum silently ran ordinary kriging — the
+		// exact pre-fix C-API behaviour the boundary gate was added for.
+		if (params.m_kriging_kind != KRIG_ORDINARY
+			&& params.m_kriging_kind != KRIG_SIMPLE)
+		{
+			std::ostringstream oss;
+			oss << "kriging_kind " << static_cast<int>(params.m_kriging_kind)
+			    << " is not a valid kriging kind (KRIG_ORDINARY=0, KRIG_SIMPLE=1)";
+			throw hpgl_exception("sequential_gaussian_simulation", oss.str());
+		}
+
+		// F-194: mirror the C-API radius gate (api.cpp's hpgl_sgs_simulation,
+		// E2-112) BEFORE the in-place forward CDF transform below. The
+		// kernel's own throwing radius guard
+		// (validate_covariance_radiuses_or_throw, reached from
+		// precalculated_covariances_t::init inside
+		// do_sequential_gausian_simulation) fires AFTER the transform has
+		// already rewritten every informed cell of the caller's buffer with
+		// its normal score and after the back-transform is skipped — so a
+		// rejected run used to leave the caller's conditioning data destroyed.
+		// Same predicate the kernel applies: the (2r+1)^3 covariance box must
+		// fit the memory cap; a zero radius stays legal (unconditional mode).
+		validate_covariance_radiuses_or_throw(params.m_radiuses,
+			"sequential_gaussian_simulation");
+
 		if (cdf != nullptr)
 		{
 			non_parametric_cdf_2_t ncdf(cdf);
@@ -187,6 +233,19 @@ namespace hpgl
 			throw hpgl_exception("sequential_gaussian_simulation_lvm", oss.str());
 		}
 
+		// F-378: same mutation-before-validation ordering as the
+		// non-LVM entry above — the seed rejection inside
+		// do_sequential_gausian_simulation fires AFTER the forward transform
+		// further down this function has rewritten every informed cell of the
+		// caller's output buffer, leaving the caller with normal scores and no
+		// back-transform. Validate the seed first so no failure path mutates.
+		if (params.m_seed < 0)
+		{
+			std::ostringstream oss;
+			oss << "Seed value " << params.m_seed << " must be non-negative.";
+			throw hpgl_exception("sequential_gaussian_simulation_lvm", oss.str());
+		}
+
 		if (mean_data == nullptr)
 		{
 			throw hpgl_exception("sequential_gaussian_simulation_lvm",
@@ -206,6 +265,16 @@ namespace hpgl
 			oss << "mean_data size: " << mean_data_size << ". Output size: " << output.size() << ". Must be equal.";
 			throw hpgl_exception("sequential_gaussian_simulation_lvm", oss.str());
 		}
+
+		// F-194: mirror the C-API radius gate (api.cpp's
+		// hpgl_sgs_lvm_simulation, the LVM sibling of E2-112) BEFORE the
+		// in-place forward CDF transform below mutates `output` and
+		// `mean_data`. Same predicate as the kernel's own throwing guard
+		// (precalculated_covariances_t::init ->
+		// validate_covariance_radiuses_or_throw), which fires only after both
+		// buffers have been rewritten.
+		validate_covariance_radiuses_or_throw(params.m_radiuses,
+			"sequential_gaussian_simulation_lvm");
 
 		std::vector<mean_t> mean_data_vec;
 		mean_data_vec.assign(mean_data, mean_data + mean_data_size);

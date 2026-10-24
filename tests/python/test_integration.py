@@ -39,6 +39,12 @@ class TestWorkflowIntegration:
         grid = SugarboxGrid(x=10, y=10, z=5)
         data = np.random.rand(500).astype("float32") * 100
         mask = np.ones(500, dtype="uint8")
+        # F-554/F-559: arm the fixture. With every cell informed, kriging
+        # copies the input through (cont_kriging.h:171,202-205) and SGS skips
+        # every node (sequential_simulation.h:310-314), so the workflow's
+        # assertions reduced to "the input came back unchanged".
+        mask[::10] = 0
+        uninformed = mask == 0
         prop = ContProperty(data, mask)
 
         cov_model = CovarianceModel(
@@ -55,12 +61,18 @@ class TestWorkflowIntegration:
         assert not np.any(np.isnan(kriged.data.astype("float64")))
         assert not np.any(np.isinf(kriged.data.astype("float64")))
         assert kriged.data.shape == (500,)
+        # The masked-out cells must now carry estimates, not the input values
+        # they had before the mask removed them (pins that kriging ran).
+        kriged_flat = kriged.data.ravel(order="F").copy()
+        assert not np.allclose(kriged_flat[uninformed], data[uninformed]), (
+            "Kriging left the uninformed cells at their input values"
+        )
 
         # Use kriged result for simulation with CDF derived from the actual data.
         # Fixes I2-F23: the previous CDF was artificial (uniform [0,25,50,75,100])
         # and could not detect normalization bugs — a CDF mismatched with the
         # data distribution produces silently wrong simulation output.
-        kriged_values = kriged.data[mask > 0].astype("float64")
+        kriged_values = kriged_flat[mask > 0].astype("float64")
         if len(kriged_values) > 0:
             # Derive CDF values from kriged data percentiles
             cdf_values = np.percentile(
@@ -77,8 +89,17 @@ class TestWorkflowIntegration:
         assert cdf_data.probs[-1] == 1.0, "CDF must end at probability 1"
         assert np.all(np.diff(cdf_data.probs) >= 0), "CDF probs must be monotonic"
 
+        # F-554/F-559: the kriged output marks every cell informed (set_at,
+        # cont_kriging.h:202-205), so SGS fed that property has nothing to
+        # simulate and returns it unchanged. Re-mask a slice of the kriged field
+        # to exercise the simulation stage of the workflow.
+        sim_mask = np.ones(500, dtype="uint8")
+        sim_mask[::10] = 0
+        simulated = sim_mask == 0
+        sim_prop = ContProperty(kriged_flat.astype("float32"), sim_mask)
+
         sim_result = sgs_simulation(
-            prop=kriged,
+            prop=sim_prop,
             grid=grid,
             cdf_data=cdf_data,
             radiuses=(5, 5, 3),
@@ -92,6 +113,14 @@ class TestWorkflowIntegration:
         sim_f64 = sim_result.data.astype("float64")
         assert np.all(np.isfinite(sim_f64)), "SGS output must have all finite values"
         assert np.any(sim_f64 != 0), "SGS output must not be all zeros"
+        # The re-masked cells must hold drawn values, not the kriged estimates
+        # they had before the mask was applied; `sim_result.mask` is all-ones
+        # after simulation (every simulated node is marked informed), so the
+        # sample comes from the pre-simulation mask.
+        sim_flat = sim_result.data.ravel(order="F")
+        assert not np.allclose(sim_flat[simulated], kriged_flat[simulated]), (
+            "SGS left the masked cells at their kriged values — no draw happened"
+        )
 
     def test_sgs_returns_new_property_preserves_input(self):
         """F-215: sgs_simulation returns a new ContProperty and does NOT mutate input data.
@@ -104,6 +133,9 @@ class TestWorkflowIntegration:
         np.random.seed(42)
         data = np.random.rand(500).astype("float32") * 100
         mask = np.ones(500, dtype="uint8")
+        # F-559: arm the fixture — with nothing to simulate SGS writes no cell,
+        # so "the input was not mutated" held trivially.
+        mask[::10] = 0
         prop = ContProperty(data, mask)
 
         cov_model = CovarianceModel(
@@ -210,6 +242,10 @@ class TestMultiStageWorkflows:
         # Create indicator property (3 categories)
         data = np.random.randint(0, 3, size, dtype="uint8")
         mask = np.ones(size, dtype="uint8")
+        # F-554: arm the fixture. With every cell informed, indicator kriging
+        # copies the input through, so the chain never estimated anything and
+        # the proportion assertion measured the input randint draw.
+        mask[::2] = 0
         ind_prop = IndProperty(data, mask, 3)
 
         # Step 1: Setup indicator kriging data
@@ -237,20 +273,37 @@ class TestMultiStageWorkflows:
         assert isinstance(ik_result, IndProperty)
         assert ik_result.indicator_count == 3
 
-        # Step 3: Run SIS using IK results
+        # Step 3: Run SIS using IK results. IK leaves every cell informed, so
+        # SIS fed the raw IK result has nothing to simulate and returns it
+        # unchanged (sequential_indicator_simulation.cpp:99-101). Re-mask a
+        # slice of the IK categories to exercise the simulation stage (F-554).
+        ik_flat = ik_result.data.ravel(order="F").copy()
+        sis_mask = np.ones(size, dtype="uint8")
+        sis_mask[::2] = 0
+        simulated = sis_mask == 0
+        sis_prop = IndProperty(ik_flat, sis_mask, 3)
+
         sis_result = sis_simulation(
-            prop=ik_result, grid=grid, data=ik_data, seed=42, marginal_probs=marginal_probs
+            prop=sis_prop, grid=grid, data=ik_data, seed=42, marginal_probs=marginal_probs
         )
 
         assert isinstance(sis_result, IndProperty)
         assert sis_result.indicator_count == 3
-        assert sis_result.data.shape == ik_result.data.shape
+        assert sis_result.data.size == size
         # Data integrity: SIS output has valid indicator categories
         sis_data = sis_result.data.astype("uint8")
         assert np.all(sis_data < 3), "SIS indicator values must be within category count"
-        # Verify category distribution is reasonable (roughly matches marginal probs)
-        category_counts = [int(np.sum(sis_data == c)) for c in range(3)]
+        # The hard data must survive: SIS skips informed nodes and the property
+        # is cloned with its hard data (sis.py:53-54), so a run that resampled
+        # them would fail here.
+        sis_flat = sis_result.data.ravel(order="F")
+        np.testing.assert_array_equal(sis_flat[~simulated], ik_flat[~simulated])
+        # The simulated cells — not the hard data — must follow the marginals.
+        category_counts = [int(np.sum(sis_flat[simulated] == c)) for c in range(3)]
         total = sum(category_counts)
+        assert total == int(np.count_nonzero(simulated)), (
+            f"expected {int(np.count_nonzero(simulated))} simulated cells, got {total}"
+        )
         for c in range(3):
             observed = category_counts[c] / total
             expected = marginal_probs[c]

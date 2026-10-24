@@ -53,6 +53,13 @@ def __prepare_sgs(prop, mean=None, use_harddata=True, mask=None):
         out_prop = _clone_prop(prop)
     else:
         out_prop = _empty_clone(prop)
+    # G-28: numpy.isscalar() is False for a 0-d ndarray, so mean=np.array(5.0)
+    # took the LVM branch and was rejected by the grid-size validator with the
+    # misleading "Array size 1 does not match grid size N". Collapse a 0-d
+    # array to the scalar it is, so the scalar branch (and its
+    # validate_scalar_mean gate, which does not accept ndarray) handles it.
+    if mean is not None and not numpy.isscalar(mean) and numpy.ndim(mean) == 0:
+        mean = float(mean)
     if mean is not None and not numpy.isscalar(mean):
         mean = _require_cont_data(mean)
     if mask is not None:
@@ -166,13 +173,20 @@ def sgs_simulation(
             kriging) the kriged estimate is computed from the
             conditioning data without an explicit mean term (the OK
             weight calculator solves for the local mean implicitly), but
-            the user-supplied mean IS applied on the failure fallback:
-            nodes that cannot be kriged (no neighbours in the search
-            radius, or a singular kriging system) draw from
-            N(mean, 1.0) rather than N(0, 1) (GSLIB sgsim semantics:
-            ``cmean = gmean; cstdev = 1.0``).  A non-scalar (LVM) mean
-            array is always used as the local varying mean, and the LVM
-            kernel performs simple kriging against it.
+            the user-supplied mean IS applied on the no-neighbour
+            fallback: nodes with no conditioning data in the search
+            radius draw from N(mean, 1.0) rather than N(0, 1) (GSLIB
+            sgsim semantics: ``cmean = gmean; cstdev = 1.0``).
+
+            The C++ kernel draws N(mean, 1.0) for a SINGULAR kriging
+            system too, but this wrapper never returns that field: any
+            node whose system was singular raises ``RuntimeError``
+            (``points_singularity > 0`` in
+            ``geo_bsd.geo.get_kriging_stats``).  N(mean, 1.0) is
+            therefore observable only through the no-neighbour path.  A
+            non-scalar (LVM) mean array is always used as the local
+            varying mean, and the LVM kernel performs simple kriging
+            against it.
     use_harddata : bool, optional
         If ``True``, use source data values for simulation. If ``False``,
         ignore source data values. Default: ``True``.
@@ -233,7 +247,10 @@ def sgs_simulation(
     # Ensure radiuses are integers for ctypes (c_int * 3)
     valid_radiuses = tuple(int(r) for r in valid_radiuses)
 
-    # Validate simulation-specific parameters
+    # Validate simulation-specific parameters (F-017: the int64 seed ceiling
+    # is enforced once, in ParameterValidator.validate_seed against
+    # ValidationConstants.MAX_SEED, and this call reaches it — do not restate
+    # the bound here).
     validate_simulation_params(seed=seed, min_neighbours=min_neighbours, max_neighbours=max_neighbours)
 
     ParameterValidator.validate_property_type(prop, ContProperty, "sgs_simulation")

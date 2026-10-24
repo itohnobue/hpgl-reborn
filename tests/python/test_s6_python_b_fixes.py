@@ -40,6 +40,7 @@ try:
         load_cont_property,
         load_ind_property,
         lvm_kriging,
+        read_inc_file_float,
         simple_kriging,
         write_gslib_property,
         write_property,
@@ -197,6 +198,34 @@ class TestKrigingFailureSurfacing:
             "could not be kriged" in rec.message for rec in caplog.records
         ), f"expected no-neighbour warning, got: {[r.message for r in caplog.records]}"
 
+    def test_full_success_emits_no_neighbour_warning(self, caplog):
+        """F-626: a fully successful SK/LVM run must NOT warn.
+
+        The positive pin above only proves the warning can fire. A regression
+        of the F1 class — ``expected_calculated`` computed from the grid size
+        rather than the uninformed count — makes the wrapper warn on every
+        successful run, and only this negative twin fails.
+        """
+        import logging
+
+        grid = SugarboxGrid(x=5, y=5, z=1)
+        data = np.random.RandomState(0).rand(25).astype("float32") * 100
+        mask = np.ones(25, dtype="uint8")
+        mask[[6, 12, 18]] = 0  # uninformed cells inside the search radius
+        prop = ContProperty(data, mask)
+        cov_model = CovarianceModel(
+            type=covariance.spherical, ranges=(5.0, 5.0, 1.0), sill=1.0, nugget=0.1
+        )
+        mean_data = np.ones(25, dtype="float32") * 50.0
+
+        with caplog.at_level(logging.WARNING, logger="geo_bsd.geo"):
+            simple_kriging(prop, grid, (5, 5, 1), 12, cov_model)
+            lvm_kriging(prop, grid, mean_data, (5, 5, 1), 12, cov_model)
+
+        assert not [
+            rec.message for rec in caplog.records if "could not be kriged" in rec.message
+        ], f"successful run warned: {[r.message for r in caplog.records]}"
+
     def test_lvm_kriging_singularity_raises(self, monkeypatch):
         """lvm_kriging must also consume stats and raise on singularity."""
         from geo_bsd import geo
@@ -346,9 +375,17 @@ class TestSlowParserTokenSemantics:
         Pre-fix: fast C++ threw 'Unexpected end of file' on this file while
         the slow parser loaded it — divergent per-path behavior. Post-fix:
         both load [1.0, 2.0] (the mid-line comment line contributes nothing).
+
+        F-623/F-633: the comparison below alone cannot observe the fast
+        reader — ``load_cont_property`` catches ``RuntimeError`` and re-runs
+        the slow parser, so a reverted C++ comment skip degrades this test to
+        slow-vs-slow. The direct ``read_inc_file_float`` call is the actual
+        witness; the agreement check stays as fallback-path smoke.
         """
         fpath = tmp_path / "agree.inc"
         _write_text(fpath, "prop\n1.0 2.0 -- 3.0 4.0\n/\n")
+        fast_direct = read_inc_file_float(str(fpath), -99.0, 2, basedir=str(tmp_path))
+        np.testing.assert_array_equal(fast_direct.data, [1.0, 2.0])
         slow = _load_prop_cont_slow(str(fpath), -99.0, basedir=str(tmp_path))
         fast = load_cont_property(str(fpath), -99.0, 2, basedir=str(tmp_path))
         np.testing.assert_array_equal(slow.data, fast.data)

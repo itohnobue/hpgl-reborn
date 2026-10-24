@@ -1,4 +1,4 @@
-# HPGL Reborn - High Performance Geostatistics Library (v2.0.6)
+# HPGL Reborn - High Performance Geostatistics Library (v2.1.0)
 
 ## Table of Contents
 
@@ -93,7 +93,8 @@ Key geostatistical terms used throughout this documentation:
 - **[uv](https://docs.astral.sh/uv/)**: Package and environment manager (installs Python and dependencies automatically)
 - **Python**: 3.9 or higher (tested up to 3.13) — installed by uv
 - **NumPy**: 2.0 or higher, < 3.0 — installed by uv
-- **SciPy**: (optional, for `routines` module) — installed by uv
+- **SciPy**: (optional) not imported by the `geo_bsd` package — installed by uv through the `book`, `dev`, or `test` extra
+- **Matplotlib**: (optional) used only by the book and sample scripts, which are not part of the distribution — installed by uv through the `book` extra
 
 ### Windows Build
 
@@ -227,7 +228,7 @@ HPGL can be built on macOS using Homebrew-installed dependencies and the Clang c
 
    ```bash
    cmake --preset macos-clang
-   cmake --build .
+   cmake --build --preset macos-clang
    ```
 
 4. **Verify the build:**
@@ -443,7 +444,7 @@ prop = geo_bsd.ContProperty(data, mask)
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `type` | `int` | `0` (spherical) | Use `geo_bsd.covariance.spherical` (0), `.exponential` (1), or `.gaussian` (2). |
-| `ranges` | `tuple[float]` | `(0, 0, 0)` | Anisotropy ranges `(rx, ry, rz)`. |
+| `ranges` | `tuple[float]` | `(1, 1, 1)` | Anisotropy ranges `(rx, ry, rz)`. |
 | `angles` | `tuple[float]` | `(0.0, 0.0, 0.0)` | Anisotropy angles `(azimuth, dip, rotation)` in degrees. |
 | `sill` | `float` | `1.0` | Covariance sill (must be positive). |
 | `nugget` | `float` | `0.0` | Nugget effect (must be ≤ sill). |
@@ -579,7 +580,7 @@ Common validation exceptions:
 | `RuntimeError` | C++ computation failure (singular matrix, memory exhaustion, incompatible data) | `"ordinary_kriging failed: singular matrix"`, `"HPGL error: ..."` |
 | `KeyError` | Missing property name in GSLIB property dictionary (`get_gslib_property`) | (standard Python KeyError) |
 | `AttributeError` | Accessing nonexistent attribute on property or model objects | (standard Python AttributeError) |
-| `OSError` / `FileNotFoundError` | File missing, permission denied, or disk I/O failure during load/write operations | `"Library directory not found"`, `"Cannot open file"` |
+| `OSError` / `FileNotFoundError` | Permission denied or an OS-level failure while opening/writing a file — a missing input file is rejected earlier as a path-validation error | `[Errno 13] Permission denied: 'porosity.inc'` |
 
 ### Runtime Errors from C++ Backend
 
@@ -620,13 +621,13 @@ geo_bsd.set_progress_handler(None, None)  # unregister
 
 ## Testing
 
-Run the full test suite:
+Run the default test suite (tests marked `slow` are deselected):
 
 ```bash
-uv run pytest tests/python/ -v
+uv run pytest tests/python/ -m "not slow" -v
 ```
 
-The test suite includes 622 tests covering:
+The test suite contains 1,358 test functions (1,545 collected tests, of which 30 are marked `slow` and deselected by default) covering:
 - All kriging algorithms (OK, SK, LVM, IK, Median IK, Cokriging)
 - All simulation algorithms (SGS, SIS)
 - Edge cases and parameter validation
@@ -737,14 +738,14 @@ uv run python -c "import sys; sys.path.insert(0,'src'); from geo_bsd import hpgl
 
 **Symptom:** `ImportError: DLL load failed` or `ImportError: cannot open shared object file`.
 
-**Cause:** The compiled native library (`hpgl.dll` on Windows, `hpgl.so` on Linux/macOS) is not in the Python path or is missing required system libraries.
+**Cause:** The compiled native library (`hpgl.dll` on Windows, `hpgl.so` on Linux, `hpgl.dylib` on macOS) is not in the Python path or is missing required system libraries.
 
 **Fix:**
 1. First re-run the build to ensure the library exists: `build.bat` (Windows) or `cmake --build .` (Linux/macOS)
 2. Copy the built library to the Python package directory: `src/geo_bsd/`
 3. Verify library dependencies are resolved:
    - **Linux:** `ldd src/geo_bsd/hpgl.so | grep "not found"`
-   - **macOS:** `otool -L src/geo_bsd/hpgl.so`
+   - **macOS:** `otool -L src/geo_bsd/hpgl.dylib`
    - **Windows:** Use Dependency Walker or `dumpbin /dependents src\geo_bsd\hpgl.dll`
 4. If OpenBLAS is not found, add it to `LD_LIBRARY_PATH` (Linux) or reinstall it
 
@@ -791,7 +792,7 @@ uv run python -c "import sys; sys.path.insert(0,'src'); from geo_bsd import hpgl
 No. HPGL works with OpenBLAS (default on Linux/macOS) or Intel MKL (default on Windows). Use `-DHPGL_USE_MKL=OFF` for OpenBLAS, `-DHPGL_USE_MKL=ON` for MKL.
 
 ### Why do I get `ImportError` after building?
-The native library (`hpgl.dll` / `hpgl.so`) must be built and available in `src/geo_bsd/`. Use `uv run python` to ensure the virtual environment is active.
+The native library (`hpgl.dll` on Windows, `hpgl.so` on Linux, `hpgl.dylib` on macOS) must be built and available in `src/geo_bsd/`. Use `uv run python` to ensure the virtual environment is active.
 
 ### Can I use pip instead of uv?
 The project uses `uv` for environment and dependency management. `uv sync` replaces `pip install`. Use `uv run` to execute scripts in the managed environment.

@@ -3,7 +3,10 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# F-355: the package lives in src/geo_bsd (readme.md:269-274), not at the
+# repository root — inserting '..' left `import geo_bsd` raising
+# ModuleNotFoundError before any script logic ran.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 from geo_bsd import (
     SugarboxGrid, CovarianceModel, covariance,
     load_cont_property, write_property, simple_kriging,
@@ -30,6 +33,14 @@ def sk_calc(x, y, z, prop1):
         sill=1,
     )
 
+    # F-350: the 100 sensitivity outputs (50 max-neighbour settings x 2 files)
+    # are CWD-relative INC names with no directory, so every run littered the
+    # working tree with untracked RES*.INC / RESULT_SK*.INC files that nothing
+    # cleans up and nothing ignores. Write them into a results/ directory
+    # created on demand, as the other sample harnesses do.
+    results_dir = "results"
+    os.makedirs(results_dir, exist_ok=True)
+
     i = -1
     n = 60
     while n > 10:
@@ -41,18 +52,18 @@ def sk_calc(x, y, z, prop1):
             cov_model=cov,
             mean=0.487,
         )
-        write_property(prop_result, "RESULT_SK" + str(i) + ".INC", "SK_RESULT" + str(i), -99)
-        values_result = load_property_python(x, y, z, "RESULT_SK" + str(i) + ".INC", True)
-        save_property_python(values_result, x, y, z, "RES" + str(i) + ".INC")
+        write_property(prop_result, os.path.join(results_dir, "RESULT_SK" + str(i) + ".INC"), "SK_RESULT" + str(i), -99)
+        values_result = load_property_python(x, y, z, os.path.join(results_dir, "RESULT_SK" + str(i) + ".INC"), True)
+        save_property_python(values_result, x, y, z, os.path.join(results_dir, "RES" + str(i) + ".INC"))
         n = n - 1
     # E-M16: the old metric accumulated the SIGNED difference and applied a
     # single abs() afterwards — abs(Σdiff) ≠ Σ|diff|, so cancellation made
     # the "sensitivity vs max_neighbours" curve meaningless. Accumulate the
     # per-cell absolute difference instead (Σ|diff|).
     razn = np.zeros(i)
-    max_n = load_property_python(x, y, z, "RES0.INC", True)
+    max_n = load_property_python(x, y, z, os.path.join(results_dir, "RES0.INC"), True)
     for j in range(i):
-        min_n = load_property_python(x, y, z, "RES" + str(i - j) + ".INC", True)
+        min_n = load_property_python(x, y, z, os.path.join(results_dir, "RES" + str(i - j) + ".INC"), True)
         for a in range(x):
             for b in range(y):
                 for c in range(z):

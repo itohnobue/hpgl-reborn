@@ -19,6 +19,16 @@ print("----------------------------------------------------")
 print("Loading data & initializing...")
 
 # Loading sample data from file
+# F-090: the cell size is a modelling parameter of the cell declustering, not
+# a property of welldata.txt. Lesson 4.2 uses a different cell size in each
+# of its scripts: this first step uses dx=dy=10 (shipped answer
+# Result/1/1_cell_declusterisation.txt: declustered mean 8.20568), while
+# 2_bootstrap.py uses dx=7/dy=8 (shipped answer Result/2/2_bootstrap.txt:
+# weighted correlation 0.57062 — 0.59209 at dx=dy=10). Each recorded answer
+# is reproducible only at its own cell size, so the two steps report
+# statistics of two different declusterings of the same 62 wells; changing
+# the cell size here requires the same change there and a regeneration of
+# both Result files.
 dx = 10
 dy = 10
 dz = 1
