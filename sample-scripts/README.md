@@ -31,4 +31,4 @@ Example Python scripts demonstrating HPGL library usage for geostatistical tasks
 that are not included in the repository. They serve as usage examples and integration
 tests for the `geo_bsd` Python API.
 
-See the main [README.md](../readme.md) for complete documentation.
+See the main [README.md](../readme.md) and [usage.md](../usage.md) for complete documentation.

@@ -212,6 +212,7 @@ include = [
     "build.sh",
     "license.txt",
     "readme.md",
+    "usage.md",
     "CHANGELOG.md",
     "src/",
     "cmake/",
@@ -219,7 +220,7 @@ include = [
     # The sdist ships `tests/`, and non-slow default-suite tests read these two
     # repository trees unguarded (test_production_fixes_rest.py:1556-1557,
     # :1650-1711; test_production_fixes_geo.py:1128, :1197-1198, :1276,
-    # :1339-1340), so without them the readme's own default-suite command fails
+    # :1339-1340), so without them the usage.md default-suite command fails
     # from an unpacked sdist with FileNotFoundError. They stay wheel-exempt and
     # uninstalled (see the `book` extra note above): shipping them as sdist
     # source content installs nothing and adds no runtime dependency.
