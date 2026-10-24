@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-10-04T20:18:40.531737
+Last updated: 2026-10-24T20:56:58.582218
 
 ## [got-20260616055758-f1d951]
 Category: gotcha
@@ -262,10 +262,12 @@ fix-introduced regression escapes on fix-modified lines: fix agents routinely sh
 
 ## [pat-20260802092606-5ce233]
 Category: pattern
-Tags: caps, performance, validation, complexity
-Changed: 2026-08-02T09:26:06.445447
+Tags: caps, performance, validation, complexity, memory, aggregate, threads
+Changed: 2026-10-24T20:56:58.323578
 
 Size/work caps must bound the right quantity, at the right value, in the right language, at every entry point. (1) COUNT caps do NOT bound WORK: a count cap (max points, max neighbours, grid cells) bounds allocations, not iteration complexity — O(n^2 x lag) or window x grid loops remain effectively infinite (calc_variograms_from_point_set is O(size^2 x lag); MAX_WINDOW_VOLUME caps offsets while the inner loop iterates all grid cells). Derive the worst-case total work as a single number (pairs x lags, window x grid) and cap THAT, for EVERY entry point (grid AND point-set). (2) A work cap's CONSTANT must be validated against the real loop cost — an existing cap can under-estimate the true work by orders of magnitude and is then not a cap at all (GridStyle cap under-estimated n^2 x NumLags by 5e5-7e5x; MovingAverage cap bounded MEMORY not WORK; a cap that passes a multi-hour input is not a cap). (3) Caps mirrored across LANGUAGES must be calibrated per-language throughput, not copied: a C++ cap of 1e12 mirrored verbatim into pure Python (4-4.6e7 units/s) hangs for ~6h-108 days; derive the Python cap from a bounded worst-case runtime (guarantee parity, not constant parity) and comment the divergence. (4) Every user-controlled size/count parameter needs a HARD cap at the Python boundary AND re-enforced in C++ (a warning is not a cap); API-boundary caps must match internal algorithm limits (1e7 API vs 1e5 internal silently routes to mean-fill); caps must fire BEFORE allocation. (5) Landing a cap/limit change is itself regression-prone: enumerate the real worst-case arithmetic and test every LEGAL boundary (radius 10x, zero/edge values, coincident points, shipped book workflows) — SCAN_LIMIT/FALLBACK_WINDOW collapsed the effective search radius to ~8-10.6 cells, a clamp made lag 0 unbinable, a 100000->10000 cap broke pinned tests; 10 of 18 post-fix findings were fix-introduced from cap/normalization changes. Checklist: (a) cap the work-estimate, not each count; (b) sanity-check the cap constant against a measured worst-case runtime; (c) per-language calibration with the divergence rationale in a comment; (d) hard caps both sides, firing before allocation; (e) grep shipped workflows that exercise the class before landing a cap change.
+
+(6) Per-object caps do not bound a CALL: K per-category covariance structures each pass their own cap while one call allocates all K (K up to 255 is legal), and a workspace declared inside `#pragma omp parallel` multiplies residency by thread count - account 16*n^2 bytes per thread, not per process. An aggregate budget must count the allocation the lookup actually makes (max(cov box, neighbour box) per structure, summed over structures) and fire before any allocation; it must also not fall below the library's own documented per-object worst case, which would reject legal inputs - state both bounds and pin one legal boundary case.
 
 ## [got-20260802092612-329455]
 Category: gotcha
@@ -283,17 +285,21 @@ GSLIB missing-value sentinel handling must be correct on EVERY path and in the S
 
 ## [got-20260802092650-41b872]
 Category: gotcha
-Tags: regression, sibling, propagation, caps
-Changed: 2026-08-02T09:26:50.038509
+Tags: regression, sibling, propagation, caps, twins, escape, fix
+Changed: 2026-10-24T20:56:58.237052
 
 A guard/fix applied to ONE path silently leaves the same defect in sibling paths. Fix agents touch only the discovered instance: an INT_MAX/radius guard added to precalculated_covariances_t but not covariance_field_t/calc_cov_field/OK-default/median_ik/cokriging; a size_t index fix landed in solver_entry_point.h but not the gauss_solve fallback; an O_NOFOLLOW hardening on the write side but not the read side; an isinstance tuple fix on one variogram function but not its sibling. Fix: when fixing a CLASS of bug (overflow, guard, cap, hardening), grep the codebase for ALL instances of the same pattern — sibling functions, fallback paths, symmetric read/write sides — and fix every one in the same change, verifying each call site reaches the fixed path. Checklist: (a) after any fix, grep for the same arithmetic/guard pattern across siblings and fallbacks; (b) symmetric operations (read/write, entry/fallback, LHS/RHS) all hardened; (c) for any (2r+1)^n-style allocation, enumerate every constructor/call site and apply the identical threshold — a guard in one sibling is not a guard.
 
+(6) Twin pairs must be enumerated at fix-assignment, not discovered at review. The same omission recurred in hpgl-reborn v2.1.0 across IK vs median-IK, SGS vs SIS, mark I vs mark II, the 1-RHS vs 2-RHS solver entries, the C-ABI entry vs the direct C++ entry, the Python writer vs the C++ writer, and a progress-accounting fix landed in one of three kernels - each produced a finding the fix stage had already reported closed. Assign one owner per twin pair, list both members in the fix task file with the shared contract, and before closing grep the sibling set for the changed predicate, constant or message; a fix that adds a mechanism to one member must add its outcome contract to every member. (escapes.md: sibling twins left unfixed.)
+
 ## [pat-20260802223230-f97aae]
 Category: pattern
-Tags: build, packaging, verification, macos
-Changed: 2026-08-02T22:32:30.467186
+Tags: build, packaging, verification, macos, gate
+Changed: 2026-10-24T20:56:58.582213
 
 a verification gate only catches what it actually inspects - a gate that checks LC_LOAD_DYLIB deps (otool -L) but never LC_RPATH/LC_BUILD_VERSION (otool -l) cannot catch absolute-path leaks or min-OS mismatches; a gate that checks only symbol presence (smoke test checks _HAS_KRIGING_STATS, never loads _cvariogram) cannot catch the defect class it was built to prevent; a build gate that exits 0 on smoke failure is not a gate. In hpgl-reborn v2.0.2: R-23 (wheel tagged macosx_11_0 embeds libomp.a objects compiled with LC_BUILD_VERSION minos 15.0 - gate checks neither dylib min-OS nor archive min-OS), R-24 (gate runs otool -L only, never otool -l - LC_RPATH/LC_BUILD_VERSION unchecked, N4 fold-in regressible silently), R-26 (non-wheel smoke gate has no relocatability check - HPGL_STATIC_LIBOMP=OFF stale cache deploys with absolute libomp dep and the gate passes), 2-M-22 (build.sh implicit exit 0 / build.bat exit /b 0 on smoke failure), 2-M-23/R-22 (INSTALL_RPATH and exported hpglTargets.cmake bake absolute build-machine BLAS/include paths - gate does not scan .cmake files). Fix: the gate must assert the exact artifact property that defines the defect class (LC_RPATH, LC_BUILD_VERSION, absolute paths in dylibs AND exported .cmake files), and gate failures must be non-zero exits. Checklist: (a) list the artifact properties the defect class depends on and verify the gate inspects each one, (b) a smoke gate must load the actual module/symbol it claims to verify, (c) build gates must exit non-zero on any smoke failure, (d) scan exported .cmake files for absolute build-machine paths.
+
+(e) A gate must perform the action whose failure it claims to detect. An importability check that resolves a module spec with importlib.util.find_spec never executes the import, so a package whose native library fails to load passes; an integrity gate whose expected-hash or expected-symbol set is empty compares nothing; a freshness gate that compares symbol presence cannot see a code-identical but older build. Call the real entry point (import, load, open) and compare identity (hash or version), not presence.
 
 ## [pat-20260802223236-e889f3]
 Category: pattern
@@ -304,10 +310,12 @@ Every entry point that can be reached directly must replicate the validation of 
 
 ## [pat-20260802223242-44d3e0]
 Category: pattern
-Tags: testing, regression, verification
-Changed: 2026-08-02T22:32:42.509108
+Tags: testing, regression, verification, oracle
+Changed: 2026-10-24T20:56:58.409409
 
 A regression test must FAIL on pre-fix code — otherwise it is not a regression test. (1) Behaviorally-inert fixes: a guard nested inside a condition that always holds never alters a branch, and the paired test passes pre- and post-fix (R-3 ndmin gate mathematically unreachable because original_data_count <= ws.indices.size() always). Prove the fix changes observable behavior before writing the test. (2) Tests asserting the BROKEN behavior become regression masks: a test that pins the current buggy behavior (e.g. asserts geo._last_kriging_stats is None after a SUCCESSFUL run) keeps the suite green while the defect ships and actively blocks the fix; flip every such test in the SAME change and grep for tests asserting None/stale/unchanged state a fix should populate. (3) Vacuous fixtures/assertions: an all-ones mask with binary data makes output==input and proportion assertions tautological — use partially-masked fixtures. (4) Numerical fixes without DIRECT tests: integration tests can mask the specific behavior through upstream guards/downstream fallbacks — add at least one unit test at the same language level that exercises the exact failure input and expected output and would FAIL if the fix were reverted. (5) Proposed additions can be bool-invariant OR permanently-red: an addition whose asserted gate fires identically with and without the code under test (a magnitude gate !isfinite catching NaN-in-X both with and without the scan; a no-op test-build macro such as HPGL_LOG_STRING) can never fail — it is not a regression test; a construction whose key conjunct is structurally dead (indefinite-matrix wild solutions always have B'X<0, so a Schur-consistency conjunct is always false) can never pass. Before writing a test, prove it discriminates — enumerate the code states it must distinguish and confirm the assertion flips between them; check for no-op macros and structurally-dead conjuncts. Checklist: (a) run any new test against pre-fix code — passing means vacuous; (b) assertions must flip between code states (bool-invariant = useless); (c) verify the guard algebra can actually alter the branch decision (no subset/superset implication); (d) regression tests exercise the pathological path, not the nominal one; (e) prove the discriminating conjunct is satisfiable in both directions (can pass AND can fail) and grep for no-op test-build macros before relying on log/status output.
+
+(6) Assertions must observe the code under test. Asserting only isinstance/size/isfinite/counts, or comparing two runs to each other, proves reproducibility or shape and never a value - a mutation that ignores the input stays green. A test that re-implements the production step it claims to pin (building the same RandomState fold itself, then feeding the transform) pins the mirror, not the step. Add one value or distribution assertion on the computed set and execute the real production entry point at least once.
 
 ## [pat-20260802223254-2e7feb]
 Category: pattern
@@ -423,10 +431,12 @@ Test-harness false-passes. (1) Sample-script tests must EXECUTE the scripts, not
 
 ## [pat-20260806182549-f8b7ea]
 Category: pattern
-Tags: testing, fixtures, vacuity
-Changed: 2026-08-06T18:25:49.848723
+Tags: testing, fixtures, vacuity, kriging
+Changed: 2026-10-24T20:56:58.495356
 
 Test fixtures and helpers can silently defeat themselves. (1) Partially-masked fixtures: an all-ones mask makes hard_cells==every cell, so restore/truncation assertions become tautologies (R-04, B-02, B-06, B-07) — use binary hard + sentinel-masked cells so restore pins only informed cells. (2) A fixture helper's parameter can LIE about arming: a parameter named informed_frac=1.0 may still mask cells because helper math clamps independently (T-08: masked index 0; values <0.5 impossible) — verify the parameter-to-fixture mapping with a discriminator (assert exactly 0 masked cells for informed_frac=1.0) and audit helper ranges for clamping. (3) Simulation OUTPUT masks are all-ones: C++ set_at writes m_mask=1 for every simulated node, so after SGS/SIS the result mask is ALL-ONES regardless of input arming — tests sampling result.mask==0 select nothing (N2-02/N2-03); snapshot the ORIGINAL input mask before simulation and sample uninformed cells from it. (4) Bare except Exception: pass in test/production code silently masks regressions — use specific exception types. Checklist: (a) proportion/truncation assertions must use fixtures with masked cells; (b) test fixture-helper extreme parameter values; (c) sample uninformed cells from a pre-simulation input-mask snapshot; (d) no bare except in test or production paths.
+
+(5) Copy-through cells are not outputs. A kriging kernel computes only uninformed cells and copies informed ones through, so selecting result.mask==1 cells (or an all-ones mask fixture) asserts on data the kernel never touched and the kriging branch runs zero times. Snapshot the input mask and select input-mask==0 cells for value assertions; keep one fully informed case only for the copy-through contract.
 
 ## [got-20260806182551-a330e5]
 Category: gotcha
@@ -462,4 +472,53 @@ Tags: testing, fixtures, slow, python
 Changed: 2026-08-10T00:42:09.085669
 
 BIG_SOFT_DATA big fixtures are 468,120 cells = 166×141×20, NOT 160×141×20 as the filenames imply: BIG_SOFT_DATA_160_141_20.INC and BIG_SOFT_DATA_CON_160_141_20.INC (both ~2MB) contain a 166×141×20 property (166*141*20 = 468,120; 160*141*20 = 451,200); any analysis computing geometry from the filename mis-sizes the grid. These fixtures are the top machine-freeze-risk class in the test suite — H-02 (AGENTS.md MANDATORY) requires @pytest.mark.slow on every test loading them; all legacy big-fixture tests and R-06 load cases now carry @slow (17 slow markers across 6 files: test_legacy_migrated 11, test_performance 2, test_cdf_edge_cases 1, test_edge_cases 1, test_memory_leaks 1, test_production_fixes_geo 1), excluding 468K-cell loads from the default suite. Checklist: (a) always verify fixture geometry from the data, not the filename, (b) any test loading a big fixture must be @slow-marked and run last/alone, (c) the default suite must exclude 468K-cell loads entirely.
+
+## [got-20261024205657-f76112]
+Category: gotcha
+Tags: build, ffi, macos, runtime, gate, escape, fix
+Changed: 2026-10-24T20:56:57.623721
+
+hpgl-reborn's runtime native library is src/geo_bsd/hpgl.dylib and src/geo_bsd/_cvariogram.dylib, not build/libhpgl.*.dylib. The Python package and tests/python load the src copy (hpgl_wrap.py's candidate list; conftest.py puts src on sys.path), while `cmake --build build` only relinks build/libhpgl.<ver>.dylib - only build.sh installs it into src/geo_bsd/ (atomic cp to .new then mv, after pruning lib-prefixed variants). A green suite after C++ edits can therefore certify the previous engine: a gate that does not install or hash-compare the runtime copy proves nothing about the fix. The engine's LC_ID version is a separate version surface - a code-identical copy can be version-stale while every symbol check passes. Prevention: before trusting any suite after C++ changes run `shasum -a 256 build/libhpgl.<ver>.dylib src/geo_bsd/hpgl.dylib`; when they differ, install with build.sh's procedure, and prefer making the build install into src/ or adding a post-build identity assertion so the check is mechanical rather than remembered. (escapes.md: runtime engine stale.)
+
+## [got-20261024205657-83166d]
+Category: gotcha
+Tags: error-handling, cpp, ffi, simulation, kriging, degradation, escape, fix
+Changed: 2026-10-24T20:56:57.711040
+
+An early exit or degraded result must reach the caller as a status, never as a partially written buffer reported as success. Mechanisms proven silent in hpgl-reborn: a cooperative-cancel handler that stops a kernel whose C entry returns void and then returns normally (the caller reads a partly stale property); a fallback that substitutes a primary-only system for a dropped secondary equation (result within 7.6e-06 of the mean-only answer, no message); failure counts divided by the whole grid instead of the cells actually kriged; a degradation whose only signal is a log line on a stream the caller does not read. Rule: every kernel exit path (cancel, fallback, no-neighbour, partial fill) either raises a typed error or populates a status the wrapper exposes, and every denominator counts computed cells. Prevention: enumerate each kernel's early-exit branches when fixing it and require an outcome channel on each; a fix that adds cancellation to one consumer must add its outcome contract in the same change. (escapes.md: cokriging cancellation without an outcome channel.)
+
+## [got-20261024205657-14db19]
+Category: gotcha
+Tags: testing, numerical, float32, tolerance, escape, test-update
+Changed: 2026-10-24T20:56:57.796336
+
+A golden-value pin's tolerance must be derived from the stored dtype's precision and stated in the same units as the assertion. A float32 golden pinned at atol=1e-6 is stricter than exact equality (one float32 ULP is 3.8e-06 at 55.4 and 7.6e-06 at 93.2), so a single last-bit difference from another BLAS or libm fails a correct tree while the docstring claims cross-platform headroom; conversely a tolerance far above the defect's magnitude hides the regression. Compute the ULP at the largest pinned value, set the tolerance above it (or pin exactly with rtol=0/atol=0 and say so), and prove a +1-ULP perturbation still passes while a real shift fails. Related helper trap: a close-comparison macro written as `if (abs(a-b) > eps)` reports PASS for NaN on either side - assert finiteness before comparing. (escapes.md: SGS golden tolerance below one ULP.)
+
+## [got-20261024205657-7d2adf]
+Category: gotcha
+Tags: build, cmake, parsing, gate
+Changed: 2026-10-24T20:56:57.883669
+
+Parsing CMakeCache.txt by the `:TYPE=` prefix misses command-line overrides: a -DVAR=value override is cached as VAR:UNINITIALIZED=value, so a regex matching only VAR:STRING= returns empty and the script silently falls back to its default - the gate then rejects a legal configured value and names the wrong target in its message. Match the key before the colon (^VAR:[^=]*=), or read it via `cmake -LA -N` / get_cmake_property, and test the documented -D override path, not only a preset.
+
+## [got-20261024205657-9cee6f]
+Category: gotcha
+Tags: repo, line-endings, diff, editing
+Changed: 2026-10-24T20:56:57.972046
+
+Some hpgl-reborn sources are committed with CRLF (for example src/geo_bsd/_cvariogram/variograms.cpp and src/geo_bsd/hpgl/indicator_kriging.h). An edit or rewrite that normalises line endings to LF makes every line appear in the diff, hiding the real change (a ~1500-line change presenting as ~5600 raw lines) and breaking tooling written against the committed convention. Check `git show HEAD:<file> | grep -c $'\r'` before editing, preserve the file's existing ending, and when a diff looks inflated compare raw versus `git diff -w` line counts before reviewing.
+
+## [got-20261024205658-f010f8]
+Category: gotcha
+Tags: concurrency, openmp, cpp, ffi, progress
+Changed: 2026-10-24T20:56:58.060480
+
+Progress/cancel callbacks have two delivery defects. (a) Invoking the user handler while holding an unnamed `#pragma omp critical` deadlocks any nested call that reaches the same critical: unnamed criticals are ONE process-global lock, so a same-thread re-entrant call self-deadlocks even at one thread, and a recursive Python-side lock does not help. Record the event and invoke the handler after releasing the critical, or make the handler path lock-free. (b) Delivering events only on an exact iterations/10 multiple, and invoking the handler only from the master thread, silently drops worker-consumed crossings - measured 11 deliveries at 1 thread versus 6/3-4/1-2 at 2/4/8 threads, with the cancel opportunity lost with them. A reduction that discards events is not delivery: queue the pending crossing and deliver it when a permitted thread runs.
+
+## [got-20261024205658-73ff3d]
+Category: gotcha
+Tags: io, testing, samples, book, cwd
+Changed: 2026-10-24T20:56:58.147464
+
+solved_problems_book/** scripts open their data by bare relative name (for example open('DBHdata.txt')), so they run only with CWD = the script's own directory; invoking one from the repo root raises FileNotFoundError while the same script succeeds from its directory. sample-scripts/* resolve paths from __file__ but write outputs to a CWD-relative results/. Any gate or test that executes a book script must chdir to its directory; a repo-root failure is not evidence the script is broken.
 
