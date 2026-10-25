@@ -1,5 +1,5 @@
 # Knowledge Base
-Last updated: 2026-10-24T20:56:58.582218
+Last updated: 2026-10-25T19:40:54.980011
 
 ## [got-20260616055758-f1d951]
 Category: gotcha
@@ -283,15 +283,6 @@ Changed: 2026-08-02T09:26:30.576629
 
 GSLIB missing-value sentinel handling must be correct on EVERY path and in the SAME float space. (a) TRIM ON ALL READ PATHS: third-party GSLIB files use the +/-1.0e21 sentinel; loading sentinels as real data silently corrupts statistics. Trimming must be applied unconditionally (isnan | < -1.0e21 | > 1.0e21) on BOTH Python and C++ read paths, including the NaN-undefined branch (F-M18/F3: LoadGslibFile kept sentinels as data; get_gslib_property masked exact equality only, while C++ read_inc_file.cpp applied the window unconditionally -> [1,1,1,1] vs [1,0,0,1]). (b) WRITE PRECISION: %E-6 (7 significant digits) does NOT round-trip float32 sentinels — a fractional undefined_value such as -99.00005 reloads slightly different, so exact-equality re-masking marks 17-30% of masked cells INFORMED (E2-06 measured 18.1%/30.7%). Write >=9 significant digits (%.9E) and/or use tolerance-aware re-masking shared across the Python slow path, the C++ fast reader, and the writer. (c) COMPUTE WINDOWS IN THE COMPARISON'S FLOAT SPACE: float32(1.0e21)=1.000000020E+21 is DATA under a float32-computed window but SENTINEL under a float64-computed one, because the boundary constant itself does not round-trip exactly (P-01, a 4-PFA repeat-regression hotspot in read_inc_file.cpp:374-380; fixed by computing the window in float64 and comparing promoted doubles). Also validate GSLIB property names before ANY header write (reject newline, '--', leading whitespace, empty) — raw names are header/row injection. Checklist: (a) grep 1.0e21/1e21 read paths — sentinel trim must be unconditional, not exact-equality; (b) every header write validates property names first; (c) Python and C++ apply the SAME sentinel window; (d) write >=9 sig digits and pin exact-edge behavior with a cross-stack parity test; (e) compute min/max windows in the same float type as the compared value.
 
-## [got-20260802092650-41b872]
-Category: gotcha
-Tags: regression, sibling, propagation, caps, twins, escape, fix
-Changed: 2026-10-24T20:56:58.237052
-
-A guard/fix applied to ONE path silently leaves the same defect in sibling paths. Fix agents touch only the discovered instance: an INT_MAX/radius guard added to precalculated_covariances_t but not covariance_field_t/calc_cov_field/OK-default/median_ik/cokriging; a size_t index fix landed in solver_entry_point.h but not the gauss_solve fallback; an O_NOFOLLOW hardening on the write side but not the read side; an isinstance tuple fix on one variogram function but not its sibling. Fix: when fixing a CLASS of bug (overflow, guard, cap, hardening), grep the codebase for ALL instances of the same pattern — sibling functions, fallback paths, symmetric read/write sides — and fix every one in the same change, verifying each call site reaches the fixed path. Checklist: (a) after any fix, grep for the same arithmetic/guard pattern across siblings and fallbacks; (b) symmetric operations (read/write, entry/fallback, LHS/RHS) all hardened; (c) for any (2r+1)^n-style allocation, enumerate every constructor/call site and apply the identical threshold — a guard in one sibling is not a guard.
-
-(6) Twin pairs must be enumerated at fix-assignment, not discovered at review. The same omission recurred in hpgl-reborn v2.1.0 across IK vs median-IK, SGS vs SIS, mark I vs mark II, the 1-RHS vs 2-RHS solver entries, the C-ABI entry vs the direct C++ entry, the Python writer vs the C++ writer, and a progress-accounting fix landed in one of three kernels - each produced a finding the fix stage had already reported closed. Assign one owner per twin pair, list both members in the fix task file with the shared contract, and before closing grep the sibling set for the changed predicate, constant or message; a fix that adds a mechanism to one member must add its outcome contract to every member. (escapes.md: sibling twins left unfixed.)
-
 ## [pat-20260802223230-f97aae]
 Category: pattern
 Tags: build, packaging, verification, macos, gate
@@ -472,27 +463,6 @@ Tags: testing, fixtures, slow, python
 Changed: 2026-08-10T00:42:09.085669
 
 BIG_SOFT_DATA big fixtures are 468,120 cells = 166×141×20, NOT 160×141×20 as the filenames imply: BIG_SOFT_DATA_160_141_20.INC and BIG_SOFT_DATA_CON_160_141_20.INC (both ~2MB) contain a 166×141×20 property (166*141*20 = 468,120; 160*141*20 = 451,200); any analysis computing geometry from the filename mis-sizes the grid. These fixtures are the top machine-freeze-risk class in the test suite — H-02 (AGENTS.md MANDATORY) requires @pytest.mark.slow on every test loading them; all legacy big-fixture tests and R-06 load cases now carry @slow (17 slow markers across 6 files: test_legacy_migrated 11, test_performance 2, test_cdf_edge_cases 1, test_edge_cases 1, test_memory_leaks 1, test_production_fixes_geo 1), excluding 468K-cell loads from the default suite. Checklist: (a) always verify fixture geometry from the data, not the filename, (b) any test loading a big fixture must be @slow-marked and run last/alone, (c) the default suite must exclude 468K-cell loads entirely.
-
-## [got-20261024205657-f76112]
-Category: gotcha
-Tags: build, ffi, macos, runtime, gate, escape, fix
-Changed: 2026-10-24T20:56:57.623721
-
-hpgl-reborn's runtime native library is src/geo_bsd/hpgl.dylib and src/geo_bsd/_cvariogram.dylib, not build/libhpgl.*.dylib. The Python package and tests/python load the src copy (hpgl_wrap.py's candidate list; conftest.py puts src on sys.path), while `cmake --build build` only relinks build/libhpgl.<ver>.dylib - only build.sh installs it into src/geo_bsd/ (atomic cp to .new then mv, after pruning lib-prefixed variants). A green suite after C++ edits can therefore certify the previous engine: a gate that does not install or hash-compare the runtime copy proves nothing about the fix. The engine's LC_ID version is a separate version surface - a code-identical copy can be version-stale while every symbol check passes. Prevention: before trusting any suite after C++ changes run `shasum -a 256 build/libhpgl.<ver>.dylib src/geo_bsd/hpgl.dylib`; when they differ, install with build.sh's procedure, and prefer making the build install into src/ or adding a post-build identity assertion so the check is mechanical rather than remembered. (escapes.md: runtime engine stale.)
-
-## [got-20261024205657-83166d]
-Category: gotcha
-Tags: error-handling, cpp, ffi, simulation, kriging, degradation, escape, fix
-Changed: 2026-10-24T20:56:57.711040
-
-An early exit or degraded result must reach the caller as a status, never as a partially written buffer reported as success. Mechanisms proven silent in hpgl-reborn: a cooperative-cancel handler that stops a kernel whose C entry returns void and then returns normally (the caller reads a partly stale property); a fallback that substitutes a primary-only system for a dropped secondary equation (result within 7.6e-06 of the mean-only answer, no message); failure counts divided by the whole grid instead of the cells actually kriged; a degradation whose only signal is a log line on a stream the caller does not read. Rule: every kernel exit path (cancel, fallback, no-neighbour, partial fill) either raises a typed error or populates a status the wrapper exposes, and every denominator counts computed cells. Prevention: enumerate each kernel's early-exit branches when fixing it and require an outcome channel on each; a fix that adds cancellation to one consumer must add its outcome contract in the same change. (escapes.md: cokriging cancellation without an outcome channel.)
-
-## [got-20261024205657-14db19]
-Category: gotcha
-Tags: testing, numerical, float32, tolerance, escape, test-update
-Changed: 2026-10-24T20:56:57.796336
-
-A golden-value pin's tolerance must be derived from the stored dtype's precision and stated in the same units as the assertion. A float32 golden pinned at atol=1e-6 is stricter than exact equality (one float32 ULP is 3.8e-06 at 55.4 and 7.6e-06 at 93.2), so a single last-bit difference from another BLAS or libm fails a correct tree while the docstring claims cross-platform headroom; conversely a tolerance far above the defect's magnitude hides the regression. Compute the ULP at the largest pinned value, set the tolerance above it (or pin exactly with rtol=0/atol=0 and say so), and prove a +1-ULP perturbation still passes while a real shift fails. Related helper trap: a close-comparison macro written as `if (abs(a-b) > eps)` reports PASS for NaN on either side - assert finiteness before comparing. (escapes.md: SGS golden tolerance below one ULP.)
 
 ## [got-20261024205657-7d2adf]
 Category: gotcha
